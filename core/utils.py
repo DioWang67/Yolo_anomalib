@@ -41,66 +41,79 @@ class ImageUtils:
         
         annotated_dir = os.path.join(result_dir, "annotated")
         original_dir = os.path.join(result_dir, "original")
-        
+        anomalib_dir = os.path.join(result_dir, "anomalib")
         os.makedirs(annotated_dir, exist_ok=True)
         os.makedirs(original_dir, exist_ok=True)
-        
-        return result_dir, time_stamp, annotated_dir, original_dir
+        os.makedirs(anomalib_dir, exist_ok=True)
+
+        return result_dir, time_stamp, annotated_dir, original_dir ,anomalib_dir
 
 class DetectionResults:
     def __init__(self, config):
-        """
-        初始化檢測結果處理器
-        
-        Args:
-            config: 配置對象
-        """
         self.config = config
-        
+
+    def check_missing_items(self, expected_items: List[str], detected_labels):
+        """
+        检查缺少的项目。
+
+        Args:
+            expected_items: 预期的项目列表。
+            detected_labels: 实际检测到的标签集合。
+
+        Returns:
+            Set[str]: 缺少的项目集合。
+        """
+        return set(expected_items) - detected_labels
+
     def evaluate_detection(self, detections: List[Dict], required_score: float = 0.5) -> Tuple[str, str]:
         """
-        評估檢測結果
-        
+        评估检测结果
+
         Args:
-            detections: 檢測結果列表
-            required_score: 最低要求分數
-            
+            detections: 检测结果列表
+            required_score: 最低要求的置信度分数
+
         Returns:
-            Tuple[str, str]: 結果狀態和錯誤信息
+            Tuple[str, str]: 结果状态和错误信息
         """
-        detected_colors = [det['label'] for det in detections 
-                         if det['confidence'] >= required_score]
-        
-        if detected_colors == self.config.expected_color_order:
-            return "PASS", ""
-        return "FAIL", "順序不正確"
+        detected_labels = {det['label'] for det in detections if det['confidence'] >= required_score}
+        expected_items = self.config.expected_items
+
+        missing_items = self.check_missing_items(expected_items, detected_labels)
+
+        if missing_items:
+            result = "FAIL"
+            error_message = f"缺少的项目: {', '.join(missing_items)}"
+        else:
+            result = "PASS"
+            error_message = ""
+
+        return result, error_message
+
 
     def format_detection_data(self, detections: List[Dict], 
-                            annotated_path: str, original_path: str) -> Dict:
+                              annotated_path: str, original_path: str) -> Dict:
         """
-        格式化檢測數據以供保存
-        
+        格式化检测数据以供保存
+
         Args:
-            detections: 檢測結果列表
-            annotated_path: 標註影像路徑
-            original_path: 原始影像路徑
-            
+            detections: 检测结果列表
+            annotated_path: 标注图像路径
+            original_path: 原始图像路径
+
         Returns:
-            Dict: 格式化後的數據
+            Dict: 格式化后的数据
         """
-        detected_colors = [det['label'] for det in detections]
         confidence_scores = {det['label']: det['confidence'] for det in detections}
         
         result, error_message = self.evaluate_detection(detections)
         
         return {
-            "時間戳記": datetime.now(),
-            "測試編號": None,  # 將在 ResultHandler 中設置
-            "預期順序": ", ".join(self.config.expected_color_order),
-            "檢測順序": ", ".join(detected_colors),
-            "結果": result,
-            "信心分數": str(dict(confidence_scores)),
-            "錯誤訊息": error_message,
-            "標註影像路徑": annotated_path,
-            "原始影像路徑": original_path,
+            "时间戳记": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "测试编号": None,
+            "检测结果": result,
+            "信心分数": confidence_scores,
+            "错误讯息": error_message,
+            "标注影像路径": annotated_path,
+            "原始影像路径": original_path,
         }

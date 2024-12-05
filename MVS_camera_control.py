@@ -179,18 +179,7 @@ class MVSCamera:
             print(f"獲取影像幀時發生錯誤: {str(e)}")
             return None
 
-    def create_control_window(self):
-        """創建參數調整視窗"""
-        cv2.namedWindow('Controls')
-        
-        # 只創建支援的控制項
-        if self.supported_features.get('ExposureTime', False):
-            cv2.createTrackbar('Exposure (us)', 'Controls', 5000, 20000, 
-                             lambda x: self.set_exposure_time(x))
-        
-        if self.supported_features.get('Gain', False):
-            cv2.createTrackbar('Gain', 'Controls', 5, 15, 
-                             lambda x: self.set_gain(float(x)))
+ 
 
     def process_key(self, key):
         """處理鍵盤輸入"""
