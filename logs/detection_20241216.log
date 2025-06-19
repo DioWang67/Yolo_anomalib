@@ -1,0 +1,47 @@
+2024-12-16 14:43:48,244 - INFO - 家更Θ
+2024-12-16 14:43:48,419 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 14:43:48,770 - INFO - con1_model 家更Θ
+2024-12-16 14:43:48,921 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 14:43:49,209 - INFO - pogo_pin_model 家更Θ
+2024-12-16 14:43:49,355 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 14:43:49,617 - INFO - weld_model 家更Θ
+2024-12-16 15:01:13,956 - INFO - 家更Θ
+2024-12-16 15:01:14,049 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 15:01:14,219 - INFO - con1_model 家更Θ
+2024-12-16 15:01:14,322 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 15:01:14,473 - INFO - pogo_pin_model 家更Θ
+2024-12-16 15:01:14,554 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 15:01:14,704 - INFO - weld_model 家更Θ
+2024-12-16 15:48:22,740 - INFO - 家更Θ
+2024-12-16 15:48:22,832 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 15:48:23,005 - INFO - con1_model 家更Θ
+2024-12-16 15:48:23,088 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 15:48:23,267 - INFO - pin_model 家更Θ
+2024-12-16 15:48:23,349 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 15:48:23,592 - INFO - pin_patchcore_model 家更Θ
+2024-12-16 15:48:23,673 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 15:48:23,929 - INFO - pogo_pin_model 家更Θ
+2024-12-16 15:48:24,013 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 15:48:24,161 - INFO - weld_model 家更Θ
+2024-12-16 16:05:50,399 - INFO - 家更Θ
+2024-12-16 16:05:50,491 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 16:05:50,656 - INFO - con1_model 家更Θ
+2024-12-16 16:05:50,737 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 16:05:50,885 - INFO - pin_model 家更Θ
+2024-12-16 16:05:50,964 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 16:05:51,135 - INFO - pin_patchcore_model 家更Θ
+2024-12-16 16:05:51,216 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 16:05:51,459 - INFO - pogo_pin_model 家更Θ
+2024-12-16 16:05:51,539 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 16:05:51,686 - INFO - weld_model 家更Θ
+2024-12-16 16:07:46,311 - INFO - 家更Θ
+2024-12-16 16:07:46,401 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 16:07:46,580 - INFO - con1_model 家更Θ
+2024-12-16 16:07:46,661 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 16:07:46,804 - INFO - pin_model 家更Θ
+2024-12-16 16:07:46,886 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 16:07:47,054 - INFO - pin_patchcore_model 家更Θ
+2024-12-16 16:07:47,134 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 16:07:47,380 - INFO - pogo_pin_model 家更Θ
+2024-12-16 16:07:47,461 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-16 16:07:47,606 - INFO - weld_model 家更Θ

@@ -1,0 +1,44 @@
+weights: "best.pt"
+device: "cpu"
+conf_thres: 0.01
+iou_thres: 0.45
+imgsz: [640, 640]
+width: 3072
+height: 2048
+exposure_time: "20000"
+gain: "15.0"
+MV_CC_GetImageBuffer_nMsec: 10000
+timeout: 1
+current_product: "PCBA1"
+expected_items:
+  PCBA1:
+    A:
+      - weld_1
+      - weld_2
+      - weld_3
+      - weld_4
+      - weld_5
+      - weld_6
+      - weld_7
+      - weld_8
+    B:
+      - con1
+    C:
+      - pogo_pin
+    D:
+      - pin
+    E:
+      - J7
+      - J7_upside_down
+  PCBA2:
+    A:
+      - weld_1
+      - weld_2
+    B:
+      - con2
+    C:
+      - pogo_pin2
+    D:
+      - pin2
+    E:
+      - J7_v2

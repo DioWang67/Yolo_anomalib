@@ -1,0 +1,158 @@
+2024-12-18 11:10:12,730 - INFO - 家更Θ
+2024-12-18 11:10:12,730 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:10:13,738 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:10:13,997 - INFO - con1_model 家更Θ
+2024-12-18 11:10:13,998 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:10:14,924 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:10:15,138 - INFO - pin_model 家更Θ
+2024-12-18 11:10:15,138 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:10:16,048 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:10:16,277 - INFO - pin_model_1 家更Θ
+2024-12-18 11:10:16,278 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:10:17,198 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:10:17,532 - INFO - pin_patchcore_model 家更Θ
+2024-12-18 11:10:17,533 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:10:18,453 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:10:18,828 - INFO - pogo_pin_model 家更Θ
+2024-12-18 11:10:18,829 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:10:19,791 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:10:20,032 - INFO - weld_model 家更Θ
+2024-12-18 11:12:45,740 - INFO - 家更Θ
+2024-12-18 11:12:45,741 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:12:46,876 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:12:47,092 - INFO - con1_model 家更Θ
+2024-12-18 11:12:47,092 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:12:48,056 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:12:48,292 - INFO - pin_model 家更Θ
+2024-12-18 11:12:48,293 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:12:49,816 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:12:50,116 - INFO - pin_model_1 家更Θ
+2024-12-18 11:12:50,116 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:12:51,246 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:12:51,530 - INFO - pin_patchcore_model 家更Θ
+2024-12-18 11:12:51,530 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:12:52,696 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:12:53,136 - INFO - pogo_pin_model 家更Θ
+2024-12-18 11:12:53,137 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:12:54,232 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:12:54,505 - INFO - weld_model 家更Θ
+2024-12-18 11:27:02,449 - INFO - 家更Θ
+2024-12-18 11:27:02,450 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:27:03,462 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:27:03,680 - INFO - con1_model 家更Θ
+2024-12-18 11:27:03,680 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:27:04,636 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:27:04,843 - INFO - pin_model 家更Θ
+2024-12-18 11:27:04,843 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:27:05,764 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:27:05,947 - INFO - pin_model_1 家更Θ
+2024-12-18 11:27:05,947 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:27:06,860 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:27:07,086 - INFO - pin_patchcore_model 家更Θ
+2024-12-18 11:27:07,086 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:27:08,010 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:27:08,322 - INFO - pogo_pin_model 家更Θ
+2024-12-18 11:27:08,322 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:27:09,308 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:27:09,518 - INFO - weld_model 家更Θ
+2024-12-18 11:33:23,073 - INFO - 家更Θ
+2024-12-18 11:33:23,074 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:33:24,171 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:33:24,442 - INFO - con1_model 家更Θ
+2024-12-18 11:33:24,443 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:33:25,528 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:33:25,794 - INFO - pin_model 家更Θ
+2024-12-18 11:33:25,794 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:33:27,417 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:33:27,719 - INFO - pin_model_1 家更Θ
+2024-12-18 11:33:27,719 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:33:29,352 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:33:29,614 - INFO - pin_patchcore_model 家更Θ
+2024-12-18 11:33:29,614 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:33:30,561 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:33:30,870 - INFO - pogo_pin_model 家更Θ
+2024-12-18 11:33:30,870 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:33:31,814 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:33:32,014 - INFO - weld_model 家更Θ
+2024-12-18 11:39:12,958 - INFO - 家更Θ
+2024-12-18 11:39:12,958 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:39:13,953 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:39:14,167 - INFO - con1_model 家更Θ
+2024-12-18 11:39:14,168 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:39:15,085 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:39:15,291 - INFO - pin_model 家更Θ
+2024-12-18 11:39:15,291 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:39:16,204 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:39:16,389 - INFO - pin_model_1 家更Θ
+2024-12-18 11:39:16,390 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:39:17,302 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:39:17,539 - INFO - pin_patchcore_model 家更Θ
+2024-12-18 11:39:17,539 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:39:18,465 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:39:18,794 - INFO - pogo_pin_model 家更Θ
+2024-12-18 11:39:18,794 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 11:39:19,733 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 11:39:19,944 - INFO - weld_model 家更Θ
+2024-12-18 13:16:36,737 - INFO - 家更Θ
+2024-12-18 13:16:36,738 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:16:37,943 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:16:38,343 - INFO - con1_model 家更Θ
+2024-12-18 13:16:38,344 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:16:39,541 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:16:39,783 - INFO - pin_model 家更Θ
+2024-12-18 13:16:39,783 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:16:40,830 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:16:41,036 - INFO - pin_model_1 家更Θ
+2024-12-18 13:16:41,036 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:16:42,056 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:16:42,300 - INFO - pin_patchcore_model 家更Θ
+2024-12-18 13:16:42,301 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:16:43,343 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:16:43,670 - INFO - pogo_pin_model 家更Θ
+2024-12-18 13:16:43,671 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:16:44,697 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:16:44,930 - INFO - weld_model 家更Θ
+2024-12-18 13:51:02,864 - INFO - 家更Θ
+2024-12-18 13:51:02,865 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:51:04,524 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:51:04,828 - INFO - con1_fastflow_model 家更Θ
+2024-12-18 13:51:04,829 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:51:06,495 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:51:06,801 - INFO - con1_model 家更Θ
+2024-12-18 13:51:06,802 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:51:08,060 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:51:08,319 - INFO - pin_model 家更Θ
+2024-12-18 13:51:08,319 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:51:09,560 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:51:09,827 - INFO - pin_model_1 家更Θ
+2024-12-18 13:51:09,828 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:51:11,111 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:51:11,403 - INFO - pin_patchcore_model 家更Θ
+2024-12-18 13:51:11,404 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:51:12,666 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:51:12,948 - INFO - pogo_pin_model 家更Θ
+2024-12-18 13:51:12,948 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 13:51:14,222 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 13:51:14,511 - INFO - weld_model 家更Θ
+2024-12-18 16:53:04,838 - INFO - 家更Θ
+2024-12-18 16:53:04,839 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 16:53:05,990 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 16:53:06,210 - INFO - con1_fastflow_model 家更Θ
+2024-12-18 16:53:06,210 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 16:53:07,236 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 16:53:07,437 - INFO - con1_model 家更Θ
+2024-12-18 16:53:07,437 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 16:53:08,415 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 16:53:08,635 - INFO - pin_model 家更Θ
+2024-12-18 16:53:08,635 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 16:53:09,641 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 16:53:09,846 - INFO - pin_model_1 家更Θ
+2024-12-18 16:53:09,847 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 16:53:10,856 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 16:53:11,119 - INFO - pin_patchcore_model 家更Θ
+2024-12-18 16:53:11,119 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 16:53:12,239 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 16:53:12,462 - INFO - pogo_pin_model 家更Θ
+2024-12-18 16:53:12,463 - WARNING - FeatureExtractor is deprecated. Use TimmFeatureExtractor instead. Both FeatureExtractor and TimmFeatureExtractor will be removed in a future release.
+2024-12-18 16:53:13,480 - INFO - Loading pretrained weights from url (https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth)
+2024-12-18 16:53:13,698 - INFO - weld_model 家更Θ

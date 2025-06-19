@@ -1,0 +1,42 @@
+2024-12-06 14:39:16,682 - INFO - 家更Θ
+2024-12-06 14:39:16,683 - WARNING - 家ヘ魁 .anomalib_model ぃ
+2024-12-06 14:43:03,153 - ERROR - 磅︽筁祘い祇ネ岿粇: 'weld_model'
+2024-12-06 14:43:25,653 - INFO - 家更Θ
+2024-12-06 14:43:25,755 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 14:43:25,993 - INFO - weld_model 家更Θ
+2024-12-06 14:56:56,772 - INFO - 家更Θ
+2024-12-06 14:56:56,863 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 14:56:57,061 - INFO - con1_model 家更Θ
+2024-12-06 14:56:57,146 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 14:56:57,295 - INFO - weld_model 家更Θ
+2024-12-06 15:03:27,331 - INFO - 家更Θ
+2024-12-06 15:03:27,421 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 15:03:27,598 - INFO - con1_model 家更Θ
+2024-12-06 15:03:27,684 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 15:03:27,838 - INFO - weld_model 家更Θ
+2024-12-06 15:23:28,364 - INFO - 家更Θ
+2024-12-06 15:23:28,453 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 15:23:28,628 - INFO - con1_model 家更Θ
+2024-12-06 15:23:28,709 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 15:23:28,859 - INFO - weld_model 家更Θ
+2024-12-06 15:25:58,240 - INFO - 家更Θ
+2024-12-06 15:25:58,331 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 15:25:58,498 - INFO - con1_model 家更Θ
+2024-12-06 15:25:58,580 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 15:25:58,725 - INFO - weld_model 家更Θ
+2024-12-06 15:29:32,414 - INFO - 家更Θ
+2024-12-06 15:29:32,506 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 15:29:32,687 - INFO - con1_model 家更Θ
+2024-12-06 15:29:32,769 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 15:29:32,917 - INFO - weld_model 家更Θ
+2024-12-06 15:34:43,605 - INFO - 家更Θ
+2024-12-06 15:34:43,695 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 15:34:43,867 - INFO - con1_model 家更Θ
+2024-12-06 15:34:43,951 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 15:34:44,133 - INFO - weld_model 家更Θ
+2024-12-06 15:34:47,572 - ERROR - 磅︽筁祘い祇ネ岿粇: 'DetectionConfig' object has no attribute 'expected_items'
+2024-12-06 15:39:45,863 - INFO - 家更Θ
+2024-12-06 15:39:45,954 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 15:39:46,124 - INFO - con1_model 家更Θ
+2024-12-06 15:39:46,205 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-12-06 15:39:46,366 - INFO - weld_model 家更Θ

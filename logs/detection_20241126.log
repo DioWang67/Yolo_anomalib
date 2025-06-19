@@ -1,0 +1,54 @@
+2024-11-26 13:18:38,591 - INFO - 模型載入成功
+2024-11-26 15:34:23,035 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:36:41,708 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:36:48,696 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:36:53,747 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:36:56,899 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:37:11,092 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:37:14,931 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:37:16,782 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:55:06,758 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:57:55,652 - INFO - model OK
+2024-11-26 15:58:03,720 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:08,160 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:10,581 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:12,678 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:14,405 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:16,629 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:19,812 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:21,517 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:30,897 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:33,488 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:34,925 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:36,969 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:38,888 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:41,337 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 15:58:42,899 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:24:42,030 - INFO - model OK
+2024-11-26 16:25:14,368 - INFO - model OK
+2024-11-26 16:25:21,446 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:27:28,528 - INFO - model OK
+2024-11-26 16:27:34,870 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:29:03,707 - INFO - model OK
+2024-11-26 16:29:10,604 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:29:15,047 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:29:16,831 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:29:19,438 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:29:20,688 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:29:22,204 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:29:23,683 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:29:25,509 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:29:26,872 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:29:28,015 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:29:29,822 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:38:05,931 - INFO - model OK
+2024-11-26 16:38:11,245 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:42:18,492 - INFO - model OK
+2024-11-26 16:42:22,618 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 16:57:30,000 - INFO - model OK
+2024-11-26 16:57:34,114 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 17:20:31,527 - INFO - model OK
+2024-11-26 17:20:37,718 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 17:20:52,314 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 17:21:06,603 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
+2024-11-26 17:21:08,278 - INFO - Loading pretrained weights from url (https://download.pytorch.org/models/resnet18-5c106cde.pth)
