@@ -192,7 +192,9 @@ class MVSCamera:
                     data = np.frombuffer(pData, count=int(stOutFrame.stFrameInfo.nFrameLen), dtype=np.uint8)
                     bayer_img = data.reshape((stOutFrame.stFrameInfo.nHeight, stOutFrame.stFrameInfo.nWidth))
                     rgb_img = cv2.cvtColor(bayer_img, cv2.COLOR_BayerRG2RGB)
-                    return rgb_img
+                    # 轉換為 BGR 以符合 OpenCV 預設格式，避免顏色顯示錯誤
+                    bgr_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
+                    return bgr_img
                 except Exception as e:
                     print(f"處理影像時發生錯誤: {str(e)}")
                     return None
