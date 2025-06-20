@@ -41,20 +41,35 @@ class YOLOInference:
             self.logger.logger.error(f"模型加載失敗: {str(e)}")
             raise
 
-    def resize_with_padding(self, image: np.ndarray, target_width: int, target_height: int) -> np.ndarray:
+
+    def letterbox(self,image, size=(640, 640), stride=32, auto=False):
         h, w = image.shape[:2]
-        scale = min(target_width / w, target_height / h)
-        new_w, new_h = int(w * scale), int(h * scale)
+        new_h, new_w = size
+
+        if auto:
+            scale = min(new_w / w, new_h / h)
+            new_w, new_h = int(w * scale), int(h * scale)
+            if new_w % stride != 0:
+                new_w = (new_w // stride + 1) * stride
+            if new_h % stride != 0:
+                new_h = (new_h // stride + 1) * stride
+
         resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        canvas = np.zeros((target_height, target_width, 3), dtype=np.uint8)
-        x_offset = (target_width - new_w) // 2
-        y_offset = (target_height - new_h) // 2
-        canvas[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
+        canvas = np.full((size[1], size[0], 3), 114, dtype=np.uint8)  # 灰色填充
+        h_offset = (size[1] - new_h) // 2
+        w_offset = (size[0] - new_w) // 2
+        canvas[h_offset:h_offset + new_h, w_offset:w_offset + new_w] = resized
         return canvas
+
+    def preprocess_image(self, frame: np.ndarray) -> np.ndarray:
+        target_size = self.config.imgsz
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        resized_img = self.letterbox(frame_rgb, size=target_size, stride=32, auto=True)
+        return resized_img
 
     def process_frame(self, frame: np.ndarray, expected_items: List[str]) -> Tuple[np.ndarray, List[Dict[str, Any]], List[str]]:
         start_time = time.time()
-        im = self.detector.preprocess_image(frame)
+        im = self.preprocess_image(frame)
         with torch.no_grad():
             pred = self.model(im, conf=self.config.conf_thres, iou=self.config.iou_thres)
         results = self.detector.process_detections(pred, im, frame, expected_items)
@@ -90,7 +105,7 @@ class YOLOInference:
             if not os.path.exists(original_image_path):
                 raise FileNotFoundError(f"無法儲存原圖: {original_image_path}")
 
-            frame = self.resize_with_padding(frame, *self.config.imgsz)
+            frame = self.preprocess_image(frame)  # 使用 preprocess_image 替代 resize_with_padding
             expected_items = self.config.get_items_by_area(product, area)
             if not expected_items:
                 raise ValueError(f"無效的產品或區域: {product},{area}")
@@ -122,7 +137,7 @@ def main():
     inference = None
     try:
         inference = YOLOInference()
-        test_cases = ["PCBA1,A", "PCBA1,B", "PCBA2,A", "PCBA2,C"]
+        test_cases = ["PCBA1,E", "PCBA1,B", "PCBA2,A", "PCBA2,C"]
         for request in test_cases:
             product, area = request.split(',')
             print(f"正在檢測產品: {product}, 區域: {area}")
