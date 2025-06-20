@@ -44,7 +44,8 @@ class YOLODetector:
         return set(expected_items) - detected_class_names
     def process_detections(self, pred, im: np.ndarray, frame: np.ndarray, expected_items: List[str]) -> Tuple[np.ndarray, List[Dict[str, Any]], Set[str]]:
         detections = []
-        annotator = self.Annotator(frame, line_width=3, example=str(self.model.names))
+        # 使用副本避免修改輸入影像
+        annotator = self.Annotator(frame.copy(), line_width=3, example=str(self.model.names))
         overlapping_threshold = 0.3
         detected_class_names = set()
 

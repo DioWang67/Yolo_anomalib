@@ -72,7 +72,8 @@ class YOLOInference:
         im = self.preprocess_image(frame)
         with torch.no_grad():
             pred = self.model(im, conf=self.config.conf_thres, iou=self.config.iou_thres)
-        results = self.detector.process_detections(pred, im, frame, expected_items)
+        # 傳入副本確保原圖不被修改
+        results = self.detector.process_detections(pred, im, frame.copy(), expected_items)
         inference_time = time.time() - start_time
         self.logger.logger.debug(f"推理時間: {inference_time:.3f}s, 檢測數量: {len(results[1])}")
         return results
@@ -82,7 +83,11 @@ class YOLOInference:
         status = "PASS" if result == "PASS" else "FAIL"
         error_message = "" if status == "PASS" else f"缺少元件: {', '.join(missing_items)}" if missing_items else "檢測失敗，無預期元件"
         annotated_frame = self.result_handler.save_results(
-            frame=frame, detections=detections, status=status, detector=self.detector, missing_items=missing_items
+            frame=frame.copy(),
+            detections=detections,
+            status=status,
+            detector=self.detector,
+            missing_items=missing_items,
         )
         result_frame = self.detector.draw_results(frame.copy(), status, detections)
         return status, result_frame, error_message, missing_items
