@@ -1,4 +1,4 @@
-# utils/logger.py
+# logger.py
 import logging
 from datetime import datetime
 import os
@@ -23,9 +23,13 @@ class DetectionLogger:
         )
         self.logger = logging.getLogger(__name__)
 
-    def log_detection(self, status: str, detections: list, confidence: float):
+    def log_detection(self, status: str, detections: list):
         self.logger.info(f"Detection Status: {status}")
         for det in detections:
             self.logger.info(
-                f"Label: {det['label']}, Confidence: {det['confidence']:.2f}"
+                f"Class: {det['class']}, Confidence: {det['confidence']:.2f}"
             )
+
+    def log_anomaly(self, status: str, anomaly_score: float):
+        self.logger.info(f"Anomaly Detection Status: {status}")
+        self.logger.info(f"Anomaly Score: {anomaly_score:.4f}")

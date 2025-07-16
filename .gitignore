@@ -1,0 +1,45 @@
+# Python 相關
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+pip_log.txt
+*.venv/
+venv/
+env/
+
+# 臨時檔案
+Result/tmp/
+tmp_*.jpg
+*.tmp
+debug_heatmap.jpg
+
+# 日誌檔案
+logs/
+*.log
+
+# 推理結果和輸出
+Result/*/annotated/
+Result/*/original/
+Result/*/preprocessed/
+Result/*/cropped/
+Result/results.xlsx
+
+# 模型檢查點和大檔案
+*.ckpt
+*.pt
+*.pth
+
+# 環境和敏感資訊
+.env
+*.env
+
+# IDE 和編輯器檔案
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

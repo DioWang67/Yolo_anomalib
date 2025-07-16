@@ -1,4 +1,4 @@
-weights: "best.pt"
+weights: "./yolo_model/best.pt"
 device: "cpu"
 conf_thres: 0.01
 iou_thres: 0.45
@@ -10,6 +10,39 @@ gain: "15.0"
 MV_CC_GetImageBuffer_nMsec: 10000
 timeout: 1
 current_product: "PCBA1"
+enable_yolo: true
+enable_anomalib: true
+output_dir: Result
+anomalib_config:
+  output: Result/YYYYMMDD/annotated
+  threshold: 0.5
+  devices: auto
+  data:
+    path: "PCBA_image"
+    transform: null
+  model:
+    class_path: anomalib.models.Patchcore
+    init_args:
+      backbone: wide_resnet50_2
+      layers:
+        - layer2
+        - layer3
+      pre_trained: true
+      coreset_sampling_ratio: 0.1
+      num_neighbors: 9
+  models:
+    PCBA1:
+      A:
+        ckpt_path: D:/Git/robotlearning/yolo11_inference/anomalib_model/PCBA1_A_patchcore_model/model.ckpt
+      B:
+        ckpt_path: D:/Git/robotlearning/yolo11_inference/anomalib_model/PCBA1_B_patchcore_model/model.ckpt
+
+    PCBA2:
+      A:
+        ckpt_path: D:/Git/robotlearning/yolo11_inference/anomalib_model/PCBA2_A_patchcore_model/model.ckpt
+      B:
+        ckpt_path: D:/Git/robotlearning/yolo11_inference/anomalib_model/PCBA2_B_patchcore_model/model.ckpt
+
 expected_items:
   PCBA1:
     A:
