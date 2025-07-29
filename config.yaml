@@ -1,6 +1,6 @@
-weights: "./yolo_model/best.pt"
+weights: "./yolo_model/PCBA_best_0721.pt"
 device: "cpu"
-conf_thres: 0.01
+conf_thres: 0.4
 iou_thres: 0.45
 imgsz: [640, 640]
 width: 3072
@@ -45,33 +45,23 @@ anomalib_config:
 
 expected_items:
   PCBA1:
+
     A:
-      - weld_1
-      - weld_2
-      - weld_3
-      - weld_4
-      - weld_5
-      - weld_6
-      - weld_7
-      - weld_8
-    B:
-      - con1
-    C:
-      - pogo_pin
-    D:
-      - pin
-    E:
+      - C22B
+      - J5-1
+      - J5-2
+      - J6
       - J7
-      - J7_upside_down
+    B:
+      - J2-1-back
+      - J2-2-back
+      - R10
+      - R11
+      - D16
+
   PCBA2:
     A:
       - weld_1
       - weld_2
     B:
       - con2
-    C:
-      - pogo_pin2
-    D:
-      - pin2
-    E:
-      - J7_v2

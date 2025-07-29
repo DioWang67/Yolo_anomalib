@@ -1,10 +1,7 @@
-import os
+
 import sys
 import logging
-import yaml
 from datetime import datetime
-from enum import Enum
-import cv2
 import numpy as np
 from core.anomalib_lightning_inference import initialize_product_models, lightning_inference, get_status
 from core.result_handler import ResultHandler

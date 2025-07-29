@@ -38,9 +38,10 @@ _is_initialized = {}
 _current_product = None
 _current_area = None
 _current_ckpt_path = None
+_thresholds = {}  # 新增：儲存各產品區域的閾值
 
 def initialize(config: dict = None, product: str = None, area: str = None) -> None:
-    global _engine, _models, _output_dir, _transform, _is_initialized, _current_product, _current_area, _current_ckpt_path
+    global _engine, _models, _output_dir, _transform, _is_initialized, _current_product, _current_area, _current_ckpt_path, _thresholds
 
     with _initialization_lock:
         model_key = (product, area)
@@ -75,11 +76,17 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
                     logging.getLogger("anomalib").warning(f"未找到 {product},{area} 的檢查點，使用預設檢查點")
                     args.ckpt_path = config.get('ckpt_path', '')
                 else:
-                    args.ckpt_path = models[product][area].get('ckpt_path')
-                    logging.getLogger("anomalib").info(f"選擇檢查點: {args.ckpt_path} (產品: {product}, 區域: {area})")
+                    model_config = models[product][area]
+                    args.ckpt_path = model_config.get('ckpt_path')
+                    # 新增：讀取閾值設定
+                    threshold = model_config.get('threshold', 0.5)  # 預設閾值 0.5
+                    _thresholds[model_key] = threshold
+                    logging.getLogger("anomalib").info(f"選擇檢查點: {args.ckpt_path} (產品: {product}, 區域: {area}, 閾值: {threshold})")
             else:
                 args.ckpt_path = config.get('ckpt_path', '')
-                logging.getLogger("anomalib").info(f"使用預設檢查點: {args.ckpt_path}")
+                # 預設閾值
+                _thresholds[model_key] = config.get('threshold', 0.5)
+                logging.getLogger("anomalib").info(f"使用預設檢查點: {args.ckpt_path}, 閾值: {_thresholds[model_key]}")
 
             if not args.ckpt_path:
                 raise ValueError("檢查點路徑未提供")
@@ -124,7 +131,7 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
             _current_product = product
             _current_area = area
             _current_ckpt_path = args.ckpt_path
-            logging.getLogger("anomalib").info(f"模型初始化完成 (產品: {product}, 區域: {area}, 檢查點: {args.ckpt_path})")
+            logging.getLogger("anomalib").info(f"模型初始化完成 (產品: {product}, 區域: {area}, 檢查點: {args.ckpt_path}, 閾值: {_thresholds[model_key]})")
             logging.getLogger("anomalib").info(f"輸出目錄: {_output_dir}")
             
         except Exception as e:
@@ -204,9 +211,13 @@ def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing
 
 def _process_prediction(pred, image_path: str, product: str, area: str, enable_timing: bool = False):
     try:
+        model_key = (product, area)
+        threshold = _thresholds.get(model_key, 0.5)  # 取得對應的閾值
+        
         anomaly_score = pred.get("pred_scores", 0.0)
         if anomaly_score is not None:
             anomaly_score = anomaly_score.item()
+        
         anomaly_map = pred.get("anomaly_maps", None)
         if anomaly_map is None:
             logging.getLogger("anomalib").error(f"未找到異常熱圖，預測內容: {pred.keys()}")
@@ -224,31 +235,67 @@ def _process_prediction(pred, image_path: str, product: str, area: str, enable_t
             heatmap_3d = heatmap_3d.mean(axis=-1)
 
         heatmap_3d = cv2.resize(heatmap_3d, (original_image.shape[1], original_image.shape[0]))
-        min_val, max_val = heatmap_3d.min(), heatmap_3d.max()
-        if max_val - min_val == 0:
-            normalized_heatmap = np.zeros_like(heatmap_3d, dtype=np.float32)
-            logging.getLogger("anomalib").warning(f"熱圖正規化失敗，min={min_val}, max={max_val}")
+        
+        # 選擇正規化方式
+        normalization_method = "score_based"  # 改為 score_based 模式
+        
+        if normalization_method == "score_based":
+            if heatmap_3d.max() - heatmap_3d.min() == 0:
+                normalized_heatmap = np.zeros_like(heatmap_3d, dtype=np.float32)
+                threshold_mask = np.zeros_like(heatmap_3d, dtype=bool)
+                logging.getLogger("anomalib").warning(f"熱圖正規化失敗，min={heatmap_3d.min()}, max={heatmap_3d.max()}")
+            else:
+                normalized_heatmap = (heatmap_3d - heatmap_3d.min()) / np.ptp(heatmap_3d)
+                # 動態調整閾值根據異常分數
+                if anomaly_score < 0.1:
+                    dynamic_threshold = 0.95
+                else:
+                    dynamic_threshold = threshold
+                threshold_mask = normalized_heatmap > dynamic_threshold
+                logging.getLogger("anomalib").info(f"使用分數調整閾值模式，動態閾值: {dynamic_threshold:.4f} (原閾值: {threshold}, 異常分數: {anomaly_score:.4f})")
+        
+        # 使用 OpenCV COLORMAP_JET 產生彩色熱圖
+        colored_heatmap = cv2.applyColorMap((normalized_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
+        colored_heatmap = cv2.cvtColor(colored_heatmap, cv2.COLOR_BGR2RGB)
+        
+        # 建立疊加圖像：從原圖開始
+        overlay_image = original_image.copy()
+        
+        # 只在超過閾值的區域疂加熱圖顏色
+        if np.any(threshold_mask):
+            # 對超過閾值的像素進行疊加
+            overlay_image[threshold_mask] = cv2.addWeighted(
+                colored_heatmap[threshold_mask].reshape(-1, 3), 0.4,
+                original_image[threshold_mask].reshape(-1, 3), 0.6, 0
+            ).reshape(-1, 3)
+            anomaly_pixel_count = np.sum(threshold_mask)
+            total_pixels = threshold_mask.size
+            anomaly_ratio = anomaly_pixel_count / total_pixels
+            logging.getLogger("anomalib").info(
+                f"像素級閾值過濾 (方法: {normalization_method}, 閾值: {dynamic_threshold})，異常像素: {anomaly_pixel_count}/{total_pixels} ({anomaly_ratio:.2%})"
+            )
         else:
-            normalized_heatmap = (heatmap_3d - min_val) / (max_val - min_val + 1e-8)
-
-        threshold = 0.5  # 從 config 中讀取閾值
-        mask = (normalized_heatmap >= threshold).astype(np.float32)
-        filtered_heatmap = normalized_heatmap * mask
-
-        colormap = colormaps.get_cmap('jet')
-        colored_heatmap = (colormap(filtered_heatmap)[:, :, :3] * 255).astype(np.uint8)
-        overlay_image = cv2.addWeighted(original_image, 0.8, colored_heatmap, 0.4, 0)
+            logging.getLogger("anomalib").info(f"無像素超過閾值 (方法: {normalization_method})，顯示原圖")
+        
+        # 判斷整體是否為異常（用於檔名標記）
+        is_anomaly = anomaly_score > threshold
 
         current_date = datetime.now().strftime("%Y%m%d")
-        heatmap_path = os.path.join("Result", current_date, "annotated", "anomalib", f"anomalib_{product}_{area}_{datetime.now().strftime('%H%M%S')}_{anomaly_score:.4f}.jpg")
+        status_str = "anomaly" if is_anomaly else "normal"
+        heatmap_path = os.path.join("Result", current_date, "annotated", "anomalib", f"anomalib_{product}_{area}_{status_str}_{datetime.now().strftime('%H%M%S')}_{anomaly_score:.4f}.jpg")
         os.makedirs(os.path.dirname(heatmap_path), exist_ok=True)
         overlay_image_bgr = cv2.cvtColor(overlay_image, cv2.COLOR_RGB2BGR)
         cv2.imwrite(heatmap_path, overlay_image_bgr)
-        logging.getLogger("anomalib").info(f"熱圖儲存至: {heatmap_path}")
+        logging.getLogger("anomalib").info(f"結果圖片儲存至: {heatmap_path}")
 
         return {
             "image_path": image_path,
             "anomaly_score": anomaly_score,
+            "threshold": threshold,
+            "is_anomaly": is_anomaly,
+            "anomaly_pixel_count": np.sum(threshold_mask) if 'threshold_mask' in locals() else 0,
+            "total_pixels": threshold_mask.size if 'threshold_mask' in locals() else 0,
+            "anomaly_pixel_ratio": np.sum(threshold_mask) / threshold_mask.size if 'threshold_mask' in locals() and threshold_mask.size > 0 else 0.0,
             "heatmap_path": heatmap_path,
             "product": product,
             "area": area,
@@ -258,6 +305,17 @@ def _process_prediction(pred, image_path: str, product: str, area: str, enable_t
     except Exception as e:
         logging.getLogger("anomalib").error(f"處理預測結果失敗: {str(e)}")
         return {"image_path": image_path, "error": f"處理預測結果失敗: {str(e)}", "product": product, "area": area}
+def set_threshold(product: str, area: str, threshold: float) -> None:
+    """動態設定特定產品區域的閾值"""
+    global _thresholds
+    model_key = (product, area)
+    _thresholds[model_key] = threshold
+    logging.getLogger("anomalib").info(f"已設定 {product},{area} 的閾值為: {threshold}")
+
+def get_threshold(product: str, area: str) -> float:
+    """取得特定產品區域的閾值"""
+    model_key = (product, area)
+    return _thresholds.get(model_key, 0.5)
 
 def get_status():
     return {
@@ -267,5 +325,6 @@ def get_status():
         "output_dir": _output_dir,
         "current_product": _current_product,
         "current_area": _current_area,
-        "current_ckpt_path": _current_ckpt_path
+        "current_ckpt_path": _current_ckpt_path,
+        "thresholds": _thresholds  # 新增：顯示所有閾值設定
     }
