@@ -48,23 +48,37 @@ class BaseInferenceModel:
 class YOLOInferenceModel(BaseInferenceModel):
     def __init__(self, config: DetectionConfig):
         super().__init__(config)
-        self.detector = None
-        self.detection_results = None
+        self.models_cache = {}  
+        self.detector_cache = {} 
+        self.detection_results = DetectionResults(self.config)
         self.image_utils = ImageUtils()
 
     def initialize(self, product: str = None, area: str = None) -> bool:
+        key = (product or "default", area or "default")  # 允許空值
+        if key in self.models_cache:
+            self.model = self.models_cache[key]
+            self.detector = self.detector_cache[key]
+            self.is_initialized = True
+            self.logger.logger.info(f"YOLO 模型快取載入成功 (產品: {product}, 區域: {area})")
+            return True
+
         try:
             self.logger.logger.info("正在初始化 YOLO 模型...")
             self.model = YOLO(self.config.weights)
             self.model.to(self.config.device)
             self.detector = YOLODetector(self.model, self.config)
-            self.detection_results = DetectionResults(self.config)
+
+            # 放入快取
+            self.models_cache[key] = self.model
+            self.detector_cache[key] = self.detector
+
             self.is_initialized = True
-            self.logger.logger.info(f"YOLO 模型初始化成功，使用設備: {self.config.device}")
+            self.logger.logger.info(f"YOLO 模型初始化成功，設備: {self.config.device}，產品: {product}, 區域: {area}")
             return True
         except Exception as e:
             self.logger.logger.error(f"YOLO 模型初始化失敗: {str(e)}")
             return False
+
 
     def preprocess_image(self, frame: np.ndarray, product: str, area: str) -> np.ndarray:
         try:
@@ -138,39 +152,53 @@ class AnomalibInferenceModel(BaseInferenceModel):
             self.logger.logger.error(f"Anomalib 模型初始化失敗: {str(e)}")
             return False
 
-    def infer(self, image: np.ndarray, product: str, area: str) -> Dict[str, Any]:
+    def infer(self, image: np.ndarray, product: str, area: str, output_path: str = None) -> Dict[str, Any]:
         if not self.is_initialized:
             self.initialize(product, area)
             if not self.is_initialized:
                 raise RuntimeError("Anomalib 模型初始化失敗")
-        
+
+        tmp_path = None
         try:
             start_time = time.time()
+
+            # 圖像前處理
             processed_image = self.image_utils.letterbox(
-                cv2.cvtColor(image, cv2.COLOR_BGR2RGB), 
-                size=self.config.imgsz, 
+                cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
+                size=self.config.imgsz,
                 fill_color=(0, 0, 0)
             )
+
+            # 寫入臨時檔案
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
                 tmp_path = tmp.name
                 cv2.imwrite(tmp_path, cv2.cvtColor(processed_image, cv2.COLOR_RGB2BGR))
-            
-            result = lightning_inference(tmp_path, thread_safe=True, enable_timing=True, product=product, area=area)
-            
-            os.unlink(tmp_path)
-            
+
+            # 執行推理
+            result = lightning_inference(
+                tmp_path,
+                thread_safe=True,
+                enable_timing=True,
+                product=product,
+                area=area,
+                output_path=output_path
+            )
+
             if 'error' in result:
                 raise RuntimeError(result['error'])
-            
+
             anomaly_score = result.get('anomaly_score', 0.0)
             threshold = self.config.anomalib_config.get('threshold', 0.5)
             is_anomaly = anomaly_score > threshold
             status = "FAIL" if is_anomaly else "PASS"
-            
+
             inference_time = time.time() - start_time
-            
-            self.logger.logger.debug(f"Anomalib 推理時間: {inference_time:.3f}s, 異常分數: {anomaly_score:.4f}, 圖像尺寸: {processed_image.shape}, 產品: {product}, 區域: {area}")
-            
+
+            self.logger.logger.debug(
+                f"Anomalib 推理時間: {inference_time:.3f}s, 異常分數: {anomaly_score:.4f}, "
+                f"圖像尺寸: {processed_image.shape}, 產品: {product}, 區域: {area}"
+            )
+
             return {
                 "inference_type": "anomalib",
                 "status": status,
@@ -179,17 +207,23 @@ class AnomalibInferenceModel(BaseInferenceModel):
                 "inference_time": inference_time,
                 "processed_image": processed_image,
                 "result_frame": processed_image,
-                "output_path": result.get('heatmap_path', ''),  # 修改為 heatmap_path
+                "output_path": result.get('heatmap_path', ''),
                 "expected_items": [],
                 "product": product,
                 "area": area
             }
-            
+
         except Exception as e:
-            if 'tmp_path' in locals() and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
             self.logger.logger.error(f"Anomalib 推理失敗: {str(e)}")
             raise
+
+        finally:
+            # 無論成功與否都嘗試刪除臨時圖像
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception as cleanup_err:
+                    self.logger.logger.warning(f"臨時檔案刪除失敗: {cleanup_err}")
 
 class InferenceEngine:
     def __init__(self, config: DetectionConfig):
@@ -221,13 +255,18 @@ class InferenceEngine:
             self.logger.logger.error(f"推理引擎初始化失敗: {str(e)}")
             return False
 
-    def infer(self, image: np.ndarray, product: str, area: str, inference_type: InferenceType) -> Dict[str, Any]:
+    def infer(self, image: np.ndarray, product: str, area: str, inference_type: InferenceType, output_path: str = None) -> Dict[str, Any]:
         if inference_type not in self.models:
             raise ValueError(f"未初始化的推理類型: {inference_type}")
         
         try:
             model = self.models[inference_type]
-            result = model.infer(image, product, area)
+            # 修改：對 Anomalib 模型傳遞 output_path 參數
+            if inference_type == InferenceType.ANOMALIB and hasattr(model, 'infer'):
+                result = model.infer(image, product, area, output_path)
+            else:
+                result = model.infer(image, product, area)
+            
             result.update({
                 "product": product,
                 "area": area,

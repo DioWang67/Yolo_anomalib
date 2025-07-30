@@ -1,4 +1,5 @@
-
+import os
+import shutil
 import sys
 import logging
 from datetime import datetime
@@ -76,23 +77,71 @@ class DetectionSystem:
                 frame = self.camera.capture_frame()
                 if frame is None:
                     self.logger.logger.error("無法從相機獲取圖像")
-                    frame = np.zeros((640, 640, 3), dtype=np.uint8)  # 回退到模擬圖像
+                    frame = np.zeros((640, 640, 3), dtype=np.uint8)
                     self.logger.logger.warning("使用模擬圖像進行檢測")
             else:
-                frame = np.zeros((640, 640, 3), dtype=np.uint8)  # 模擬圖像
+                frame = np.zeros((640, 640, 3), dtype=np.uint8)
                 self.logger.logger.warning("相機不可用，使用模擬圖像進行檢測")
             
-            image_path = f"tmp_{product}_{area}_{datetime.now().strftime('%H%M%S')}.jpg"
-            # cv2.imwrite(image_path, frame)
+            # 為 Anomalib 預先生成標註影像路徑
+            output_path = None
+            if inference_type_enum == InferenceType.ANOMALIB:
+                output_path = self.result_handler.get_annotated_path(
+                    status="TEMP", detector=inference_type, product=product, area=area
+                )
             
-            result = self.inference_engine.infer(frame, product, area, inference_type_enum)
+            # 執行推理
+            result = self.inference_engine.infer(frame, product, area, inference_type_enum, output_path)
             if "status" in result and result["status"] == "ERROR":
                 self.logger.logger.error(f"推理失敗: {result.get('error')}")
-                return result
+                return {
+                    "status": "ERROR",
+                    "error": result.get("error"),
+                    "product": product,
+                    "area": area,
+                    "inference_type": inference_type,
+                    "ckpt_path": "",
+                    "anomaly_score": "",
+                    "detections": [],
+                    "missing_items": [],
+                    "original_image_path": "",
+                    "preprocessed_image_path": "",
+                    "heatmap_path": "",
+                    "cropped_paths": []
+                }
             
             status = result["status"]
+            
+            # 處理 Anomalib 熱圖路徑
+            if inference_type_enum == InferenceType.ANOMALIB and output_path:
+                correct_output_path = self.result_handler.get_annotated_path(
+                    status=status,
+                    detector=inference_type,
+                    product=product,
+                    area=area,
+                    anomaly_score=result.get("anomaly_score")
+                )
+                if output_path != correct_output_path and os.path.exists(output_path):
+                    os.makedirs(os.path.dirname(correct_output_path), exist_ok=True)
+                    try:
+                        shutil.move(output_path, correct_output_path)
+                        result["output_path"] = correct_output_path
+                        self.logger.logger.info(f"熱圖檔案已從 {output_path} 移動到 {correct_output_path}")
+                    except Exception as e:
+                        self.logger.logger.error(f"移動熱圖檔案失敗: {str(e)}")
+                    try:
+                        old_dir = os.path.dirname(output_path)
+                        if not os.listdir(old_dir):
+                            os.rmdir(old_dir)
+                    except Exception as cleanup_err:
+                        self.logger.logger.warning(f"清理舊目錄失敗: {cleanup_err}")
+                else:
+                    self.logger.logger.info(f"無需移動熱圖檔案，路徑已正確: {correct_output_path}")
+                    result["output_path"] = correct_output_path
+            
+            # 保存結果
             if inference_type_enum == InferenceType.ANOMALIB:
-                self.result_handler.save_results(
+                save_result = self.result_handler.save_results(
                     frame=frame,
                     detections=[],
                     status=status,
@@ -100,14 +149,14 @@ class DetectionSystem:
                     missing_items=[],
                     processed_image=result["processed_image"],
                     anomaly_score=result.get("anomaly_score"),
-                    heatmap_path=result.get("heatmap_path"),
+                    heatmap_path=result.get("output_path"),
                     product=product,
                     area=area,
                     ckpt_path=result.get("ckpt_path")
                 )
                 self.logger.log_anomaly(status, result.get("anomaly_score", 0.0))
             else:  # YOLO
-                self.result_handler.save_results(
+                save_result = self.result_handler.save_results(
                     frame=frame,
                     detections=result.get("detections", []),
                     status=status,
@@ -122,6 +171,24 @@ class DetectionSystem:
                 )
                 self.logger.log_detection(status, result.get("detections", []))
             
+            if save_result.get("status") == "ERROR":
+                self.logger.logger.error(f"保存結果失敗: {save_result.get('error_message')}")
+                return {
+                    "status": "ERROR",
+                    "error": save_result.get("error_message"),
+                    "product": product,
+                    "area": area,
+                    "inference_type": inference_type,
+                    "ckpt_path": result.get("ckpt_path", self.config.weights),
+                    "anomaly_score": result.get("anomaly_score", ""),
+                    "detections": result.get("detections", []),
+                    "missing_items": result.get("missing_items", []),
+                    "original_image_path": "",
+                    "preprocessed_image_path": "",
+                    "heatmap_path": "",
+                    "cropped_paths": []
+                }
+            
             self.logger.logger.info(f"檢測完成 - 狀態: {status}")
             return {
                 "status": status,
@@ -132,16 +199,29 @@ class DetectionSystem:
                 "anomaly_score": result.get("anomaly_score", ""),
                 "detections": result.get("detections", []),
                 "missing_items": result.get("missing_items", []),
-                "original_image_path": f"Result/{datetime.now().strftime('%Y%m%d')}/{status}/original/{product}_{area}_{datetime.now().strftime('%H%M%S')}.jpg",
-                "preprocessed_image_path": f"Result/{datetime.now().strftime('%Y%m%d')}/{status}/preprocessed/{product}_{area}_{datetime.now().strftime('%H%M%S')}.jpg",
-                "heatmap_path": result.get("heatmap_path", ""),
-                "cropped_paths": result.get("cropped_paths", [])
+                "original_image_path": save_result.get("original_path", ""),
+                "preprocessed_image_path": save_result.get("preprocessed_path", ""),
+                "heatmap_path": save_result.get("heatmap_path", ""),
+                "cropped_paths": save_result.get("cropped_paths", [])
             }
-            
+        
         except Exception as e:
             self.logger.logger.error(f"檢測失敗: {str(e)}")
-            return {"status": "ERROR", "error": str(e)}
-
+            return {
+                "status": "ERROR",
+                "error": str(e),
+                "product": product,
+                "area": area,
+                "inference_type": inference_type,
+                "ckpt_path": "",
+                "anomaly_score": "",
+                "detections": [],
+                "missing_items": [],
+                "original_image_path": "",
+                "preprocessed_image_path": "",
+                "heatmap_path": "",
+                "cropped_paths": []
+            }
     def run(self):
         self.logger.logger.info("檢測系統已啟動，等待輸入訊號...")
         

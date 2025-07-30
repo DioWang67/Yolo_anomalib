@@ -70,12 +70,26 @@ class ResultHandler:
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         self.image_utils.draw_label(frame, label, (x1, y1 - 10), color)
 
+    def get_annotated_path(self, status: str, detector: str, product: str, area: str, anomaly_score: float = None) -> str:
+        """生成標註影像的完整路徑"""
+        current_date = datetime.now().strftime("%Y%m%d")
+        time_stamp = datetime.now().strftime("%H%M%S")
+        base_path = os.path.join(self.base_dir, current_date, status, "annotated", detector.lower())
+        
+        if detector.lower() == "anomalib" and anomaly_score is not None:
+            image_name = f"{detector.lower()}_{product}_{area}_{time_stamp}_{anomaly_score:.4f}.jpg"
+        else:
+            image_name = f"{detector.lower()}_{product}_{area}_{time_stamp}.jpg" if product and area else f"{detector.lower()}_{time_stamp}.jpg"
+        
+        os.makedirs(base_path, exist_ok=True)
+        return os.path.join(base_path, image_name)
+
     def save_results(self, frame: np.ndarray, detections: List[Dict[str, Any]], status: str, detector: str, missing_items: List[str], processed_image: np.ndarray, anomaly_score: float = None, heatmap_path: str = None, product: str = None, area: str = None, ckpt_path: str = None) -> Dict:
         try:
             current_date = datetime.now().strftime("%Y%m%d")
             time_stamp = datetime.now().strftime("%H%M%S")
             base_path = os.path.join(self.base_dir, current_date, status)
-            detector_prefix = detector.lower()  # 'yolo' 或 'anomalib'
+            detector_prefix = detector.lower()
             
             os.makedirs(os.path.join(base_path, "original", detector_prefix), exist_ok=True)
             os.makedirs(os.path.join(base_path, "preprocessed", detector_prefix), exist_ok=True)
@@ -92,18 +106,42 @@ class ResultHandler:
             preprocessed_path = os.path.join(base_path, "preprocessed", detector_prefix, image_name)
             cv2.imwrite(preprocessed_path, cv2.cvtColor(processed_image, cv2.COLOR_RGB2BGR))
             
+            # 處理標註影像
             if detector.lower() == "yolo":
                 annotated_frame = processed_image.copy()
                 crop_source = processed_image
-            else:
-                annotated_frame = frame.copy()
+                
+                if detections:
+                    for det in detections:
+                        self._draw_detection_box(annotated_frame, det)
+                
+                status_color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
+                text_x = 50
+                text_y = min(50, annotated_frame.shape[0] - 20)
+                self.image_utils.draw_label(annotated_frame, f"Status: {status}", (text_x, text_y), status_color, font_scale=1.0, thickness=2)
+                
+                annotated_path = os.path.join(base_path, "annotated", detector_prefix, image_name)
+                cv2.imwrite(annotated_path, cv2.cvtColor(annotated_frame, cv2.COLOR_RGB2BGR))
+                
+            else:  # Anomalib
+                annotated_path = os.path.join(base_path, "annotated", detector_prefix, image_name)
+                if heatmap_path and os.path.exists(heatmap_path):
+                    if heatmap_path != annotated_path:  # 檢查路徑是否相同
+                        shutil.copy(heatmap_path, annotated_path)
+                        self.logger.logger.info(f"Anomalib 熱圖已複製至標註影像路徑: {annotated_path}")
+                    else:
+                        self.logger.logger.info(f"熱圖路徑與標註路徑相同，跳過複製: {annotated_path}")
+                else:
+                    cv2.imwrite(annotated_path, frame)
+                    self.logger.logger.warning("未找到 Anomalib 熱圖，使用原始圖像作為標註影像")
+                
                 crop_source = frame
 
+            # 處理裁剪圖像（僅對 YOLO 有效）
             cropped_images = []
             cropped_paths = []
             if detector.lower() == "yolo" and detections:
                 for idx, det in enumerate(detections):
-                    self._draw_detection_box(annotated_frame, det)
                     x1, y1, x2, y2 = det['bbox']
                     x1, y1 = max(0, x1), max(0, y1)
                     x2, y2 = min(crop_source.shape[1], x2), min(crop_source.shape[0], y2)
@@ -114,21 +152,8 @@ class ResultHandler:
                     cropped_images.append(cropped_img)
                     cropped_paths.append(cropped_path)
 
-            status_color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
-            text_x = 50
-            text_y = min(50, annotated_frame.shape[0] - 20)
-            self.image_utils.draw_label(annotated_frame, f"Status: {status}", (text_x, text_y), status_color, font_scale=1.0, thickness=2)
-            
-            annotated_path = os.path.join(base_path, "annotated", detector_prefix, image_name)
-            if detector.lower() == "yolo":
-                cv2.imwrite(annotated_path, cv2.cvtColor(annotated_frame, cv2.COLOR_RGB2BGR))
-            else:
-                cv2.imwrite(annotated_path,annotated_frame)
-            heatmap_dest_path = None
-            if heatmap_path and os.path.exists(heatmap_path):
-                heatmap_dest_path = os.path.join(base_path, "annotated", detector_prefix, os.path.basename(heatmap_path))
-                if heatmap_path != heatmap_dest_path:
-                    shutil.copy(heatmap_path, heatmap_dest_path)
+            # 處理熱圖路徑（僅對 Anomalib 有效）
+            heatmap_dest_path = annotated_path if detector.lower() == "anomalib" and heatmap_path and os.path.exists(heatmap_path) else None
 
             confidence_scores = ";".join([f"{det['class']}:{det['confidence']:.2f}" for det in detections]) if detections else ""
             error_message = "" if status == "PASS" else f"缺少元件: {', '.join(missing_items)}" if missing_items else "異常分數超出閾值"
@@ -146,7 +171,7 @@ class ResultHandler:
                 "標註影像路徑": annotated_path,
                 "原始影像路徑": original_path,
                 "預處理圖像路徑": preprocessed_path,
-                "異常熱圖路徑": heatmap_dest_path if heatmap_path else "",
+                "異常熱圖路徑": heatmap_dest_path if heatmap_dest_path else "",
                 "裁剪圖像路徑": ";".join(cropped_paths) if cropped_paths else "",
                 "檢查點路徑": ckpt_path or ""
             }
