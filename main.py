@@ -58,7 +58,7 @@ class DetectionSystem:
         """初始化指定機種的所有模型"""
         if self.config.enable_yolo:
             self.logger.logger.info(f"YOLO 模型已為 {product} 準備")
-        
+
         if self.config.enable_anomalib:
             try:
                 initialize_product_models(self.config.anomalib_config, product)
@@ -67,8 +67,35 @@ class DetectionSystem:
                 self.logger.logger.error(f"機種 {product} 的 Anomalib 模型初始化失敗: {str(e)}")
                 raise
 
+    def load_model_configs(self, product: str, area: str) -> None:
+        """根據指定產品與區域載入模型設定，若與當前設定相同則略過"""
+        if (
+            product == self.config.current_product
+            and area == self.config.current_area
+        ):
+            self.logger.logger.info(
+                "產品與區域與目前設定相同，略過重新載入與推理引擎初始化"
+            )
+            return
+
+        self.logger.logger.info(
+            f"切換至產品: {product}, 區域: {area}，重新載入模型與推理引擎"
+        )
+        previous_product = self.config.current_product
+        self.config.current_product = product
+        self.config.current_area = area
+        self.inference_engine = InferenceEngine(self.config)
+        self.initialize_inference_engine()
+        if product != previous_product:
+            try:
+                self.initialize_product_models(product)
+            except Exception as e:
+                self.logger.logger.error(f"重新初始化 {product} 模型失敗: {str(e)}")
+                raise
+
     def detect(self, product, area, inference_type):
         try:
+            self.load_model_configs(product, area)
             self.logger.logger.info(f"開始檢測 - 產品: {product}, 區域: {area}, 推理類型: {inference_type}")
             inference_type_enum = InferenceType.from_string(inference_type)
             
@@ -246,6 +273,8 @@ class DetectionSystem:
         
         try:
             self.initialize_product_models(product)
+            self.config.current_product = product
+            self.config.current_area = None
         except Exception as e:
             self.logger.logger.error(f"初始化 {product} 模型失敗: {str(e)}")
             if self.camera:
