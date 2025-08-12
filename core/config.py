@@ -19,8 +19,9 @@ class DetectionConfig:
     expected_items: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
     enable_yolo: bool = True
     enable_anomalib: bool = False
-    output_dir: str = "Result"  # 新增 output_dir
+    output_dir: str = "Result"
     anomalib_config: Optional[Dict] = None
+    position_config: Dict[str, Dict[str, Dict]] = field(default_factory=dict)
 
     @classmethod
     def from_yaml(cls, path: str) -> 'DetectionConfig':
@@ -43,9 +44,30 @@ class DetectionConfig:
             expected_items=config_dict.get('expected_items', {}),
             enable_yolo=config_dict.get('enable_yolo', True),
             enable_anomalib=config_dict.get('enable_anomalib', False),
-            output_dir=config_dict.get('output_dir', 'Result'),  # 新增 output_dir 解析
-            anomalib_config=config_dict.get('anomalib_config')
+            output_dir=config_dict.get('output_dir', 'Result'),
+            anomalib_config=config_dict.get('anomalib_config'),
+            position_config=config_dict.get('position_config', {})
         )
 
     def get_items_by_area(self, product: str, area: str) -> Optional[List[str]]:
         return self.expected_items.get(product, {}).get(area)
+
+    def get_position_config(self, product: str, area: str) -> Optional[Dict]:
+        return self.position_config.get(product, {}).get(area, None)
+
+    def is_position_check_enabled(self, product: str, area: str) -> bool:
+        config = self.get_position_config(product, area)
+        return config is not None and config.get("enabled", False)
+    
+    def get_tolerance_ratio(self, product: str, area: str) -> float:
+        """取得指定區域的容忍比例 (0.05 表示 5%)"""
+        config = self.get_position_config(product, area)
+        if config is None:
+            return 0.0
+
+        val = config.get("tolerance", 0)
+        if val <= 0:
+            return 0.0
+        if val <= 100:
+            return val / 100.0  # 百分比轉小數
+        return 0.0

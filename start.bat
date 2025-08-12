@@ -10,7 +10,7 @@ call %CONDA_PATH%\Scripts\activate.bat
 call conda activate yolo_anomalib
 
 REM 切換到指定目錄
-cd /d D:\Git\robotlearning\yolo11_inference
+cd /d D:\Git\robotlearning\yolo11_inference0811
 
 REM 確認 Python 環境和 torch 模組
 python --version
