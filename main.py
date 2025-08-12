@@ -29,9 +29,8 @@ class DetectionSystem:
         self.config = DetectionConfig.from_yaml(config_path)
         self.camera = None
         self.result_handler = ResultHandler(self.config, base_dir=self.config.output_dir, logger=self.logger)
-        self.inference_engine = InferenceEngine(self.config)
+        self.inference_engine = None
         self.initialize_camera()
-        self.initialize_inference_engine()
 
     def load_config(self, config_path):
         return DetectionConfig.from_yaml(config_path)
@@ -68,18 +67,22 @@ class DetectionSystem:
                 raise
 
     def load_model_configs(self, product: str, area: str) -> None:
-        """根據指定產品與區域載入模型設定，若與當前設定相同則略過"""
-        if (
-            product == self.config.current_product
-            and area == self.config.current_area
-        ):
+        """根據指定產品與區域載入模型設定，必要時建立推理引擎"""
+
+        needs_reload = (
+            self.inference_engine is None
+            or product != self.config.current_product
+            or area != self.config.current_area
+        )
+
+        if not needs_reload:
             self.logger.logger.info(
-                "產品與區域與目前設定相同，略過重新載入與推理引擎初始化"
+                "產品與區域與目前設定相同，略過重新載入與推理引擎初始化",
             )
             return
 
         self.logger.logger.info(
-            f"切換至產品: {product}, 區域: {area}，重新載入模型與推理引擎"
+            f"切換至產品: {product}, 區域: {area}，重新載入模型與推理引擎",
         )
         previous_product = self.config.current_product
         self.config.current_product = product
@@ -262,7 +265,8 @@ class DetectionSystem:
             product = input("請輸入要檢測的機種 (或輸入 'quit' 退出): ").strip()
             if product.lower() == "quit":
                 self.logger.logger.info("退出檢測系統")
-                self.inference_engine.shutdown()
+                if self.inference_engine:
+                    self.inference_engine.shutdown()
                 if self.camera:
                     self.camera.shutdown()
                 return
@@ -288,7 +292,8 @@ class DetectionSystem:
             cmd = input("請輸入檢測指令 (格式: area,inference_type 或 quit): ").strip()
             if cmd.lower() == "quit":
                 self.logger.logger.info("退出檢測系統")
-                self.inference_engine.shutdown()
+                if self.inference_engine:
+                    self.inference_engine.shutdown()
                 if self.camera:
                     self.camera.shutdown()
                 break
@@ -306,7 +311,8 @@ class DetectionSystem:
                 if inference_type.lower() not in ["yolo", "anomalib"]:
                     print("無效的推理類型，應為: yolo 或 anomalib")
                     continue
-                
+
+                self.load_model_configs(product, area)
                 result = self.detect(product, area, inference_type.lower())
                 print("\n=== 檢測結果 ===")
                 print(f"狀態: {result['status']}")
