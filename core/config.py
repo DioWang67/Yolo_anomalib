@@ -12,8 +12,8 @@ class DetectionConfig:
     timeout: int = 2
     exposure_time: str = "1000"
     gain: str = "1.0"
-    width: int = 640
-    height: int = 640
+    width: int = 3072
+    height: int = 2048
     MV_CC_GetImageBuffer_nMsec: int = 10000
     current_product: Optional[str] = None
     current_area: Optional[str] = None
