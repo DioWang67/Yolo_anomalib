@@ -1,10 +1,11 @@
+import os
 import yaml
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 
 @dataclass
 class DetectionConfig:
-    weights: str
+    weights: Optional[str] = None
     device: str = 'cpu'
     conf_thres: float = 0.25
     iou_thres: float = 0.45
@@ -17,37 +18,31 @@ class DetectionConfig:
     MV_CC_GetImageBuffer_nMsec: int = 10000
     current_product: Optional[str] = None
     expected_items: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
-    enable_yolo: bool = True
+    enable_yolo: bool = False
     enable_anomalib: bool = False
     output_dir: str = "Result"
-    anomalib_config: Optional[Dict] = None
+    anomalib_config: Optional[Dict[str, Any]] = None
     position_config: Dict[str, Dict[str, Dict]] = field(default_factory=dict)
 
     @classmethod
     def from_yaml(cls, path: str) -> 'DetectionConfig':
         with open(path, 'r', encoding='utf-8') as f:
-            config_dict = yaml.safe_load(f)
-            print("Loaded YAML:", config_dict)
-        return cls(
-            weights=config_dict.get('weights'),
-            device=config_dict.get('device', 'cpu'),
-            conf_thres=config_dict.get('conf_thres', 0.25),
-            iou_thres=config_dict.get('iou_thres', 0.45),
-            imgsz=tuple(config_dict.get('imgsz', (640, 640))),
-            timeout=config_dict.get('timeout', 2),
-            exposure_time=config_dict.get('exposure_time', "1000"),
-            gain=config_dict.get('gain', "1.0"),
-            width=config_dict.get('width', 640),
-            height=config_dict.get('height', 640),
-            MV_CC_GetImageBuffer_nMsec=config_dict.get('MV_CC_GetImageBuffer_nMsec', 10000),
-            current_product=config_dict.get('current_product'),
-            expected_items=config_dict.get('expected_items', {}),
-            enable_yolo=config_dict.get('enable_yolo', True),
-            enable_anomalib=config_dict.get('enable_anomalib', False),
-            output_dir=config_dict.get('output_dir', 'Result'),
-            anomalib_config=config_dict.get('anomalib_config'),
-            position_config=config_dict.get('position_config', {})
-        )
+            config_dict = yaml.safe_load(f) or {}
+        cfg = cls()
+        cfg._apply_dict(config_dict)
+        return cfg
+
+    def update_from_yaml(self, path: str) -> None:
+        if not os.path.exists(path):
+            return
+        with open(path, 'r', encoding='utf-8') as f:
+            config_dict = yaml.safe_load(f) or {}
+        self._apply_dict(config_dict)
+
+    def _apply_dict(self, config_dict: Dict[str, Any]) -> None:
+        for key, value in config_dict.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
     def get_items_by_area(self, product: str, area: str) -> Optional[List[str]]:
         return self.expected_items.get(product, {}).get(area)

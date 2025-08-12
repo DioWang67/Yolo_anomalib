@@ -28,3 +28,4 @@ anomalib_config:
       A:
         ckpt_path: D:/Git/robotlearning/yolo11_inference/models/PCBA1/A/anomalib/PCBA1_A_patchcore_model/weights/lightning/model.ckpt
 
+

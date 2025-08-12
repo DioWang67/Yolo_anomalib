@@ -31,10 +31,37 @@ class DetectionSystem:
         self.result_handler = ResultHandler(self.config, base_dir=self.config.output_dir, logger=self.logger)
         self.inference_engine = InferenceEngine(self.config)
         self.initialize_camera()
-        self.initialize_inference_engine()
 
     def load_config(self, config_path):
         return DetectionConfig.from_yaml(config_path)
+
+    def load_model_configs(self, product: str, area: str) -> None:
+        self.logger.logger.info(f"載入模型設定: {product}/{area}")
+        model_base = os.path.join("models", product, area)
+        yolo_config = os.path.join(model_base, "yolo", "config.yaml")
+        anomalib_config = os.path.join(model_base, "anomalib", "config.yaml")
+
+        try:
+            self.inference_engine.shutdown()
+        except Exception:
+            pass
+
+        # 重設與模型相關的設定，避免殘留上一次的資訊
+        self.config.current_product = product
+        self.config.expected_items = {}
+        self.config.position_config = {}
+        self.config.anomalib_config = None
+        self.config.enable_yolo = False
+        self.config.enable_anomalib = False
+        self.config.weights = None
+
+        if os.path.exists(yolo_config):
+            self.config.update_from_yaml(yolo_config)
+        if os.path.exists(anomalib_config):
+            self.config.update_from_yaml(anomalib_config)
+        self.result_handler = ResultHandler(self.config, base_dir=self.config.output_dir, logger=self.logger)
+        self.inference_engine = InferenceEngine(self.config)
+        self.initialize_inference_engine()
 
     def initialize_camera(self):
         self.logger.logger.info("正在初始化相機...")
@@ -225,11 +252,12 @@ class DetectionSystem:
     def run(self):
         self.logger.logger.info("檢測系統已啟動，等待輸入訊號...")
         
-        available_products = list(self.config.expected_items.keys())
+        models_base = "models"
+        available_products = [d for d in os.listdir(models_base) if os.path.isdir(os.path.join(models_base, d))]
         if not available_products:
-            self.logger.logger.error("配置中未定義任何機種")
+            self.logger.logger.error("未在 models 目錄中找到任何機種")
             return
-        
+
         print(f"可用機種: {', '.join(available_products)}")
         while True:
             product = input("請輸入要檢測的機種 (或輸入 'quit' 退出): ").strip()
@@ -244,15 +272,7 @@ class DetectionSystem:
                 continue
             break
         
-        try:
-            self.initialize_product_models(product)
-        except Exception as e:
-            self.logger.logger.error(f"初始化 {product} 模型失敗: {str(e)}")
-            if self.camera:
-                self.camera.shutdown()
-            return
-        
-        available_areas = list(self.config.expected_items.get(product, {}).keys())
+        available_areas = [d for d in os.listdir(os.path.join(models_base, product)) if os.path.isdir(os.path.join(models_base, product, d))]
         
         while True:
             print(f"可用區域: {', '.join(available_areas)}")
@@ -277,7 +297,14 @@ class DetectionSystem:
                 if inference_type.lower() not in ["yolo", "anomalib"]:
                     print("無效的推理類型，應為: yolo 或 anomalib")
                     continue
-                
+
+                self.load_model_configs(product, area)
+                try:
+                    self.initialize_product_models(product)
+                except Exception as e:
+                    self.logger.logger.error(f"初始化 {product} 模型失敗: {str(e)}")
+                    continue
+
                 result = self.detect(product, area, inference_type.lower())
                 print("\n=== 檢測結果 ===")
                 print(f"狀態: {result['status']}")
