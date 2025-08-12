@@ -1,10 +1,8 @@
-weights: "D:/Git/robotlearning/yolo11_inference/models/PCBA1/A/yolo"
+weights: "D:/Git/robotlearning/yolo11_inference/models/PCBA1/A/yolo/PCBA_A.pt"
 device: "cpu"
 conf_thres: 0.01
 iou_thres: 0.45
 imgsz: [640, 640]
-width: 3072
-height: 2048
 timeout: 1
 current_product: "PCBA1"
 enable_yolo: true
