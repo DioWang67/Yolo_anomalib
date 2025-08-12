@@ -4,6 +4,7 @@ import sys
 import logging
 from datetime import datetime
 import numpy as np
+import yaml
 from core.anomalib_lightning_inference import initialize_product_models, lightning_inference, get_status
 from core.result_handler import ResultHandler
 from core.config import DetectionConfig
@@ -30,6 +31,7 @@ class DetectionSystem:
         self.camera = None
         self.result_handler = ResultHandler(self.config, base_dir=self.config.output_dir, logger=self.logger)
         self.inference_engine = None
+        self.current_inference_type = None
         self.initialize_camera()
 
     def load_config(self, config_path):
@@ -66,39 +68,79 @@ class DetectionSystem:
                 self.logger.logger.error(f"機種 {product} 的 Anomalib 模型初始化失敗: {str(e)}")
                 raise
 
-    def load_model_configs(self, product: str, area: str) -> None:
-        """根據指定產品與區域載入模型設定，必要時建立推理引擎"""
+    def load_model_configs(self, product: str, area: str, inference_type: str) -> None:
+        """根據指定產品、區域與模型載入設定並初始化推理引擎"""
 
         needs_reload = (
             self.inference_engine is None
             or product != self.config.current_product
             or area != self.config.current_area
+            or inference_type != self.current_inference_type
         )
 
         if not needs_reload:
             self.logger.logger.info(
-                "產品與區域與目前設定相同，略過重新載入與推理引擎初始化",
+                "產品、區域與模型與目前設定相同，略過重新載入與推理引擎初始化",
             )
             return
 
         self.logger.logger.info(
-            f"切換至產品: {product}, 區域: {area}，重新載入模型與推理引擎",
+            f"切換至產品: {product}, 區域: {area}，模型: {inference_type}",
         )
-        previous_product = self.config.current_product
+
+        model_config_path = os.path.join(
+            "models", product, area, inference_type, "config.yaml"
+        )
+        if not os.path.exists(model_config_path):
+            raise FileNotFoundError(f"找不到模型設定檔: {model_config_path}")
+
+        with open(model_config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+
         self.config.current_product = product
         self.config.current_area = area
+
+        if inference_type == "yolo":
+            self.config.enable_yolo = True
+            self.config.enable_anomalib = False
+            self.config.weights = cfg.get("weights")
+            self.config.device = cfg.get("device", self.config.device)
+            self.config.conf_thres = cfg.get("conf_thres", self.config.conf_thres)
+            self.config.iou_thres = cfg.get("iou_thres", self.config.iou_thres)
+            self.config.imgsz = tuple(cfg.get("imgsz", self.config.imgsz))
+            self.config.timeout = cfg.get("timeout", self.config.timeout)
+            self.config.expected_items = cfg.get("expected_items", {})
+            self.config.output_dir = cfg.get("output_dir", self.config.output_dir)
+            self.config.position_config = cfg.get("position_config", {})
+            self.config.anomalib_config = None
+        else:  # anomalib
+            self.config.enable_yolo = False
+            self.config.enable_anomalib = True
+            self.config.device = cfg.get("device", self.config.device)
+            self.config.imgsz = tuple(cfg.get("imgsz", self.config.imgsz))
+            self.config.width = cfg.get("width", self.config.width)
+            self.config.height = cfg.get("height", self.config.height)
+            self.config.output_dir = cfg.get("output_dir", self.config.output_dir)
+            self.config.anomalib_config = cfg.get("anomalib_config")
+            self.config.expected_items = {}
+            self.config.position_config = {}
+            self.config.weights = ""
+
         self.inference_engine = InferenceEngine(self.config)
         self.initialize_inference_engine()
-        if product != previous_product:
+
+        if inference_type == "anomalib":
             try:
                 self.initialize_product_models(product)
             except Exception as e:
                 self.logger.logger.error(f"重新初始化 {product} 模型失敗: {str(e)}")
                 raise
 
+        self.current_inference_type = inference_type
+
     def detect(self, product, area, inference_type):
         try:
-            self.load_model_configs(product, area)
+            self.load_model_configs(product, area, inference_type)
             self.logger.logger.info(f"開始檢測 - 產品: {product}, 區域: {area}, 推理類型: {inference_type}")
             inference_type_enum = InferenceType.from_string(inference_type)
             
@@ -254,12 +296,16 @@ class DetectionSystem:
             }
     def run(self):
         self.logger.logger.info("檢測系統已啟動，等待輸入訊號...")
-        
-        available_products = list(self.config.expected_items.keys())
+
+        models_base = os.path.join(os.path.dirname(__file__), "models")
+        available_products = [
+            d for d in os.listdir(models_base)
+            if os.path.isdir(os.path.join(models_base, d))
+        ]
         if not available_products:
-            self.logger.logger.error("配置中未定義任何機種")
+            self.logger.logger.error("models 資料夾中未找到任何機種")
             return
-        
+
         print(f"可用機種: {', '.join(available_products)}")
         while True:
             product = input("請輸入要檢測的機種 (或輸入 'quit' 退出): ").strip()
@@ -275,17 +321,11 @@ class DetectionSystem:
                 continue
             break
         
-        try:
-            self.initialize_product_models(product)
-            self.config.current_product = product
-            self.config.current_area = None
-        except Exception as e:
-            self.logger.logger.error(f"初始化 {product} 模型失敗: {str(e)}")
-            if self.camera:
-                self.camera.shutdown()
-            return
-        
-        available_areas = list(self.config.expected_items.get(product, {}).keys())
+        product_dir = os.path.join(models_base, product)
+        available_areas = [
+            d for d in os.listdir(product_dir)
+            if os.path.isdir(os.path.join(product_dir, d))
+        ]
         
         while True:
             print(f"可用區域: {', '.join(available_areas)}")
@@ -312,7 +352,15 @@ class DetectionSystem:
                     print("無效的推理類型，應為: yolo 或 anomalib")
                     continue
 
-                self.load_model_configs(product, area)
+                config_path = os.path.join(
+                    models_base, product, area, inference_type.lower(), "config.yaml"
+                )
+                if not os.path.exists(config_path):
+                    print(
+                        f"選擇的模型不存在: {config_path}"
+                    )
+                    continue
+
                 result = self.detect(product, area, inference_type.lower())
                 print("\n=== 檢測結果 ===")
                 print(f"狀態: {result['status']}")

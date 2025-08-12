@@ -13,14 +13,16 @@ class DetectionLogger:
         log_file = os.path.join(self.log_dir, f"detection_{date_str}.log")
         os.makedirs(self.log_dir, exist_ok=True)
         
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler()
-            ]
-        )
+        root_logger = logging.getLogger()
+        if not root_logger.handlers:
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setFormatter(formatter)
+            stream_handler = logging.StreamHandler()
+            stream_handler.setFormatter(formatter)
+            root_logger.setLevel(logging.INFO)
+            root_logger.addHandler(file_handler)
+            root_logger.addHandler(stream_handler)
         self.logger = logging.getLogger(__name__)
 
     def log_detection(self, status: str, detections: list):
