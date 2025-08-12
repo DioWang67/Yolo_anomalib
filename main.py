@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 import numpy as np
 import yaml
+import copy
 from core.anomalib_lightning_inference import initialize_product_models, lightning_inference, get_status
 from core.result_handler import ResultHandler
 from core.config import DetectionConfig
@@ -32,6 +33,7 @@ class DetectionSystem:
         self.result_handler = ResultHandler(self.config, base_dir=self.config.output_dir, logger=self.logger)
         self.inference_engine = None
         self.current_inference_type = None
+        self.model_cache = {}
         self.initialize_camera()
 
     def load_config(self, config_path):
@@ -70,18 +72,15 @@ class DetectionSystem:
 
     def load_model_configs(self, product: str, area: str, inference_type: str) -> None:
         """根據指定產品、區域與模型載入設定並初始化推理引擎"""
+        cache_key = (product, area, inference_type)
 
-        needs_reload = (
-            self.inference_engine is None
-            or product != self.config.current_product
-            or area != self.config.current_area
-            or inference_type != self.current_inference_type
-        )
-
-        if not needs_reload:
+        if cache_key in self.model_cache:
             self.logger.logger.info(
-                "產品、區域與模型與目前設定相同，略過重新載入與推理引擎初始化",
+                f"使用快取模型: 產品 {product}, 區域 {area}, 模型 {inference_type}"
             )
+            self.inference_engine, cached_config = self.model_cache[cache_key]
+            self.config.__dict__.update(copy.deepcopy(cached_config.__dict__))
+            self.current_inference_type = inference_type
             return
 
         self.logger.logger.info(
@@ -137,6 +136,7 @@ class DetectionSystem:
                 raise
 
         self.current_inference_type = inference_type
+        self.model_cache[cache_key] = (self.inference_engine, copy.deepcopy(self.config))
 
     def detect(self, product, area, inference_type):
         try:
