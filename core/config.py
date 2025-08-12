@@ -16,6 +16,7 @@ class DetectionConfig:
     height: int = 640
     MV_CC_GetImageBuffer_nMsec: int = 10000
     current_product: Optional[str] = None
+    current_area: Optional[str] = None
     expected_items: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
     enable_yolo: bool = True
     enable_anomalib: bool = False
@@ -41,6 +42,7 @@ class DetectionConfig:
             height=config_dict.get('height', 640),
             MV_CC_GetImageBuffer_nMsec=config_dict.get('MV_CC_GetImageBuffer_nMsec', 10000),
             current_product=config_dict.get('current_product'),
+            current_area=config_dict.get('current_area'),
             expected_items=config_dict.get('expected_items', {}),
             enable_yolo=config_dict.get('enable_yolo', True),
             enable_anomalib=config_dict.get('enable_anomalib', False),
