@@ -48,11 +48,9 @@ class DetectionSystem:
             self.camera = None
 
     def initialize_inference_engine(self):
-        self.logger.logger.info("正在初始化推理引擎...")
         if not self.inference_engine.initialize():
             self.logger.logger.error("推理引擎初始化失敗")
             raise RuntimeError("推理引擎初始化失敗")
-        self.logger.logger.info("推理引擎初始化成功")
 
     def initialize_product_models(self, product):
         """初始化指定機種的所有模型"""
