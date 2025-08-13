@@ -10,6 +10,8 @@ from core.logger import DetectionLogger
 import shutil
 from openpyxl import load_workbook
 import time
+import threading
+import atexit
 
 
 class ResultHandler:
@@ -29,6 +31,22 @@ class ResultHandler:
         os.makedirs(self.base_dir, exist_ok=True)
         if not os.path.exists(self.excel_path):
             self._initialize_excel()
+
+        # 建立工作簿並維持於記憶體
+        self.wb = load_workbook(self.excel_path)
+        self.ws = self.wb.active
+
+        # 緩衝設定
+        self.buffer: List[List[Any]] = []
+        self.buffer_limit = self.config.get("buffer_limit", 10)
+        self.flush_interval = self.config.get("flush_interval", None)
+
+        if self.flush_interval:
+            self._timer = threading.Timer(self.flush_interval, self._periodic_flush)
+            self._timer.daemon = True
+            self._timer.start()
+
+        atexit.register(self.close)
 
     def _initialize_excel(self) -> None:
         df = pd.DataFrame(columns=self.columns)
@@ -53,23 +71,10 @@ class ResultHandler:
         return pd.DataFrame(columns=self.columns)
 
     def _get_next_test_id(self) -> int:
-        backup_path = self.excel_path + ".bak"
-        for attempt in range(3):
-            try:
-                if os.path.exists(self.excel_path):
-                    wb = load_workbook(self.excel_path)
-                    sheet = wb.active
-                    return sheet.max_row
-                return 1
-            except Exception as e:
-                self.logger.logger.error(f"取得測試編號失敗（第{attempt + 1}次）: {str(e)}")
-                time.sleep(0.5)
-                if os.path.exists(backup_path):
-                    shutil.copy(backup_path, self.excel_path)
-        return 1
+        # 當前緩衝中的資料列尚未寫入工作表，需加總
+        return self.ws.max_row + len(self.buffer)
 
     def _append_to_excel(self, data: Dict) -> None:
-        backup_path = self.excel_path + ".bak"
         row = []
         for col in self.columns:
             value = data.get(col, "")
@@ -77,16 +82,31 @@ class ResultHandler:
                 value = value.strftime('%Y-%m-%d %H:%M:%S')
             row.append(value)
 
+        self.buffer.append(row)
+        if len(self.buffer) >= self.buffer_limit:
+            self.flush()
+
+    def _periodic_flush(self) -> None:
+        self.flush()
+        if self.flush_interval:
+            self._timer = threading.Timer(self.flush_interval, self._periodic_flush)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def flush(self) -> None:
+        if not self.buffer:
+            return
+        backup_path = self.excel_path + ".bak"
         for attempt in range(3):
             try:
                 if os.path.exists(self.excel_path):
                     shutil.copy(self.excel_path, backup_path)
-                wb = load_workbook(self.excel_path)
-                ws = wb.active
-                ws.append(row)
-                wb.save(self.excel_path)
+                for row in self.buffer:
+                    self.ws.append(row)
+                self.wb.save(self.excel_path)
                 if os.path.exists(backup_path):
                     os.remove(backup_path)
+                self.buffer.clear()
                 self.logger.logger.info(f"Excel 數據已保存至 {self.excel_path}")
                 return
             except PermissionError:
@@ -94,11 +114,17 @@ class ResultHandler:
             except Exception as e:
                 self.logger.logger.error(f"寫入 Excel 時發生錯誤（第{attempt + 1}次）: {str(e)}")
             time.sleep(0.5)
-
         if os.path.exists(backup_path):
             shutil.copy(backup_path, self.excel_path)
             self.logger.logger.warning(f"已從備份恢復 {self.excel_path}")
             os.remove(backup_path)
+
+    def close(self) -> None:
+        self.flush()
+        if self.flush_interval and hasattr(self, "_timer"):
+            self._timer.cancel()
+        if hasattr(self, "wb"):
+            self.wb.close()
 
     def _draw_detection_box(self, frame: np.ndarray, detection: Dict) -> None:
         x1, y1, x2, y2 = detection['bbox']
