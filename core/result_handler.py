@@ -38,8 +38,8 @@ class ResultHandler:
 
         # 緩衝設定
         self.buffer: List[List[Any]] = []
-        self.buffer_limit = self.config.get("buffer_limit", 10)
-        self.flush_interval = self.config.get("flush_interval", None)
+        self.buffer_limit = getattr(self.config, "buffer_limit", 10)
+        self.flush_interval = getattr(self.config, "flush_interval", None)
 
         if self.flush_interval:
             self._timer = threading.Timer(self.flush_interval, self._periodic_flush)
