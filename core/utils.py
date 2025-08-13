@@ -9,15 +9,15 @@ class ImageUtils:
     @staticmethod
     def letterbox(img, size=(640, 640), fill_color=(128, 128, 128)):
         """
-        等比例縮放圖像並填充到目標尺寸（預設 640x640），保持長寬比。
-        
+        等比例縮放圖像並填充到目標尺寸，保持長寬比。
+
         Args:
             img: 輸入圖像 (numpy array, RGB 格式)
             size: 目標尺寸 (height, width)
             fill_color: 填充顏色 (RGB tuple, 預設灰色 128,128,128)
-        
+
         Returns:
-            resized_img: 調整後的圖像 (RGB 格式, 640x640)
+            resized_img: 調整後的圖像 (RGB 格式，尺寸為 size)
         """
         # 獲取原始圖像尺寸
         h, w = img.shape[:2]
@@ -40,9 +40,9 @@ class ImageUtils:
         # 將縮放後的圖像複製到畫布中心
         padded_img[top:top + new_h, left:left + new_w] = resized_img
         
-        # 確保輸出尺寸為 640x640
-        if padded_img.shape[:2] != (640, 640):
-            padded_img = cv2.resize(padded_img, (640, 640), interpolation=cv2.INTER_AREA)
+        # 確保輸出尺寸符合指定的 size
+        if padded_img.shape[:2] != (target_h, target_w):
+            padded_img = cv2.resize(padded_img, (target_w, target_h), interpolation=cv2.INTER_AREA)
         
         return padded_img
 
