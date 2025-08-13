@@ -1,6 +1,9 @@
 import yaml
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class DetectionConfig:
@@ -28,7 +31,7 @@ class DetectionConfig:
     def from_yaml(cls, path: str) -> 'DetectionConfig':
         with open(path, 'r', encoding='utf-8') as f:
             config_dict = yaml.safe_load(f)
-            print("Loaded YAML:", config_dict)
+            logger.debug("Loaded YAML: %s", config_dict)
         return cls(
             weights=config_dict.get('weights'),
             device=config_dict.get('device', 'cpu'),
