@@ -187,7 +187,7 @@ def lightning_inference(image_path: str = None, image: Union[np.ndarray, torch.T
         if model_key not in _dataloaders:
             if image is not None:
                 temp_path = os.path.join(tempfile.gettempdir(), "temp_infer.png")
-                cv2.imwrite(temp_path, cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                cv2.imwrite(temp_path, img)
                 dataset = PredictDataset(path=temp_path, transform=_transform)
             else:
                 dataset = PredictDataset(path=image_path, transform=_transform)
@@ -204,7 +204,7 @@ def lightning_inference(image_path: str = None, image: Union[np.ndarray, torch.T
             dataset = _datasets[model_key]
             if image is not None:
                 temp_path = os.path.join(tempfile.gettempdir(), "temp_infer.png")
-                cv2.imwrite(temp_path, cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                cv2.imwrite(temp_path, img)
                 dataset.path = temp_path
             else:
                 dataset.path = image_path
