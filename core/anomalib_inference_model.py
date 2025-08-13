@@ -1,13 +1,10 @@
-import os
 import cv2
 import time
-import tempfile
 import numpy as np
 from core.base_model import BaseInferenceModel
 
 from core.anomalib_lightning_inference import initialize, lightning_inference
 from core.utils import ImageUtils
-from core.logger import DetectionLogger
 
 
 class AnomalibInferenceModel(BaseInferenceModel):
@@ -35,7 +32,6 @@ class AnomalibInferenceModel(BaseInferenceModel):
             if not self.is_initialized:
                 raise RuntimeError("Anomalib 模型初始化失敗")
 
-        tmp_path = None
         try:
             start_time = time.time()
 
@@ -45,12 +41,8 @@ class AnomalibInferenceModel(BaseInferenceModel):
                 fill_color=(0, 0, 0)
             )
 
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-                tmp_path = tmp.name
-                cv2.imwrite(tmp_path, cv2.cvtColor(processed_image, cv2.COLOR_RGB2BGR))
-
             result = lightning_inference(
-                tmp_path,
+                image=processed_image,
                 thread_safe=True,
                 enable_timing=True,
                 product=product,
@@ -89,10 +81,3 @@ class AnomalibInferenceModel(BaseInferenceModel):
         except Exception as e:
             self.logger.logger.error(f"Anomalib 推理失敗: {str(e)}")
             raise
-
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except Exception as cleanup_err:
-                    self.logger.logger.warning(f"臨時檔案刪除失敗: {cleanup_err}")

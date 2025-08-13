@@ -137,29 +137,38 @@ def initialize_product_models(config: dict = None, product: str = None) -> None:
     for area in config['models'][product]:
         initialize(config, product, area)
 
-def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing: bool = True, product: str = None, area: str = None, output_path: str = None) -> dict:
+def lightning_inference(image_path: str = None, image: np.ndarray = None, thread_safe: bool = True, enable_timing: bool = True, product: str = None, area: str = None, output_path: str = None) -> dict:
     global _engine, _models, _output_dir, _transform, _inference_lock
 
     model_key = (product, area)
     if model_key not in _is_initialized or not _is_initialized[model_key]:
         raise RuntimeError(f"模型未針對 {product},{area} 初始化，請先呼叫 initialize()")
 
-    if not os.path.exists(image_path):
-        return {"image_path": image_path, "error": "圖片檔案不存在"}
+    if image is None:
+        if image_path is None or not os.path.exists(image_path):
+            return {"image_path": image_path, "error": "圖片檔案不存在"}
+        img = cv2.imread(image_path)
+    else:
+        img = image
 
-    img = cv2.imread(image_path)
+    if img is None:
+        return {"image_path": image_path, "error": "無法讀取圖片"}
+
     if img.shape[:2] != (640, 640):
         logging.getLogger("anomalib").warning(f"輸入圖像尺寸 {img.shape[:2]} 不符合預期 640x640")
 
     timings = {}
     start_time = time.time()
-    
+
     try:
         dataset_start = time.time()
-        dataset = PredictDataset(path=image_path, transform=_transform)
+        if image is not None:
+            dataset = PredictDataset(image=img, transform=_transform)
+        else:
+            dataset = PredictDataset(path=image_path, transform=_transform)
         dataloader = DataLoader(
-            dataset, 
-            batch_size=16, 
+            dataset,
+            batch_size=16,
             num_workers=0,
             pin_memory=False,
             persistent_workers=False
@@ -183,7 +192,7 @@ def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing
 
         process_start = time.time()
         for pred in predictions:
-            result = _process_prediction(pred, image_path, product, area, output_path, enable_timing=enable_timing)
+            result = _process_prediction(pred, image_path, product, area, output_path, enable_timing=enable_timing, original_image=img)
             if enable_timing:
                 timings["result_processing"] = round(time.time() - process_start, 4)
                 result["timings"] = timings
@@ -201,7 +210,7 @@ def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing
         }
 
 # anomalib_lightning_inference.py, _process_prediction 方法中
-def _process_prediction(pred, image_path: str, product: str, area: str, output_path: str = None, enable_timing: bool = False):
+def _process_prediction(pred, image_path: str, product: str, area: str, output_path: str = None, enable_timing: bool = False, original_image: np.ndarray = None):
     try:
         model_key = (product, area)
         threshold = _thresholds.get(model_key, 0.5)
@@ -214,10 +223,11 @@ def _process_prediction(pred, image_path: str, product: str, area: str, output_p
             logging.getLogger("anomalib").error(f"未找到異常熱圖，預測內容: {pred.keys()}")
             return {"image_path": image_path, "error": "未找到異常熱圖", "product": product, "area": area}
 
-        original_image = cv2.imread(image_path)
         if original_image is None:
-            logging.getLogger("anomalib").error(f"無法讀取圖片: {image_path}")
-            return {"image_path": image_path, "error": "無法讀取圖片", "product": product, "area": area}
+            original_image = cv2.imread(image_path)
+            if original_image is None:
+                logging.getLogger("anomalib").error(f"無法讀取圖片: {image_path}")
+                return {"image_path": image_path, "error": "無法讀取圖片", "product": product, "area": area}
 
         original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
         heatmap_3d = anomaly_map[0].cpu().numpy()
