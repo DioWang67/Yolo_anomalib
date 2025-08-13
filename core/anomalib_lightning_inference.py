@@ -321,8 +321,7 @@ def _process_prediction(pred, image_path: str, product: str, area: str, output_p
         os.makedirs(os.path.dirname(heatmap_path), exist_ok=True)
 
         overlay_image_bgr = cv2.cvtColor(overlay_image, cv2.COLOR_RGB2BGR)
-        overlay_image_rgb = cv2.cvtColor(overlay_image_bgr, cv2.COLOR_BGR2RGB)
-        cv2.imwrite(heatmap_path, overlay_image_rgb)
+        cv2.imwrite(heatmap_path, overlay_image_bgr)
         logging.getLogger("anomalib").info(f"結果圖片儲存至: {heatmap_path}")
 
         return {
