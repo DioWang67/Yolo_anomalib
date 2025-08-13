@@ -3,6 +3,8 @@ import time
 import torch
 import numpy as np
 from typing import Dict, Any
+from contextlib import nullcontext
+from torch.cuda.amp import autocast
 from ultralytics import YOLO
 
 from core.base_model import BaseInferenceModel
@@ -33,6 +35,10 @@ class YOLOInferenceModel(BaseInferenceModel):
             self.logger.logger.info("正在初始化 YOLO 模型...")
             self.model = YOLO(self.config.weights)
             self.model.to(self.config.device)
+            self.model.fuse()
+            if self.config.device != 'cpu':
+                self.model.model.half()
+                torch.backends.cudnn.benchmark = True
             self.detector = YOLODetector(self.model, self.config)
 
             self.models_cache[key] = self.model
@@ -63,8 +69,10 @@ class YOLOInferenceModel(BaseInferenceModel):
             if not expected_items:
                 raise ValueError(f"無效的產品或區域: {product},{area}")
 
-            with torch.no_grad():
-                pred = self.model(processed_image, conf=self.config.conf_thres, iou=self.config.iou_thres)
+            amp_ctx = autocast if self.config.device != 'cpu' else nullcontext
+            with torch.inference_mode():
+                with amp_ctx():
+                    pred = self.model(processed_image, conf=self.config.conf_thres, iou=self.config.iou_thres)
 
             result_frame, detections, missing_items = self.detector.process_detections(
                 pred, processed_image, image, expected_items
