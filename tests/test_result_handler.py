@@ -2,11 +2,12 @@ import os
 from datetime import datetime
 from openpyxl import load_workbook
 
+from core.config import DetectionConfig
 from core.result_handler import ResultHandler
 
 
 def dummy_config():
-    return {}
+    return DetectionConfig(weights="")
 
 
 def test_append_to_excel_multiple_times(tmp_path):
