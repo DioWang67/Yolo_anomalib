@@ -137,7 +137,7 @@ def initialize_product_models(config: dict = None, product: str = None) -> None:
     for area in config['models'][product]:
         initialize(config, product, area)
 
-def lightning_inference(image_path: str = None, image: np.ndarray = None, thread_safe: bool = True, enable_timing: bool = True, product: str = None, area: str = None, output_path: str = None) -> dict:
+def lightning_inference(image_path: str = None, image: np.ndarray = None, thread_safe: bool = True, enable_timing: bool = True, product: str = None, area: str = None, output_path: str = None, num_workers: int = 1) -> dict:
     global _engine, _models, _output_dir, _transform, _inference_lock
 
     model_key = (product, area)
@@ -168,10 +168,10 @@ def lightning_inference(image_path: str = None, image: np.ndarray = None, thread
             dataset = PredictDataset(path=image_path, transform=_transform)
         dataloader = DataLoader(
             dataset,
-            batch_size=16,
-            num_workers=0,
-            pin_memory=False,
-            persistent_workers=False
+            batch_size=1,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=num_workers > 0
         )
         if enable_timing:
             timings["dataset_creation"] = round(time.time() - dataset_start, 4)

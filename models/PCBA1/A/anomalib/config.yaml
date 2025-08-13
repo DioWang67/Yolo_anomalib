@@ -10,6 +10,7 @@ anomalib_config:
   output: Result/YYYYMMDD/annotated
   threshold: 0.5
   devices: auto
+  num_workers: 1
   data:
     path: "PCBA_image"
     transform: null

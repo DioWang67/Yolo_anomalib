@@ -47,7 +47,8 @@ class AnomalibInferenceModel(BaseInferenceModel):
                 enable_timing=True,
                 product=product,
                 area=area,
-                output_path=output_path
+                output_path=output_path,
+                num_workers=self.config.anomalib_config.get('num_workers', 1) if self.config.anomalib_config else 1
             )
 
             if 'error' in result:
