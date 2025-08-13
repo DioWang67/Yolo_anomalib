@@ -19,6 +19,7 @@ import logging
 from datetime import datetime
 from matplotlib import colormaps
 from typing import Union
+import tempfile
 
 logging.getLogger("anomalib").setLevel(logging.INFO)
 logging.getLogger("lightning").setLevel(logging.ERROR)
@@ -125,7 +126,9 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
 
             if model_key not in _datasets:
                 dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
-                _datasets[model_key] = PredictDataset(image=dummy_img, transform=_transform)
+                temp_path = os.path.join(tempfile.gettempdir(), "dummy.png")
+                cv2.imwrite(temp_path, dummy_img)
+                _datasets[model_key] = PredictDataset(path=temp_path, transform=_transform)
                 _dataloaders[model_key] = DataLoader(
                     _datasets[model_key],
                     batch_size=16,
@@ -182,7 +185,9 @@ def lightning_inference(image_path: str = None, image: Union[np.ndarray, torch.T
         dataset_start = time.time()
         if model_key not in _dataloaders:
             if image is not None:
-                dataset = PredictDataset(image=img, transform=_transform)
+                temp_path = os.path.join(tempfile.gettempdir(), "temp_infer.png")
+                cv2.imwrite(temp_path, img)
+                dataset = PredictDataset(path=temp_path, transform=_transform)
             else:
                 dataset = PredictDataset(path=image_path, transform=_transform)
             dataloader = DataLoader(
@@ -197,10 +202,10 @@ def lightning_inference(image_path: str = None, image: Union[np.ndarray, torch.T
         else:
             dataset = _datasets[model_key]
             if image is not None:
-                dataset.path = None
-                dataset.image = img
+                temp_path = os.path.join(tempfile.gettempdir(), "temp_infer.png")
+                cv2.imwrite(temp_path, img)
+                dataset.path = temp_path
             else:
-                dataset.image = None
                 dataset.path = image_path
             dataloader = _dataloaders[model_key]
         if enable_timing:
