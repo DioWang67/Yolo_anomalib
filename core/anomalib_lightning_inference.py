@@ -2,7 +2,6 @@ import os
 import cv2
 import numpy as np
 import warnings
-import torch
 from jsonargparse import ActionConfigFile, Namespace
 from lightning.pytorch.cli import LightningArgumentParser
 from lightning.pytorch.callbacks import Callback
@@ -18,8 +17,6 @@ import time
 import logging
 from datetime import datetime
 from matplotlib import colormaps
-from typing import Union
-import tempfile
 
 logging.getLogger("anomalib").setLevel(logging.INFO)
 logging.getLogger("lightning").setLevel(logging.ERROR)
@@ -42,8 +39,6 @@ _current_product = None
 _current_area = None
 _current_ckpt_path = None
 _thresholds = {}  # 新增：儲存各產品區域的閾值
-_datasets = {}
-_dataloaders = {}
 
 # anomalib_lightning_inference.py, initialize 方法中
 def initialize(config: dict = None, product: str = None, area: str = None) -> None:
@@ -124,20 +119,6 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
             _transform = args.data.get("transform")
             os.makedirs(_output_dir, exist_ok=True)
 
-            if model_key not in _datasets:
-                dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
-                temp_path = os.path.join(tempfile.gettempdir(), "dummy.png")
-                dummy_img_rgb = cv2.cvtColor(dummy_img, cv2.COLOR_BGR2RGB)
-                cv2.imwrite(temp_path, dummy_img_rgb)
-                _datasets[model_key] = PredictDataset(path=temp_path, transform=_transform)
-                _dataloaders[model_key] = DataLoader(
-                    _datasets[model_key],
-                    batch_size=16,
-                    num_workers=0,
-                    pin_memory=False,
-                    persistent_workers=False
-                )
-
             _is_initialized[model_key] = True
             _current_product = product
             _current_area = area
@@ -156,59 +137,33 @@ def initialize_product_models(config: dict = None, product: str = None) -> None:
     for area in config['models'][product]:
         initialize(config, product, area)
 
-def lightning_inference(image_path: str = None, image: Union[np.ndarray, torch.Tensor] = None, thread_safe: bool = True, enable_timing: bool = True, product: str = None, area: str = None, output_path: str = None) -> dict:
-    global _engine, _models, _output_dir, _transform, _inference_lock, _datasets, _dataloaders
-
-    if isinstance(image, torch.Tensor):
-        image = image.detach().cpu().numpy()
+def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing: bool = True, product: str = None, area: str = None, output_path: str = None) -> dict:
+    global _engine, _models, _output_dir, _transform, _inference_lock
 
     model_key = (product, area)
     if model_key not in _is_initialized or not _is_initialized[model_key]:
         raise RuntimeError(f"模型未針對 {product},{area} 初始化，請先呼叫 initialize()")
 
-    if image is None:
-        if image_path is None or not os.path.exists(image_path):
-            return {"image_path": image_path, "error": "圖片檔案不存在"}
-        img = cv2.imread(image_path)
-    else:
-        img = image
+    if not os.path.exists(image_path):
+        return {"image_path": image_path, "error": "圖片檔案不存在"}
 
-    if img is None:
-        return {"image_path": image_path, "error": "無法讀取圖片"}
-
+    img = cv2.imread(image_path)
     if img.shape[:2] != (640, 640):
         logging.getLogger("anomalib").warning(f"輸入圖像尺寸 {img.shape[:2]} 不符合預期 640x640")
 
     timings = {}
     start_time = time.time()
-
+    
     try:
         dataset_start = time.time()
-        if model_key not in _dataloaders:
-            if image is not None:
-                temp_path = os.path.join(tempfile.gettempdir(), "temp_infer.png")
-                cv2.imwrite(temp_path, img)
-                dataset = PredictDataset(path=temp_path, transform=_transform)
-            else:
-                dataset = PredictDataset(path=image_path, transform=_transform)
-            dataloader = DataLoader(
-                dataset,
-                batch_size=16,
-                num_workers=0,
-                pin_memory=False,
-                persistent_workers=False
-            )
-            _datasets[model_key] = dataset
-            _dataloaders[model_key] = dataloader
-        else:
-            dataset = _datasets[model_key]
-            if image is not None:
-                temp_path = os.path.join(tempfile.gettempdir(), "temp_infer.png")
-                cv2.imwrite(temp_path, img)
-                dataset.path = temp_path
-            else:
-                dataset.path = image_path
-            dataloader = _dataloaders[model_key]
+        dataset = PredictDataset(path=image_path, transform=_transform)
+        dataloader = DataLoader(
+            dataset, 
+            batch_size=16, 
+            num_workers=0,
+            pin_memory=False,
+            persistent_workers=False
+        )
         if enable_timing:
             timings["dataset_creation"] = round(time.time() - dataset_start, 4)
 
@@ -228,7 +183,7 @@ def lightning_inference(image_path: str = None, image: Union[np.ndarray, torch.T
 
         process_start = time.time()
         for pred in predictions:
-            result = _process_prediction(pred, image_path, product, area, output_path, enable_timing=enable_timing, original_image=img)
+            result = _process_prediction(pred, image_path, product, area, output_path, enable_timing=enable_timing)
             if enable_timing:
                 timings["result_processing"] = round(time.time() - process_start, 4)
                 result["timings"] = timings
@@ -246,7 +201,7 @@ def lightning_inference(image_path: str = None, image: Union[np.ndarray, torch.T
         }
 
 # anomalib_lightning_inference.py, _process_prediction 方法中
-def _process_prediction(pred, image_path: str, product: str, area: str, output_path: str = None, enable_timing: bool = False, original_image: np.ndarray = None):
+def _process_prediction(pred, image_path: str, product: str, area: str, output_path: str = None, enable_timing: bool = False):
     try:
         model_key = (product, area)
         threshold = _thresholds.get(model_key, 0.5)
@@ -259,11 +214,10 @@ def _process_prediction(pred, image_path: str, product: str, area: str, output_p
             logging.getLogger("anomalib").error(f"未找到異常熱圖，預測內容: {pred.keys()}")
             return {"image_path": image_path, "error": "未找到異常熱圖", "product": product, "area": area}
 
+        original_image = cv2.imread(image_path)
         if original_image is None:
-            original_image = cv2.imread(image_path)
-            if original_image is None:
-                logging.getLogger("anomalib").error(f"無法讀取圖片: {image_path}")
-                return {"image_path": image_path, "error": "無法讀取圖片", "product": product, "area": area}
+            logging.getLogger("anomalib").error(f"無法讀取圖片: {image_path}")
+            return {"image_path": image_path, "error": "無法讀取圖片", "product": product, "area": area}
 
         original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
         heatmap_3d = anomaly_map[0].cpu().numpy()
