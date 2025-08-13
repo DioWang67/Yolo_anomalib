@@ -127,7 +127,8 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
             if model_key not in _datasets:
                 dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
                 temp_path = os.path.join(tempfile.gettempdir(), "dummy.png")
-                cv2.imwrite(temp_path, dummy_img)
+                dummy_img_rgb = cv2.cvtColor(dummy_img, cv2.COLOR_BGR2RGB)
+                cv2.imwrite(temp_path, dummy_img_rgb)
                 _datasets[model_key] = PredictDataset(path=temp_path, transform=_transform)
                 _dataloaders[model_key] = DataLoader(
                     _datasets[model_key],
@@ -186,7 +187,7 @@ def lightning_inference(image_path: str = None, image: Union[np.ndarray, torch.T
         if model_key not in _dataloaders:
             if image is not None:
                 temp_path = os.path.join(tempfile.gettempdir(), "temp_infer.png")
-                cv2.imwrite(temp_path, img)
+                cv2.imwrite(temp_path, cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
                 dataset = PredictDataset(path=temp_path, transform=_transform)
             else:
                 dataset = PredictDataset(path=image_path, transform=_transform)
@@ -203,7 +204,7 @@ def lightning_inference(image_path: str = None, image: Union[np.ndarray, torch.T
             dataset = _datasets[model_key]
             if image is not None:
                 temp_path = os.path.join(tempfile.gettempdir(), "temp_infer.png")
-                cv2.imwrite(temp_path, img)
+                cv2.imwrite(temp_path, cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
                 dataset.path = temp_path
             else:
                 dataset.path = image_path
@@ -320,7 +321,8 @@ def _process_prediction(pred, image_path: str, product: str, area: str, output_p
         os.makedirs(os.path.dirname(heatmap_path), exist_ok=True)
 
         overlay_image_bgr = cv2.cvtColor(overlay_image, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(heatmap_path, overlay_image_bgr)
+        overlay_image_rgb = cv2.cvtColor(overlay_image_bgr, cv2.COLOR_BGR2RGB)
+        cv2.imwrite(heatmap_path, overlay_image_rgb)
         logging.getLogger("anomalib").info(f"結果圖片儲存至: {heatmap_path}")
 
         return {
