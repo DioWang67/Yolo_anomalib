@@ -27,6 +27,8 @@ class DetectionConfig:
     anomalib_config: Optional[Dict] = None
     position_config: Dict[str, Dict[str, Dict]] = field(default_factory=dict)
     max_cache_size: int = 3
+    buffer_limit: int = 10
+    flush_interval: float | None = None
 
     @classmethod
     def from_yaml(cls, path: str) -> 'DetectionConfig':
@@ -53,7 +55,9 @@ class DetectionConfig:
             output_dir=config_dict.get('output_dir', 'Result'),
             anomalib_config=config_dict.get('anomalib_config'),
             position_config=config_dict.get('position_config', {}),
-            max_cache_size=config_dict.get('max_cache_size', 3)
+            max_cache_size=config_dict.get('max_cache_size', 3),
+            buffer_limit=config_dict.get('buffer_limit', 10),
+            flush_interval=config_dict.get('flush_interval', None)
         )
 
     def get_items_by_area(self, product: str, area: str) -> Optional[List[str]]:
