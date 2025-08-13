@@ -2,6 +2,7 @@ import os
 import cv2
 import numpy as np
 import warnings
+import torch
 from jsonargparse import ActionConfigFile, Namespace
 from lightning.pytorch.cli import LightningArgumentParser
 from lightning.pytorch.callbacks import Callback
@@ -17,6 +18,7 @@ import time
 import logging
 from datetime import datetime
 from matplotlib import colormaps
+from typing import Union
 
 logging.getLogger("anomalib").setLevel(logging.INFO)
 logging.getLogger("lightning").setLevel(logging.ERROR)
@@ -137,8 +139,11 @@ def initialize_product_models(config: dict = None, product: str = None) -> None:
     for area in config['models'][product]:
         initialize(config, product, area)
 
-def lightning_inference(image_path: str = None, image: np.ndarray = None, thread_safe: bool = True, enable_timing: bool = True, product: str = None, area: str = None, output_path: str = None) -> dict:
+def lightning_inference(image_path: str = None, image: Union[np.ndarray, torch.Tensor] = None, thread_safe: bool = True, enable_timing: bool = True, product: str = None, area: str = None, output_path: str = None) -> dict:
     global _engine, _models, _output_dir, _transform, _inference_lock
+
+    if isinstance(image, torch.Tensor):
+        image = image.detach().cpu().numpy()
 
     model_key = (product, area)
     if model_key not in _is_initialized or not _is_initialized[model_key]:
