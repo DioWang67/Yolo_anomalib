@@ -1,4 +1,7 @@
 from enum import Enum
+from typing import Dict
+
+from core.base_model import BaseInferenceModel
 from core.yolo_inference_model import YOLOInferenceModel
 from core.anomalib_inference_model import AnomalibInferenceModel
 from core.logger import DetectionLogger
@@ -18,33 +21,11 @@ class InferenceType(Enum):
         raise ValueError(f"不支援的推理類型: {value}")
 
 
-class BaseInferenceModel:
-    def __init__(self, config: DetectionConfig):
-        self.config = config
-        self.logger = DetectionLogger()
-        self.model = None
-        self.is_initialized = False
-
-    def initialize(self, product: str = None, area: str = None) -> bool:
-        raise NotImplementedError("子類必須實現 initialize 方法")
-
-    def infer(self, image, product: str, area: str):
-        raise NotImplementedError("子類必須實現 infer 方法")
-
-    def shutdown(self):
-        import torch
-        if hasattr(self, 'model') and self.model:
-            del self.model
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        self.logger.logger.info("記憶體已清理")
-
-
 class InferenceEngine:
     def __init__(self, config: DetectionConfig):
         self.config = config
         self.logger = DetectionLogger()
-        self.models = {}
+        self.models: Dict[InferenceType, BaseInferenceModel] = {}
 
     def initialize(self) -> bool:
         try:
