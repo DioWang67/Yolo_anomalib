@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 import cv2
 from typing import List, Dict, Any
+from dataclasses import asdict, is_dataclass
 from .utils import ImageUtils, DetectionResults
 import numpy as np
 from ultralytics.utils.plotting import colors
@@ -16,6 +17,8 @@ import atexit
 
 class ResultHandler:
     def __init__(self, config, base_dir: str = "Result", logger: DetectionLogger = None):
+        if is_dataclass(config):
+            config = asdict(config)
         self.base_dir = base_dir
         self.config = config
         self.logger = logger or DetectionLogger()
