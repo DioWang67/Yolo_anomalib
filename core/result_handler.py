@@ -138,7 +138,7 @@ class ResultHandler:
         try:
             current_date = datetime.now().strftime("%Y%m%d")
             time_stamp = datetime.now().strftime("%H%M%S")
-            base_path = os.path.join(self.base_dir, current_date, status)
+            base_path = os.path.join(self.base_dir, current_date ,product ,area , status)
             detector_prefix = detector.lower()
 
             os.makedirs(os.path.join(base_path, "original", detector_prefix), exist_ok=True)
