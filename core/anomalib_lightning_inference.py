@@ -39,10 +39,12 @@ _current_product = None
 _current_area = None
 _current_ckpt_path = None
 _thresholds = {}  # 新增：儲存各產品區域的閾值
+_datasets = {}
+_dataloaders = {}
 
 # anomalib_lightning_inference.py, initialize 方法中
 def initialize(config: dict = None, product: str = None, area: str = None) -> None:
-    global _engine, _models, _output_dir, _transform, _is_initialized, _current_product, _current_area, _current_ckpt_path, _thresholds
+    global _engine, _models, _output_dir, _transform, _is_initialized, _current_product, _current_area, _current_ckpt_path, _thresholds, _datasets, _dataloaders
 
     with _initialization_lock:
         model_key = (product, area)
@@ -119,6 +121,9 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
             _transform = args.data.get("transform")
             os.makedirs(_output_dir, exist_ok=True)
 
+            _datasets[model_key] = None
+            _dataloaders[model_key] = None
+
             _is_initialized[model_key] = True
             _current_product = product
             _current_area = area
@@ -138,7 +143,7 @@ def initialize_product_models(config: dict = None, product: str = None) -> None:
         initialize(config, product, area)
 
 def lightning_inference(image_path: str = None, image: np.ndarray = None, thread_safe: bool = True, enable_timing: bool = True, product: str = None, area: str = None, output_path: str = None) -> dict:
-    global _engine, _models, _output_dir, _transform, _inference_lock
+    global _engine, _models, _output_dir, _transform, _inference_lock, _datasets, _dataloaders
 
     model_key = (product, area)
     if model_key not in _is_initialized or not _is_initialized[model_key]:
@@ -162,17 +167,40 @@ def lightning_inference(image_path: str = None, image: np.ndarray = None, thread
 
     try:
         dataset_start = time.time()
-        if image is not None:
-            dataset = PredictDataset(image=img, transform=_transform)
+        if model_key in _dataloaders and _dataloaders[model_key] is not None:
+            dataset = _datasets.get(model_key)
+            if image is not None:
+                if dataset is not None and hasattr(dataset, "image"):
+                    dataset.image = img
+                    if hasattr(dataset, "path"):
+                        dataset.path = None
+                else:
+                    dataset = PredictDataset(image=img, transform=_transform)
+                    _datasets[model_key] = dataset
+            else:
+                if dataset is not None and hasattr(dataset, "path"):
+                    dataset.path = image_path
+                    if hasattr(dataset, "image"):
+                        dataset.image = None
+                else:
+                    dataset = PredictDataset(path=image_path, transform=_transform)
+                    _datasets[model_key] = dataset
+            dataloader = _dataloaders[model_key]
+            dataloader.dataset = dataset
         else:
-            dataset = PredictDataset(path=image_path, transform=_transform)
-        dataloader = DataLoader(
-            dataset,
-            batch_size=16,
-            num_workers=0,
-            pin_memory=False,
-            persistent_workers=False
-        )
+            if image is not None:
+                dataset = PredictDataset(image=img, transform=_transform)
+            else:
+                dataset = PredictDataset(path=image_path, transform=_transform)
+            dataloader = DataLoader(
+                dataset,
+                batch_size=16,
+                num_workers=0,
+                pin_memory=False,
+                persistent_workers=False
+            )
+            _datasets[model_key] = dataset
+            _dataloaders[model_key] = dataloader
         if enable_timing:
             timings["dataset_creation"] = round(time.time() - dataset_start, 4)
 
