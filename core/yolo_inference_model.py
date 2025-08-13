@@ -10,21 +10,22 @@ from core.detector import YOLODetector
 from core.utils import ImageUtils, DetectionResults
 from core.logger import DetectionLogger
 from core.position_validator import PositionValidator
+from collections import OrderedDict
 
 
 class YOLOInferenceModel(BaseInferenceModel):
     def __init__(self, config):
         super().__init__(config)
-        self.models_cache = {}
-        self.detector_cache = {}
+        self.model_cache = OrderedDict()
+        self.max_cache_size = getattr(config, 'max_cache_size', 3)
         self.image_utils = ImageUtils()
         self.detection_results = DetectionResults(self.config)
 
     def initialize(self, product: str = None, area: str = None) -> bool:
         key = (product or "default", area or "default")
-        if key in self.models_cache:
-            self.model = self.models_cache[key]
-            self.detector = self.detector_cache[key]
+        if key in self.model_cache:
+            self.model, self.detector = self.model_cache[key]
+            self.model_cache.move_to_end(key)
             self.is_initialized = True
             self.logger.logger.info(f"YOLO 模型快取載入成功 (產品: {product}, 區域: {area})")
             return True
@@ -35,8 +36,17 @@ class YOLOInferenceModel(BaseInferenceModel):
             self.model.to(self.config.device)
             self.detector = YOLODetector(self.model, self.config)
 
-            self.models_cache[key] = self.model
-            self.detector_cache[key] = self.detector
+            self.model_cache[key] = (self.model, self.detector)
+            self.model_cache.move_to_end(key)
+            if len(self.model_cache) > self.max_cache_size:
+                old_key, (old_model, _) = self.model_cache.popitem(last=False)
+                try:
+                    del old_model
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                self.logger.logger.info(f"釋放最舊 YOLO 模型快取: 產品 {old_key[0]}, 區域 {old_key[1]}")
 
             self.is_initialized = True
             self.logger.logger.info(f"YOLO 模型初始化成功，設備: {self.config.device}，產品: {product}, 區域: {area}")

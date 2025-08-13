@@ -6,3 +6,4 @@ width: 3072
 height: 2048
 enable_yolo: false
 enable_anomalib: false
+max_cache_size: 3

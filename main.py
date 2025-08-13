@@ -12,6 +12,7 @@ from core.config import DetectionConfig
 from core.logger import DetectionLogger
 from core.inference_engine import InferenceEngine, InferenceType
 from camera.camera_controller import CameraController
+from collections import OrderedDict
 
 # 設置日誌
 logging.basicConfig(
@@ -33,7 +34,8 @@ class DetectionSystem:
         self.result_handler = ResultHandler(self.config, base_dir=self.config.output_dir, logger=self.logger)
         self.inference_engine = None
         self.current_inference_type = None
-        self.model_cache = {}
+        self.model_cache = OrderedDict()
+        self.max_cache_size = self.config.max_cache_size
         self.initialize_camera()
 
     def load_config(self, config_path):
@@ -72,13 +74,14 @@ class DetectionSystem:
 
     def load_model_configs(self, product: str, area: str, inference_type: str) -> None:
         """根據指定產品、區域與模型載入設定並初始化推理引擎"""
-        cache_key = (product, area, inference_type)
+        cache_key = (product, area)
 
-        if cache_key in self.model_cache:
+        if cache_key in self.model_cache and inference_type in self.model_cache[cache_key]:
             self.logger.logger.info(
                 f"使用快取模型: 產品 {product}, 區域 {area}, 模型 {inference_type}"
             )
-            self.inference_engine, cached_config = self.model_cache[cache_key]
+            self.inference_engine, cached_config = self.model_cache[cache_key][inference_type]
+            self.model_cache.move_to_end(cache_key)
             self.config.__dict__.update(copy.deepcopy(cached_config.__dict__))
             self.current_inference_type = inference_type
             return
@@ -136,7 +139,15 @@ class DetectionSystem:
                 raise
 
         self.current_inference_type = inference_type
-        self.model_cache[cache_key] = (self.inference_engine, copy.deepcopy(self.config))
+        if cache_key not in self.model_cache:
+            self.model_cache[cache_key] = {}
+        self.model_cache[cache_key][inference_type] = (self.inference_engine, copy.deepcopy(self.config))
+        self.model_cache.move_to_end(cache_key)
+        if len(self.model_cache) > self.max_cache_size:
+            old_key, engines = self.model_cache.popitem(last=False)
+            for eng, _ in engines.values():
+                eng.shutdown()
+            self.logger.logger.info(f"釋放快取模型: 產品 {old_key[0]}, 區域 {old_key[1]}")
 
     def detect(self, product, area, inference_type):
         try:

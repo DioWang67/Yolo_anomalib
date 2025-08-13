@@ -26,6 +26,7 @@ class DetectionConfig:
     output_dir: str = "Result"
     anomalib_config: Optional[Dict] = None
     position_config: Dict[str, Dict[str, Dict]] = field(default_factory=dict)
+    max_cache_size: int = 3
 
     @classmethod
     def from_yaml(cls, path: str) -> 'DetectionConfig':
@@ -51,7 +52,8 @@ class DetectionConfig:
             enable_anomalib=config_dict.get('enable_anomalib', False),
             output_dir=config_dict.get('output_dir', 'Result'),
             anomalib_config=config_dict.get('anomalib_config'),
-            position_config=config_dict.get('position_config', {})
+            position_config=config_dict.get('position_config', {}),
+            max_cache_size=config_dict.get('max_cache_size', 3)
         )
 
     def get_items_by_area(self, product: str, area: str) -> Optional[List[str]]:
