@@ -5,10 +5,11 @@ import warnings
 from jsonargparse import ActionConfigFile, Namespace
 from lightning.pytorch.cli import LightningArgumentParser
 from lightning.pytorch.callbacks import Callback
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from anomalib.data import PredictDataset
 from anomalib.engine import Engine
 from anomalib.models import AnomalyModule
+import torch
 from importlib import import_module
 import pathlib
 import sys
@@ -39,10 +40,36 @@ _current_product = None
 _current_area = None
 _current_ckpt_path = None
 _thresholds = {}  # 新增：儲存各產品區域的閾值
+_dataloaders = {}
+
+
+class _InMemoryDataset(Dataset):
+    """簡易資料集，用於處理直接傳入的 numpy array 或 tensor。"""
+
+    def __init__(self, image, transform=None):
+        self.image = image
+        self.transform = transform
+
+    def __len__(self):
+        return 1
+
+    def __getitem__(self, idx):
+        img = self.image
+        if isinstance(img, torch.Tensor):
+            tensor = img
+        else:
+            tensor = torch.from_numpy(img)
+        if self.transform:
+            try:
+                transformed = self.transform(image=tensor.permute(1, 2, 0).cpu().numpy())
+                tensor = transformed["image"]
+            except Exception:
+                pass
+        return {"image": tensor, "image_path": "in_memory"}
 
 # anomalib_lightning_inference.py, initialize 方法中
-def initialize(config: dict = None, product: str = None, area: str = None) -> None:
-    global _engine, _models, _output_dir, _transform, _is_initialized, _current_product, _current_area, _current_ckpt_path, _thresholds
+def initialize(config: dict = None, product: str = None, area: str = None, dataloader: DataLoader = None) -> None:
+    global _engine, _models, _output_dir, _transform, _is_initialized, _current_product, _current_area, _current_ckpt_path, _thresholds, _dataloaders
 
     with _initialization_lock:
         model_key = (product, area)
@@ -123,6 +150,8 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
             _current_product = product
             _current_area = area
             _current_ckpt_path = args.ckpt_path
+            if dataloader is not None:
+                _dataloaders[model_key] = dataloader
             logging.getLogger("anomalib").info(f"模型初始化完成 (產品: {product}, 區域: {area}, 檢查點: {args.ckpt_path}, 閾值: {_thresholds[model_key]})")
             logging.getLogger("anomalib").info(f"輸出目錄: {_output_dir}")
 
@@ -137,36 +166,55 @@ def initialize_product_models(config: dict = None, product: str = None) -> None:
     for area in config['models'][product]:
         initialize(config, product, area)
 
-def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing: bool = True, product: str = None, area: str = None, output_path: str = None) -> dict:
-    global _engine, _models, _output_dir, _transform, _inference_lock
+def lightning_inference(image=None, thread_safe: bool = True, enable_timing: bool = True, product: str = None, area: str = None, output_path: str = None, dataloader: DataLoader = None) -> dict:
+    global _engine, _models, _output_dir, _transform, _inference_lock, _dataloaders
 
     model_key = (product, area)
     if model_key not in _is_initialized or not _is_initialized[model_key]:
         raise RuntimeError(f"模型未針對 {product},{area} 初始化，請先呼叫 initialize()")
 
-    if not os.path.exists(image_path):
-        return {"image_path": image_path, "error": "圖片檔案不存在"}
-
-    img = cv2.imread(image_path)
-    if img.shape[:2] != (640, 640):
-        logging.getLogger("anomalib").warning(f"輸入圖像尺寸 {img.shape[:2]} 不符合預期 640x640")
-
     timings = {}
     start_time = time.time()
-    
-    try:
-        dataset_start = time.time()
-        dataset = PredictDataset(path=image_path, transform=_transform)
+
+    if dataloader is not None:
+        _dataloaders[model_key] = dataloader
+
+    orig_image = None
+    if image is not None:
+        if isinstance(image, str):
+            image_path = image
+            if not os.path.exists(image_path):
+                return {"image_path": image_path, "error": "圖片檔案不存在"}
+            orig_image = cv2.imread(image_path)
+            if orig_image.shape[:2] != (640, 640):
+                logging.getLogger("anomalib").warning(f"輸入圖像尺寸 {orig_image.shape[:2]} 不符合預期 640x640")
+            dataset_start = time.time()
+            dataset = PredictDataset(path=image_path, transform=_transform)
+        else:
+            image_path = "in_memory"
+            dataset_start = time.time()
+            if isinstance(image, torch.Tensor):
+                orig_image = image.permute(1, 2, 0).cpu().numpy()
+            else:
+                orig_image = image
+            dataset = _InMemoryDataset(image, transform=_transform)
         dataloader = DataLoader(
-            dataset, 
-            batch_size=16, 
-            num_workers=0,
-            pin_memory=False,
-            persistent_workers=False
+            dataset,
+            batch_size=1,
+            num_workers=1,
+            pin_memory=True,
+            persistent_workers=True
         )
+        _dataloaders[model_key] = dataloader
         if enable_timing:
             timings["dataset_creation"] = round(time.time() - dataset_start, 4)
+    else:
+        dataloader = _dataloaders.get(model_key)
+        if dataloader is None:
+            return {"image_path": None, "error": "未提供資料或 DataLoader"}
+        image_path = getattr(getattr(dataloader, "dataset", {}), "path", "in_memory")
 
+    try:
         predict_start = time.time()
         if thread_safe:
             with _inference_lock:
@@ -177,17 +225,17 @@ def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 predictions = _engine.predict(model=_models[model_key]['model'], dataloaders=[dataloader])
-        
+
         if enable_timing:
             timings["model_inference"] = round(time.time() - predict_start, 4)
 
         process_start = time.time()
         for pred in predictions:
-            result = _process_prediction(pred, image_path, product, area, output_path, enable_timing=enable_timing)
+            result = _process_prediction(pred, image_path, product, area, output_path, enable_timing=enable_timing, original_image=orig_image)
             if enable_timing:
                 timings["result_processing"] = round(time.time() - process_start, 4)
                 result["timings"] = timings
-            
+
             total_time = time.time() - start_time
             result["inference_time"] = round(total_time, 4)
             result["ckpt_path"] = _models[model_key]['ckpt_path']
@@ -195,13 +243,13 @@ def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing
 
     except Exception as e:
         return {
-            "image_path": image_path, 
+            "image_path": image_path,
             "error": f"圖片處理失敗: {str(e)}",
             "inference_time": round(time.time() - start_time, 4)
         }
 
 # anomalib_lightning_inference.py, _process_prediction 方法中
-def _process_prediction(pred, image_path: str, product: str, area: str, output_path: str = None, enable_timing: bool = False):
+def _process_prediction(pred, image_path: str, product: str, area: str, output_path: str = None, enable_timing: bool = False, original_image: np.ndarray = None):
     try:
         model_key = (product, area)
         threshold = _thresholds.get(model_key, 0.5)
@@ -214,12 +262,14 @@ def _process_prediction(pred, image_path: str, product: str, area: str, output_p
             logging.getLogger("anomalib").error(f"未找到異常熱圖，預測內容: {pred.keys()}")
             return {"image_path": image_path, "error": "未找到異常熱圖", "product": product, "area": area}
 
-        original_image = cv2.imread(image_path)
+        if original_image is None:
+            original_image = cv2.imread(image_path)
         if original_image is None:
             logging.getLogger("anomalib").error(f"無法讀取圖片: {image_path}")
             return {"image_path": image_path, "error": "無法讀取圖片", "product": product, "area": area}
 
-        original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
+        if original_image.ndim == 3:
+            original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
         heatmap_3d = anomaly_map[0].cpu().numpy()
         heatmap_3d = np.squeeze(heatmap_3d)
         if heatmap_3d.ndim == 3 and heatmap_3d.shape[-1] > 1:
