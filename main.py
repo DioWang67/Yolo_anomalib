@@ -29,7 +29,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 class DetectionSystem:
     def __init__(self, config_path="config.yaml"):
         self.logger = DetectionLogger()
-        self.config = DetectionConfig.from_yaml(config_path)
+        self.config = self.load_config(config_path)
         self.camera = None
         self.result_handler = ResultHandler(self.config, base_dir=self.config.output_dir, logger=self.logger)
         self.inference_engine = None
@@ -39,7 +39,17 @@ class DetectionSystem:
         self.initialize_camera()
 
     def load_config(self, config_path):
+        """載入 YAML 組態並回傳 DetectionConfig 物件"""
         return DetectionConfig.from_yaml(config_path)
+
+    def shutdown(self):
+        """釋放推理引擎與相機資源"""
+        if self.inference_engine:
+            self.inference_engine.shutdown()
+            self.inference_engine = None
+        if self.camera:
+            self.camera.shutdown()
+            self.camera = None
 
     def initialize_camera(self):
         self.logger.logger.info("正在初始化相機...")
@@ -322,10 +332,7 @@ class DetectionSystem:
             product = input("請輸入要檢測的機種 (或輸入 'quit' 退出): ").strip()
             if product.lower() == "quit":
                 self.logger.logger.info("退出檢測系統")
-                if self.inference_engine:
-                    self.inference_engine.shutdown()
-                if self.camera:
-                    self.camera.shutdown()
+                self.shutdown()
                 return
             if product not in available_products:
                 print(f"無效的機種: {product}，請選擇: {', '.join(available_products)}")
@@ -343,10 +350,7 @@ class DetectionSystem:
             cmd = input("請輸入檢測指令 (格式: area,inference_type 或 quit): ").strip()
             if cmd.lower() == "quit":
                 self.logger.logger.info("退出檢測系統")
-                if self.inference_engine:
-                    self.inference_engine.shutdown()
-                if self.camera:
-                    self.camera.shutdown()
+                self.shutdown()
                 break
             
             try:
