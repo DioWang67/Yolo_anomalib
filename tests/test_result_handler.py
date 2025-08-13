@@ -33,6 +33,9 @@ def test_append_to_excel_multiple_times(tmp_path):
         data["測試編號"] = i + 1
         handler._append_to_excel(data)
 
+    handler.flush()
+    handler.close()
+
     wb = load_workbook(handler.excel_path)
     sheet = wb.active
     assert sheet.max_row == 6  # 1 header + 5 data rows
