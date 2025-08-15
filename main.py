@@ -199,6 +199,7 @@ class DetectionSystem:
                     "missing_items": [],
                     "original_image_path": "",
                     "preprocessed_image_path": "",
+                    "annotated_path": "",
                     "heatmap_path": "",
                     "cropped_paths": []
                 }
@@ -278,6 +279,7 @@ class DetectionSystem:
                     "missing_items": result.get("missing_items", []),
                     "original_image_path": "",
                     "preprocessed_image_path": "",
+                    "annotated_path": "",
                     "heatmap_path": "",
                     "cropped_paths": []
                 }
@@ -294,6 +296,7 @@ class DetectionSystem:
                 "missing_items": result.get("missing_items", []),
                 "original_image_path": save_result.get("original_path", ""),
                 "preprocessed_image_path": save_result.get("preprocessed_path", ""),
+                "annotated_path": save_result.get("annotated_path", ""),
                 "heatmap_path": save_result.get("heatmap_path", ""),
                 "cropped_paths": save_result.get("cropped_paths", [])
             }
@@ -312,6 +315,7 @@ class DetectionSystem:
                 "missing_items": [],
                 "original_image_path": "",
                 "preprocessed_image_path": "",
+                "annotated_path": "",
                 "heatmap_path": "",
                 "cropped_paths": []
             }

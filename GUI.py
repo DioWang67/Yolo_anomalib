@@ -350,9 +350,9 @@ class DetectionSystemGUI(QMainWindow):
         self.processed_image = ImageViewer("處理後圖像")
         self.image_tabs.addTab(self.processed_image, "處理後圖像")
 
-        # 檢測圖像
-        self.heatmap_image = ImageViewer("檢測圖像")
-        self.image_tabs.addTab(self.heatmap_image, "檢測圖像")
+        # 檢測結果圖像（YOLO 標註或 Anomalib 熱圖）
+        self.result_image = ImageViewer("結果圖像")
+        self.image_tabs.addTab(self.result_image, "結果圖像")
         
         layout.addWidget(self.image_tabs)
         area.setLayout(layout)
@@ -502,7 +502,7 @@ class DetectionSystemGUI(QMainWindow):
         # 清除之前的圖像
         self.original_image.clear()
         self.processed_image.clear()
-        self.heatmap_image.clear()
+        self.result_image.clear()
         
         self.log_message(f"開始檢測 - 產品: {product}, 區域: {area}, 類型: {inference_type}")
         
@@ -551,8 +551,10 @@ class DetectionSystemGUI(QMainWindow):
         if result.get('preprocessed_image_path'):
             self.processed_image.set_image(result['preprocessed_image_path'])
         
-        if result.get('heatmap_path'):
-            self.heatmap_image.set_image(result['heatmap_path'])
+        if result.get("annotated_path"):
+            self.result_image.set_image(result["annotated_path"])
+        elif result.get('heatmap_path'):
+            self.result_image.set_image(result['heatmap_path'])
         
         self.log_message(f"檢測完成 - 狀態: {status}")
         
