@@ -455,8 +455,7 @@ class DetectionSystemGUI(QMainWindow):
             ]
             
             self.product_combo.clear()
-            self.product_combo.addItems(self.available_products)
-            
+
             # 載入區域
             self.available_areas = {}
             for product in self.available_products:
@@ -466,6 +465,11 @@ class DetectionSystemGUI(QMainWindow):
                     if os.path.isdir(os.path.join(product_dir, d))
                 ]
                 self.available_areas[product] = areas
+
+            self.product_combo.addItems(self.available_products)
+
+            if self.available_products:
+                self.on_product_changed(self.product_combo.currentText())
             
             self.log_message(f"載入了 {len(self.available_products)} 個產品模型")
             
