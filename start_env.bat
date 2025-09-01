@@ -18,5 +18,5 @@ where python
 python -c "import torch; print(torch.__version__)"
 
 REM 執行主控腳本並保持視窗開啟
-python GUI.py %*
+
 cmd /k

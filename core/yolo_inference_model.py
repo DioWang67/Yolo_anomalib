@@ -3,6 +3,8 @@ import time
 import torch
 import numpy as np
 from typing import Dict, Any
+from contextlib import nullcontext
+from torch.cuda.amp import autocast
 from ultralytics import YOLO
 
 from core.base_model import BaseInferenceModel
@@ -10,21 +12,22 @@ from core.detector import YOLODetector
 from core.utils import ImageUtils, DetectionResults
 from core.logger import DetectionLogger
 from core.position_validator import PositionValidator
+from collections import OrderedDict
 
 
 class YOLOInferenceModel(BaseInferenceModel):
     def __init__(self, config):
         super().__init__(config)
-        self.models_cache = {}
-        self.detector_cache = {}
+        self.model_cache = OrderedDict()
+        self.max_cache_size = getattr(config, 'max_cache_size', 3)
         self.image_utils = ImageUtils()
         self.detection_results = DetectionResults(self.config)
 
     def initialize(self, product: str = None, area: str = None) -> bool:
         key = (product or "default", area or "default")
-        if key in self.models_cache:
-            self.model = self.models_cache[key]
-            self.detector = self.detector_cache[key]
+        if key in self.model_cache:
+            self.model, self.detector = self.model_cache[key]
+            self.model_cache.move_to_end(key)
             self.is_initialized = True
             self.logger.logger.info(f"YOLO 模型快取載入成功 (產品: {product}, 區域: {area})")
             return True
@@ -33,10 +36,23 @@ class YOLOInferenceModel(BaseInferenceModel):
             self.logger.logger.info("正在初始化 YOLO 模型...")
             self.model = YOLO(self.config.weights)
             self.model.to(self.config.device)
+            self.model.fuse()
+            if self.config.device != 'cpu':
+                self.model.model.half()
+                torch.backends.cudnn.benchmark = True
             self.detector = YOLODetector(self.model, self.config)
 
-            self.models_cache[key] = self.model
-            self.detector_cache[key] = self.detector
+            self.model_cache[key] = (self.model, self.detector)
+            self.model_cache.move_to_end(key)
+            if len(self.model_cache) > self.max_cache_size:
+                old_key, (old_model, _) = self.model_cache.popitem(last=False)
+                try:
+                    del old_model
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                self.logger.logger.info(f"釋放最舊 YOLO 模型快取: 產品 {old_key[0]}, 區域 {old_key[1]}")
 
             self.is_initialized = True
             self.logger.logger.info(f"YOLO 模型初始化成功，設備: {self.config.device}，產品: {product}, 區域: {area}")
@@ -47,7 +63,8 @@ class YOLOInferenceModel(BaseInferenceModel):
 
     def preprocess_image(self, frame: np.ndarray, product: str, area: str) -> np.ndarray:
         target_size = self.config.imgsz
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_rgb = frame
         resized_img = self.image_utils.letterbox(frame_rgb, size=target_size, fill_color=(128, 128, 128))
         self.logger.logger.debug(f"圖像預處理：原始尺寸={frame.shape[:2]}，目標尺寸={target_size}")
         return resized_img
@@ -63,8 +80,10 @@ class YOLOInferenceModel(BaseInferenceModel):
             if not expected_items:
                 raise ValueError(f"無效的產品或區域: {product},{area}")
 
-            with torch.no_grad():
-                pred = self.model(processed_image, conf=self.config.conf_thres, iou=self.config.iou_thres)
+            amp_ctx = autocast if self.config.device != 'cpu' else nullcontext
+            with torch.inference_mode():
+                with amp_ctx():
+                    pred = self.model(processed_image, conf=self.config.conf_thres, iou=self.config.iou_thres)
 
             result_frame, detections, missing_items = self.detector.process_detections(
                 pred, processed_image, image, expected_items

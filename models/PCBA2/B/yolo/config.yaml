@@ -1,0 +1,32 @@
+weights: "D:/Git/robotlearning/yolo11_inference/models/PCBA2/B/yolo/PCBA_B.pt"
+device: "cpu"
+conf_thres: 0.01
+iou_thres: 0.45
+imgsz: [640, 640]
+timeout: 1
+current_product: "PCBA2"
+enable_yolo: true
+output_dir: Result
+
+expected_items:
+  PCBA2:
+    B:
+      - C22B
+      - J5-1
+      - J5-2
+      - J6
+      - J7
+
+
+position_config:
+  PCBA2:
+    B:
+      enabled: false
+      mode: bbox
+      tolerance: 2
+      expected_boxes:
+        C22B: { x1: 350, y1: 210, x2: 390, y2: 310 }
+        J5-1: { x1: 400, y1: 200, x2: 540, y2: 340 }
+        J5-2: { x1: 80,  y1: 250, x2: 180, y2: 380 }
+        J6:   { x1: 200, y1: 250, x2: 320, y2: 380 }
+        J7:   { x1: 430, y1: 270, x2: 580, y2: 400 }

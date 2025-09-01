@@ -1,4 +1,4 @@
-exposure_time: "20000"  # 20000
+exposure_time: "150"  # 20000
 gain: "15.0"
 MV_CC_GetImageBuffer_nMsec: 10000
 timeout: 1
@@ -6,3 +6,4 @@ width: 3072
 height: 2048
 enable_yolo: false
 enable_anomalib: false
+max_cache_size: 3

@@ -1,6 +1,9 @@
 import yaml
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class DetectionConfig:
@@ -23,12 +26,15 @@ class DetectionConfig:
     output_dir: str = "Result"
     anomalib_config: Optional[Dict] = None
     position_config: Dict[str, Dict[str, Dict]] = field(default_factory=dict)
+    max_cache_size: int = 3
+    buffer_limit: int = 10
+    flush_interval: float | None = None
 
     @classmethod
     def from_yaml(cls, path: str) -> 'DetectionConfig':
         with open(path, 'r', encoding='utf-8') as f:
             config_dict = yaml.safe_load(f)
-            print("Loaded YAML:", config_dict)
+            logger.debug("Loaded YAML: %s", config_dict)
         return cls(
             weights=config_dict.get('weights'),
             device=config_dict.get('device', 'cpu'),
@@ -48,7 +54,10 @@ class DetectionConfig:
             enable_anomalib=config_dict.get('enable_anomalib', False),
             output_dir=config_dict.get('output_dir', 'Result'),
             anomalib_config=config_dict.get('anomalib_config'),
-            position_config=config_dict.get('position_config', {})
+            position_config=config_dict.get('position_config', {}),
+            max_cache_size=config_dict.get('max_cache_size', 3),
+            buffer_limit=config_dict.get('buffer_limit', 10),
+            flush_interval=config_dict.get('flush_interval', None)
         )
 
     def get_items_by_area(self, product: str, area: str) -> Optional[List[str]]:

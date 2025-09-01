@@ -54,3 +54,11 @@ class InferenceEngine:
         if inference_type not in self.models:
             raise ValueError(f"未初始化的推理類型: {inference_type}")
         return self.models[inference_type].infer(image, product, area, output_path)
+
+    def shutdown(self):
+        for model in self.models.values():
+            try:
+                model.shutdown()
+            except Exception:
+                pass
+        self.models.clear()
