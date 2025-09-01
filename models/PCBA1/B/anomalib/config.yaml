@@ -1,0 +1,31 @@
+
+device: "cpu"
+imgsz: [640, 640]
+width: 3072
+height: 2048
+current_product: "PCBA1"
+enable_anomalib: true
+output_dir: Result
+anomalib_config:
+  output: Result/YYYYMMDD/annotated
+  threshold: 0.5
+  devices: auto
+  data:
+    path: "PCBA_image"
+    transform: null
+  model:
+    class_path: anomalib.models.Patchcore
+    init_args:
+      backbone: wide_resnet50_2
+      layers:
+        - layer2
+        - layer3
+      pre_trained: true
+      coreset_sampling_ratio: 0.1
+      num_neighbors: 9
+  models:
+    PCBA1:
+      B:
+        ckpt_path: D:/Git/robotlearning/yolo11_inference/models/PCBA1/B/anomalib/PCBA1_B_patchcore_model/weights/lightning/model.ckpt
+
+

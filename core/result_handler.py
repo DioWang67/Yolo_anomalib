@@ -183,7 +183,7 @@ class ResultHandler:
             cv2.imwrite(original_path, frame)
 
             preprocessed_path = os.path.join(base_path, "preprocessed", detector_prefix, image_name)
-            cv2.imwrite(preprocessed_path, cv2.cvtColor(processed_image, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(preprocessed_path, processed_image)
 
             # 處理標註影像
             if detector.lower() == "yolo":
@@ -200,7 +200,7 @@ class ResultHandler:
                 self.image_utils.draw_label(annotated_frame, f"Status: {status}", (text_x, text_y), status_color, font_scale=1.0, thickness=2)
 
                 annotated_path = os.path.join(base_path, "annotated", detector_prefix, image_name)
-                cv2.imwrite(annotated_path, cv2.cvtColor(annotated_frame, cv2.COLOR_RGB2BGR))
+                cv2.imwrite(annotated_path, annotated_frame)
 
             else:  # Anomalib
                 annotated_path = os.path.join(base_path, "annotated", detector_prefix, image_name)
@@ -227,7 +227,7 @@ class ResultHandler:
                     cropped_img = crop_source[y1:y2, x1:x2]
                     cropped_filename = f"{detector_prefix}_{product}_{area}_{time_stamp}_{det['class']}_{idx}.png"
                     cropped_path = os.path.join(base_path, "cropped", detector_prefix, cropped_filename)
-                    cv2.imwrite(cropped_path, cv2.cvtColor(cropped_img, cv2.COLOR_RGB2BGR))
+                    cv2.imwrite(cropped_path, cropped_img)
                     cropped_images.append(cropped_img)
                     cropped_paths.append(cropped_path)
 

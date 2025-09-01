@@ -73,17 +73,17 @@ class CameraController:
             return None
 
     def _validate_frame(self, frame: np.ndarray) -> bool:
-        if frame is None:
-            return False
-        if frame.shape[0] < 100 or frame.shape[1] < 100:
-            self.logger.logger.warning("圖像尺寸過小")
-            return False
-        if np.mean(frame) < 10:
-            self.logger.logger.warning("圖像過暗")
-            return False
-        if np.mean(frame) > 245:
-            self.logger.logger.warning("圖像過亮")
-            return False
+        # if frame is None:
+        #     return False
+        # if frame.shape[0] < 100 or frame.shape[1] < 100:
+        #     self.logger.logger.warning("圖像尺寸過小")
+        #     return False
+        # if np.mean(frame) < 10:
+        #     self.logger.logger.warning("圖像過暗")
+        #     return False
+        # if np.mean(frame) > 245:
+        #     self.logger.logger.warning("圖像過亮")
+        #     return False
         return True
 
     def get_camera_info(self) -> dict:
