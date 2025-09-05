@@ -7,7 +7,7 @@ timeout: 1
 current_product: "LED"
 enable_yolo: true
 enable_color_check: true           # 是否啟用顏色檢查
-color_model_path: "path/to/enhanced_model.json"
+color_model_path: "D:/Git/robotlearning/yolo11_inference/models/LED/A/yolo/enhanced_model.json"
 output_dir: Result
 
 expected_items:
