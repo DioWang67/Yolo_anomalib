@@ -204,15 +204,6 @@ class ResultHandler:
 
             else:  # Anomalib
                 annotated_path = os.path.join(base_path, "annotated", detector_prefix, image_name)
-                # if heatmap_path and os.path.exists(heatmap_path):
-                #     if heatmap_path != annotated_path:  # 檢查路徑是否相同
-                #         shutil.copy(heatmap_path, annotated_path)
-                #         self.logger.logger.info(f"Anomalib 熱圖已複製至標註影像路徑: {annotated_path}")
-                #     else:
-                #         self.logger.logger.info(f"熱圖路徑與標註路徑相同，跳過複製: {annotated_path}")
-                # else:
-                #     cv2.imwrite(annotated_path, frame)
-                #     self.logger.logger.warning("未找到 Anomalib 熱圖，使用原始圖像作為標註影像")
 
                 crop_source = frame
 

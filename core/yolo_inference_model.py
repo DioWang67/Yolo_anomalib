@@ -63,7 +63,6 @@ class YOLOInferenceModel(BaseInferenceModel):
 
     def preprocess_image(self, frame: np.ndarray, product: str, area: str) -> np.ndarray:
         target_size = self.config.imgsz
-        # frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_rgb = frame
         resized_img = self.image_utils.letterbox(frame_rgb, size=target_size, fill_color=(128, 128, 128))
         self.logger.logger.debug(f"圖像預處理：原始尺寸={frame.shape[:2]}，目標尺寸={target_size}")
