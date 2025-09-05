@@ -13,6 +13,7 @@ from core.logger import DetectionLogger
 from core.inference_engine import InferenceEngine, InferenceType
 from camera.camera_controller import CameraController
 from collections import OrderedDict
+from core import ColorChecker
 
 # 設置日誌
 logging.basicConfig(
@@ -36,6 +37,8 @@ class DetectionSystem:
         self.current_inference_type = None
         self.model_cache = OrderedDict()
         self.max_cache_size = self.config.max_cache_size
+        self.color_checker = None
+        self._color_model_path = None
         self.initialize_camera()
 
     def load_config(self, config_path):
@@ -168,7 +171,20 @@ class DetectionSystem:
             self.load_model_configs(product, area, inference_type)
             self.logger.logger.info(f"開始檢測 - 產品: {product}, 區域: {area}, 推理類型: {inference_type}")
             inference_type_enum = InferenceType.from_string(inference_type)
-            
+
+            # 初始化顏色檢測器
+            if self.config.enable_color_check and self.config.color_model_path:
+                if self.color_checker is None or self._color_model_path != self.config.color_model_path:
+                    try:
+                        self.color_checker = ColorChecker(self.config.color_model_path)
+                        self._color_model_path = self.config.color_model_path
+                        self.logger.logger.info("顏色檢測器已初始化")
+                    except Exception as e:
+                        self.logger.logger.error(f"顏色檢測器初始化失敗: {str(e)}")
+                        self.color_checker = None
+            else:
+                self.color_checker = None
+
             # 嘗試使用真實相機捕獲圖像
             if self.camera:
                 frame = self.camera.capture_frame()
@@ -205,11 +221,23 @@ class DetectionSystem:
                     "preprocessed_image_path": "",
                     "annotated_path": "",
                     "heatmap_path": "",
-                    "cropped_paths": []
+                    "cropped_paths": [],
+                    "color_check": None
                 }
-            
+
             status = result["status"]
-            
+
+            color_result = None
+            if self.color_checker is not None:
+                try:
+                    c_result = self.color_checker.check(frame)
+                    color_result = {"is_ok": c_result.is_ok, "diff": c_result.diff}
+                    state = "通過" if c_result.is_ok else "不通過"
+                    self.logger.logger.info(f"顏色檢測{state}，差異值: {c_result.diff:.2f}")
+                except Exception as e:
+                    self.logger.logger.error(f"顏色檢測失敗: {str(e)}")
+                    color_result = {"is_ok": False, "diff": None, "error": str(e)}
+
             # 處理 Anomalib 熱圖路徑
             if inference_type_enum == InferenceType.ANOMALIB and output_path:
                 correct_output_path = self.result_handler.get_annotated_path(
@@ -285,9 +313,10 @@ class DetectionSystem:
                     "preprocessed_image_path": "",
                     "annotated_path": "",
                     "heatmap_path": "",
-                    "cropped_paths": []
+                    "cropped_paths": [],
+                    "color_check": color_result
                 }
-            
+
             self.logger.logger.info(f"檢測完成 - 狀態: {status}")
             return {
                 "status": status,
@@ -302,7 +331,8 @@ class DetectionSystem:
                 "preprocessed_image_path": save_result.get("preprocessed_path", ""),
                 "annotated_path": save_result.get("annotated_path", ""),
                 "heatmap_path": save_result.get("heatmap_path", ""),
-                "cropped_paths": save_result.get("cropped_paths", [])
+                "cropped_paths": save_result.get("cropped_paths", []),
+                "color_check": color_result
             }
         
         except Exception as e:
@@ -321,7 +351,8 @@ class DetectionSystem:
                 "preprocessed_image_path": "",
                 "annotated_path": "",
                 "heatmap_path": "",
-                "cropped_paths": []
+                "cropped_paths": [],
+                "color_check": None
             }
     def run(self):
         self.logger.logger.info("檢測系統已啟動，等待輸入訊號...")
@@ -398,6 +429,13 @@ class DetectionSystem:
                 print(f"預處理圖像路徑: {result.get('preprocessed_image_path', '')}")
                 print(f"異常熱圖路徑: {result.get('heatmap_path', '')}")
                 print(f"裁剪圖像路徑: {result.get('cropped_paths', [])}")
+                color_info = result.get('color_check')
+                if color_info:
+                    status_text = '通過' if color_info.get('is_ok') else '不通過'
+                    diff_val = color_info.get('diff')
+                    print(f"顏色檢測: {status_text}, 差異值: {diff_val}")
+                else:
+                    print("顏色檢測: 未執行")
                 print("====================")
                 
             except Exception as e:
