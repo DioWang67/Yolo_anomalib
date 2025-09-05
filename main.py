@@ -124,6 +124,8 @@ class DetectionSystem:
             self.config.expected_items = cfg.get("expected_items", {})
             self.config.output_dir = cfg.get("output_dir", self.config.output_dir)
             self.config.position_config = cfg.get("position_config", {})
+            self.config.enable_color_check = cfg.get("enable_color_check", self.config.enable_color_check)
+            self.config.color_model_path = cfg.get("color_model_path", self.config.color_model_path)
             self.config.anomalib_config = None
         else:  # anomalib
             self.config.enable_yolo = False
@@ -137,6 +139,8 @@ class DetectionSystem:
             self.config.expected_items = {}
             self.config.position_config = {}
             self.config.weights = ""
+            self.config.enable_color_check = cfg.get("enable_color_check", False)
+            self.config.color_model_path = cfg.get("color_model_path", None)
 
         self.inference_engine = InferenceEngine(self.config)
         self.initialize_inference_engine()
