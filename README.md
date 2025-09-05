@@ -31,7 +31,11 @@ exposure_time: "20000"
 gain: "15.0"
 enable_yolo: false
 enable_anomalib: false
+enable_color_detection: false
+color_model_path: ""
 ```
+
+若要啟用顏色檢測，請將 `enable_color_detection` 設為 `true`，並在 `color_model_path` 指定顏色模型的路徑。
 
 ### 模型設定
 
@@ -61,6 +65,12 @@ height: 640
 anomalib_config: "path/to/anomalib/model/config.yaml"
 ```
 
+**顏色檢測範例：**
+
+```yaml
+color_model_path: "path/to/color_model.pt"
+```
+
 ## 執行
 
 以 `main.py` 啟動系統：
@@ -73,6 +83,7 @@ python main.py
 
 1. 輸入機種名稱。
 2. 輸入 `區域,推論類型`，例如 `A,yolo` 或 `B,anomalib`。
+   若要進行顏色檢測，請輸入 `A,color`，並在 `config.yaml` 中啟用 `enable_color_detection` 並設定 `color_model_path`。
 3. 程式會載入對應設定並輸出檢測結果。
 
 ## 檔案輸出

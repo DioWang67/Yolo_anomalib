@@ -115,6 +115,7 @@ class DetectionSystem:
         if inference_type == "yolo":
             self.config.enable_yolo = True
             self.config.enable_anomalib = False
+            self.config.enable_color_detection = False
             self.config.weights = cfg.get("weights")
             self.config.device = cfg.get("device", self.config.device)
             self.config.conf_thres = cfg.get("conf_thres", self.config.conf_thres)
@@ -125,9 +126,20 @@ class DetectionSystem:
             self.config.output_dir = cfg.get("output_dir", self.config.output_dir)
             self.config.position_config = cfg.get("position_config", {})
             self.config.anomalib_config = None
+        elif inference_type == "color":
+            self.config.enable_yolo = False
+            self.config.enable_anomalib = False
+            self.config.enable_color_detection = True
+            self.config.color_model_path = cfg.get("color_model_path", self.config.color_model_path)
+            self.config.output_dir = cfg.get("output_dir", self.config.output_dir)
+            self.config.expected_items = {}
+            self.config.position_config = {}
+            self.config.weights = ""
+            self.config.anomalib_config = None
         else:  # anomalib
             self.config.enable_yolo = False
             self.config.enable_anomalib = True
+            self.config.enable_color_detection = False
             self.config.device = cfg.get("device", self.config.device)
             self.config.imgsz = tuple(cfg.get("imgsz", self.config.imgsz))
             self.config.width = cfg.get("width", self.config.width)
@@ -367,8 +379,8 @@ class DetectionSystem:
                 if area not in available_areas:
                     print(f"無效的區域: {area}，請選擇: {', '.join(available_areas)}")
                     continue
-                if inference_type.lower() not in ["yolo", "anomalib"]:
-                    print("無效的推理類型，應為: yolo 或 anomalib")
+                if inference_type.lower() not in ["yolo", "anomalib", "color"]:
+                    print("無效的推理類型，應為: yolo、anomalib 或 color")
                     continue
 
                 config_path = os.path.join(

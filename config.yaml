@@ -6,4 +6,6 @@ width: 3072
 height: 2048
 enable_yolo: false
 enable_anomalib: false
+enable_color_detection: false
+color_model_path: ""
 max_cache_size: 3

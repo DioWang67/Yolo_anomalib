@@ -4,6 +4,7 @@ from typing import Dict
 from core.base_model import BaseInferenceModel
 from core.yolo_inference_model import YOLOInferenceModel
 from core.anomalib_inference_model import AnomalibInferenceModel
+from core.color_inference_model import ColorInferenceModel
 from core.logger import DetectionLogger
 from core.config import DetectionConfig
 
@@ -11,6 +12,7 @@ from core.config import DetectionConfig
 class InferenceType(Enum):
     YOLO = "yolo"
     ANOMALIB = "anomalib"
+    COLOR = "color"
 
     @classmethod
     def from_string(cls, value: str) -> 'InferenceType':
@@ -40,6 +42,12 @@ class InferenceEngine:
                 anomalib_model = AnomalibInferenceModel(self.config)
                 self.models[InferenceType.ANOMALIB] = anomalib_model
                 self.logger.logger.info("Anomalib 模型已準備")
+
+            if getattr(self.config, 'enable_color_detection', False):
+                color_model = ColorInferenceModel(self.config)
+                if color_model.initialize():
+                    self.models[InferenceType.COLOR] = color_model
+                    self.logger.logger.info("顏色檢測模型已加載")
 
             if not self.models:
                 raise RuntimeError("沒有成功初始化任何推理模型")
