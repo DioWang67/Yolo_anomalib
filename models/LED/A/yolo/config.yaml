@@ -1,6 +1,6 @@
 weights: "D:/Git/robotlearning/yolo11_inference/models/LED/A/yolo/LED_best.pt"
 device: "cpu"
-conf_thres: 0.6
+conf_thres: 0.3
 iou_thres: 0.45
 imgsz: [640, 640]
 timeout: 1

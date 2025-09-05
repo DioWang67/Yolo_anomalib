@@ -1,5 +1,5 @@
-exposure_time: "150"  # 20000
-gain: "15.0"
+exposure_time: "5000"  # 20000
+gain: "0.0" #15
 MV_CC_GetImageBuffer_nMsec: 10000
 timeout: 1
 width: 3072
