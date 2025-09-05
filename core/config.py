@@ -23,6 +23,8 @@ class DetectionConfig:
     expected_items: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
     enable_yolo: bool = True
     enable_anomalib: bool = False
+    enable_color_check: bool = False
+    color_model_path: str | None = None
     output_dir: str = "Result"
     anomalib_config: Optional[Dict] = None
     position_config: Dict[str, Dict[str, Dict]] = field(default_factory=dict)
@@ -52,6 +54,8 @@ class DetectionConfig:
             expected_items=config_dict.get('expected_items', {}),
             enable_yolo=config_dict.get('enable_yolo', True),
             enable_anomalib=config_dict.get('enable_anomalib', False),
+            enable_color_check=config_dict.get('enable_color_check', False),
+            color_model_path=config_dict.get('color_model_path'),
             output_dir=config_dict.get('output_dir', 'Result'),
             anomalib_config=config_dict.get('anomalib_config'),
             position_config=config_dict.get('position_config', {}),
