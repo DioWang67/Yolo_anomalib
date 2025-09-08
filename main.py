@@ -270,7 +270,10 @@ class DetectionSystem:
                         per_items = [{"index": -1, "class": None, "bbox": None, "best_color": c_res.best_color, "diff": c_res.diff, "threshold": c_res.threshold, "is_ok": c_res.is_ok}]
                         all_ok = c_res.is_ok
 
-                    color_result = {"is_ok": all_ok, "items": per_items}
+                    diff_values = [item["diff"] for item in per_items if item.get("diff") is not None]
+                    avg_diff = float(np.mean(diff_values)) if diff_values else None
+                    max_diff = float(np.max(diff_values)) if diff_values else None
+                    color_result = {"is_ok": all_ok, "items": per_items, "diff": {"avg": avg_diff, "max": max_diff}}
                 except Exception as e:
                     self.logger.logger.error(f"顏色檢測失敗: {str(e)}")
                     color_result = {"is_ok": False, "items": [], "error": str(e)}
@@ -469,8 +472,16 @@ class DetectionSystem:
                 color_info = result.get('color_check')
                 if color_info:
                     status_text = '通過' if color_info.get('is_ok') else '不通過'
-                    diff_val = color_info.get('diff')
-                    print(f"顏色檢測: {status_text}, 差異值: {diff_val}")
+                    diff_val = color_info.get('diff', {})
+                    if isinstance(diff_val, dict):
+                        avg_diff = diff_val.get('avg')
+                        max_diff = diff_val.get('max')
+                        if avg_diff is not None and max_diff is not None:
+                            print(f"顏色檢測: {status_text}, 差異值(平均/最大): {avg_diff:.2f}/{max_diff:.2f}")
+                        else:
+                            print(f"顏色檢測: {status_text}")
+                    else:
+                        print(f"顏色檢測: {status_text}")
                 else:
                     print("顏色檢測: 未執行")
                 print("====================")
