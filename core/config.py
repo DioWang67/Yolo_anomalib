@@ -1,9 +1,14 @@
 import yaml
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 
 logger = logging.getLogger(__name__)
+try:  # optional pydantic validation
+    from .config_schema import GlobalConfigSchema, _to_dict  # type: ignore
+except Exception:  # pragma: no cover
+    GlobalConfigSchema = None  # type: ignore
+    _to_dict = None  # type: ignore
 
 @dataclass
 class DetectionConfig:
@@ -31,12 +36,22 @@ class DetectionConfig:
     max_cache_size: int = 3
     buffer_limit: int = 1
     flush_interval: float | None = None
+    pipeline: Optional[List[str]] = None
+    steps: Dict[str, Any] = field(default_factory=dict)
+    backends: Optional[Dict[str, Dict[str, Any]]] = None  # extra/custom backends
 
     @classmethod
     def from_yaml(cls, path: str) -> 'DetectionConfig':
         with open(path, 'r', encoding='utf-8') as f:
             config_dict = yaml.safe_load(f)
             logger.debug("Loaded YAML: %s", config_dict)
+        # Validate/normalize via pydantic if available
+        if GlobalConfigSchema is not None:
+            try:
+                model = GlobalConfigSchema(**(config_dict or {}))
+                config_dict = _to_dict(model)  # type: ignore
+            except Exception as e:
+                logger.warning("Global config validation failed, using raw values: %s", e)
         return cls(
             weights=config_dict.get('weights'),
             device=config_dict.get('device', 'cpu'),
@@ -61,7 +76,10 @@ class DetectionConfig:
             position_config=config_dict.get('position_config', {}),
             max_cache_size=config_dict.get('max_cache_size', 3),
             buffer_limit=config_dict.get('buffer_limit', 10),
-            flush_interval=config_dict.get('flush_interval', None)
+            flush_interval=config_dict.get('flush_interval', None),
+            pipeline=config_dict.get('pipeline'),
+            steps=config_dict.get('steps', {}),
+            backends=config_dict.get('backends')
         )
 
     def get_items_by_area(self, product: str, area: str) -> Optional[List[str]]:

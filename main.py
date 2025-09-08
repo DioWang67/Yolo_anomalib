@@ -13,9 +13,10 @@ except Exception:
 
 
 def setup_logging() -> None:
+    fmt = "%(asctime)s - %(levelname)s - [%(product)s/%(area)s/%(infer_type)s:%(request_id)s] - %(message)s"
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
+        format=fmt,
         handlers=[
             logging.FileHandler(f"logs/detection_{datetime.now().strftime('%Y%m%d')}.log", encoding='utf-8'),
             logging.StreamHandler(sys.stdout),
@@ -23,6 +24,12 @@ def setup_logging() -> None:
     )
     try:
         sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+    # Install context filter so missing fields don't break formatter
+    try:
+        from core.logging_utils import install_context_filter
+        install_context_filter(logging.getLogger())
     except Exception:
         pass
 
