@@ -28,7 +28,7 @@ class ResultHandler:
         self.detection_results = DetectionResults(config)
         self.columns = [
             "時間戳記", "測試編號", "產品", "區域", "模型類型", "結果", "信心分數", "異常分數",
-            "錯誤訊息", "標註影像路徑", "原始影像路徑", "預處理圖像路徑",
+            "顏色檢測狀態", "顏色差異值", "錯誤訊息", "標註影像路徑", "原始影像路徑", "預處理圖像路徑",
             "異常熱圖路徑", "裁剪圖像路徑", "檢查點路徑"
         ]
         os.makedirs(self.base_dir, exist_ok=True)
@@ -163,6 +163,7 @@ class ResultHandler:
         product: str = None,
         area: str = None,
         ckpt_path: str = None,
+        color_result: Dict[str, Any] = None,
     ) -> Dict:
         try:
             current_date = datetime.now().strftime("%Y%m%d")
@@ -198,6 +199,21 @@ class ResultHandler:
                 text_x = 50
                 text_y = min(50, annotated_frame.shape[0] - 20)
                 self.image_utils.draw_label(annotated_frame, f"Status: {status}", (text_x, text_y), status_color, font_scale=1.0, thickness=2)
+                if color_result:
+                    color_status = "PASS" if color_result.get("is_ok", False) else "FAIL"
+                    diffs = ";".join(
+                        [f"{item.get('diff', 0):.2f}" for item in color_result.get("items", [])]
+                    )
+                    color_color = (0, 255, 0) if color_result.get("is_ok", False) else (0, 0, 255)
+                    text_y += 30
+                    self.image_utils.draw_label(
+                        annotated_frame,
+                        f"Color: {color_status} Diff: {diffs}",
+                        (text_x, text_y),
+                        color_color,
+                        font_scale=1.0,
+                        thickness=2,
+                    )
 
                 annotated_path = os.path.join(base_path, "annotated", detector_prefix, image_name)
                 cv2.imwrite(annotated_path, annotated_frame)
@@ -227,6 +243,13 @@ class ResultHandler:
 
             confidence_scores = ";".join([f"{det['class']}:{det['confidence']:.2f}" for det in detections]) if detections else ""
             error_message = "" if status == "PASS" else f"缺少元件: {', '.join(missing_items)}" if missing_items else "異常分數超出閾值"
+            color_status = ""
+            diff_value = ""
+            if color_result:
+                color_status = "PASS" if color_result.get("is_ok", False) else "FAIL"
+                diff_value = ";".join([
+                    f"{item.get('diff', 0):.2f}" for item in color_result.get("items", [])
+                ])
 
             excel_data = {
                 "時間戳記": datetime.now(),
@@ -237,6 +260,8 @@ class ResultHandler:
                 "結果": status,
                 "信心分數": confidence_scores,
                 "異常分數": anomaly_score,
+                "顏色檢測狀態": color_status,
+                "顏色差異值": diff_value,
                 "錯誤訊息": error_message,
                 "標註影像路徑": annotated_path,
                 "原始影像路徑": original_path,

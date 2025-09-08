@@ -270,7 +270,8 @@ class DetectionSystem:
                         per_items = [{"index": -1, "class": None, "bbox": None, "best_color": c_res.best_color, "diff": c_res.diff, "threshold": c_res.threshold, "is_ok": c_res.is_ok}]
                         all_ok = c_res.is_ok
 
-                    color_result = {"is_ok": all_ok, "items": per_items}
+                    diff_str = ";".join([f"{it.get('diff', 0):.2f}" for it in per_items])
+                    color_result = {"is_ok": all_ok, "items": per_items, "diff": diff_str}
                 except Exception as e:
                     self.logger.logger.error(f"顏色檢測失敗: {str(e)}")
                     color_result = {"is_ok": False, "items": [], "error": str(e)}
@@ -315,7 +316,8 @@ class DetectionSystem:
                     heatmap_path=result.get("output_path"),
                     product=product,
                     area=area,
-                    ckpt_path=result.get("ckpt_path")
+                    ckpt_path=result.get("ckpt_path"),
+                    color_result=color_result,
                 )
                 self.logger.log_anomaly(status, result.get("anomaly_score", 0.0))
             else:  # YOLO
@@ -330,7 +332,8 @@ class DetectionSystem:
                     heatmap_path=None,
                     product=product,
                     area=area,
-                    ckpt_path=self.config.weights
+                    ckpt_path=self.config.weights,
+                    color_result=color_result,
                 )
                 self.logger.log_detection(status, result.get("detections", []))
             
