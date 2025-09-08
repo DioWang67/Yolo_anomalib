@@ -14,7 +14,6 @@ from core.logger import DetectionLogger
 from core.inference_engine import InferenceEngine, InferenceType
 from camera.camera_controller import CameraController
 from collections import OrderedDict
-from core import ColorChecker
 
 # 設置日誌
 logging.basicConfig(
