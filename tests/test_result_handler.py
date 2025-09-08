@@ -96,6 +96,7 @@ def test_save_results_yolo_success_and_flush(tmp_result_dir):
         "class_id": 1,
         "confidence": 0.93,
     }]
+    color_res = {"is_ok": True, "items": [{"diff": 0.1}]}
     out = h.save_results(
         frame=frame,
         detections=detections,
@@ -108,6 +109,7 @@ def test_save_results_yolo_success_and_flush(tmp_result_dir):
         anomaly_score=None,
         heatmap_path=None,
         ckpt_path="ckpt.pt",
+        color_result=color_res,
     )
 
     # 檔案存在
@@ -122,6 +124,8 @@ def test_save_results_yolo_success_and_flush(tmp_result_dir):
     assert (df["結果"] == "PASS").any()
     # 信心分數格式 "class:xx.xx"
     assert any(isinstance(v, str) and "screw:0.93" in v for v in df["信心分數"].fillna(""))
+    assert (df["顏色檢測狀態"] == "PASS").any()
+    assert any(isinstance(v, str) and "0.10" in v for v in df["顏色差異值"].fillna(""))
 
 def test_save_results_anomalib_with_existing_heatmap(tmp_result_dir, tmp_path):
     h = ResultHandler(DummyConfig(buffer_limit=1), base_dir=tmp_result_dir, logger=DummyLogger())
