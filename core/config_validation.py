@@ -40,4 +40,8 @@ def validate_model_cfg(cfg: Dict[str, Any], product: str, area: str) -> None:
         ckp = resolve_path(m.get("ckpt_path"))
         if not ckp or not os.path.exists(str(ckp)):
             raise ValueError(f"Anomalib ckpt not found: {ckp}")
+"""Lightweight validation helpers for model-level configs.
 
+These checks provide clear error messages early for missing/invalid paths.
+Use together with optional pydantic schema for type/range validation.
+"""

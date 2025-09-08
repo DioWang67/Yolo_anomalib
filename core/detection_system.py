@@ -21,6 +21,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 class DetectionSystem:
     def __init__(self, config_path: str = "config.yaml"):
+        """Create a detection system instance.
+
+        Args:
+            config_path: Path to the global config YAML (project-level defaults).
+        """
         self.logger = DetectionLogger()
         self.config = self.load_config(config_path)
         self.camera: CameraController | None = None
@@ -32,9 +37,11 @@ class DetectionSystem:
         self.initialize_camera()
 
     def load_config(self, config_path: str) -> DetectionConfig:
+        """Load global config from YAML into DetectionConfig dataclass."""
         return DetectionConfig.from_yaml(config_path)
 
     def shutdown(self) -> None:
+        """Release resources: models, camera, sinks."""
         if self.inference_engine:
             self.inference_engine.shutdown()
             self.inference_engine = None
@@ -48,6 +55,7 @@ class DetectionSystem:
                 pass
 
     def initialize_camera(self) -> None:
+        """Initialize camera if available; log and fall back to dummy on failure."""
         self.logger.logger.info("Initializing camera...")
         try:
             self.camera = CameraController(self.config)
@@ -59,6 +67,7 @@ class DetectionSystem:
             self.camera = None
 
     def initialize_inference_engine(self) -> None:
+        """Initialize inference engine backends that are enabled in config."""
         self.logger.logger.info("Initializing inference engine...")
         if not self.inference_engine or not self.inference_engine.initialize():
             self.logger.logger.error("Inference engine init failed")
@@ -66,6 +75,10 @@ class DetectionSystem:
         self.logger.logger.info("Inference engine is ready")
 
     def initialize_product_models(self, product: str) -> None:
+        """Preload anomalib models for a product (optional).
+
+        YOLO has fast load; anomalib can benefit from preloading across areas.
+        """
         if self.config.enable_yolo:
             self.logger.logger.info(f"YOLO is enabled for {product}")
         if self.config.enable_anomalib:
@@ -78,11 +91,26 @@ class DetectionSystem:
                 raise
 
     def load_model_configs(self, product: str, area: str, inference_type: str) -> None:
+        """Switch to a specific (product, area, type) model configuration.
+
+        Uses ModelManager to keep an LRU cache of engines and snapshots of configs.
+        """
         engine, _ = self.model_manager.switch(self.config, product, area, inference_type)
         self.inference_engine = engine
         self.current_inference_type = inference_type.lower()
 
     def detect(self, product: str, area: str, inference_type: str, frame: np.ndarray | None = None) -> dict:
+        """Run one-shot detection and return a normalized result dict.
+
+        Args:
+            product: Product name (top-level folder under models/)
+            area: Area/station name (second-level folder)
+            inference_type: Backend key (e.g., 'yolo', 'anomalib', or custom)
+            frame: Optional BGR image np.ndarray; if None, capture from camera or use dummy
+
+        Returns:
+            Dict with normalized keys consumed by sinks and GUI (status, paths, etc.).
+        """
         try:
             self.load_model_configs(product, area, inference_type)
             run_logger = context_adapter(self.logger.logger, product, area, inference_type)
@@ -229,6 +257,17 @@ class DetectionSystem:
                 "ckpt_path": result.get("ckpt_path", ""),
                 "anomaly_score": result.get("anomaly_score", ""),
                 "detections": result.get("detections", []),
+"""
+Detection system orchestrator.
+
+Responsibilities:
+- Load and merge per-product/area/type model configs via ModelManager
+- Initialize camera and inference engine backends
+- Build a per-run pipeline (position/color/save) and execute
+- Normalize outputs and persist results via sinks
+
+Public entrypoint: DetectionSystem.detect(product, area, inference_type, frame=None)
+"""
                 "missing_items": result.get("missing_items", []),
                 "original_image_path": (ctx.save_result or {}).get("original_path", ""),
                 "preprocessed_image_path": (ctx.save_result or {}).get("preprocessed_path", ""),

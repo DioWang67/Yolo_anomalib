@@ -20,12 +20,19 @@ PROJECT_ROOT = project_root()
 
 class ModelManager:
     def __init__(self, logger: DetectionLogger, max_cache_size: int = 3) -> None:
+        """Create a model manager.
+
+        Args:
+            logger: DetectionLogger wrapper
+            max_cache_size: Max number of (product, area) entries to keep
+        """
         self.logger = logger
         self.max_cache_size = max_cache_size
         # cache key: (product, area) -> { type: (engine, config_snapshot) }
         self._cache: OrderedDict[tuple[str, str], dict[str, tuple[InferenceEngine, DetectionConfig]]] = OrderedDict()
 
     def _initialize_product_models(self, config: DetectionConfig, product: str) -> None:
+        """Preload anomalib models for all areas of a product (optional)."""
         if not getattr(config, "enable_anomalib", False):
             return
         try:
@@ -37,6 +44,7 @@ class ModelManager:
             raise
 
     def _apply_model_config(self, base_config: DetectionConfig, cfg: dict) -> None:
+        """Apply per-model overrides into the shared DetectionConfig instance."""
         base_config.device = cfg.get("device", base_config.device)
         base_config.conf_thres = cfg.get("conf_thres", base_config.conf_thres)
         base_config.iou_thres = cfg.get("iou_thres", base_config.iou_thres)
@@ -66,6 +74,10 @@ class ModelManager:
         base_config.steps = merged_steps
 
     def switch(self, base_config: DetectionConfig, product: str, area: str, inference_type: str) -> tuple[InferenceEngine, DetectionConfig]:
+        """Switch engine to (product, area, type), with LRU cache.
+
+        Returns the engine and the (mutated) base_config snapshot after overrides.
+        """
         key = (product, area)
         if key in self._cache and inference_type in self._cache[key]:
             self.logger.logger.info(
@@ -113,6 +125,16 @@ class ModelManager:
 
         if key not in self._cache:
             self._cache[key] = {}
+"""
+ModelManager: load/merge model-level configs and manage engine cache.
+
+Key features:
+- Read models/<product>/<area>/<type>/config.yaml
+- Apply overrides onto DetectionConfig (device, thresholds, imgsz, etc.)
+- Resolve relative paths robustly (via path_utils)
+- Validate critical fields/paths early (weights, color model, anomalib ckpt)
+- Maintain LRU cache (per (product, area), per type) with engine shutdown on eviction
+"""
         self._cache[key][inference_type] = (engine, copy.deepcopy(base_config))
         self._cache.move_to_end(key)
         if len(self._cache) > self.max_cache_size:

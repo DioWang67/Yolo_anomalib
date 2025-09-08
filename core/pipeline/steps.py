@@ -9,6 +9,8 @@ from core.position_validator import PositionValidator
 
 
 class Step:
+    """Pipeline step interface. Implement run(ctx) in subclasses."""
+
     def run(self, ctx: DetectionContext) -> None:  # pragma: no cover
         raise NotImplementedError
 
@@ -20,6 +22,7 @@ class ColorCheckStep(Step):
         self.options = options or {}
 
     def run(self, ctx: DetectionContext) -> None:
+        """Run color check on detections and attach ctx.color_result."""
         detections: List[Dict[str, Any]] = ctx.result.get("detections", [])
         c_res = self.color_service.check_items(
             frame=ctx.frame, processed_image=ctx.processed_image, detections=detections
@@ -39,6 +42,7 @@ class SaveResultsStep(Step):
         self.options = options or {}
 
     def run(self, ctx: DetectionContext) -> None:
+        """Persist results and flush workbook/images via sink."""
         # Treat as anomalib-like when anomaly_score is present (normalized by adapter)
         if ctx.result.get("anomaly_score") is not None:
             save_result = self.sink.save(
@@ -85,6 +89,7 @@ class PositionCheckStep(Step):
         self.options = options or {}
 
     def run(self, ctx: DetectionContext) -> None:
+        """Validate detections against configured expected boxes and update status."""
         detections = ctx.result.get("detections", []) or []
         if not detections:
             return
@@ -109,4 +114,3 @@ class PositionCheckStep(Step):
             self.logger.info(f"Position check evaluated status: {new_status}")
         except Exception as e:
             self.logger.warning(f"Position check failed: {e}")
-

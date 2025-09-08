@@ -16,6 +16,8 @@ import atexit
 
 
 class ResultHandler:
+    """Handle result persistence (images + Excel workbook with buffering)."""
+
     def __init__(self, config, base_dir: str = "Result", logger: DetectionLogger = None):
         if is_dataclass(config):
             config = asdict(config)
@@ -52,10 +54,12 @@ class ResultHandler:
         atexit.register(self.close)
 
     def _initialize_excel(self) -> None:
+        """Create a fresh Excel file with headers if it does not exist."""
         df = pd.DataFrame(columns=self.columns)
         df.to_excel(self.excel_path, index=False, engine='openpyxl')
 
     def _read_excel(self) -> pd.DataFrame:
+        """Read current Excel file or its backup, with retries."""
         backup_path = self.excel_path + ".bak"
         for attempt in range(3):
             try:
@@ -90,6 +94,7 @@ class ResultHandler:
             self.flush()
 
     def _periodic_flush(self) -> None:
+        """Timer callback to flush buffered rows periodically."""
         self.flush()
         if self.flush_interval:
             self._timer = threading.Timer(self.flush_interval, self._periodic_flush)
@@ -97,6 +102,7 @@ class ResultHandler:
             self._timer.start()
 
     def flush(self) -> None:
+        """Write buffered rows to Excel file, with backup and retry."""
         if not self.buffer:
             return
         backup_path = self.excel_path + ".bak"
@@ -123,11 +129,12 @@ class ResultHandler:
             os.remove(backup_path)
 
     def close(self) -> None:
+        """Flush, stop timer and close the workbook on exit."""
         self.flush()
         if self.flush_interval and hasattr(self, "_timer"):
             self._timer.cancel()
-        if hasattr(self, "wb"):
-            self.wb.close()
+            if hasattr(self, "wb"):
+                self.wb.close()
 
     def _draw_detection_box(self, frame: np.ndarray, detection: Dict) -> None:
         x1, y1, x2, y2 = detection['bbox']

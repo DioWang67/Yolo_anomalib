@@ -6,6 +6,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def run_cli(system) -> None:
+    """Run an interactive shell to execute detections."""
     logger = system.logger
     logger.logger.info("檢測系統已啟動，等待使用者輸入...")
 
@@ -96,5 +97,11 @@ def run_cli(system) -> None:
             break
         except Exception as e:
             logger.logger.error(f"指令處理失敗: {str(e)}")
-            print(f"錯誤: {str(e)}")
+"""Simple interactive CLI to run one-shot detections.
 
+Features:
+- Enumerate products/areas by scanning models/ tree
+- Prompt user for product/area/backend type
+- Call DetectionSystem.detect(...) and print a compact summary
+"""
+            print(f"錯誤: {str(e)}")

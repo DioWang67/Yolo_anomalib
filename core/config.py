@@ -12,6 +12,12 @@ except Exception:  # pragma: no cover
 
 @dataclass
 class DetectionConfig:
+    """Shared runtime configuration.
+
+    Loaded from global config.yaml and then overridden by per-model configs
+    (models/<product>/<area>/<type>/config.yaml). This instance is mutated
+    in-place by ModelManager.switch() to reflect the active model settings.
+    """
     weights: str
     device: str = 'cpu'
     conf_thres: float = 0.25
@@ -42,6 +48,7 @@ class DetectionConfig:
 
     @classmethod
     def from_yaml(cls, path: str) -> 'DetectionConfig':
+        """Load global config from YAML file (with optional schema normalization)."""
         with open(path, 'r', encoding='utf-8') as f:
             config_dict = yaml.safe_load(f)
             logger.debug("Loaded YAML: %s", config_dict)

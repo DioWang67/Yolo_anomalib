@@ -10,9 +10,11 @@ from core.models import ColorCheckItemResult, ColorCheckResult
 
 
 class ColorCheckerService:
-    """Wrapper service around LEDQCEnhanced that manages model lifecycle.
+    """Wrapper around LEDQCEnhanced that manages model lifecycle.
 
-    It provides higher-level helpers to check multiple detections' ROIs.
+    Responsibilities:
+    - Load advanced JSON color model (once per path change)
+    - Provide helper to run color check across multiple detections' ROIs
     """
 
     def __init__(self) -> None:
@@ -20,11 +22,13 @@ class ColorCheckerService:
         self._model_path: Optional[str] = None
 
     def ensure_loaded(self, model_path: str) -> None:
+        """Load/Reload the color model if needed (path changed or not loaded)."""
         if self._checker is None or self._model_path != model_path:
             self._checker = LEDQCEnhanced.from_json(model_path)
             self._model_path = model_path
 
     def is_ready(self) -> bool:
+        """Return True if a model is loaded and ready."""
         return self._checker is not None
 
     def check_items(
@@ -33,6 +37,10 @@ class ColorCheckerService:
         processed_image: np.ndarray,
         detections: List[Dict[str, Any]],
     ) -> ColorCheckResult:
+        """Run color check on detections.
+
+        If no detections are present, fallback to check on full frame.
+        """
         if self._checker is None:
             raise RuntimeError("ColorChecker not loaded")
 
@@ -77,4 +85,3 @@ class ColorCheckerService:
             all_ok = bool(c_res.is_ok)
 
         return ColorCheckResult(is_ok=all_ok, items=items)
-

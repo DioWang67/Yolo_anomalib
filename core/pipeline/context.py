@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Context object passed between pipeline steps during a detection run."""
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 import numpy as np
