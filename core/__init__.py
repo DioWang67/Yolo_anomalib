@@ -4,7 +4,6 @@ try:  # 匯入可能因缺少相依套件而失敗（如 cv2）
 except Exception:  # pragma: no cover
     AnomalibInferenceModel = None  # type: ignore
 
-from .color_checker import ColorChecker
 
 __all__ = ["ColorChecker"]
 if AnomalibInferenceModel is not None:
