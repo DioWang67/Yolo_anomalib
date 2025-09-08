@@ -57,6 +57,9 @@ class DetectionSystem:
         if self.camera:
             self.camera.shutdown()
             self.camera = None
+        if self.result_handler:
+            self.result_handler.close()
+            self.result_handler = None
 
     def initialize_camera(self):
         self.logger.logger.info("正在初始化相機...")
@@ -344,7 +347,7 @@ class DetectionSystem:
                     color_result=color_result,
                 )
                 self.logger.log_detection(status, result.get("detections", []))
-            
+            self.result_handler.flush()
             if save_result.get("status") == "ERROR":
                 self.logger.logger.error(f"保存結果失敗: {save_result.get('error_message')}")
                 return {
@@ -493,3 +496,7 @@ class DetectionSystem:
 if __name__ == "__main__":
     system = DetectionSystem()
     system.run()
+    try:
+        system.run()
+    finally:
+        system.shutdown()
