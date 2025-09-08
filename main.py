@@ -7,6 +7,7 @@ import numpy as np
 import json
 import yaml
 import copy
+from pathlib import Path
 # anomalib 相關功能延後在需要時載入，避免未安裝依賴影響主流程
 from core.result_handler import ResultHandler
 from core.config import DetectionConfig
@@ -15,6 +16,8 @@ from core.inference_engine import InferenceEngine, InferenceType
 from camera.camera_controller import CameraController
 from collections import OrderedDict
 from core import ColorChecker
+
+BASE_DIR = Path(__file__).resolve().parent
 
 # 設置日誌
 logging.basicConfig(
@@ -130,7 +133,10 @@ class DetectionSystem:
             self.config.output_dir = cfg.get("output_dir", self.config.output_dir)
             self.config.position_config = cfg.get("position_config", {})
             self.config.enable_color_check = cfg.get("enable_color_check", self.config.enable_color_check)
-            self.config.color_model_path = cfg.get("color_model_path", self.config.color_model_path)
+            color_model_path = cfg.get("color_model_path", self.config.color_model_path)
+            if color_model_path and not os.path.isabs(color_model_path):
+                color_model_path = os.path.join(BASE_DIR, color_model_path)
+            self.config.color_model_path = color_model_path
             self.config.anomalib_config = None
         else:  # anomalib
             self.config.enable_yolo = False
@@ -145,7 +151,10 @@ class DetectionSystem:
             self.config.position_config = {}
             self.config.weights = ""
             self.config.enable_color_check = cfg.get("enable_color_check", False)
-            self.config.color_model_path = cfg.get("color_model_path", None)
+            color_model_path = cfg.get("color_model_path", None)
+            if color_model_path and not os.path.isabs(color_model_path):
+                color_model_path = os.path.join(BASE_DIR, color_model_path)
+            self.config.color_model_path = color_model_path
 
         self.inference_engine = InferenceEngine(self.config)
         self.initialize_inference_engine()
