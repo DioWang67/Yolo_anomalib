@@ -4,9 +4,10 @@ import sys
 import logging
 from datetime import datetime
 import numpy as np
+import json
 import yaml
 import copy
-from core.anomalib_lightning_inference import initialize_product_models, lightning_inference, get_status
+# anomalib 相關功能延後在需要時載入，避免未安裝依賴影響主流程
 from core.result_handler import ResultHandler
 from core.config import DetectionConfig
 from core.logger import DetectionLogger
@@ -79,7 +80,8 @@ class DetectionSystem:
 
         if self.config.enable_anomalib:
             try:
-                initialize_product_models(self.config.anomalib_config, product)
+                from core.anomalib_lightning_inference import initialize_product_models as _anoma_init
+                _anoma_init(self.config.anomalib_config, product)
                 self.logger.logger.info(f"機種 {product} 的 Anomalib 模型初始化完成")
             except Exception as e:
                 self.logger.logger.error(f"機種 {product} 的 Anomalib 模型初始化失敗: {str(e)}")
@@ -172,13 +174,15 @@ class DetectionSystem:
             self.logger.logger.info(f"開始檢測 - 產品: {product}, 區域: {area}, 推理類型: {inference_type}")
             inference_type_enum = InferenceType.from_string(inference_type)
 
-            # 初始化顏色檢測器
+            # 初始化顏色檢測器（一律使用 LEDQCEnhanced）
             if self.config.enable_color_check and self.config.color_model_path:
                 if self.color_checker is None or self._color_model_path != self.config.color_model_path:
                     try:
-                        self.color_checker = ColorChecker(self.config.color_model_path)
+                        from core.led_qc_enhanced import LEDQCEnhanced
+                        self.color_checker = LEDQCEnhanced.from_json(self.config.color_model_path)
+                        self._color_checker_mode = 'advanced'
                         self._color_model_path = self.config.color_model_path
-                        self.logger.logger.info("顏色檢測器已初始化")
+                        self.logger.logger.info("顏色檢測器已初始化 (LEDQCEnhanced)")
                     except Exception as e:
                         self.logger.logger.error(f"顏色檢測器初始化失敗: {str(e)}")
                         self.color_checker = None
@@ -230,13 +234,46 @@ class DetectionSystem:
             color_result = None
             if self.color_checker is not None:
                 try:
-                    c_result = self.color_checker.check(frame)
-                    color_result = {"is_ok": c_result.is_ok, "diff": c_result.diff}
-                    state = "通過" if c_result.is_ok else "不通過"
-                    self.logger.logger.info(f"顏色檢測{state}，差異值: {c_result.diff:.2f}")
+                    # 逐一裁切 YOLO 檢出框並執行 LEDQCEnhanced 打分
+                    detections = result.get("detections", [])
+                    per_items = []
+                    all_ok = True
+                    if detections:
+                        proc = result.get("processed_image", frame)
+                        for idx, det in enumerate(detections):
+                            x1, y1, x2, y2 = det["bbox"]
+                            x1, y1 = max(0, x1), max(0, y1)
+                            x2, y2 = min(proc.shape[1], x2), min(proc.shape[0], y2)
+                            roi = proc[y1:y2, x1:x2]
+                            # 以 YOLO 預測類別做為允許顏色，單一色比對
+                            allowed = [det.get("class")] if det.get("class") else None
+                            c_res = self.color_checker.check(roi, allowed_colors=allowed)
+                            item = {
+                                "index": idx,
+                                "class": det.get("class"),
+                                "bbox": det.get("bbox"),
+                                "best_color": c_res.best_color,
+                                "diff": c_res.diff,
+                                "threshold": c_res.threshold,
+                                "is_ok": c_res.is_ok,
+                            }
+                            per_items.append(item)
+                            if not c_res.is_ok:
+                                all_ok = False
+                            state = "通過" if c_res.is_ok else "不通過"
+                            self.logger.logger.info(
+                                f"顏色檢測{state} (idx={idx}, 目標:{det.get('class')}, 最佳:{c_res.best_color}, diff={c_res.diff:.2f}, thr={c_res.threshold:.2f})"
+                            )
+                    else:
+                        # 若無檢出，對整張圖做一次評估（可能無意義，但保底）
+                        c_res = self.color_checker.check(frame)
+                        per_items = [{"index": -1, "class": None, "bbox": None, "best_color": c_res.best_color, "diff": c_res.diff, "threshold": c_res.threshold, "is_ok": c_res.is_ok}]
+                        all_ok = c_res.is_ok
+
+                    color_result = {"is_ok": all_ok, "items": per_items}
                 except Exception as e:
                     self.logger.logger.error(f"顏色檢測失敗: {str(e)}")
-                    color_result = {"is_ok": False, "diff": None, "error": str(e)}
+                    color_result = {"is_ok": False, "items": [], "error": str(e)}
 
             # 處理 Anomalib 熱圖路徑
             if inference_type_enum == InferenceType.ANOMALIB and output_path:

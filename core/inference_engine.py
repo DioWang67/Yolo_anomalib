@@ -3,7 +3,10 @@ from typing import Dict
 
 from core.base_model import BaseInferenceModel
 from core.yolo_inference_model import YOLOInferenceModel
-from core.anomalib_inference_model import AnomalibInferenceModel
+try:
+    from core.anomalib_inference_model import AnomalibInferenceModel
+except Exception:  # pragma: no cover
+    AnomalibInferenceModel = None  # type: ignore
 from core.logger import DetectionLogger
 from core.config import DetectionConfig
 
@@ -15,9 +18,9 @@ class InferenceType(Enum):
     @classmethod
     def from_string(cls, value: str) -> 'InferenceType':
         value = value.lower()
-        for inference_type in cls:
-            if inference_type.value == value:
-                return inference_type
+        for t in cls:
+            if t.value == value:
+                return t
         raise ValueError(f"不支援的推理類型: {value}")
 
 
@@ -29,22 +32,25 @@ class InferenceEngine:
 
     def initialize(self) -> bool:
         try:
-            self.logger.logger.info("正在初始化推理引擎...")
+            self.logger.logger.info("初始化推理引擎...")
             if self.config.enable_yolo:
                 yolo_model = YOLOInferenceModel(self.config)
                 if yolo_model.initialize():
                     self.models[InferenceType.YOLO] = yolo_model
-                    self.logger.logger.info("YOLO 模型已加載")
+                    self.logger.logger.info("YOLO 模型已就緒")
 
             if self.config.enable_anomalib:
-                anomalib_model = AnomalibInferenceModel(self.config)
-                self.models[InferenceType.ANOMALIB] = anomalib_model
-                self.logger.logger.info("Anomalib 模型已準備")
+                if AnomalibInferenceModel is None:
+                    self.logger.logger.error("Anomalib 依賴未安裝或載入失敗，已跳過 Anomalib 初始化")
+                else:
+                    anomalib_model = AnomalibInferenceModel(self.config)
+                    self.models[InferenceType.ANOMALIB] = anomalib_model
+                    self.logger.logger.info("Anomalib 模型已就緒")
 
             if not self.models:
-                raise RuntimeError("沒有成功初始化任何推理模型")
+                raise RuntimeError("沒有啟用或載入任何推理模型")
 
-            self.logger.logger.info(f"推理引擎初始化成功，可用模型: {list(self.models.keys())}")
+            self.logger.logger.info(f"推理引擎可用模型: {list(self.models.keys())}")
             return True
         except Exception as e:
             self.logger.logger.error(f"推理引擎初始化失敗: {str(e)}")
@@ -62,3 +68,4 @@ class InferenceEngine:
             except Exception:
                 pass
         self.models.clear()
+
