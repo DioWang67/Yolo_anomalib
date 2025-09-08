@@ -29,7 +29,7 @@ class DetectionConfig:
     anomalib_config: Optional[Dict] = None
     position_config: Dict[str, Dict[str, Dict]] = field(default_factory=dict)
     max_cache_size: int = 3
-    buffer_limit: int = 10
+    buffer_limit: int = 1
     flush_interval: float | None = None
 
     @classmethod
