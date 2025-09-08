@@ -14,7 +14,7 @@ from core.logger import DetectionLogger
 from core.inference_engine import InferenceEngine, InferenceType
 from camera.camera_controller import CameraController
 from collections import OrderedDict
-from core import ColorChecker
+from core.led_qc_enhanced import LEDQCEnhanced
 
 # 設置日誌
 logging.basicConfig(
@@ -178,7 +178,6 @@ class DetectionSystem:
             if self.config.enable_color_check and self.config.color_model_path:
                 if self.color_checker is None or self._color_model_path != self.config.color_model_path:
                     try:
-                        from core.led_qc_enhanced import LEDQCEnhanced
                         self.color_checker = LEDQCEnhanced.from_json(self.config.color_model_path)
                         self._color_checker_mode = 'advanced'
                         self._color_model_path = self.config.color_model_path
