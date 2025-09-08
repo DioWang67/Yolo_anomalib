@@ -1,4 +1,3 @@
-import cv2
 import time
 import torch
 import numpy as np
@@ -9,8 +8,7 @@ from ultralytics import YOLO
 
 from core.base_model import BaseInferenceModel
 from core.detector import YOLODetector
-from core.utils import ImageUtils, DetectionResults
-from core.logger import DetectionLogger
+from core.utils import ImageUtils
 from core.position_validator import PositionValidator
 from collections import OrderedDict
 
@@ -21,7 +19,7 @@ class YOLOInferenceModel(BaseInferenceModel):
         self.model_cache = OrderedDict()
         self.max_cache_size = getattr(config, 'max_cache_size', 3)
         self.image_utils = ImageUtils()
-        self.detection_results = DetectionResults(self.config)
+        # DetectionResults instance was unused; keep logic focused
 
     def initialize(self, product: str = None, area: str = None) -> bool:
         key = (product or "default", area or "default")

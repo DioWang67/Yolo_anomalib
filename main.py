@@ -4,7 +4,6 @@ import sys
 import logging
 from datetime import datetime
 import numpy as np
-import json
 import yaml
 import copy
 from pathlib import Path
@@ -495,7 +494,6 @@ class DetectionSystem:
 
 if __name__ == "__main__":
     system = DetectionSystem()
-    system.run()
     try:
         system.run()
     finally:
