@@ -27,10 +27,30 @@ class DetectionLogger:
 
     def log_detection(self, status: str, detections: list):
         self.logger.info(f"Detection Status: {status}")
-        for det in detections:
-            self.logger.info(
-                f"Class: {det['class']}, Confidence: {det['confidence']:.2f}"
-            )
+        # Aggregate by class to reduce log noise
+        try:
+            from collections import defaultdict
+            agg = defaultdict(list)
+            for det in detections or []:
+                cls = det.get('class')
+                conf = float(det.get('confidence', 0.0))
+                agg[cls].append(conf)
+            if not agg:
+                return
+            for cls, confs in agg.items():
+                cnt = len(confs)
+                mx = max(confs)
+                mn = min(confs)
+                avg = sum(confs) / cnt if cnt else 0.0
+                self.logger.info(
+                    f"Class {cls}: x{cnt}, max={mx:.2f}, min={mn:.2f}, avg={avg:.2f}"
+                )
+        except Exception:
+            # Fallback to verbose per-detection logs if aggregation fails
+            for det in detections:
+                self.logger.info(
+                    f"Class: {det['class']}, Confidence: {det['confidence']:.2f}"
+                )
 
     def log_anomaly(self, status: str, anomaly_score: float):
         self.logger.info(f"Anomaly Detection Status: {status}")

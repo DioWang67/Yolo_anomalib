@@ -1,3 +1,14 @@
+"""Detection system orchestrator.
+
+Responsibilities:
+- Load and merge per-product/area/type model configs via ModelManager
+- Initialize camera and inference engine backends
+- Build a per-run pipeline (position/color/save) and execute
+- Normalize outputs and persist results via sinks
+
+Public entrypoint: DetectionSystem.detect(product, area, inference_type, frame=None)
+"""
+
 import os
 import shutil
 from pathlib import Path
@@ -120,7 +131,28 @@ class DetectionSystem:
             # Ensure color checker ready if enabled
             if self.config.enable_color_check and self.config.color_model_path:
                 try:
-                    self.color_service.ensure_loaded(self.config.color_model_path)
+                    # Load latest overrides from model-level YAML (even if engine is cached)
+                    overrides = getattr(self.config, "color_threshold_overrides", None)
+                    white_over = getattr(self.config, "color_white_overrides", None)
+                    try:
+                        import yaml as _yaml
+                        _cfg_path = os.path.join("models", product, area, inference_type, "config.yaml")
+                        if os.path.exists(_cfg_path):
+                            with open(_cfg_path, "r", encoding="utf-8") as _f:
+                                _model_cfg = _yaml.safe_load(_f) or {}
+                                ov = _model_cfg.get("color_threshold_overrides")
+                                if isinstance(ov, dict) and ov:
+                                    overrides = ov
+                                wov = _model_cfg.get("color_white_overrides")
+                                if isinstance(wov, dict) and wov:
+                                    white_over = wov
+                    except Exception:
+                        pass
+                    self.color_service.ensure_loaded(
+                        self.config.color_model_path,
+                        overrides=overrides,
+                        white_overrides=white_over,
+                    )
                     run_logger.info("Color checker loaded (LEDQCEnhanced)")
                 except Exception as e:
                     run_logger.error(f"Color checker init failed: {str(e)}")
@@ -243,11 +275,32 @@ class DetectionSystem:
             # Persist results via pipeline
             for step in steps:
                 step.run(ctx)
-            # Logging summary
+
+            # Use possibly-updated status from pipeline (e.g., color/position checks)
+            status = ctx.status
+
+            # Logging summary with final status
             if inference_type_name == "anomalib":
                 self.logger.log_anomaly(status, result.get("anomaly_score", 0.0))
             else:
                 self.logger.log_detection(status, result.get("detections", []))
+
+            # Extra debugging: print reasons when FAIL
+            try:
+                if str(status).upper() == "FAIL":
+                    miss = result.get("missing_items", [])
+                    if miss:
+                        run_logger.info(f"Fail reason - missing items: {miss}")
+                    c = ctx.color_result or {}
+                    if isinstance(c, dict) and (not c.get("is_ok", True)):
+                        items = c.get("items", []) or []
+                        fail_cnt = sum(1 for it in items if not it.get("is_ok", False))
+                        run_logger.info(f"Fail reason - color mismatch: {fail_cnt}/{len(items)} items failed")
+                    pos_wrong = [d.get("class") for d in (result.get("detections", []) or []) if d.get("position_status") == "WRONG"]
+                    if pos_wrong:
+                        run_logger.info(f"Fail reason - position wrong: {pos_wrong}")
+            except Exception:
+                pass
 
             return {
                 "status": status,
@@ -257,17 +310,6 @@ class DetectionSystem:
                 "ckpt_path": result.get("ckpt_path", ""),
                 "anomaly_score": result.get("anomaly_score", ""),
                 "detections": result.get("detections", []),
-"""
-Detection system orchestrator.
-
-Responsibilities:
-- Load and merge per-product/area/type model configs via ModelManager
-- Initialize camera and inference engine backends
-- Build a per-run pipeline (position/color/save) and execute
-- Normalize outputs and persist results via sinks
-
-Public entrypoint: DetectionSystem.detect(product, area, inference_type, frame=None)
-"""
                 "missing_items": result.get("missing_items", []),
                 "original_image_path": (ctx.save_result or {}).get("original_path", ""),
                 "preprocessed_image_path": (ctx.save_result or {}).get("preprocessed_path", ""),

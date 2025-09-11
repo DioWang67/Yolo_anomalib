@@ -28,11 +28,28 @@ class ColorCheckStep(Step):
             frame=ctx.frame, processed_image=ctx.processed_image, detections=detections
         )
         ctx.color_result = c_res.to_dict()
-        for it in c_res.items:
-            state = "PASS" if it.is_ok else "FAIL"
-            self.logger.info(
-                f"Color check {state} (idx={it.index}, class={it.class_name}, pred={it.best_color}, diff={it.diff:.2f}, thr={it.threshold:.2f})"
-            )
+        # Compact logging: show up to N items then summary
+        max_log = int(self.options.get("max_log_items", 5))
+        total = len(c_res.items)
+        fail_cnt = 0
+        for idx, it in enumerate(c_res.items):
+            if not it.is_ok:
+                fail_cnt += 1
+            if idx < max_log:
+                state = "PASS" if it.is_ok else "FAIL"
+                self.logger.info(
+                    f"Color check {state} (idx={it.index}, class={it.class_name}, pred={it.best_color}, diff={it.diff:.2f}, thr={it.threshold:.2f})"
+                )
+        if total > max_log:
+            self.logger.info(f"Color check logs truncated: {total-max_log} more items...")
+        self.logger.info(f"Color check summary: total={total}, fail={fail_cnt}")
+        # Enforce FAIL when color check is enabled and any item fails
+        try:
+            if not bool(ctx.color_result.get("is_ok", True)):
+                ctx.status = "FAIL"
+                self.logger.info("Color check mismatch -> overall FAIL")
+        except Exception:
+            pass
 
 
 class SaveResultsStep(Step):

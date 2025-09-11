@@ -1,4 +1,4 @@
-weights: "D:/Git/robotlearning/yolo11_inference/models/LED/A/yolo/LED_color_mixing_best.pt"
+weights: "D:/Git/robotlearning/yolo11_inference/models/LED/B/yolo/LED_color_mixing_best.pt"
 device: "cpu"
 conf_thres: 0.3
 iou_thres: 0.45
@@ -7,13 +7,9 @@ timeout: 1
 current_product: "LED"
 enable_yolo: true
 enable_color_check: true           # 是否啟用顏色檢查
-color_model_path: "models/LED/A/yolo/enhanced_model.json"
+color_model_path: "models/LED/B/yolo/enhanced_model.json"
 color_threshold_overrides:
-  White: 2
   Red: 1
-color_white_overrides:
-  s_p90_max: 240     # null to disable
-  v_p50_min: 140     # null to disable
 output_dir: Result
 
 # Saving controls (tune IO and file size)
@@ -29,16 +25,16 @@ max_crops_per_frame: 0       # 0 or null means unlimited (ignored if save_crops=
 expected_items:
   LED:
 
-    A:
-      - White
-      - White
-      - White
-      - White
-      - White
-      - White
-      - White
-      - White
-      - White
+    B:
+      - Red
+      - Red
+      - Red
+      - Red
+      - Red
+      - Red
+      - Red
+      - Red
+      - Red
 
 
 

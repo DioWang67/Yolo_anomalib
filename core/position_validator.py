@@ -1,4 +1,5 @@
 from typing import Dict, List, Any
+import logging
 
 
 class PositionValidator:
@@ -15,7 +16,7 @@ class PositionValidator:
                 det["position_status"] = "UNKNOWN"
                 continue
             status = self.is_position_correct(
-                det["class"], det["cx"], det["cy"]
+                det.get("class"), float(det.get("cx", 0.0)), float(det.get("cy", 0.0))
             )
             det["position_status"] = status
         return detections
@@ -25,8 +26,7 @@ class PositionValidator:
         if not box:
             return "UNEXPECTED"
 
-        # 使用 YOLO 輸入尺寸（如 640）計算容忍像素範圍
-        imgsz = self.config.imgsz[0]  # 假設正方形圖
+        imgsz = self.config.imgsz[0]
         tolerance_ratio = self.config.get_tolerance_ratio(self.product, self.area)
         tolerance_px = imgsz * tolerance_ratio
 
@@ -38,15 +38,14 @@ class PositionValidator:
 
         if dx == 0 and dy == 0:
             return "CORRECT"
-        else:
-            print(
-  
-                f"位置錯誤: {class_name}, 中心點超出容許區域，偏移 dx={dx:.1f}, dy={dy:.1f}，"
-                f"允許中心點必須落在擴展後區域內 (±{tolerance_px:.1f} px)"
-                f"允許區域: x=[{x1:.1f}, {x2:.1f}], y=[{y1:.1f}, {y2:.1f}]，實際中心點: ({cx:.1f}, {cy:.1f})"
+        try:
+            logging.getLogger(__name__).debug(
+                "Position error: class=%s, dx=%.1f, dy=%.1f, tol_px=%.1f, x=[%.1f,%.1f], y=[%.1f,%.1f], center=(%.1f,%.1f)",
+                class_name, dx, dy, tolerance_px, x1, x2, y1, y2, cx, cy
             )
-            return "WRONG"
-
+        except Exception:
+            pass
+        return "WRONG"
 
     def has_wrong_position(self, detections: List[Dict[str, Any]]) -> bool:
         return any(det.get("position_status") == "WRONG" for det in detections)
@@ -59,3 +58,4 @@ class PositionValidator:
             if missing_items:
                 return "FAIL"
         return "PASS"
+

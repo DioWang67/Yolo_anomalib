@@ -62,6 +62,14 @@ class ModelManager:
             base_config.color_model_path = str(resolve_path(color_model_path))
         else:
             base_config.color_model_path = None
+        # optional color threshold overrides (per-color hist_thr)
+        base_config.color_threshold_overrides = cfg.get(
+            "color_threshold_overrides", getattr(base_config, "color_threshold_overrides", None)
+        )
+        # optional white rules overrides
+        base_config.color_white_overrides = cfg.get(
+            "color_white_overrides", getattr(base_config, "color_white_overrides", None)
+        )
         # optional custom backends config (name -> {class_path, enabled, ...})
         base_config.backends = cfg.get("backends", getattr(base_config, "backends", None))
         # optional pipeline and steps overrides
@@ -125,16 +133,6 @@ class ModelManager:
 
         if key not in self._cache:
             self._cache[key] = {}
-"""
-ModelManager: load/merge model-level configs and manage engine cache.
-
-Key features:
-- Read models/<product>/<area>/<type>/config.yaml
-- Apply overrides onto DetectionConfig (device, thresholds, imgsz, etc.)
-- Resolve relative paths robustly (via path_utils)
-- Validate critical fields/paths early (weights, color model, anomalib ckpt)
-- Maintain LRU cache (per (product, area), per type) with engine shutdown on eviction
-"""
         self._cache[key][inference_type] = (engine, copy.deepcopy(base_config))
         self._cache.move_to_end(key)
         if len(self._cache) > self.max_cache_size:

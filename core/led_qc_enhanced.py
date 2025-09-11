@@ -245,7 +245,34 @@ class LEDQCEnhanced:
             v_p50 = metrics.get("v_p50", 0.0)
             s_ok = True if self.model.white_s_p90_max is None else (s_p90 <= self.model.white_s_p90_max)
             v_ok = True if self.model.white_v_p50_min is None else (v_p50 >= self.model.white_v_p50_min)
+            # Logging reasons when white rules fail (for debugging)
+            try:
+                import logging
+                lg = logging.getLogger(__name__)
+                if not (best_diff <= best_thr):
+                    lg.info("Color hist FAIL: color=%s diff=%.2f > thr=%.2f", best_name, best_diff, best_thr)
+                if not s_ok:
+                    lg.info(
+                        "White rule FAIL (S): s_p90=%.1f > max=%.1f", s_p90, (self.model.white_s_p90_max if self.model.white_s_p90_max is not None else float('nan'))
+                    )
+                if not v_ok:
+                    lg.info(
+                        "White rule FAIL (V): v_p50=%.1f < min=%.1f", v_p50, (self.model.white_v_p50_min if self.model.white_v_p50_min is not None else float('nan'))
+                    )
+            except Exception:
+                pass
             is_ok = is_ok and s_ok and v_ok
+        else:
+            # Non-white: if histogram fails, log the reason
+            if not (best_diff <= best_thr):
+                try:
+                    import logging
+                    logging.getLogger(__name__).info(
+                        "Color hist FAIL: color=%s diff=%.2f > thr=%.2f",
+                        best_name, best_diff, best_thr,
+                    )
+                except Exception:
+                    pass
 
         return LEDQCAdvancedResult(
             best_color=best_name,
@@ -255,6 +282,42 @@ class LEDQCEnhanced:
             scores=sorted(scores, key=lambda x: x[1]),
             metrics=metrics,
         )
+
+    # --- runtime overrides ---
+    def apply_threshold_overrides(self, overrides: Dict[str, float]) -> None:
+        """Override per-color histogram thresholds from a mapping (case-insensitive)."""
+        if not overrides:
+            return
+        try:
+            # map by lower-cased name
+            by_name = {c.name.lower(): c for c in self.model.colors}
+            for name, thr in overrides.items():
+                key = str(name).lower()
+                if key in by_name:
+                    try:
+                        by_name[key].hist_thr = float(thr)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    def apply_white_overrides(self, overrides: Dict[str, Optional[float]]) -> None:
+        """Override white-specific rules: s_p90_max, v_p50_min. Use None to disable."""
+        try:
+            smax = overrides.get("s_p90_max") if isinstance(overrides, dict) else None
+            vmin = overrides.get("v_p50_min") if isinstance(overrides, dict) else None
+            if smax is not None:
+                try:
+                    self.model.white_s_p90_max = float(smax)
+                except Exception:
+                    self.model.white_s_p90_max = None
+            if vmin is not None:
+                try:
+                    self.model.white_v_p50_min = float(vmin)
+                except Exception:
+                    self.model.white_v_p50_min = None
+        except Exception:
+            pass
 
 
 __all__ = [

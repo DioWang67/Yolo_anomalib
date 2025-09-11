@@ -36,6 +36,9 @@ class DetectionConfig:
     enable_anomalib: bool = False
     enable_color_check: bool = False
     color_model_path: str | None = None
+    color_threshold_overrides: Optional[Dict[str, float]] = None
+    # Optional overrides for white-specific rules in color model
+    color_white_overrides: Optional[Dict[str, Optional[float]]] = None
     output_dir: str = "Result"
     anomalib_config: Optional[Dict] = None
     position_config: Dict[str, Dict[str, Dict]] = field(default_factory=dict)
@@ -45,6 +48,17 @@ class DetectionConfig:
     pipeline: Optional[List[str]] = None
     steps: Dict[str, Any] = field(default_factory=dict)
     backends: Optional[Dict[str, Dict[str, Any]]] = None  # extra/custom backends
+    # Avoid duplicating cache with YOLO internal cache (default: disable)
+    disable_internal_cache: bool = True
+    # Saving controls
+    save_original: bool = True
+    save_processed: bool = True
+    save_annotated: bool = True
+    save_crops: bool = True
+    save_fail_only: bool = False
+    jpeg_quality: int = 95
+    png_compression: int = 3
+    max_crops_per_frame: Optional[int] = None
 
     @classmethod
     def from_yaml(cls, path: str) -> 'DetectionConfig':
@@ -78,6 +92,8 @@ class DetectionConfig:
             enable_anomalib=config_dict.get('enable_anomalib', False),
             enable_color_check=config_dict.get('enable_color_check', False),
             color_model_path=config_dict.get('color_model_path'),
+            color_threshold_overrides=config_dict.get('color_threshold_overrides'),
+            color_white_overrides=config_dict.get('color_white_overrides'),
             output_dir=config_dict.get('output_dir', 'Result'),
             anomalib_config=config_dict.get('anomalib_config'),
             position_config=config_dict.get('position_config', {}),
@@ -86,7 +102,16 @@ class DetectionConfig:
             flush_interval=config_dict.get('flush_interval', None),
             pipeline=config_dict.get('pipeline'),
             steps=config_dict.get('steps', {}),
-            backends=config_dict.get('backends')
+            backends=config_dict.get('backends'),
+            save_original=config_dict.get('save_original', True),
+            save_processed=config_dict.get('save_processed', True),
+            save_annotated=config_dict.get('save_annotated', True),
+            save_crops=config_dict.get('save_crops', True),
+            save_fail_only=config_dict.get('save_fail_only', False),
+            jpeg_quality=int(config_dict.get('jpeg_quality', 95)),
+            png_compression=int(config_dict.get('png_compression', 3)),
+            max_crops_per_frame=config_dict.get('max_crops_per_frame'),
+            disable_internal_cache=config_dict.get('disable_internal_cache', True)
         )
 
     def get_items_by_area(self, product: str, area: str) -> Optional[List[str]]:

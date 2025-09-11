@@ -21,11 +21,27 @@ class ColorCheckerService:
         self._checker: Optional[LEDQCEnhanced] = None
         self._model_path: Optional[str] = None
 
-    def ensure_loaded(self, model_path: str) -> None:
-        """Load/Reload the color model if needed (path changed or not loaded)."""
+    def ensure_loaded(
+        self,
+        model_path: str,
+        overrides: Optional[Dict[str, float]] = None,
+        white_overrides: Optional[Dict[str, Optional[float]]] = None,
+    ) -> None:
+        """Load/Reload the color model if needed and apply overrides if provided."""
         if self._checker is None or self._model_path != model_path:
             self._checker = LEDQCEnhanced.from_json(model_path)
             self._model_path = model_path
+        # Apply threshold overrides (case-insensitive) if provided
+        if overrides:
+            try:
+                self._checker.apply_threshold_overrides(overrides)
+            except Exception:
+                pass
+        if white_overrides:
+            try:
+                self._checker.apply_white_overrides(white_overrides)
+            except Exception:
+                pass
 
     def is_ready(self) -> bool:
         """Return True if a model is loaded and ready."""

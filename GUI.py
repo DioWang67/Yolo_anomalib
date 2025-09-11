@@ -328,6 +328,15 @@ class DetectionSystemGUI(QMainWindow):
         button_layout.addWidget(self.start_btn)
         button_layout.addWidget(self.stop_btn)
         button_layout.addWidget(self.save_btn)
+
+        # Camera/Image toggle
+        try:
+            self.use_camera_chk = QCheckBox("使用相機")
+            self.use_camera_chk.setChecked(True)
+            self.use_camera_chk.toggled.connect(self.on_use_camera_toggled)
+            button_layout.addWidget(self.use_camera_chk)
+        except Exception:
+            pass
         
         # 影像選擇（可選）
         self.pick_image_btn = QPushButton("選擇影像...")
@@ -337,6 +346,13 @@ class DetectionSystemGUI(QMainWindow):
         self.image_path_label.setStyleSheet("color: #6c757d;")
         button_layout.addWidget(self.pick_image_btn)
         button_layout.addWidget(self.image_path_label)
+        try:
+            self.clear_image_btn = QPushButton("清除選圖")
+            self.clear_image_btn.clicked.connect(self.clear_selected_image)
+            self.clear_image_btn.setEnabled(False)
+            button_layout.addWidget(self.clear_image_btn)
+        except Exception:
+            pass
         
         button_group.setLayout(button_layout)
         layout.addWidget(button_group)
@@ -548,13 +564,26 @@ class DetectionSystemGUI(QMainWindow):
         
         # 建立背景執行緒
         frame = None
-        if getattr(self, 'selected_image_path', None) and os.path.exists(self.selected_image_path):
-            try:
-                img = cv2.imread(self.selected_image_path)
-                if img is not None:
-                    frame = img
-            except Exception:
-                pass
+        # 若選擇使用相機，frame 保持 None，交由 CameraController 擷取
+        use_cam = True
+        try:
+            use_cam = bool(self.use_camera_chk.isChecked())
+        except Exception:
+            pass
+        if not use_cam:
+            if getattr(self, 'selected_image_path', None) and os.path.exists(self.selected_image_path):
+                try:
+                    img = cv2.imread(self.selected_image_path)
+                    if img is not None:
+                        frame = img
+                except Exception:
+                    pass
+            else:
+                QMessageBox.warning(self, "未選影像", "請選擇影像，或切回使用相機")
+                self.start_btn.setEnabled(True)
+                self.stop_btn.setEnabled(False)
+                self.status_widget.set_status("idle")
+                return
         
         self.worker = DetectionWorker(self.detection_system, product, area, inference_type, frame=frame)
         self.worker.result_ready.connect(self.on_detection_complete)
@@ -659,6 +688,44 @@ class DetectionSystemGUI(QMainWindow):
             pass
         try:
             self.original_image.set_image(fname)
+        except Exception:
+            pass
+
+    def clear_selected_image(self):
+        """清除當前選擇影像並切回相機"""
+        self.selected_image_path = None
+        try:
+            self.image_path_label.setText("尚未選擇影像（可切換使用相機）")
+        except Exception:
+            pass
+        try:
+            if getattr(self, 'clear_image_btn', None):
+                self.clear_image_btn.setEnabled(False)
+            if getattr(self, 'use_camera_chk', None):
+                self.use_camera_chk.setChecked(True)
+        except Exception:
+            pass
+
+    def on_use_camera_toggled(self, checked):
+        """切換 使用相機 / 使用影像 模式"""
+        try:
+            if checked:
+                # 使用相機 → 停用清除鈕與選圖鈕
+                self.selected_image_path = None
+                if getattr(self, 'pick_image_btn', None):
+                    self.pick_image_btn.setEnabled(False)
+                if getattr(self, 'clear_image_btn', None):
+                    self.clear_image_btn.setEnabled(False)
+                if getattr(self, 'image_path_label', None):
+                    self.image_path_label.setText("使用相機輸入（可切換選圖）")
+            else:
+                # 使用影像 → 啟用選圖鈕
+                if getattr(self, 'pick_image_btn', None):
+                    self.pick_image_btn.setEnabled(True)
+                if getattr(self, 'clear_image_btn', None):
+                    self.clear_image_btn.setEnabled(bool(self.selected_image_path))
+                if not self.selected_image_path and getattr(self, 'image_path_label', None):
+                    self.image_path_label.setText("請選擇影像（或切回相機）")
         except Exception:
             pass
 

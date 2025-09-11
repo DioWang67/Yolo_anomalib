@@ -18,12 +18,15 @@ class YOLOInferenceModel(BaseInferenceModel):
         super().__init__(config)
         self.model_cache = OrderedDict()
         self.max_cache_size = getattr(config, 'max_cache_size', 3)
+        # avoid duplicating cache with ModelManager (default: disable)
+        if getattr(config, 'disable_internal_cache', True):
+            self.max_cache_size = 0
         self.image_utils = ImageUtils()
         # DetectionResults instance was unused; keep logic focused
 
     def initialize(self, product: str = None, area: str = None) -> bool:
         key = (product or "default", area or "default")
-        if key in self.model_cache:
+        if self.max_cache_size > 0 and key in self.model_cache:
             self.model, self.detector = self.model_cache[key]
             self.model_cache.move_to_end(key)
             self.is_initialized = True
@@ -39,17 +42,26 @@ class YOLOInferenceModel(BaseInferenceModel):
                 self.model.model.half()
                 torch.backends.cudnn.benchmark = True
             self.detector = YOLODetector(self.model, self.config)
+            # warm up one forward to stabilize first-run latency
+            try:
+                h, w = self.config.imgsz
+                dummy = np.zeros((h, w, 3), dtype=np.uint8)
+                with torch.inference_mode():
+                    _ = self.model(dummy, conf=self.config.conf_thres, iou=self.config.iou_thres)
+            except Exception:
+                pass
 
-            self.model_cache[key] = (self.model, self.detector)
-            self.model_cache.move_to_end(key)
-            if len(self.model_cache) > self.max_cache_size:
-                old_key, (old_model, _) = self.model_cache.popitem(last=False)
-                try:
-                    del old_model
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                except Exception:
-                    pass
+            if self.max_cache_size > 0:
+                self.model_cache[key] = (self.model, self.detector)
+                self.model_cache.move_to_end(key)
+                if len(self.model_cache) > self.max_cache_size:
+                    old_key, (old_model, _) = self.model_cache.popitem(last=False)
+                    try:
+                        del old_model
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    except Exception:
+                        pass
                 self.logger.logger.info(f"釋放最舊 YOLO 模型快取: 產品 {old_key[0]}, 區域 {old_key[1]}")
 
             self.is_initialized = True

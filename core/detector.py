@@ -8,6 +8,7 @@ from ultralytics import YOLO
 from ultralytics.utils.plotting import Annotator, colors
 from .utils import ImageUtils
 
+
 class YOLODetector:
     def __init__(self, model: YOLO, config):
         self.model = model
@@ -17,8 +18,8 @@ class YOLODetector:
         self.Annotator = Annotator
 
     def preprocess_image(self, frame: np.ndarray) -> np.ndarray:
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        resized_img = self.image_utils.letterbox(frame_rgb, size=self.config.imgsz, stride=32, auto=True)
+        # Keep BGR throughout; ImageUtils handles letterbox to target size
+        resized_img = self.image_utils.letterbox(frame, size=self.config.imgsz, fill_color=(128, 128, 128))
         return resized_img
 
     @staticmethod
@@ -36,23 +37,33 @@ class YOLODetector:
     def check_missing_items(expected_items: List[str], detected_class_names: Set[str]) -> Set[str]:
         return set(expected_items) - detected_class_names
 
-    def process_detections(self, predictions, processed_image: np.ndarray, 
+    def process_detections(self, predictions, processed_image: np.ndarray,
                           original_image: np.ndarray, expected_items: List[str]) -> Tuple[np.ndarray, List[Dict[str, Any]], List[str]]:
         try:
-            detections = []
+            result = predictions[0]
+            boxes = getattr(result, "boxes", None)
+            detections: List[Dict[str, Any]] = []
             detected_items = set()
-            for pred in predictions[0].boxes:
-                class_id = int(pred.cls)
-                class_name = self.model.names[class_id]
-                confidence = float(pred.conf)
-                bbox = pred.xyxy[0].cpu().numpy().astype(int)
-                detections.append({
-                    "class": class_name,
-                    "confidence": confidence,
-                    "bbox": bbox.tolist(),
-                    "class_id": class_id
-                })
-                detected_items.add(class_name)
+
+            if boxes is not None and len(boxes) > 0:
+                # Vectorized extraction for speed
+                xyxy = boxes.xyxy.detach().cpu().numpy().astype(int)
+                confs = boxes.conf.detach().cpu().numpy()
+                clss = boxes.cls.detach().cpu().numpy().astype(int)
+                names = self.model.names
+
+                for (x1, y1, x2, y2), conf, cid in zip(xyxy, confs, clss):
+                    cname = names[int(cid)] if isinstance(names, dict) else names[int(cid)]
+                    det = {
+                        "class": cname,
+                        "confidence": float(conf),
+                        "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                        "class_id": int(cid)
+                    }
+                    detections.append(det)
+                    detected_items.add(cname)
+
+            # Draw annotations on processed image
             result_frame = processed_image.copy()
             for det in detections:
                 x1, y1, x2, y2 = det['bbox']
@@ -60,10 +71,16 @@ class YOLODetector:
                 cv2.rectangle(result_frame, (x1, y1), (x2, y2), color, 2)
                 label = f"{det['class']}: {det['confidence']:.2f}"
                 self.image_utils.draw_label(result_frame, label, (x1, y1 - 10), color)
-            missing_items = [item for item in expected_items if item not in detected_items]
+
+            # Normalize class-name comparison (case/whitespace insensitive)
+            detected_norm = {str(n).strip().lower() for n in detected_items}
+            missing_items = [
+                item for item in expected_items
+                if str(item).strip().lower() not in detected_norm
+            ]
             return result_frame, detections, missing_items
         except Exception as e:
-            raise RuntimeError(f"處理檢測結果失敗: {str(e)}")
+            raise RuntimeError(f"解析檢測結果失敗: {str(e)}")
 
     def draw_results(self, frame: np.ndarray, status: str, detections: List[Dict]) -> np.ndarray:
         result_frame = frame.copy()
