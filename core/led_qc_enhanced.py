@@ -10,7 +10,7 @@ Key features implemented:
 - Compute HSV 3D histogram on masked region (V > 30)
 - Compare with each color's avg_color_hist using L1 distance
 - Pick best-matching color and decide pass/fail by threshold
-- Optional white-specific rule using S/V percentiles
+- Optional per-color S/V percentile rules (configurable via overrides)
 
 This module is self-contained and does not depend on the simple model.
 """
@@ -50,9 +50,6 @@ class _Model:
     hist_bins: Tuple[int, int, int]
     default_hist_thr: float
     colors: List[_ColorEntry]
-    # White-specific config (optional)
-    white_s_p90_max: Optional[float] = None
-    white_v_p50_min: Optional[float] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "_Model":
@@ -61,14 +58,6 @@ class _Model:
         if not (isinstance(bins, list) and len(bins) == 3):
             bins = [12, 12, 12]
         default_hist_thr = float(cfg.get("default_hist_thr", 0.25))
-
-        # Optional white-specific knobs
-        white_s_p90_max = cfg.get("white_s_p90_max", None)
-        white_v_p50_min = cfg.get("white_v_p50_min", None)
-        if white_s_p90_max is not None:
-            white_s_p90_max = float(white_s_p90_max)
-        if white_v_p50_min is not None:
-            white_v_p50_min = float(white_v_p50_min)
 
         colors_field = data.get("colors", {}) or {}
         colors: List[_ColorEntry] = []
@@ -92,8 +81,6 @@ class _Model:
             hist_bins=(int(bins[0]), int(bins[1]), int(bins[2])),
             default_hist_thr=default_hist_thr,
             colors=colors,
-            white_s_p90_max=white_s_p90_max,
-            white_v_p50_min=white_v_p50_min,
         )
 
 
@@ -119,8 +106,10 @@ def _compute_hsv3d_hist(image_bgr, bins: Tuple[int, int, int]) -> Tuple[List[flo
                 v = hsv[:, :, 2][mask].astype(np.float32)
                 # Percentiles for white rule
                 s_p90 = float(np.percentile(s, 90))
+                s_p10 = float(np.percentile(s, 10))
                 v_p50 = float(np.percentile(v, 50))
-                # Indices
+                v_p95 = float(np.percentile(v, 95))
+                # Indices and histogram
                 h_idx = (h * (hb / 180.0)).astype(np.int32)
                 s_idx = (s * (sb / 256.0)).astype(np.int32)
                 v_idx = (v * (vb / 256.0)).astype(np.int32)
@@ -131,10 +120,10 @@ def _compute_hsv3d_hist(image_bgr, bins: Tuple[int, int, int]) -> Tuple[List[flo
                 hist = np.bincount(idx, minlength=hb * sb * vb).astype(np.float32)
                 if hist.sum() > 0:
                     hist /= hist.sum()
-                return hist.tolist(), {"s_p90": s_p90, "v_p50": v_p50}
+                return hist.tolist(), {"s_p90": s_p90, "s_p10": s_p10, "v_p50": v_p50, "v_p95": v_p95}
             else:
                 total_bins = hb * sb * vb
-                return [0.0] * total_bins, {"s_p90": 0.0, "v_p50": 0.0}
+                return [0.0] * total_bins, {"s_p90": 0.0, "s_p10": 0.0, "v_p50": 0.0, "v_p95": 0.0}
         except Exception:
             pass
 
@@ -180,7 +169,12 @@ def _compute_hsv3d_hist(image_bgr, bins: Tuple[int, int, int]) -> Tuple[List[flo
         k = max(0, min(len(vs) - 1, int(round((p / 100.0) * (len(vs) - 1)))))
         return float(vs[k])
 
-    return hist, {"s_p90": _percentile(s_vals, 90.0), "v_p50": _percentile(v_vals, 50.0)}
+    return hist, {
+        "s_p90": _percentile(s_vals, 90.0),
+        "s_p10": _percentile(s_vals, 10.0),
+        "v_p50": _percentile(v_vals, 50.0),
+        "v_p95": _percentile(v_vals, 95.0),
+    }
 
 
 def _l1(a: List[float], b: List[float]) -> float:
@@ -204,6 +198,8 @@ class LEDQCEnhanced:
 
     def __init__(self, model: _Model) -> None:
         self.model = model
+        # runtime per-color rules overrides: name(lower) -> rules dict
+        self._color_rules_overrides: Dict[str, Dict[str, Optional[float]]] = {}
 
     @classmethod
     def from_json(cls, path: Any) -> "LEDQCEnhanced":
@@ -240,28 +236,50 @@ class LEDQCEnhanced:
         is_ok = best_diff <= best_thr
 
         # Optional white rule: if predicted White, enforce S/V percentile constraints
-        if best_name.lower() == "white":
-            s_p90 = metrics.get("s_p90", 0.0)
-            v_p50 = metrics.get("v_p50", 0.0)
-            s_ok = True if self.model.white_s_p90_max is None else (s_p90 <= self.model.white_s_p90_max)
-            v_ok = True if self.model.white_v_p50_min is None else (v_p50 >= self.model.white_v_p50_min)
-            # Logging reasons when white rules fail (for debugging)
+        # Per-color rules (white defaults from model + runtime overrides)
+        name_l = best_name.lower()
+        s_p90 = metrics.get("s_p90", 0.0)
+        s_p10 = metrics.get("s_p10", 0.0)
+        v_p50 = metrics.get("v_p50", 0.0)
+        v_p95 = metrics.get("v_p95", 0.0)
+
+        # Base rules: disabled by default; use per-color overrides if configured
+        s_p90_max: Optional[float] = None
+        s_p10_min: Optional[float] = None
+        v_p50_min: Optional[float] = None
+        v_p95_max: Optional[float] = None
+
+        # Apply per-color overrides if provided
+        rules = self._color_rules_overrides.get(name_l)
+        if isinstance(rules, dict):
+            if "s_p90_max" in rules: s_p90_max = rules.get("s_p90_max")
+            if "s_p10_min" in rules: s_p10_min = rules.get("s_p10_min")
+            if "v_p50_min" in rules: v_p50_min = rules.get("v_p50_min")
+            if "v_p95_max" in rules: v_p95_max = rules.get("v_p95_max")
+
+        # Evaluate rules (None means disabled)
+        conds = []
+        if s_p90_max is not None:
+            conds.append((s_p90 <= float(s_p90_max), f"(S) s_p90={s_p90:.1f} > max={float(s_p90_max):.1f}"))
+        if s_p10_min is not None:
+            conds.append((s_p10 >= float(s_p10_min), f"(S-min) s_p10={s_p10:.1f} < min={float(s_p10_min):.1f}"))
+        if v_p50_min is not None:
+            conds.append((v_p50 >= float(v_p50_min), f"(V) v_p50={v_p50:.1f} < min={float(v_p50_min):.1f}"))
+        if v_p95_max is not None:
+            conds.append((v_p95 <= float(v_p95_max), f"(V-max) v_p95={v_p95:.1f} > max={float(v_p95_max):.1f}"))
+
+        if conds:
             try:
                 import logging
                 lg = logging.getLogger(__name__)
                 if not (best_diff <= best_thr):
                     lg.info("Color hist FAIL: color=%s diff=%.2f > thr=%.2f", best_name, best_diff, best_thr)
-                if not s_ok:
-                    lg.info(
-                        "White rule FAIL (S): s_p90=%.1f > max=%.1f", s_p90, (self.model.white_s_p90_max if self.model.white_s_p90_max is not None else float('nan'))
-                    )
-                if not v_ok:
-                    lg.info(
-                        "White rule FAIL (V): v_p50=%.1f < min=%.1f", v_p50, (self.model.white_v_p50_min if self.model.white_v_p50_min is not None else float('nan'))
-                    )
+                for ok, msg in conds:
+                    if not ok:
+                        lg.info("%s rule FAIL %s", best_name, msg)
             except Exception:
                 pass
-            is_ok = is_ok and s_ok and v_ok
+            is_ok = is_ok and all(ok for ok, _ in conds)
         else:
             # Non-white: if histogram fails, log the reason
             if not (best_diff <= best_thr):
@@ -301,21 +319,25 @@ class LEDQCEnhanced:
         except Exception:
             pass
 
-    def apply_white_overrides(self, overrides: Dict[str, Optional[float]]) -> None:
-        """Override white-specific rules: s_p90_max, v_p50_min. Use None to disable."""
+    # apply_white_overrides removed (use apply_color_rules_overrides with key 'White')
+
+    def apply_color_rules_overrides(self, overrides: Dict[str, Dict[str, Optional[float]]]) -> None:
+        """Set per-color rules overrides mapping. Keys are color names (case-insensitive)."""
         try:
-            smax = overrides.get("s_p90_max") if isinstance(overrides, dict) else None
-            vmin = overrides.get("v_p50_min") if isinstance(overrides, dict) else None
-            if smax is not None:
-                try:
-                    self.model.white_s_p90_max = float(smax)
-                except Exception:
-                    self.model.white_s_p90_max = None
-            if vmin is not None:
-                try:
-                    self.model.white_v_p50_min = float(vmin)
-                except Exception:
-                    self.model.white_v_p50_min = None
+            m: Dict[str, Dict[str, Optional[float]]] = {}
+            for k, v in (overrides or {}).items():
+                if not isinstance(v, dict):
+                    continue
+                name = str(k).lower()
+                # accept only known keys
+                rule: Dict[str, Optional[float]] = {}
+                for key in ("s_p90_max", "s_p10_min", "v_p50_min", "v_p95_max"):
+                    if key in v:
+                        val = v.get(key)
+                        rule[key] = float(val) if val is not None else None
+                if rule:
+                    m[name] = rule
+            self._color_rules_overrides = m
         except Exception:
             pass
 

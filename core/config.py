@@ -37,8 +37,8 @@ class DetectionConfig:
     enable_color_check: bool = False
     color_model_path: str | None = None
     color_threshold_overrides: Optional[Dict[str, float]] = None
-    # Optional overrides for white-specific rules in color model
-    color_white_overrides: Optional[Dict[str, Optional[float]]] = None
+    # Optional per-color rules overrides: { ColorName: { s_p90_max, s_p10_min, v_p50_min, v_p95_max } }
+    color_rules_overrides: Optional[Dict[str, Dict[str, Optional[float]]]] = None
     output_dir: str = "Result"
     anomalib_config: Optional[Dict] = None
     position_config: Dict[str, Dict[str, Dict]] = field(default_factory=dict)
@@ -59,6 +59,7 @@ class DetectionConfig:
     jpeg_quality: int = 95
     png_compression: int = 3
     max_crops_per_frame: Optional[int] = None
+    fail_on_unexpected: bool = True
 
     @classmethod
     def from_yaml(cls, path: str) -> 'DetectionConfig':
@@ -93,7 +94,7 @@ class DetectionConfig:
             enable_color_check=config_dict.get('enable_color_check', False),
             color_model_path=config_dict.get('color_model_path'),
             color_threshold_overrides=config_dict.get('color_threshold_overrides'),
-            color_white_overrides=config_dict.get('color_white_overrides'),
+            color_rules_overrides=config_dict.get('color_rules_overrides'),
             output_dir=config_dict.get('output_dir', 'Result'),
             anomalib_config=config_dict.get('anomalib_config'),
             position_config=config_dict.get('position_config', {}),
@@ -111,6 +112,7 @@ class DetectionConfig:
             jpeg_quality=int(config_dict.get('jpeg_quality', 95)),
             png_compression=int(config_dict.get('png_compression', 3)),
             max_crops_per_frame=config_dict.get('max_crops_per_frame'),
+            fail_on_unexpected=bool(config_dict.get('fail_on_unexpected', True)),
             disable_internal_cache=config_dict.get('disable_internal_cache', True)
         )
 

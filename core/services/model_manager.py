@@ -66,9 +66,9 @@ class ModelManager:
         base_config.color_threshold_overrides = cfg.get(
             "color_threshold_overrides", getattr(base_config, "color_threshold_overrides", None)
         )
-        # optional white rules overrides
-        base_config.color_white_overrides = cfg.get(
-            "color_white_overrides", getattr(base_config, "color_white_overrides", None)
+        # optional per-color rules overrides
+        base_config.color_rules_overrides = cfg.get(
+            "color_rules_overrides", getattr(base_config, "color_rules_overrides", None)
         )
         # optional custom backends config (name -> {class_path, enabled, ...})
         base_config.backends = cfg.get("backends", getattr(base_config, "backends", None))

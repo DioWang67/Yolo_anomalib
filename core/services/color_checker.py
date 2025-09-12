@@ -25,7 +25,7 @@ class ColorCheckerService:
         self,
         model_path: str,
         overrides: Optional[Dict[str, float]] = None,
-        white_overrides: Optional[Dict[str, Optional[float]]] = None,
+        rules_overrides: Optional[Dict[str, Dict[str, Optional[float]]]] = None,
     ) -> None:
         """Load/Reload the color model if needed and apply overrides if provided."""
         if self._checker is None or self._model_path != model_path:
@@ -37,9 +37,9 @@ class ColorCheckerService:
                 self._checker.apply_threshold_overrides(overrides)
             except Exception:
                 pass
-        if white_overrides:
+        if rules_overrides:
             try:
-                self._checker.apply_white_overrides(white_overrides)
+                self._checker.apply_color_rules_overrides(rules_overrides)
             except Exception:
                 pass
 

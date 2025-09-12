@@ -303,8 +303,29 @@ class ResultHandler:
                 crop_source = processed_image
 
                 if detections:
-                    for det in detections:
+                    # Draw per-detection boxes and color status (OK/NG) when available
+                    color_items = []
+                    try:
+                        color_items = (color_result or {}).get("items", []) if color_result else []
+                    except Exception:
+                        color_items = []
+                    fail_indices = []
+                    for idx, det in enumerate(detections):
                         self._draw_detection_box(annotated_frame, det)
+                        try:
+                            if idx < len(color_items):
+                                it = color_items[idx]
+                                is_ok = bool(it.get("is_ok", False))
+                                tag = "OK" if is_ok else "NG"
+                                tag_color = (0, 200, 0) if is_ok else (0, 0, 255)
+                                x1, y1, x2, y2 = det['bbox']
+                                # place small tag inside box corner
+                                pos = (max(0, x1 + 5), max(0, y1 + 20))
+                                self.image_utils.draw_label(annotated_frame, f"{tag}", pos, tag_color, font_scale=0.7, thickness=2)
+                                if not is_ok:
+                                    fail_indices.append(idx)
+                        except Exception:
+                            pass
 
                 status_color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
                 text_x = 50
@@ -323,6 +344,22 @@ class ResultHandler:
                         font_scale=1.0,
                         thickness=2,
                     )
+                    # If any failed indices, show them for quick localization
+                    try:
+                        items = color_result.get("items", [])
+                        bad = [str(i) for i, it in enumerate(items) if not it.get("is_ok", False)]
+                        if bad:
+                            text_y += 30
+                            self.image_utils.draw_label(
+                                annotated_frame,
+                                f"NG idx: {', '.join(bad)}",
+                                (text_x, text_y),
+                                (0, 0, 255),
+                                font_scale=1.0,
+                                thickness=2,
+                            )
+                    except Exception:
+                        pass
 
                 annotated_path = os.path.join(base_path, "annotated", detector_prefix, image_name)
                 _imwrite_sync(annotated_path, annotated_frame)

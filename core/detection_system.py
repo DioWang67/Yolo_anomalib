@@ -133,7 +133,7 @@ class DetectionSystem:
                 try:
                     # Load latest overrides from model-level YAML (even if engine is cached)
                     overrides = getattr(self.config, "color_threshold_overrides", None)
-                    white_over = getattr(self.config, "color_white_overrides", None)
+                    rules_over = getattr(self.config, "color_rules_overrides", None)
                     try:
                         import yaml as _yaml
                         _cfg_path = os.path.join("models", product, area, inference_type, "config.yaml")
@@ -143,15 +143,15 @@ class DetectionSystem:
                                 ov = _model_cfg.get("color_threshold_overrides")
                                 if isinstance(ov, dict) and ov:
                                     overrides = ov
-                                wov = _model_cfg.get("color_white_overrides")
-                                if isinstance(wov, dict) and wov:
-                                    white_over = wov
+                                crov = _model_cfg.get("color_rules_overrides")
+                                if isinstance(crov, dict) and crov:
+                                    rules_over = crov
                     except Exception:
                         pass
                     self.color_service.ensure_loaded(
                         self.config.color_model_path,
                         overrides=overrides,
-                        white_overrides=white_over,
+                        rules_overrides=rules_over,
                     )
                     run_logger.info("Color checker loaded (LEDQCEnhanced)")
                 except Exception as e:
@@ -296,6 +296,9 @@ class DetectionSystem:
                         items = c.get("items", []) or []
                         fail_cnt = sum(1 for it in items if not it.get("is_ok", False))
                         run_logger.info(f"Fail reason - color mismatch: {fail_cnt}/{len(items)} items failed")
+                    unexp = result.get("unexpected_items", [])
+                    if unexp:
+                        run_logger.info(f"Fail reason - unexpected items: {unexp}")
                     pos_wrong = [d.get("class") for d in (result.get("detections", []) or []) if d.get("position_status") == "WRONG"]
                     if pos_wrong:
                         run_logger.info(f"Fail reason - position wrong: {pos_wrong}")

@@ -44,6 +44,8 @@ class YOLODetector:
             boxes = getattr(result, "boxes", None)
             detections: List[Dict[str, Any]] = []
             detected_items = set()
+            from collections import Counter
+            det_counter: Counter = Counter()
 
             if boxes is not None and len(boxes) > 0:
                 # Vectorized extraction for speed
@@ -62,6 +64,7 @@ class YOLODetector:
                     }
                     detections.append(det)
                     detected_items.add(cname)
+                    det_counter[cname] += 1
 
             # Draw annotations on processed image
             result_frame = processed_image.copy()
@@ -72,12 +75,14 @@ class YOLODetector:
                 label = f"{det['class']}: {det['confidence']:.2f}"
                 self.image_utils.draw_label(result_frame, label, (x1, y1 - 10), color)
 
-            # Normalize class-name comparison (case/whitespace insensitive)
-            detected_norm = {str(n).strip().lower() for n in detected_items}
-            missing_items = [
-                item for item in expected_items
-                if str(item).strip().lower() not in detected_norm
-            ]
+            # Enforce counts (treat expected_items as multiset)
+            exp_items = [str(x).strip() for x in (expected_items or [])]
+            exp_counter: Counter = Counter(exp_items)
+            missing_items: List[str] = []
+            for name, need in exp_counter.items():
+                have = int(det_counter.get(name, 0))
+                if have < need:
+                    missing_items.extend([name] * (need - have))
             return result_frame, detections, missing_items
         except Exception as e:
             raise RuntimeError(f"解析檢測結果失敗: {str(e)}")

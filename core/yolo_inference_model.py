@@ -112,6 +112,16 @@ class YOLOInferenceModel(BaseInferenceModel):
 
             # ✅ 統一檢查結果狀態（含位置誤差 + 缺漏）
             status = validator.evaluate_status(detections, missing_items)
+            # 若存在未預期類別且設定要求，直接 FAIL
+            unexpected_items = []
+            try:
+                exp_set = {str(x).strip() for x in (expected_items or [])}
+                det_names = [str(d.get("class", "")).strip() for d in (detections or [])]
+                unexpected_items = sorted({n for n in det_names if n and n not in exp_set})
+                if unexpected_items and getattr(self.config, 'fail_on_unexpected', True):
+                    status = 'FAIL'
+            except Exception:
+                unexpected_items = []
             inference_time = time.time() - start_time
 
             self.logger.logger.debug(f"YOLO 推理時間: {inference_time:.3f}s, 檢測數量: {len(detections)}")
@@ -121,6 +131,7 @@ class YOLOInferenceModel(BaseInferenceModel):
                 "status": status,
                 "detections": detections,
                 "missing_items": list(missing_items),
+                "unexpected_items": unexpected_items,
                 "inference_time": inference_time,
                 "processed_image": processed_image,
                 "result_frame": result_frame,
