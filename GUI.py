@@ -8,8 +8,8 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 import cv2
 import numpy as np
-from PIL import Image
 import traceback
+import threading
 
 # 導入 DetectionSystem 類
 try:
@@ -31,13 +31,27 @@ class DetectionWorker(QThread):
         self.area = area
         self.inference_type = inference_type
         self.frame = frame
+        self._stop_event = threading.Event()
+    
+    def cancel(self):
+        try:
+            self._stop_event.set()
+        except Exception:
+            pass
     
     def run(self):
         try:
-            result = self.detection_system.detect(self.product, self.area, self.inference_type, frame=self.frame)
-            self.result_ready.emit(result)
-        except Exception as e:
-            self.error_occurred.emit(str(e))
+            result = self.detection_system.detect(
+                self.product,
+                self.area,
+                self.inference_type,
+                frame=self.frame,
+                cancel_cb=self._stop_event.is_set,
+            )
+            if not self._stop_event.is_set():
+                self.result_ready.emit(result)
+        except Exception:
+            self.error_occurred.emit(traceback.format_exc())
 
 class StatusWidget(QWidget):
     """系統狀態顯示元件"""
@@ -150,6 +164,7 @@ class ResultDisplayWidget(QWidget):
             }
         """)
         self.result_text.setMaximumHeight(200)
+        self.result_text.setReadOnly(True)
         
         layout.addWidget(title)
         layout.addWidget(self.result_text)
@@ -164,7 +179,7 @@ class ResultDisplayWidget(QWidget):
         text += f"推論類型: {result.get('inference_type', 'N/A')}\n"
         text += f"模型路徑: {result.get('ckpt_path', 'N/A')}\n"
         
-        if result.get('anomaly_score'):
+        if result.get('anomaly_score') or result.get('anomaly_score') in (0, 0.0):
             text += f"異常分數: {result.get('anomaly_score')}\n"
         
         if result.get('detections'):
@@ -175,6 +190,14 @@ class ResultDisplayWidget(QWidget):
         if result.get('missing_items'):
             text += f"缺失項目: {result.get('missing_items')}\n"
         
+        # 補：將缺失項目以多行顯示（若為清單）
+        try:
+            items = result.get('missing_items')
+            if isinstance(items, list) and items:
+                text += "缺失項目:\n" + "\n".join(f"  - {x}" for x in items) + "\n"
+        except Exception:
+            pass
+
         text += "==================="
         
         self.result_text.setPlainText(text)
@@ -188,10 +211,30 @@ class DetectionSystemGUI(QMainWindow):
         self.available_areas = {}
         self.current_result = None
         self.selected_image_path = None
+        # Models base path and settings
+        self._models_base = os.path.join(os.path.dirname(__file__), "models")
+        self._settings = QSettings()
         
         self.init_ui()
         self.init_system()
         self.load_available_models()
+        # 快捷鍵
+        try:
+            QShortcut(QKeySequence("F5"), self).activated.connect(self.load_available_models)
+            QShortcut(QKeySequence("Ctrl+O"), self).activated.connect(self.open_config)
+            QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_config)
+        except Exception:
+            pass
+        # Restore window geometry/state
+        try:
+            geo = self._settings.value("geometry")
+            if geo is not None:
+                self.restoreGeometry(geo)
+            st = self._settings.value("windowState")
+            if st is not None:
+                self.restoreState(st)
+        except Exception:
+            pass
     
     def init_ui(self):
         self.setWindowTitle("AI 檢測系統 - PyQt 介面")
@@ -301,7 +344,6 @@ class DetectionSystemGUI(QMainWindow):
         inference_layout = QVBoxLayout()
         
         self.inference_combo = QComboBox()
-        self.inference_combo.addItems(["yolo", "anomalib"])
         inference_layout.addWidget(QLabel("後端:"))
         inference_layout.addWidget(self.inference_combo)
         
@@ -415,6 +457,7 @@ class DetectionSystemGUI(QMainWindow):
                 border-radius: 4px;
             }
         """)
+        self.log_text.setReadOnly(True)
         
         log_layout.addWidget(self.log_text)
         log_group.setLayout(log_layout)
@@ -472,16 +515,16 @@ class DetectionSystemGUI(QMainWindow):
     def load_available_models(self):
         """載入可用模型"""
         try:
-            models_base = os.path.join(os.path.dirname(__file__), "models")
+            models_base = self._models_base
             if not os.path.exists(models_base):
                 self.log_message("找不到 models 資料夾")
                 return
             
             # 載入產品
-            self.available_products = [
+            self.available_products = sorted([
                 d for d in os.listdir(models_base)
-                if os.path.isdir(os.path.join(models_base, d))
-            ]
+                if os.path.isdir(os.path.join(models_base, d)) and not str(d).startswith('.')
+            ])
             
             self.product_combo.clear()
 
@@ -489,18 +532,30 @@ class DetectionSystemGUI(QMainWindow):
             self.available_areas = {}
             for product in self.available_products:
                 product_dir = os.path.join(models_base, product)
-                areas = [
+                areas = sorted([
                     d for d in os.listdir(product_dir)
-                    if os.path.isdir(os.path.join(product_dir, d))
-                ]
+                    if os.path.isdir(os.path.join(product_dir, d)) and not str(d).startswith('.')
+                ])
                 self.available_areas[product] = areas
 
             self.product_combo.addItems(self.available_products)
 
             if self.available_products:
+                # restore last selections if any
+                last_prod = str(self._settings.value("last_product", ""))
+                last_area = str(self._settings.value("last_area", ""))
+                last_infer = str(self._settings.value("last_infer", ""))
+
+                if last_prod and last_prod in self.available_products:
+                    self.product_combo.setCurrentText(last_prod)
                 self.on_product_changed(self.product_combo.currentText())
                 try:
+                    if last_area and last_area in self.available_areas.get(self.product_combo.currentText(), []):
+                        self.area_combo.setCurrentText(last_area)
                     self.on_area_changed(self.area_combo.currentText())
+                    # set inference type after reload
+                    if last_infer and last_infer in [self.inference_combo.itemText(i) for i in range(self.inference_combo.count())]:
+                        self.inference_combo.setCurrentText(last_infer)
                 except Exception:
                     pass
             
@@ -527,7 +582,7 @@ class DetectionSystemGUI(QMainWindow):
         self.inference_combo.clear()
         if not product or not area:
             return
-        base = os.path.join(os.path.dirname(__file__), "models", product, area)
+        base = os.path.join(self._models_base, product, area)
         if os.path.isdir(base):
             types = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
             types.sort()
@@ -545,7 +600,7 @@ class DetectionSystemGUI(QMainWindow):
             return
         
         # 檢查模型設定是否存在
-        config_path = os.path.join("models", product, area, inference_type, "config.yaml")
+        config_path = os.path.join(self._models_base, product, area, inference_type, "config.yaml")
         if not os.path.exists(config_path):
             QMessageBox.critical(self, "模型不存在", f"找不到對應的模型設定檔:\n{config_path}")
             return
@@ -594,8 +649,8 @@ class DetectionSystemGUI(QMainWindow):
         """停止檢測"""
         if self.worker and self.worker.isRunning():
             try:
-                self.worker.quit()
-                self.worker.wait(2000)
+                self.worker.cancel()
+                self.worker.wait(3000)
             except Exception:
                 self.worker.terminate()
                 self.worker.wait()
@@ -710,6 +765,19 @@ class DetectionSystemGUI(QMainWindow):
         """切換 使用相機 / 使用影像 模式"""
         try:
             if checked:
+                # 簡易偵測相機可用性
+                ok = False
+                try:
+                    cap = cv2.VideoCapture(0)
+                    ok = cap is not None and cap.isOpened()
+                    if cap:
+                        cap.release()
+                except Exception:
+                    ok = False
+                if not ok:
+                    QMessageBox.warning(self, "相機不可用", "找不到可用相機，請改用選圖模式。")
+                    self.use_camera_chk.setChecked(False)
+                    return
                 # 使用相機 → 停用清除鈕與選圖鈕
                 self.selected_image_path = None
                 if getattr(self, 'pick_image_btn', None):
@@ -767,8 +835,8 @@ class DetectionSystemGUI(QMainWindow):
                                        QMessageBox.No)
             if reply == QMessageBox.Yes:
                 try:
-                    self.worker.quit()
-                    self.worker.wait(2000)
+                    self.worker.cancel()
+                    self.worker.wait(3000)
                 except Exception:
                     self.worker.terminate()
                     self.worker.wait()
@@ -778,7 +846,16 @@ class DetectionSystemGUI(QMainWindow):
         
         if self.detection_system:
             self.detection_system.shutdown()
-        
+        # Save window + last selections
+        try:
+            self._settings.setValue("geometry", self.saveGeometry())
+            self._settings.setValue("windowState", self.saveState())
+            self._settings.setValue("last_product", self.product_combo.currentText())
+            self._settings.setValue("last_area", self.area_combo.currentText())
+            self._settings.setValue("last_infer", self.inference_combo.currentText())
+        except Exception:
+            pass
+
         event.accept()
 
 def main():

@@ -110,7 +110,7 @@ class DetectionSystem:
         self.inference_engine = engine
         self.current_inference_type = inference_type.lower()
 
-    def detect(self, product: str, area: str, inference_type: str, frame: np.ndarray | None = None) -> dict:
+    def detect(self, product: str, area: str, inference_type: str, frame: np.ndarray | None = None, cancel_cb=None) -> dict:
         """Run one-shot detection and return a normalized result dict.
 
         Args:
@@ -123,7 +123,32 @@ class DetectionSystem:
             Dict with normalized keys consumed by sinks and GUI (status, paths, etc.).
         """
         try:
+            def _canceled() -> bool:
+                try:
+                    return bool(cancel_cb and cancel_cb())
+                except Exception:
+                    return False
+
+            def _cancel_result(status: str = "CANCELED") -> dict:
+                return {
+                    "status": status,
+                    "product": product,
+                    "area": area,
+                    "inference_type": inference_type,
+                    "ckpt_path": "",
+                    "anomaly_score": "",
+                    "detections": [],
+                    "missing_items": [],
+                    "original_image_path": "",
+                    "preprocessed_image_path": "",
+                    "annotated_path": "",
+                    "heatmap_path": "",
+                    "cropped_paths": [],
+                    "color_check": None,
+                }
             self.load_model_configs(product, area, inference_type)
+            if _canceled():
+                return _cancel_result()
             run_logger = context_adapter(self.logger.logger, product, area, inference_type)
             run_logger.info("Start detection")
             inference_type_name = inference_type.lower()
@@ -136,7 +161,7 @@ class DetectionSystem:
                     rules_over = getattr(self.config, "color_rules_overrides", None)
                     try:
                         import yaml as _yaml
-                        _cfg_path = os.path.join("models", product, area, inference_type, "config.yaml")
+                        _cfg_path = str(PROJECT_ROOT / "models" / product / area / inference_type / "config.yaml")
                         if os.path.exists(_cfg_path):
                             with open(_cfg_path, "r", encoding="utf-8") as _f:
                                 _model_cfg = _yaml.safe_load(_f) or {}
@@ -177,6 +202,8 @@ class DetectionSystem:
                 )
 
             # Inference
+            if _canceled():
+                return _cancel_result()
             raw_result = self.inference_engine.infer(frame, product, area, inference_type_name, output_path)
             result = normalize_result(raw_result, inference_type_name, frame)
             if "status" in result and result["status"] == "ERROR":
@@ -274,6 +301,8 @@ class DetectionSystem:
 
             # Persist results via pipeline
             for step in steps:
+                if _canceled():
+                    return _cancel_result()
                 step.run(ctx)
 
             # Use possibly-updated status from pipeline (e.g., color/position checks)
