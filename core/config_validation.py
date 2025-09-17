@@ -6,7 +6,7 @@ from typing import Any, Dict
 from core.path_utils import resolve_path
 
 
-def validate_model_cfg(cfg: Dict[str, Any], product: str, area: str) -> None:
+def validate_model_cfg(cfg: Dict[str, Any], product: str, area: str, selected_backend: str | None = None) -> None:
     """Lightweight validation for model-level config.
 
     Raises ValueError with helpful message on critical issues.
@@ -40,6 +40,17 @@ def validate_model_cfg(cfg: Dict[str, Any], product: str, area: str) -> None:
         ckp = resolve_path(m.get("ckpt_path"))
         if not ckp or not os.path.exists(str(ckp)):
             raise ValueError(f"Anomalib ckpt not found: {ckp}")
+
+    # Custom backend (when a non-builtin type is selected)
+    if selected_backend:
+        name = str(selected_backend).lower().strip()
+        if name not in ("yolo", "anomalib"):
+            backs = cfg.get("backends") or {}
+            spec = backs.get(name) if isinstance(backs, dict) else None
+            if not spec:
+                raise ValueError(f"Custom backend '{name}' not configured under backends")
+            if not spec.get("class_path"):
+                raise ValueError(f"Custom backend '{name}' missing class_path in backends")
 """Lightweight validation helpers for model-level configs.
 
 These checks provide clear error messages early for missing/invalid paths.

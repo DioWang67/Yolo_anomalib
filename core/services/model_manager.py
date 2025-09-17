@@ -117,7 +117,7 @@ class ModelManager:
 
         # Validate critical fields/paths early with helpful messages
         try:
-            validate_model_cfg(cfg or {}, product, area)
+            validate_model_cfg(cfg or {}, product, area, selected_backend=inference_type)
         except Exception as e:
             self.logger.logger.error(f"Model config validation failed: {e}")
             raise
