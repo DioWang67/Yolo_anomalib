@@ -23,6 +23,11 @@ YOLO11 Inference 將 YOLO 目標偵測與 Anomalib 異常偵測整合為單一�
 
 > 選用依賴：若需串接海康威視相機，請安裝 MVS 驅動程式；若需自動推導模型路徑，可以設定環境變數 `YOLO11_ROOT`。
 
+## 依賴與安裝注意
+- **PyQt5**：若需使用 GUI，請額外安裝 `pip install PyQt5==5.15.11`。
+- **海康威視 MVS SDK**：請依官方說明安裝驅動與 `MvImport` Python 綁定，並確認 SDK 的 Python 路徑已加入 `PYTHONPATH`。
+- **測試工具**：開發環境建議安裝 `pytest` 以執行 `tests/` 單元測試。
+
 ## 功能亮點
 - 同時支援 YOLO 與 Anomalib 推論，並能依產品/站別切換模型。
 - 透過 `models/<product>/<area>/<type>/config.yaml` 管理模型設定，採 LRU 快取減少重複載入。

@@ -77,30 +77,6 @@ class DetectionSystem:
             self.logger.logger.warning("Camera disabled; using dummy image for detection")
             self.camera = None
 
-    def initialize_inference_engine(self) -> None:
-        """Initialize inference engine backends that are enabled in config."""
-        self.logger.logger.info("Initializing inference engine...")
-        if not self.inference_engine or not self.inference_engine.initialize():
-            self.logger.logger.error("Inference engine init failed")
-            raise RuntimeError("Inference engine init failed")
-        self.logger.logger.info("Inference engine is ready")
-
-    def initialize_product_models(self, product: str) -> None:
-        """Preload anomalib models for a product (optional).
-
-        YOLO has fast load; anomalib can benefit from preloading across areas.
-        """
-        if self.config.enable_yolo:
-            self.logger.logger.info(f"YOLO is enabled for {product}")
-        if self.config.enable_anomalib:
-            try:
-                from core.anomalib_lightning_inference import initialize_product_models as _anoma_init
-                _anoma_init(self.config.anomalib_config, product)
-                self.logger.logger.info(f"Anomalib models initialized for {product}")
-            except Exception as e:
-                self.logger.logger.error(f"Anomalib init failed for {product}: {str(e)}")
-                raise
-
     def load_model_configs(self, product: str, area: str, inference_type: str) -> None:
         """Switch to a specific (product, area, type) model configuration.
 
