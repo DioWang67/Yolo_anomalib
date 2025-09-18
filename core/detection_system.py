@@ -343,6 +343,7 @@ class DetectionSystem:
                 "anomaly_score": result.get("anomaly_score", ""),
                 "detections": result.get("detections", []),
                 "missing_items": result.get("missing_items", []),
+                "result_frame": result.get("result_frame"),
                 "original_image_path": (ctx.save_result or {}).get("original_path", ""),
                 "preprocessed_image_path": (ctx.save_result or {}).get("preprocessed_path", ""),
                 "annotated_path": (ctx.save_result or {}).get("annotated_path", ""),

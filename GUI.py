@@ -321,6 +321,10 @@ class DetectionSystemGUI(QMainWindow):
         
         self.product_combo = QComboBox()
         self.product_combo.currentTextChanged.connect(self.on_product_changed)
+        try:
+            self.product_combo.currentTextChanged.connect(lambda _=None: self.update_start_enabled())
+        except Exception:
+            pass
         product_layout.addWidget(QLabel("產品:"))
         product_layout.addWidget(self.product_combo)
         
@@ -333,6 +337,10 @@ class DetectionSystemGUI(QMainWindow):
         
         self.area_combo = QComboBox()
         self.area_combo.currentTextChanged.connect(self.on_area_changed)
+        try:
+            self.area_combo.currentTextChanged.connect(lambda _=None: self.update_start_enabled())
+        except Exception:
+            pass
         area_layout.addWidget(QLabel("區域:"))
         area_layout.addWidget(self.area_combo)
         
@@ -344,6 +352,10 @@ class DetectionSystemGUI(QMainWindow):
         inference_layout = QVBoxLayout()
         
         self.inference_combo = QComboBox()
+        try:
+            self.inference_combo.currentTextChanged.connect(lambda _=None: self.update_start_enabled())
+        except Exception:
+            pass
         inference_layout.addWidget(QLabel("後端:"))
         inference_layout.addWidget(self.inference_combo)
         
@@ -588,6 +600,18 @@ class DetectionSystemGUI(QMainWindow):
             types.sort()
             if types:
                 self.inference_combo.addItems(types)
+        
+    def update_start_enabled(self):
+        """根據選擇是否完整，自動啟用/停用開始檢測按鈕"""
+        try:
+            ok = bool(
+                self.product_combo.currentText().strip()
+                and self.area_combo.currentText().strip()
+                and self.inference_combo.currentText().strip()
+            )
+            self.start_btn.setEnabled(ok and not self.stop_btn.isEnabled())
+        except Exception:
+            pass
 
     def start_detection(self):
         """開始檢測"""
@@ -694,6 +718,23 @@ class DetectionSystemGUI(QMainWindow):
             self.result_image.set_image(result["annotated_path"])
         elif result.get('heatmap_path'):
             self.result_image.set_image(result['heatmap_path'])
+        else:
+            # Fallback for UI-only preview when annotated image is not saved (e.g., save_fail_only=True)
+            try:
+                rf = result.get('result_frame', None)
+                if rf is not None and getattr(rf, 'size', 0) > 0:
+                    import tempfile
+                    temp_dir = os.path.join(tempfile.gettempdir(), 'ai_detect_preview')
+                    os.makedirs(temp_dir, exist_ok=True)
+                    fname = f"annotated_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.jpg"
+                    temp_path = os.path.join(temp_dir, fname)
+                    try:
+                        cv2.imwrite(temp_path, rf)
+                        self.result_image.set_image(temp_path)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         
         self.log_message(f"檢測完成 - 狀態: {status}")
         
