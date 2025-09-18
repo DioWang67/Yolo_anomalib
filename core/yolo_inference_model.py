@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 
+import os
 import time
 from collections import OrderedDict
 from contextlib import nullcontext
@@ -18,6 +19,8 @@ from core.utils import ImageUtils
 
 
 class YOLOInferenceModel(BaseInferenceModel):
+    _warmup_registry: set[tuple[str, str]] = set()
+
     """Inference wrapper that keeps a lightweight cache of YOLO models."""
 
     def __init__(self, config):
@@ -39,6 +42,9 @@ class YOLOInferenceModel(BaseInferenceModel):
 
         try:
             self.logger.logger.info("Initializing YOLO model...")
+            weights_key = (os.path.abspath(str(self.config.weights)), str(self.config.device))
+            should_warmup = weights_key not in self._warmup_registry
+
             self.model = YOLO(self.config.weights)
             self.model.to(self.config.device)
             self.model.fuse()
@@ -47,13 +53,15 @@ class YOLOInferenceModel(BaseInferenceModel):
                 torch.backends.cudnn.benchmark = True
             self.detector = YOLODetector(self.model, self.config)
 
-            try:
-                h, w = self.config.imgsz
-                dummy = np.zeros((h, w, 3), dtype=np.uint8)
-                with torch.inference_mode():
-                    _ = self.model(dummy, conf=self.config.conf_thres, iou=self.config.iou_thres)
-            except Exception:
-                pass
+            if should_warmup:
+                try:
+                    h, w = self.config.imgsz
+                    dummy = np.zeros((h, w, 3), dtype=np.uint8)
+                    with torch.inference_mode():
+                        _ = self.model(dummy, conf=self.config.conf_thres, iou=self.config.iou_thres)
+                    self._warmup_registry.add(weights_key)
+                except Exception:
+                    pass
 
             if self.max_cache_size > 0:
                 self.model_cache[key] = (self.model, self.detector)

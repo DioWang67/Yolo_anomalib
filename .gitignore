@@ -13,6 +13,7 @@ env/
 # 臨時檔案
 Result/tmp/
 tmp_*.jpg
+*.jpg
 *.tmp
 debug_heatmap.jpg
 

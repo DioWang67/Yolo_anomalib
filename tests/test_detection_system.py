@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 import os
 import numpy as np
 import pytest
@@ -15,10 +15,11 @@ class FakeEngine:
 
     def infer(self, image, product, area, inference_type_enum, output_path=None):
         self.infer_calls += 1
+        status = "FAIL" if getattr(self, 'force_fail', False) else "PASS"
         if inference_type_enum.value == "anomalib":
             return {
                 "inference_type": "anomalib",
-                "status": "PASS",
+                "status": status,
                 "anomaly_score": 0.01,
                 "processed_image": np.zeros_like(image),
                 "output_path": output_path,
@@ -26,9 +27,9 @@ class FakeEngine:
         else:
             return {
                 "inference_type": "yolo",
-                "status": "PASS",
+                "status": status,
                 "detections": [],
-                "missing_items": [],
+                "missing_items": [] if status == "PASS" else ['missing'],
                 "processed_image": np.zeros_like(image),
             }
 
@@ -122,7 +123,7 @@ def test_detect_calls_flush_yolo(monkeypatch, tmp_result_dir):
     sys, sink = _mk_system(monkeypatch, tmp_result_dir)
     out = sys.detect("P", "A", "yolo")
     assert out["status"] in ("PASS", "FAIL", "ERROR")
-    assert sink.flushed == 1
+    assert sink.flushed == 0
     assert len(sink.saved) == 1
 
 
@@ -132,5 +133,13 @@ def test_detect_calls_flush_anomalib(monkeypatch, tmp_result_dir):
     sys, sink = _mk_system(monkeypatch, tmp_result_dir)
     out = sys.detect("P", "A", "anomalib")
     assert out["status"] in ("PASS", "FAIL", "ERROR")
+    assert sink.flushed == 0
+    assert len(sink.saved) == 1
+
+def test_detect_flush_on_failure(monkeypatch, tmp_result_dir):
+    sys, sink = _mk_system(monkeypatch, tmp_result_dir)
+    sys.model_manager.engine.force_fail = True
+    out = sys.detect("P", "A", "yolo")
+    assert out["status"] == "FAIL"
     assert sink.flushed == 1
     assert len(sink.saved) == 1

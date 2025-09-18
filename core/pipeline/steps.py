@@ -92,10 +92,13 @@ class SaveResultsStep(Step):
                 color_result=ctx.color_result,
             )
         ctx.save_result = save_result
-        try:
-            self.sink.flush()
-        except Exception as _e:
-            self.logger.warning(f"Excel flush failed: {_e}")
+        flush_mode = str(self.options.get("flush", "fail")).lower()
+        should_flush = flush_mode == "always" or (flush_mode == "fail" and str(ctx.status).upper() != "PASS")
+        if should_flush:
+            try:
+                self.sink.flush()
+            except Exception as _e:
+                self.logger.warning(f"Excel flush failed: {_e}")
 
 
 class PositionCheckStep(Step):
