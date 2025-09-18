@@ -1,24 +1,29 @@
+
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Any
 
 try:
-    # pydantic v1 fallback
-    from pydantic import BaseModel, Field, validator  # type: ignore
-    _V2 = False
+    from pydantic import BaseModel, Field
+    try:
+        from pydantic import field_validator as _field_validator
+        _VALIDATOR_MODE = 'v2'
+    except ImportError:  # pragma: no cover - pydantic v1 path
+        from pydantic import validator as _validator  # type: ignore
+        _VALIDATOR_MODE = 'v1'
 except Exception:  # pragma: no cover
     try:
-        # pydantic v2
-        from pydantic.v1 import BaseModel, Field, validator  # type: ignore
-        _V2 = True
+        from pydantic.v1 import BaseModel, Field, validator as _validator  # type: ignore
+        _VALIDATOR_MODE = 'v1'
     except Exception:  # pragma: no cover
         BaseModel = None  # type: ignore
+        _VALIDATOR_MODE = None
 
 
 def _to_dict(model: Any) -> Dict[str, Any]:  # compatible dump
-    if hasattr(model, "dict"):
+    if hasattr(model, 'dict'):
         return model.dict()
-    if hasattr(model, "model_dump"):
+    if hasattr(model, 'model_dump'):
         return model.model_dump()
     return dict(model)
 
@@ -59,16 +64,26 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         pipeline: Optional[List[str]] = None
         steps: Dict[str, Any] = Field(default_factory=dict)
 
-        @validator("imgsz", pre=True)
-        def _coerce_imgsz(cls, v):
-            if v is None:
-                return v
-            if isinstance(v, (list, tuple)) and len(v) == 2:
-                return [int(v[0]), int(v[1])]
-            raise ValueError("imgsz must be [h, w]")
+        if _VALIDATOR_MODE == 'v2':
 
+            @_field_validator('imgsz', mode='before')
+            def _coerce_imgsz(cls, v):
+                if v is None:
+                    return v
+                if isinstance(v, (list, tuple)) and len(v) == 2:
+                    return [int(v[0]), int(v[1])]
+                raise ValueError('imgsz must be [h, w]')
+
+        elif _VALIDATOR_MODE == 'v1':
+
+            @_validator('imgsz', pre=True)  # type: ignore[misc]
+            def _coerce_imgsz(cls, v):
+                if v is None:
+                    return v
+                if isinstance(v, (list, tuple)) and len(v) == 2:
+                    return [int(v[0]), int(v[1])]
+                raise ValueError('imgsz must be [h, w]')
 else:
     # No pydantic available; expose sentinels
     GlobalConfigSchema = None  # type: ignore
     ModelConfigSchema = None  # type: ignore
-

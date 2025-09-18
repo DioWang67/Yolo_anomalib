@@ -127,7 +127,7 @@ class DetectionConfig:
         return config is not None and config.get("enabled", False)
     
     def get_tolerance_ratio(self, product: str, area: str) -> float:
-        """取得指定區域的容忍比例 (0.05 表示 5%)"""
+        """Return tolerance ratio for a given product/area (0.05 == 5%)."""
         config = self.get_position_config(product, area)
         if config is None:
             return 0.0
@@ -136,5 +136,5 @@ class DetectionConfig:
         if val <= 0:
             return 0.0
         if val <= 100:
-            return val / 100.0  # 百分比轉小數
+            return val / 100.0  # convert percentage to decimal
         return 0.0

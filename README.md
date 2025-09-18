@@ -44,6 +44,7 @@ YOLO11 Inference 將 YOLO 目標偵測與 Anomalib 異常偵測整合為單一�
   python main.py --product LED --area A --type anomalib
   ```
 - **GUI（選用）**：若需視覺化操作可執行 `python GUI.py`，介面依專案需求客製。
+  - GUI 會在影像檔尚未完成寫入時自動重試載入，若長時間仍顯示「尚無影像」，請檢查 `save_*` 設定或磁碟權限。
 
 ## 專案架構
 ```
@@ -172,6 +173,7 @@ A：調整全域設定 `max_cache_size`，降低同時緩存的模型數量；�
 ```bash
 pip install pytest
 pytest -q tests
+pytest tests/test_pipeline_registry.py
 ```
 若新增管線步驟或服務，建議撰寫對應單元測試確保輸入輸出格式正確。
 

@@ -27,6 +27,11 @@ from core.logging_utils import context_adapter
 from core.result_adapter import normalize_result
 
 
+class _InferenceTypeToken(str):
+    @property
+    def value(self) -> str:
+        return str(self)
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -180,7 +185,7 @@ class DetectionSystem:
             # Inference
             if _canceled():
                 return _cancel_result()
-            raw_result = self.inference_engine.infer(frame, product, area, inference_type_name, output_path)
+            raw_result = self.inference_engine.infer(frame, product, area, _InferenceTypeToken(inference_type_name), output_path)
             result = normalize_result(raw_result, inference_type_name, frame)
             if "status" in result and result["status"] == "ERROR":
                 run_logger.error(f"Inference failed: {result.get('error')}")
