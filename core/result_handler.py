@@ -2,6 +2,7 @@ import os
 import pandas as pd
 from datetime import datetime
 import cv2
+import queue
 from typing import List, Dict, Any
 from dataclasses import asdict, is_dataclass
 from .utils import ImageUtils, DetectionResults
@@ -49,8 +50,10 @@ class ResultHandler:
         self._lock = threading.Lock()
 
         # Non-blocking image write queue (original/processed/crops). Keep annotated sync for GUI.
-        import queue as _q
-        self._img_queue: _q.Queue = _q.Queue(maxsize=1000)
+        self._img_queue: queue.Queue = queue.Queue(maxsize=1000)
+        self._img_queue_warn_threshold = int(self._img_queue.maxsize * 0.8) if self._img_queue.maxsize else None
+        self._img_queue_overflow = 0
+        self._img_worker_errors = 0
         self._img_stop = False
         self._img_worker = threading.Thread(target=self._img_worker_loop, daemon=True)
         self._img_worker.start()
@@ -136,14 +139,19 @@ class ResultHandler:
             try:
                 path, img, params = item
                 try:
-                    if params:
-                        cv2.imwrite(path, img, params)
-                    else:
+                    ok = cv2.imwrite(path, img, params) if params else cv2.imwrite(path, img)
+                    if ok is False:
+                        raise IOError('cv2.imwrite returned False')
+                except Exception as exc:
+                    self._img_worker_errors += 1
+                    self.logger.logger.error(f"Image write failed ({path}): {exc}")
+                    try:
                         cv2.imwrite(path, img)
-                except Exception:
-                    cv2.imwrite(path, img)
-            except Exception:
-                pass
+                    except Exception as fallback_exc:
+                        self.logger.logger.error(f"Image write fallback failed ({path}): {fallback_exc}")
+            except Exception as worker_exc:
+                self._img_worker_errors += 1
+                self.logger.logger.error(f"Image worker exception: {worker_exc}")
             finally:
                 self._img_queue.task_done()
 
@@ -184,18 +192,37 @@ class ResultHandler:
             self._img_stop = True
             try:
                 self._img_queue.put_nowait(None)
+            except queue.Full:
+                self.logger.logger.warning("Image queue full during shutdown; draining synchronously")
+                try:
+                    while True:
+                        path_img, img, params = self._img_queue.get_nowait()
+                        try:
+                            cv2.imwrite(path_img, img, params)
+                        except Exception:
+                            cv2.imwrite(path_img, img)
+                        self._img_queue.task_done()
+                except Exception:
+                    pass
             except Exception:
                 pass
             try:
                 self._img_queue.join()
             except Exception:
                 pass
-        except Exception:
-            pass
+            remaining = getattr(self._img_queue, "unfinished_tasks", 0)
+            if remaining:
+                self.logger.logger.warning(f"Image queue shutdown with {remaining} pending tasks")
+        except Exception as exc:
+            self.logger.logger.error(f"Failed to shutdown image worker: {exc}")
         if self.flush_interval and hasattr(self, "_timer"):
             self._timer.cancel()
             if hasattr(self, "wb"):
                 self.wb.close()
+        if getattr(self, "_img_queue_overflow", 0):
+            self.logger.logger.warning(f"Image queue overflow occurred {self._img_queue_overflow} times")
+        if getattr(self, "_img_worker_errors", 0):
+            self.logger.logger.warning(f"Image writer encountered {self._img_worker_errors} errors")
 
     def _draw_detection_box(self, frame: np.ndarray, detection: Dict) -> None:
         """Draw one detection (bbox + class/conf label) on frame."""
@@ -267,25 +294,41 @@ class ResultHandler:
             original_path = os.path.join(base_path, "original", detector_prefix, image_name)
             preprocessed_path = os.path.join(base_path, "preprocessed", detector_prefix, image_name)
 
-            # write images (async for non-annotated)
+            # write images (async where possible; annotated images remain sync)
+            def _imwrite_sync(path, img):
+                params = imwrite_params_png if path.lower().endswith('.png') else imwrite_params_jpg
+                try:
+                    ok = cv2.imwrite(path, img, params)
+                    if ok is False:
+                        raise IOError('cv2.imwrite returned False')
+                except Exception as exc:
+                    self._img_worker_errors += 1
+                    self.logger.logger.error(f"Immediate image write failed ({path}): {exc}")
+                    try:
+                        cv2.imwrite(path, img)
+                    except Exception as fallback_exc:
+                        self.logger.logger.error(f"Immediate image fallback failed ({path}): {fallback_exc}")
+
             def _enqueue_write(path, img):
                 params = imwrite_params_png if path.lower().endswith('.png') else imwrite_params_jpg
                 try:
                     self._img_queue.put_nowait((path, img, params))
-                except Exception:
-                    try:
-                        cv2.imwrite(path, img, params)
-                    except Exception:
-                        cv2.imwrite(path, img)
-
-            def _imwrite_sync(path, img):
-                try:
-                    if path.lower().endswith('.png'):
-                        cv2.imwrite(path, img, imwrite_params_png)
-                    else:
-                        cv2.imwrite(path, img, imwrite_params_jpg)
-                except Exception:
-                    cv2.imwrite(path, img)
+                    if self._img_queue_warn_threshold:
+                        try:
+                            qsize = self._img_queue.qsize()
+                        except NotImplementedError:
+                            qsize = None
+                        if qsize is not None and qsize >= self._img_queue_warn_threshold:
+                            maxsize = self._img_queue.maxsize or 'unbounded'
+                            self.logger.logger.warning(f"Image queue backlog at {qsize}/{maxsize} items")
+                except queue.Full:
+                    self._img_queue_overflow += 1
+                    self.logger.logger.warning(f"Image queue full ({self._img_queue_overflow} overflows); writing synchronously for {path}")
+                    _imwrite_sync(path, img)
+                except Exception as exc:
+                    self._img_queue_overflow += 1
+                    self.logger.logger.error(f"Failed to enqueue image {path}: {exc}; writing synchronously")
+                    _imwrite_sync(path, img)
 
             if save_original:
                 _enqueue_write(original_path, frame)

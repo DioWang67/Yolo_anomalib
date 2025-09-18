@@ -121,7 +121,19 @@ steps:
   save_results:
     output_dir: "Result"  # 覆寫輸出資料夾
 ```
-若需新增步驟，可在 `core/pipeline/steps.py` 中擴充並於模型設定加入名稱與參數。
+若需新增步驟，可在 `core/pipeline/steps.py` 撰寫 Step 類別，並透過 `core/pipeline/registry.register_step()` 註冊後在模型設定加入名稱與參數；預設已內建 `color_check`、`position_check`、`save_results`。
+範例：
+```python
+from core.pipeline.registry import PipelineEnv, register_step
+from core.pipeline.steps import Step
+
+class DbSinkStep(Step):
+    def run(self, ctx):
+        # 將結果寫入資料庫
+        pass
+
+register_step("db_sink", lambda env, options: DbSinkStep())
+```
 
 ## 輸出結果與日誌
 ```
@@ -133,6 +145,7 @@ Result/<YYYYMMDD>/<product>/<area>/<status>/
 Result/<YYYYMMDD>/results.xlsx  # 每次偵測追加一列紀錄
 logs/detection_YYYYMMDD.log      # 日誌附帶 product/area/type/request_id
 ```
+> 備註：影像寫入採用背景佇列，佇列接近滿載或發生錯誤時會記錄警告訊息，關閉系統時亦會輸出佇列統計以便除錯。
 Excel 會在每次 `save()` 後呼叫 `flush()`，避免因中途中斷而遺失資料。
 
 ## 模型與部署建議
@@ -164,3 +177,4 @@ pytest -q tests
 
 ## 授權
 本專案屬於內部檢測系統，僅供授權人員使用，未經許可請勿散佈或公開程式碼與模型。
+

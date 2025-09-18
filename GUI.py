@@ -613,6 +613,28 @@ class DetectionSystemGUI(QMainWindow):
         except Exception:
             pass
 
+    def _load_image_with_retry(self, viewer, path, attempts=5, delay_ms=200, on_fail=None):
+        """嘗試載入影像，若尚未寫入磁碟則以定時器重試。"""
+        if not path:
+            if on_fail:
+                on_fail()
+            else:
+                viewer.setText(f'無可顯示{viewer.title}')
+            return
+
+        def attempt(remaining):
+            if os.path.exists(path):
+                viewer.set_image(path)
+            elif remaining > 0:
+                QTimer.singleShot(delay_ms, lambda: attempt(remaining - 1))
+            else:
+                if on_fail:
+                    on_fail()
+                else:
+                    viewer.setText(f'無法載入{viewer.title}')
+
+        attempt(max(0, int(attempts)))
+
     def start_detection(self):
         """開始檢測"""
         product = self.product_combo.currentText()
@@ -685,62 +707,165 @@ class DetectionSystemGUI(QMainWindow):
         self.log_message("檢測已取消")
     
     def on_detection_complete(self, result):
+
         """檢測完成回調"""
+
         self.current_result = result
-        
+
+
+
         # 更新界面
+
         self.start_btn.setEnabled(True)
+
         self.stop_btn.setEnabled(False)
+
         self.save_btn.setEnabled(True)
-        
+
+
+
         # 根據結果設定狀態
+
         status = result.get('status', 'ERROR')
+
         if status == 'PASS':
+
             self.status_widget.set_status("success")
+
         elif status == 'FAIL':
+
             self.status_widget.set_status("warning")
+
         elif status == 'ERROR':
+
             self.status_widget.set_status("error")
+
         else:
+
             self.status_widget.set_status("warning")
-        
+
+
+
         # 更新結果顯示
+
         self.result_widget.update_result(result)
-        
-        # 顯示圖像
-        if result.get('original_image_path'):
-            self.original_image.set_image(result['original_image_path'])
-        
-        if result.get('preprocessed_image_path'):
-            self.processed_image.set_image(result['preprocessed_image_path'])
-        
-        if result.get("annotated_path"):
-            self.result_image.set_image(result["annotated_path"])
-        elif result.get('heatmap_path'):
-            self.result_image.set_image(result['heatmap_path'])
-        else:
-            # Fallback for UI-only preview when annotated image is not saved (e.g., save_fail_only=True)
-            try:
-                rf = result.get('result_frame', None)
-                if rf is not None and getattr(rf, 'size', 0) > 0:
+
+
+
+        # 顯示圖像（考慮非同步寫檔延遲）
+
+        self._load_image_with_retry(
+
+            self.original_image,
+
+            result.get('original_image_path'),
+
+            on_fail=lambda: self.original_image.setText('尚無原始影像（可能未保存）')
+
+        )
+
+
+
+        self._load_image_with_retry(
+
+            self.processed_image,
+
+            result.get('preprocessed_image_path'),
+
+            on_fail=lambda: self.processed_image.setText('尚無預處理影像')
+
+        )
+
+
+
+        annotated_path = result.get('annotated_path')
+
+        heatmap_path = result.get('heatmap_path')
+
+
+
+        def show_result_frame():
+
+            rf = result.get('result_frame', None)
+
+            if isinstance(rf, np.ndarray) and getattr(rf, 'size', 0) > 0:
+
+                try:
+
                     import tempfile
+
                     temp_dir = os.path.join(tempfile.gettempdir(), 'ai_detect_preview')
+
                     os.makedirs(temp_dir, exist_ok=True)
+
                     fname = f"annotated_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.jpg"
+
                     temp_path = os.path.join(temp_dir, fname)
-                    try:
-                        cv2.imwrite(temp_path, rf)
-                        self.result_image.set_image(temp_path)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        
+
+                    cv2.imwrite(temp_path, rf)
+
+                    self.result_image.set_image(temp_path)
+
+                except Exception:
+
+                    self.result_image.setText('無法載入結果影像')
+
+            else:
+
+                self.result_image.setText('無法載入結果影像')
+
+
+
+        def load_heatmap():
+
+            if heatmap_path:
+
+                self._load_image_with_retry(
+
+                    self.result_image,
+
+                    heatmap_path,
+
+                    attempts=3,
+
+                    delay_ms=200,
+
+                    on_fail=show_result_frame
+
+                )
+
+            else:
+
+                show_result_frame()
+
+
+
+        self._load_image_with_retry(
+
+            self.result_image,
+
+            annotated_path,
+
+            attempts=5,
+
+            delay_ms=200,
+
+            on_fail=load_heatmap
+
+        )
+
+
+
         self.log_message(f"檢測完成 - 狀態: {status}")
-        
+
+
+
         # 狀態列
+
         self.statusBar().showMessage(f"檢測完成 - {status}", 5000)
-    
+
+
+
     def on_detection_error(self, error_msg):
         """檢測錯誤回調"""
         self.start_btn.setEnabled(True)

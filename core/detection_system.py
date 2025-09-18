@@ -22,7 +22,7 @@ from camera.camera_controller import CameraController
 from core.services.color_checker import ColorCheckerService
 from core.services.result_sink import ExcelImageResultSink
 from core.pipeline.context import DetectionContext
-from core.pipeline.steps import ColorCheckStep, SaveResultsStep, PositionCheckStep
+from core.pipeline.registry import PipelineEnv, build_pipeline, default_pipeline
 from core.logging_utils import context_adapter
 from core.result_adapter import normalize_result
 
@@ -216,36 +216,28 @@ class DetectionSystem:
                 config=self.config,
             )
 
-            # Build pipeline steps from config if provided; fallback to default
-            steps = []
+            env = PipelineEnv(
+                color_service=self.color_service,
+                result_sink=self.result_sink,
+                logger=run_logger,
+                product=product,
+                area=area,
+                config=self.config,
+            )
+
             pipe_cfg = getattr(self.config, "pipeline", None)
-            step_opts = getattr(self.config, "steps", {}) or {}
-            def _add_color():
-                if self.color_service.is_ready():
-                    steps.append(ColorCheckStep(self.color_service, run_logger, options=step_opts.get("color_check", {})))
-                else:
-                    run_logger.warning(f"Color checker not ready; skip color check (path={self.config.color_model_path})")
-            def _add_save():
-                steps.append(SaveResultsStep(self.result_sink, run_logger, options=step_opts.get("save_results", {})))
-            def _add_position():
-                steps.append(PositionCheckStep(run_logger, product=product, area=area, options=step_opts.get("position_check", {})))
+            step_opts_raw = getattr(self.config, "steps", {}) or {}
+            step_opts = {str(k).lower(): v for k, v in step_opts_raw.items()}
+
             if isinstance(pipe_cfg, list) and pipe_cfg:
-                for name in pipe_cfg:
-                    key = str(name).lower().strip()
-                    if key == "color_check" and self.config.enable_color_check and self.config.color_model_path:
-                        _add_color()
-                    elif key == "position_check":
-                        _add_position()
-                    elif key == "save_results":
-                        _add_save()
-                    else:
-                        run_logger.warning(f"Unknown or disabled pipeline step: {name}")
+                step_names = [str(name) for name in pipe_cfg]
             else:
-                # default pipeline: optional color check then save
-                if self.config.enable_color_check and self.config.color_model_path:
-                    _add_color()
-                # 預設不強制位置檢查，保持與既有行為一致；可在 pipeline 配置中開啟
-                _add_save()
+                step_names = default_pipeline(env)
+
+            steps = build_pipeline(step_names, env, step_opts)
+            if not steps:
+                run_logger.warning("Pipeline produced no executable steps; enforcing save_results fallback")
+                steps = build_pipeline(["save_results"], env, step_opts)
 
             # Adjust anomalib output path from TEMP to PASS/FAIL
             if inference_type_name == "anomalib" and output_path:
@@ -347,3 +339,4 @@ class DetectionSystem:
                 "cropped_paths": [],
                 "color_check": None,
             }
+
