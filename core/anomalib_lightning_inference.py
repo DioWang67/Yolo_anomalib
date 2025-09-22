@@ -172,11 +172,11 @@ def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing
             with _inference_lock:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    predictions = _engine.predict(model=_models[model_key]['model'], dataloaders=[dataloader])
+                    predictions = _engine.predict(model=_models[model_key]['model'], dataloaders=[dataloader], ckpt_path=_models[model_key]['ckpt_path'])
         else:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                predictions = _engine.predict(model=_models[model_key]['model'], dataloaders=[dataloader])
+                predictions = _engine.predict(model=_models[model_key]['model'], dataloaders=[dataloader], ckpt_path=_models[model_key]['ckpt_path'])
         
         if enable_timing:
             timings["model_inference"] = round(time.time() - predict_start, 4)
