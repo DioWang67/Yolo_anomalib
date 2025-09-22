@@ -111,4 +111,3 @@ Features:
 - Prompt user for product/area/backend type
 - Call DetectionSystem.detect(...) and print a compact summary
 """
-            print(f"錯誤: {str(e)}")

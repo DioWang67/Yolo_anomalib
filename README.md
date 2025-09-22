@@ -23,6 +23,24 @@ YOLO11 Inference 將 YOLO 目標偵測與 Anomalib 異常偵測整合為單一�
 
 > 選用依賴：若需串接海康威視相機，請安裝 MVS 驅動程式；若需自動推導模型路徑，可以設定環境變數 `YOLO11_ROOT`。
 
+## 模型與資料準備
+- **YOLO 權重**：放置於 models/<產品>/<站別>/yolo/，並在對應 config.yaml 的 weights 欄位填入實際檔案路徑。
+- **Anomalib ckpt**：置於 models/<產品>/<站別>/anomalib/<模型資料夾>/weights/lightning/，config.yaml 內的 nomalib_config.models[產品][站別].ckpt_path 必須對應實際檔案。
+- **測試影像**：若需離線測試，將影像放在任意路徑，使用 --image path/to/img.jpg 或在 GUI 中載入；若未指定會改用相機影像。
+- **環境變數 YOLO11_ROOT**：推薦在部署機器上設定成專案根目錄，可讓所有相對路徑在服務或排程中保持一致。
+
+## 常見錯誤與偵錯建議
+- 影像讀取失敗：檔案存在但 OpenCV 讀不到，請確認路徑權限與檔案是否為支援格式。
+- 未取得推論結果：anomalib 未回傳任何預測，通常是 ckpt/輸入影像不符，檢查 config 與模型版本是否一致。
+- Anomalib 推論未返回結果 / 回傳非預期格式：代表推論程序異常結束，請先觀察 logs/ 下同時間點的日誌再重試。
+- Excel 未更新：確認 Result/<日期>/results.xlsx 是否被其他程式占用；必要時執行 esult_sink.flush() 或重新啟動服務。
+
+## 測試與上線前檢查
+1. 執行 pytest -q tests，確保核心流程正常。
+2. 使用範例影像各跑一次 YOLO 與 anomalib，確認 Result/<日期>/... 內有產生對應影像與 Excel 記錄。
+3. 檢查 GUI / CLI 介面是否能顯示錯誤訊息，避免使用者遇到無回饋的狀態。
+4. 確認 config.yaml 內的 enable_anomalib、enable_yolo 等旗標符合部署需求，避免未使用的後端被誤啟。
+
 ## 依賴與安裝注意
 - **PyQt5**：若需使用 GUI，請額外安裝 `pip install PyQt5==5.15.11`。
 - **海康威視 MVS SDK**：請依官方說明安裝驅動與 `MvImport` Python 綁定，並確認 SDK 的 Python 路徑已加入 `PYTHONPATH`。

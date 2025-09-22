@@ -2,7 +2,7 @@ import os
 import cv2
 import numpy as np
 import warnings
-from jsonargparse import ActionConfigFile, Namespace
+from jsonargparse import Namespace
 from lightning.pytorch.cli import LightningArgumentParser
 from lightning.pytorch.callbacks import Callback
 from torch.utils.data import DataLoader
@@ -148,6 +148,8 @@ def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing
         return {"image_path": image_path, "error": "圖片檔案不存在"}
 
     img = cv2.imread(image_path)
+    if img is None:
+        return {"image_path": image_path, "error": "影像讀取失敗", "product": product, "area": area}
     if img.shape[:2] != (640, 640):
         logging.getLogger("anomalib").warning(f"輸入圖像尺寸 {img.shape[:2]} 不符合預期 640x640")
 
@@ -178,6 +180,9 @@ def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing
                 warnings.simplefilter("ignore")
                 predictions = _engine.predict(model=_models[model_key]['model'], dataloaders=[dataloader], ckpt_path=_models[model_key]['ckpt_path'])
         
+        if not predictions:
+            return {"image_path": image_path, "error": "未取得推論結果", "product": product, "area": area}
+
         if enable_timing:
             timings["model_inference"] = round(time.time() - predict_start, 4)
 

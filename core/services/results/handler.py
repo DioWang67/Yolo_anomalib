@@ -414,17 +414,6 @@ class ResultHandler:
             status = "PASS" if color_result.get("is_ok", False) else "FAIL"
             color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
             self.image_utils.draw_label(frame, f"Color: {status}", (text_x, text_y), color, font_scale=1.0, thickness=2)
-            items = color_result.get("items", []) or []
-            bad = [str(i) for i, it in enumerate(items) if not it.get("is_ok", False)]
-            if bad:
-                self.image_utils.draw_label(
-                    frame,
-                    # f"NG idx: {', '.join(bad)}",
-                    (text_x, text_y + 30),
-                    (0, 0, 255),
-                    font_scale=1.0,
-                    thickness=2,
-                )
         except Exception:
             pass
 
