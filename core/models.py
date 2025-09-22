@@ -71,6 +71,7 @@ class DetectionResultModel:
     heatmap_path: str = ""
     cropped_paths: List[str] = None  # type: ignore
     color_check: Optional[ColorCheckResult] = None
+    error: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -88,5 +89,6 @@ class DetectionResultModel:
             "heatmap_path": self.heatmap_path,
             "cropped_paths": list(self.cropped_paths or []),
             "color_check": self.color_check.to_dict() if self.color_check else None,
+            "error": self.error,
         }
 

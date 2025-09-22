@@ -12,6 +12,7 @@ Public entrypoint: DetectionSystem.detect(product, area, inference_type, frame=N
 import os
 import shutil
 from pathlib import Path
+from core.path_utils import project_root
 from core.services.model_manager import ModelManager
 import numpy as np
 
@@ -43,18 +44,47 @@ class DetectionSystem:
             config_path: Path to the global config YAML (project-level defaults).
         """
         self.logger = DetectionLogger()
-        self.config = self.load_config(config_path)
+        root_dir = project_root()
+        if not (root_dir / "config.yaml").exists():
+            root_dir = Path(__file__).resolve().parent.parent
+        resolved_config = Path(config_path) if config_path else root_dir / "config.yaml"
+        resolved_config = resolved_config.resolve()
+        self.config_path = resolved_config
+        self.config = self.load_config(resolved_config)
+
         self.camera: CameraController | None = None
-        self.result_sink = ExcelImageResultSink(self.config, base_dir=self.config.output_dir, logger=self.logger)
+        self.result_sink: ExcelImageResultSink | None = None
+        self._sink_base_dir: Path | None = None
+        self._refresh_result_sink()
+
         self.inference_engine: InferenceEngine | None = None
         self.current_inference_type: str | None = None
         self.model_manager = ModelManager(self.logger, max_cache_size=self.config.max_cache_size)
         self.color_service = ColorCheckerService()
         self.initialize_camera()
 
-    def load_config(self, config_path: str) -> DetectionConfig:
+    def _resolve_output_dir(self) -> Path:
+        output_dir = Path(self.config.output_dir)
+        if not output_dir.is_absolute():
+            output_dir = (self.config_path.parent / output_dir).resolve()
+        self.config.output_dir = str(output_dir)
+        return output_dir
+
+    def _refresh_result_sink(self) -> None:
+        output_dir = self._resolve_output_dir()
+        if getattr(self, '_sink_base_dir', None) == output_dir:
+            return
+        if self.result_sink:
+            try:
+                self.result_sink.close()
+            except Exception:
+                pass
+        self.result_sink = ExcelImageResultSink(self.config, base_dir=str(output_dir), logger=self.logger)
+        self._sink_base_dir = output_dir
+
+    def load_config(self, config_path: str | Path) -> DetectionConfig:
         """Load global config from YAML into DetectionConfig dataclass."""
-        return DetectionConfig.from_yaml(config_path)
+        return DetectionConfig.from_yaml(str(Path(config_path)))
 
     def shutdown(self) -> None:
         """Release resources: models, camera, sinks."""
@@ -69,6 +99,8 @@ class DetectionSystem:
                 self.result_sink.close()
             except Exception:
                 pass
+            self.result_sink = None
+        self._sink_base_dir = None
 
     def initialize_camera(self) -> None:
         """Initialize camera if available; log and fall back to dummy on failure."""
@@ -90,6 +122,7 @@ class DetectionSystem:
         engine, _ = self.model_manager.switch(self.config, product, area, inference_type)
         self.inference_engine = engine
         self.current_inference_type = inference_type.lower()
+        self._refresh_result_sink()
 
     def detect(self, product: str, area: str, inference_type: str, frame: np.ndarray | None = None, cancel_cb=None) -> dict:
         """Run one-shot detection and return a normalized result dict.
@@ -309,6 +342,7 @@ class DetectionSystem:
 
             return {
                 "status": status,
+                "error": result.get("error", ""),
                 "product": product,
                 "area": area,
                 "inference_type": inference_type,
@@ -344,4 +378,5 @@ class DetectionSystem:
                 "cropped_paths": [],
                 "color_check": None,
             }
+
 

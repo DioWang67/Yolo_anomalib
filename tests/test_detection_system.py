@@ -3,6 +3,8 @@ import os
 import numpy as np
 import pytest
 
+from core.config import DetectionConfig
+
 from core.detection_system import DetectionSystem
 
 
@@ -106,6 +108,45 @@ def _mk_system(monkeypatch, tmp_result_dir):
         return s
     monkeypatch.setattr(ds, "ExcelImageResultSink", _fake_sink_factory, raising=True)
 
+    def fake_load_config(self, _):
+        return DetectionConfig(
+            weights="dummy.pt",
+            device="cpu",
+            conf_thres=0.25,
+            iou_thres=0.45,
+            imgsz=(8, 8),
+            timeout=1,
+            exposure_time="1000",
+            gain="1.0",
+            width=8,
+            height=8,
+            MV_CC_GetImageBuffer_nMsec=1000,
+            expected_items={},
+            enable_yolo=True,
+            enable_anomalib=True,
+            enable_color_check=False,
+            output_dir=str(tmp_result_dir),
+            anomalib_config=None,
+            position_config={},
+            max_cache_size=1,
+            buffer_limit=1,
+            flush_interval=None,
+            pipeline=["save_results"],
+            steps={},
+            backends=None,
+            disable_internal_cache=True,
+            save_original=False,
+            save_processed=False,
+            save_annotated=False,
+            save_crops=False,
+            save_fail_only=False,
+            jpeg_quality=90,
+            png_compression=3,
+            max_crops_per_frame=None,
+            fail_on_unexpected=False,
+        )
+
+    monkeypatch.setattr(ds.DetectionSystem, "load_config", fake_load_config, raising=False)
     sys = DetectionSystem()
     # Use the created fake sink
     fake_sink = created[0]
@@ -123,7 +164,8 @@ def test_detect_calls_flush_yolo(monkeypatch, tmp_result_dir):
     sys, sink = _mk_system(monkeypatch, tmp_result_dir)
     out = sys.detect("P", "A", "yolo")
     assert out["status"] in ("PASS", "FAIL", "ERROR")
-    assert sink.flushed == 0
+    assert sink.flushed == 1
+    assert "error" in out
     assert len(sink.saved) == 1
 
 
@@ -133,7 +175,8 @@ def test_detect_calls_flush_anomalib(monkeypatch, tmp_result_dir):
     sys, sink = _mk_system(monkeypatch, tmp_result_dir)
     out = sys.detect("P", "A", "anomalib")
     assert out["status"] in ("PASS", "FAIL", "ERROR")
-    assert sink.flushed == 0
+    assert sink.flushed == 1
+    assert "error" in out
     assert len(sink.saved) == 1
 
 def test_detect_flush_on_failure(monkeypatch, tmp_result_dir):

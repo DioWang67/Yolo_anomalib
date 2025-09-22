@@ -6,6 +6,7 @@ from core.pipeline.context import DetectionContext
 from core.services.color_checker import ColorCheckerService
 from core.services.result_sink import ExcelImageResultSink
 from core.position_validator import PositionValidator
+from core.exceptions import ResultPersistenceError
 
 
 class Step:
@@ -60,39 +61,44 @@ class SaveResultsStep(Step):
 
     def run(self, ctx: DetectionContext) -> None:
         """Persist results and flush workbook/images via sink."""
-        # Treat as anomalib-like when anomaly_score is present (normalized by adapter)
-        if ctx.result.get("anomaly_score") is not None:
-            save_result = self.sink.save(
-                frame=ctx.frame,
-                detections=[],
-                status=ctx.status,
-                detector=ctx.inference_type,
-                missing_items=[],
-                processed_image=ctx.processed_image,
-                anomaly_score=ctx.result.get("anomaly_score"),
-                heatmap_path=ctx.result.get("output_path"),
-                product=ctx.product,
-                area=ctx.area,
-                ckpt_path=ctx.result.get("ckpt_path"),
-                color_result=ctx.color_result,
-            )
-        else:
-            save_result = self.sink.save(
-                frame=ctx.frame,
-                detections=ctx.result.get("detections", []),
-                status=ctx.status,
-                detector=ctx.inference_type,
-                missing_items=ctx.result.get("missing_items", []),
-                processed_image=ctx.processed_image,
-                anomaly_score=None,
-                heatmap_path=None,
-                product=ctx.product,
-                area=ctx.area,
-                ckpt_path=ctx.result.get("ckpt_path"),
-                color_result=ctx.color_result,
-            )
-        ctx.save_result = save_result
-        flush_mode = str(self.options.get("flush", "fail")).lower()
+        try:
+            if ctx.result.get("anomaly_score") is not None:
+                save_result = self.sink.save(
+                    frame=ctx.frame,
+                    detections=[],
+                    status=ctx.status,
+                    detector=ctx.inference_type,
+                    missing_items=[],
+                    processed_image=ctx.processed_image,
+                    anomaly_score=ctx.result.get("anomaly_score"),
+                    heatmap_path=ctx.result.get("output_path"),
+                    product=ctx.product,
+                    area=ctx.area,
+                    ckpt_path=ctx.result.get("ckpt_path"),
+                    color_result=ctx.color_result,
+                )
+            else:
+                save_result = self.sink.save(
+                    frame=ctx.frame,
+                    detections=ctx.result.get("detections", []),
+                    status=ctx.status,
+                    detector=ctx.inference_type,
+                    missing_items=ctx.result.get("missing_items", []),
+                    processed_image=ctx.processed_image,
+                    anomaly_score=None,
+                    heatmap_path=None,
+                    product=ctx.product,
+                    area=ctx.area,
+                    ckpt_path=ctx.result.get("ckpt_path"),
+                    color_result=ctx.color_result,
+                )
+            ctx.save_result = save_result
+        except ResultPersistenceError as exc:
+            self.logger.error("Save results failed: %s", exc)
+            ctx.status = "ERROR"
+            ctx.save_result = {"status": "ERROR", "error": str(exc)}
+            return
+        flush_mode = str(self.options.get("flush", "always")).lower()
         should_flush = flush_mode == "always" or (flush_mode == "fail" and str(ctx.status).upper() != "PASS")
         if should_flush:
             try:

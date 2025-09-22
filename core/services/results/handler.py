@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import atexit
 import os
@@ -13,6 +13,7 @@ from ultralytics.utils.plotting import colors
 
 from core.logger import DetectionLogger
 from core.utils import ImageUtils, DetectionResults
+from core.exceptions import ResultExcelWriteError, ResultImageWriteError, ResultPersistenceError
 
 from .excel_buffer import ExcelWorkbookBuffer, format_excel_row
 from .image_queue import ImageWriteError, ImageWriteQueue
@@ -182,7 +183,11 @@ class ResultHandler:
                 ckpt_path=ckpt_path,
                 color_result=color_result,
             )
-            self._excel.append(excel_row)
+            try:
+                self._excel.append(excel_row)
+            except Exception as exc:
+                self.logger.logger.exception("Excel append failed")
+                raise ResultExcelWriteError(str(exc)) from exc
 
             return {
                 "status": "SUCCESS",
@@ -195,32 +200,33 @@ class ResultHandler:
                 "area": area,
             }
         except ImageWriteError as exc:
-            self.logger.logger.error(str(exc))
-            return {"status": "ERROR", "error_message": str(exc)}
+            self.logger.logger.exception("Image write failed")
+            raise ResultImageWriteError(str(exc)) from exc
+        except ResultPersistenceError:
+            raise
         except Exception as exc:  # pragma: no cover
-            self.logger.logger.error(f"保存結果失敗: {exc}")
-            return {"status": "ERROR", "error_message": str(exc)}
+            self.logger.logger.exception("Result persistence failed")
+            raise ResultPersistenceError(str(exc)) from exc
 
     def flush(self) -> None:
         self._excel.flush()
 
     def close(self) -> None:
-        try:
-            self._excel.flush()
-        except Exception:
-            pass
-        try:
-            self._img_queue.flush()
-        except Exception:
-            pass
-        try:
-            self._img_queue.shutdown()
-        except Exception:
-            pass
-        try:
-            self._excel.close()
-        except Exception:
-            pass
+        def _warn(action: str, exc: Exception) -> None:
+            self.logger.logger.warning(f"{action} during ResultHandler.close failed: {exc}", exc_info=exc)
+
+        operations = [
+            ("Excel flush", self._excel.flush),
+            ("Image queue flush", self._img_queue.flush),
+            ("Image queue shutdown", self._img_queue.shutdown),
+            ("Excel close", self._excel.close),
+        ]
+        for label, fn in operations:
+            try:
+                fn()
+            except Exception as exc:
+                _warn(label, exc)
+
         stats = self._img_queue.stats
         if stats.overflows:
             self.logger.logger.warning(f"Image queue overflow occurred {stats.overflows} times")

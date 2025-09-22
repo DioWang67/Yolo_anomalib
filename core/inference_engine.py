@@ -3,6 +3,7 @@ from importlib import import_module
 
 from core.base_model import BaseInferenceModel
 from core.yolo_inference_model import YOLOInferenceModel
+from core.exceptions import BackendInitializationError, BackendNotAvailableError, ModelInitializationError
 try:
     from core.anomalib_inference_model import AnomalibInferenceModel
 except Exception:  # pragma: no cover
@@ -33,62 +34,65 @@ class InferenceEngine:
 
     def initialize(self) -> bool:
         """Lazy initialization: defer backend model creation to infer()."""
-        try:
-            self.logger.logger.info("Inference engine ready (lazy backends)")
-            return True
-        except Exception as e:
-            self.logger.logger.error(f"Inference engine init failed: {str(e)}")
-            return False
+        self.logger.logger.info("Inference engine ready (lazy backends)")
+        return True
 
     def infer(self, image, product: str, area: str, inference_type: Any, output_path: str = None):
         name = inference_type.value if hasattr(inference_type, "value") else str(inference_type)
         name = name.lower()
 
-        # Create backend on first use
         if name not in self.models:
             if name == "yolo" and getattr(self.config, "enable_yolo", False):
+                model = YOLOInferenceModel(self.config)
                 try:
-                    m = YOLOInferenceModel(self.config)
-                    if m.initialize(product=product, area=area):
-                        self.models["yolo"] = m
-                        self.logger.logger.info("YOLO backend ready (lazy)")
-                    else:
-                        raise RuntimeError("YOLO initialize() returned False")
-                except Exception as e:
-                    raise RuntimeError(f"YOLO backend init failed: {e}")
+                    model.initialize(product=product, area=area)
+                except ModelInitializationError as exc:
+                    self.logger.logger.error("YOLO backend init failed: %s", exc)
+                    raise BackendInitializationError(f"YOLO backend init failed: {exc}") from exc
+                except Exception as exc:
+                    self.logger.logger.exception("YOLO backend unexpected failure")
+                    raise BackendInitializationError("YOLO backend init failed") from exc
+                self.models["yolo"] = model
+                self.logger.logger.info("YOLO backend ready (lazy)")
             elif name == "anomalib" and getattr(self.config, "enable_anomalib", False):
                 if AnomalibInferenceModel is None:
-                    raise RuntimeError("Anomalib not available")
+                    raise BackendNotAvailableError("Anomalib not available")
+                model = AnomalibInferenceModel(self.config)  # type: ignore[call-arg]
                 try:
-                    m = AnomalibInferenceModel(self.config)
-                    if m.initialize(product=product, area=area):
-                        self.models["anomalib"] = m
-                        self.logger.logger.info("Anomalib backend ready (lazy)")
-                    else:
-                        raise RuntimeError("Anomalib initialize() returned False")
-                except Exception as e:
-                    raise RuntimeError(f"Anomalib backend init failed: {e}")
+                    model.initialize(product=product, area=area)
+                except ModelInitializationError as exc:
+                    self.logger.logger.error("Anomalib backend init failed: %s", exc)
+                    raise BackendInitializationError(f"Anomalib backend init failed: {exc}") from exc
+                except Exception as exc:
+                    self.logger.logger.exception("Anomalib backend unexpected failure")
+                    raise BackendInitializationError("Anomalib backend init failed") from exc
+                self.models["anomalib"] = model
+                self.logger.logger.info("Anomalib backend ready (lazy)")
             else:
-                # custom backend
                 backends = getattr(self.config, "backends", None) or {}
                 spec = backends.get(name)
                 if not spec or not spec.get("enabled", True):
-                    raise ValueError(f"Backend not initialized or disabled: {name}")
+                    raise BackendNotAvailableError(f"Backend not initialized or disabled: {name}")
                 class_path = spec.get("class_path")
                 if not class_path:
-                    raise ValueError(f"Backend '{name}' missing class_path")
+                    raise BackendInitializationError(f"Backend '{name}' missing class_path")
                 try:
                     mod, clsname = class_path.rsplit(".", 1)
-                    cls: Type[BaseInferenceModel] = getattr(import_module(mod), clsname)  # type: ignore
+                    cls: Type[BaseInferenceModel] = getattr(import_module(mod), clsname)  # type: ignore[attr-defined]
                     inst = cls(self.config)
-                    if getattr(inst, "initialize", None):
-                        ok = inst.initialize(product=product, area=area)
-                        if not ok:
-                            raise RuntimeError(f"Backend '{name}' initialize() returned False")
-                    self.models[name] = inst
-                    self.logger.logger.info(f"Backend '{name}' ready (lazy)")
-                except Exception as e:
-                    raise RuntimeError(f"Backend '{name}' load failed: {e}")
+                    initializer = getattr(inst, "initialize", None)
+                    if callable(initializer):
+                        result = initializer(product=product, area=area)
+                        if result is False:
+                            raise BackendInitializationError(f"Backend '{name}' initialize() returned False")
+                except ModelInitializationError as exc:
+                    self.logger.logger.error("Backend '%s' init failed: %s", name, exc)
+                    raise BackendInitializationError(f"Backend '{name}' init failed: {exc}") from exc
+                except Exception as exc:
+                    self.logger.logger.exception("Backend '%s' load failed", name)
+                    raise BackendInitializationError(f"Backend '{name}' load failed: {exc}") from exc
+                self.models[name] = inst
+                self.logger.logger.info("Backend '%s' ready (lazy)", name)
 
         return self.models[name].infer(image, product, area, output_path)
 
@@ -96,6 +100,6 @@ class InferenceEngine:
         for model in self.models.values():
             try:
                 model.shutdown()
-            except Exception:
-                pass
+            except Exception as exc:
+                self.logger.logger.warning("Backend shutdown failed: %s", exc, exc_info=exc)
         self.models.clear()

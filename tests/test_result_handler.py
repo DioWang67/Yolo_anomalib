@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import os
 import io
 import time
@@ -10,18 +10,35 @@ import pytest
 
 from core.services.results import handler as rh
 from core.services.results.handler import ResultHandler
+from core.exceptions import ResultImageWriteError
 
-# ----------------- 皜祈岫?典??拐辣 -----------------
+# ----------------- 測試輔助項目 -----------------
 class DummyLogger:
     def __init__(self):
         self.records = []
         class L:
-            def __init__(self, outer): self.outer = outer
-            def info(self, msg):    self.outer.records.append(("INFO", msg))
-            def debug(self, msg):   self.outer.records.append(("DEBUG", msg))
-            def warning(self, msg): self.outer.records.append(("WARN", msg))
-            def error(self, msg):   self.outer.records.append(("ERROR", msg))
+            def __init__(self, outer):
+                self.outer = outer
+
+            def _format(self, msg, args):
+                return msg % args if args else msg
+
+            def info(self, msg, *args, **kwargs):
+                self.outer.records.append(("INFO", self._format(msg, args)))
+
+            def debug(self, msg, *args, **kwargs):
+                self.outer.records.append(("DEBUG", self._format(msg, args)))
+
+            def warning(self, msg, *args, **kwargs):
+                self.outer.records.append(("WARN", self._format(msg, args)))
+
+            def error(self, msg, *args, **kwargs):
+                self.outer.records.append(("ERROR", self._format(msg, args)))
+
+            def exception(self, msg, *args, **kwargs):
+                self.outer.records.append(("EXCEPTION", self._format(msg, args)))
         self.logger = L(self)
+
 
 class DummyConfig:
     """Minimal config stub exposing buffer_limit/flush_interval."""
@@ -198,30 +215,24 @@ def test_buffer_and_manual_flush(tmp_result_dir):
     df_after = pd.read_excel(h.excel_path, engine="openpyxl")
     assert len(df_after) == 2
 
-def test_cv2_imwrite_failure_returns_error(tmp_result_dir, monkeypatch):
+def test_cv2_imwrite_failure_raises(tmp_result_dir, monkeypatch):
     h = ResultHandler(DummyConfig(buffer_limit=1), base_dir=tmp_result_dir, logger=DummyLogger())
     frame = _mk_img(); processed = _mk_img()[:, :, ::-1]
 
-    # 霈洵銝甈?imwrite 憭望?隞亥孛??except
     called = {"n": 0}
     real_imwrite = cv2.imwrite
+
     def boom(path, img=None):
         called["n"] += 1
         if called["n"] == 1:
             raise RuntimeError("imwrite failed")
         return real_imwrite(path, img)
+
     monkeypatch.setattr(cv2, "imwrite", boom, raising=True)
 
-    out = h.save_results(
-        frame, [], "PASS", "yolo", [], processed,
-        anomaly_score=None, heatmap_path=None, product="P", area="A", ckpt_path=None
-    )
-    assert out["status"] == "ERROR"
+    with pytest.raises(ResultImageWriteError):
+        h.save_results(
+            frame, [], "PASS", "yolo", [], processed,
+            anomaly_score=None, heatmap_path=None, product="P", area="A", ckpt_path=None
+        )
 
-
-# mkdir reports 2>NUL
-# set PYTHONPATH=%CD%
-# pytest tests\test_result_handler.py ^
-#   --html=reports\result_handler_report.html --self-contained-html ^
-#   --junitxml=reports\result_handler_junit.xml ^
-#   --cov=core\result_handler.py --cov-report=term-missing --cov-report=xml:reports\result_handler_coverage.xml

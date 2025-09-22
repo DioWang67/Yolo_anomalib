@@ -212,7 +212,9 @@ class DetectionSystemGUI(QMainWindow):
         self.current_result = None
         self.selected_image_path = None
         # Models base path and settings
-        self._models_base = os.path.join(os.path.dirname(__file__), "models")
+        self._base_dir = os.path.abspath(os.path.dirname(__file__))
+        self._config_path = os.path.join(self._base_dir, "config.yaml")
+        self._models_base = os.path.join(self._base_dir, "models")
         self._settings = QSettings()
         
         self.init_ui()
@@ -518,7 +520,7 @@ class DetectionSystemGUI(QMainWindow):
     def init_system(self):
         """初始化偵測系統"""
         try:
-            self.detection_system = DetectionSystem()
+            self.detection_system = DetectionSystem(config_path=self._config_path)
             self.log_message("檢測系統初始化成功")
         except Exception as e:
             self.log_message(f"檢測系統初始化失敗: {str(e)}")
@@ -652,6 +654,15 @@ class DetectionSystemGUI(QMainWindow):
             return
         
         # 更新界面
+        if not self.detection_system:
+            QMessageBox.critical(self, "偵測系統", "偵測系統尚未成功初始化，請重新載入設定或重啟應用程式")
+            self.init_system()
+            if not self.detection_system:
+                self.start_btn.setEnabled(True)
+                self.stop_btn.setEnabled(False)
+                self.status_widget.set_status("error")
+                return
+
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.status_widget.set_status("running")

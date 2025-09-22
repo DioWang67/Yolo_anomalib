@@ -1,9 +1,10 @@
+weights: "models/LED/A/yolo/LED_color_mixing_best.pt"
 exposure_time: "200"  # 20000
 gain: "0.0" #15
 MV_CC_GetImageBuffer_nMsec: 10000
 timeout: 1
 width: 3072
 height: 2048
-enable_yolo: false
+enable_yolo: true
 enable_anomalib: false
 max_cache_size: 3

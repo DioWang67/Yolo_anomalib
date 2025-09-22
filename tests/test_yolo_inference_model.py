@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from core.yolo_inference_model import YOLOInferenceModel
+from core.exceptions import ModelInitializationError, ModelInferenceError
 from core import yolo_inference_model as yim  # 直接 patch 模組內名稱
 import cv2
 
@@ -14,18 +15,33 @@ class DummyLogger:
     def __init__(self):
         self.records = []
         class _L:
-            def __init__(self, outer): self.outer = outer
-            def info(self, msg):    self.outer.records.append(("INFO", msg))
-            def debug(self, msg):   self.outer.records.append(("DEBUG", msg))
-            def warning(self, msg): self.outer.records.append(("WARN", msg))
-            def error(self, msg):   self.outer.records.append(("ERROR", msg))
+            def __init__(self, outer):
+                self.outer = outer
+
+            def _format(self, msg, args):
+                return msg % args if args else msg
+
+            def info(self, msg, *args, **kwargs):
+                self.outer.records.append(("INFO", self._format(msg, args)))
+
+            def debug(self, msg, *args, **kwargs):
+                self.outer.records.append(("DEBUG", self._format(msg, args)))
+
+            def warning(self, msg, *args, **kwargs):
+                self.outer.records.append(("WARN", self._format(msg, args)))
+
+            def error(self, msg, *args, **kwargs):
+                self.outer.records.append(("ERROR", self._format(msg, args)))
+
+            def exception(self, msg, *args, **kwargs):
+                self.outer.records.append(("EXCEPTION", self._format(msg, args)))
         self.logger = _L(self)
 
 class DummyConfig:
     """提供 YOLOInferenceModel 所需屬性與方法。"""
     def __init__(self, device="cpu", imgsz=256, conf_thres=0.25, iou_thres=0.45, max_cache_size=3):
         self.device = device
-        self.imgsz = imgsz
+        self.imgsz = (imgsz, imgsz) if isinstance(imgsz, int) else imgsz
         self.conf_thres = conf_thres
         self.iou_thres = iou_thres
         self.max_cache_size = max_cache_size
@@ -137,14 +153,17 @@ def test_initialize_success_and_cache_reuse(model_cpu):
     yolo2, _ = model_cpu.model_cache[("P1", "A1")]
     assert yolo2 is yolo_obj  # 同一物件
 
-def test_initialize_failure_returns_false(cfg_cpu, monkeypatch):
-    # 讓 YOLO 建構子丟例外
+def test_initialize_failure_raises(cfg_cpu, monkeypatch):
+    # 模擬 YOLO 建立失敗的例外
     class BOOM:
-        def __init__(self, *_a, **_k): raise RuntimeError("boom")
+        def __init__(self, *_a, **_k):
+            raise RuntimeError("boom")
     monkeypatch.setattr(yim, "YOLO", BOOM, raising=True)
-    m = YOLOInferenceModel(cfg_cpu); m.logger = DummyLogger()
-    ok = m.initialize("P", "A")
-    assert ok is False and m.is_initialized is False
+    m = YOLOInferenceModel(cfg_cpu)
+    m.logger = DummyLogger()
+    with pytest.raises(ModelInitializationError):
+        m.initialize("P", "A")
+
 
 def test_cache_eviction_lru(monkeypatch):
     cfg = DummyConfig(device="cpu", max_cache_size=2)
@@ -196,7 +215,7 @@ def test_infer_happy_path(model_cpu, cfg_cpu, image_bgr_dark, monkeypatch):
 def test_infer_invalid_product_area_raises(model_cpu, image_bgr_dark):
     # 未設定 expected_items → get_items_by_area 回空 → 觸發 ValueError
     model_cpu.initialize("P", "A")
-    with pytest.raises(ValueError):
+    with pytest.raises(ModelInferenceError):
         model_cpu.infer(image_bgr_dark, product="P", area="A")
 
 def test_infer_requires_initialized(cfg_cpu, image_bgr_dark):
