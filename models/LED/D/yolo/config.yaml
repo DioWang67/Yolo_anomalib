@@ -1,0 +1,79 @@
+weights: "D:/Git/robotlearning/yolo11_inference/models/LED/D/yolo/LED_color_mixing_best.pt"
+device: "cpu"
+conf_thres: 0.3
+iou_thres: 0.45
+imgsz: [640, 640]
+timeout: 1
+current_product: "LED"
+enable_yolo: true
+enable_color_check: true           # 是否啟用顏色檢查
+color_model_path: "models/LED/D/yolo/enhanced_model.json"
+# Histogram thresholds per color (diff <= thr)
+color_threshold_overrides:
+  White: 1
+  Red: 1
+  Green: 0.4
+  Blue: 0.7
+
+# Per-color S/V rules (percentiles in 0–255). Set to null to disable.
+color_rules_overrides:
+  White:
+    s_p10_min: 115   # from HSV_range S lower ~135.3
+    s_p90_max: 230   # from HSV_range S upper ~167.3
+    v_p50_min: 204   # from HSV_range V lower ~203.6
+    v_p95_max: 250   # from HSV_range V upper ~235.6
+  Red:
+    s_p10_min: 230   # S lower ~229.7
+    s_p90_max: 255   # S upper ~255.0
+    v_p50_min: 72    # V lower ~71.6
+    v_p95_max: 115   # V upper ~103.6
+  Green:
+    s_p10_min: 212   # S lower ~212.3
+    s_p90_max: 244   # S upper ~244.3
+    v_p50_min: 65    # V lower ~65.4
+    v_p95_max: 97    # V upper ~97.4
+  Blue:
+    s_p10_min: 233   # S lower ~233.2
+    s_p90_max: 255   # S upper ~255.0
+    v_p50_min: 170   # V lower ~170.1
+    v_p95_max: 215   # V upper ~202.1
+output_dir: Result
+
+# Saving controls (tune IO and file size)
+save_fail_only: true         # only save images for FAIL results
+save_original: true          # save original frame
+save_processed: false        # skip processed image to reduce IO
+save_annotated: true         # keep annotated for review
+save_crops: false            # skip per-detection crops for performance
+jpeg_quality: 90             # 1-100, higher = better quality/larger file
+png_compression: 3           # 0-9, higher = smaller/slower
+max_crops_per_frame: 0       # 0 or null means unlimited (ignored if save_crops=false)
+
+expected_items:
+  LED:
+
+    D:
+      - Blue
+      - Blue
+      - Blue
+      - Blue
+      - Blue
+      - Blue
+      - Blue
+      - Blue
+      - Blue
+
+
+
+position_config:
+  PCBA1:
+    A:
+      enabled: false
+      mode: bbox
+      tolerance: 2
+      expected_boxes:
+        C22B: { x1: 350, y1: 210, x2: 390, y2: 310 }
+        J5-1: { x1: 400, y1: 200, x2: 540, y2: 340 }
+        J5-2: { x1: 80,  y1: 250, x2: 180, y2: 380 }
+        J6:   { x1: 200, y1: 250, x2: 320, y2: 380 }
+        J7:   { x1: 430, y1: 270, x2: 580, y2: 400 }

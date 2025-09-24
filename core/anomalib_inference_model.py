@@ -58,8 +58,13 @@ class AnomalibInferenceModel(BaseInferenceModel):
                 output_path=output_path
             )
 
-            if 'error' in result:
-                raise RuntimeError(result['error'])
+            if not result:
+                raise RuntimeError("Anomalib 推論未返回結果")
+            if not isinstance(result, dict):
+                raise RuntimeError("Anomalib 推論回傳非預期格式")
+            error_msg = result.get('error')
+            if error_msg:
+                raise RuntimeError(error_msg)
 
             anomaly_score = result.get('anomaly_score', 0.0)
             threshold = self.config.anomalib_config.get('threshold', 0.5)

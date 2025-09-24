@@ -8,6 +8,7 @@ from ultralytics import YOLO
 from ultralytics.utils.plotting import Annotator, colors
 from .utils import ImageUtils
 
+
 class YOLODetector:
     def __init__(self, model: YOLO, config):
         self.model = model
@@ -17,8 +18,8 @@ class YOLODetector:
         self.Annotator = Annotator
 
     def preprocess_image(self, frame: np.ndarray) -> np.ndarray:
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        resized_img = self.image_utils.letterbox(frame_rgb, size=self.config.imgsz, stride=32, auto=True)
+        # Keep BGR throughout; ImageUtils handles letterbox to target size
+        resized_img = self.image_utils.letterbox(frame, size=self.config.imgsz)
         return resized_img
 
     @staticmethod
@@ -36,23 +37,53 @@ class YOLODetector:
     def check_missing_items(expected_items: List[str], detected_class_names: Set[str]) -> Set[str]:
         return set(expected_items) - detected_class_names
 
-    def process_detections(self, predictions, processed_image: np.ndarray, 
+    def process_detections(self, predictions, processed_image: np.ndarray,
                           original_image: np.ndarray, expected_items: List[str]) -> Tuple[np.ndarray, List[Dict[str, Any]], List[str]]:
         try:
-            detections = []
+            result = predictions[0]
+            if not hasattr(result, 'boxes'):
+                raise AttributeError('boxes attribute missing')
+            boxes = result.boxes
+            detections: List[Dict[str, Any]] = []
             detected_items = set()
-            for pred in predictions[0].boxes:
-                class_id = int(pred.cls)
-                class_name = self.model.names[class_id]
-                confidence = float(pred.conf)
-                bbox = pred.xyxy[0].cpu().numpy().astype(int)
-                detections.append({
-                    "class": class_name,
-                    "confidence": confidence,
-                    "bbox": bbox.tolist(),
-                    "class_id": class_id
-                })
-                detected_items.add(class_name)
+            from collections import Counter
+            det_counter: Counter = Counter()
+
+            if boxes is not None and len(boxes) > 0:
+                names = self.model.names
+                items = []
+                if hasattr(boxes, 'xyxy'):
+                    xyxy = boxes.xyxy.detach().cpu().numpy().astype(int)
+                    confs = boxes.conf.detach().cpu().numpy()
+                    clss = boxes.cls.detach().cpu().numpy().astype(int)
+                    items = [(coords, float(conf), int(cid)) for coords, conf, cid in zip(xyxy, confs, clss)]
+                else:
+                    for box in boxes:
+                        if not all(hasattr(box, attr) for attr in ('xyxy', 'conf', 'cls')):
+                            raise AttributeError('box missing expected attributes')
+                        coords = getattr(box, 'xyxy')
+                        for attr in ('detach', 'cpu', 'numpy'):
+                            if hasattr(coords, attr):
+                                coords = getattr(coords, attr)()
+                        coords_array = np.asarray(coords).reshape(-1)
+                        if coords_array.size < 4:
+                            raise ValueError('invalid bbox shape')
+                        coords_int = coords_array[:4].astype(int)
+                        items.append((coords_int, float(getattr(box, 'conf')), int(getattr(box, 'cls'))))
+                for coords, conf, cid in items:
+                    x1, y1, x2, y2 = map(int, coords[:4])
+                    cname = names[int(cid)] if isinstance(names, dict) else names[int(cid)]
+                    det = {
+                        'class': cname,
+                        'confidence': float(conf),
+                        'bbox': [x1, y1, x2, y2],
+                        'class_id': int(cid)
+                    }
+                    detections.append(det)
+                    detected_items.add(cname)
+                    det_counter[cname] += 1
+
+            # Draw annotations on processed image
             result_frame = processed_image.copy()
             for det in detections:
                 x1, y1, x2, y2 = det['bbox']
@@ -60,7 +91,15 @@ class YOLODetector:
                 cv2.rectangle(result_frame, (x1, y1), (x2, y2), color, 2)
                 label = f"{det['class']}: {det['confidence']:.2f}"
                 self.image_utils.draw_label(result_frame, label, (x1, y1 - 10), color)
-            missing_items = [item for item in expected_items if item not in detected_items]
+
+            # Enforce counts (treat expected_items as multiset)
+            exp_items = [str(x).strip() for x in (expected_items or [])]
+            exp_counter: Counter = Counter(exp_items)
+            missing_items: List[str] = []
+            for name, need in exp_counter.items():
+                have = int(det_counter.get(name, 0))
+                if have < need:
+                    missing_items.extend([name] * (need - have))
             return result_frame, detections, missing_items
         except Exception as e:
             raise RuntimeError(f"處理檢測結果失敗: {str(e)}")
