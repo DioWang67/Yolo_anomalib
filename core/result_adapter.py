@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict
 import numpy as np
 
 
@@ -12,7 +12,9 @@ def _ensure_list(v, default=None):
     return list(v)
 
 
-def normalize_result(result: Dict[str, Any], inference_type: str, fallback_frame: np.ndarray) -> Dict[str, Any]:
+def normalize_result(
+    result: Dict[str, Any], inference_type: str, fallback_frame: np.ndarray
+) -> Dict[str, Any]:
     """Normalize backend-specific outputs into a common shape.
 
     Ensures presence of keys consumed by downstream pipeline/sinks:
@@ -54,6 +56,8 @@ def normalize_result(result: Dict[str, Any], inference_type: str, fallback_frame
     out["ckpt_path"] = out.get("ckpt_path", "") or ""
 
     return out
+
+
 """
 Result adapter to normalize backend-specific outputs.
 

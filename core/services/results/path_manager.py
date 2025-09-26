@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 from dataclasses import dataclass
@@ -64,14 +64,18 @@ class ResultPathManager:
         product = product or "unknown"
         area = area or "unknown"
 
-        base_path = os.path.join(self.base_dir, date_folder, product, area, status)
+        base_path = os.path.join(
+            self.base_dir, date_folder, product, area, status)
         original_dir = os.path.join(base_path, "original", detector_prefix)
-        preprocessed_dir = os.path.join(base_path, "preprocessed", detector_prefix)
+        preprocessed_dir = os.path.join(
+            base_path, "preprocessed", detector_prefix)
         annotated_dir = os.path.join(base_path, "annotated", detector_prefix)
         cropped_dir = os.path.join(base_path, "cropped", detector_prefix)
 
         if detector_prefix == "anomalib" and anomaly_score is not None:
-            image_name = f"{detector_prefix}_{product}_{area}_{ts}_{anomaly_score:.4f}.jpg"
+            image_name = (
+                f"{detector_prefix}_{product}_{area}_{ts}_{anomaly_score:.4f}.jpg"
+            )
         else:
             image_name = (
                 f"{detector_prefix}_{product}_{area}_{ts}.jpg"
@@ -98,4 +102,3 @@ class ResultPathManager:
             annotated_path=annotated_path,
             cropped_dir=cropped_dir,
         )
-

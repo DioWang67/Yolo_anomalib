@@ -26,7 +26,9 @@ class YOLOInferenceModel(BaseInferenceModel):
 
     def __init__(self, config):
         super().__init__(config)
-        self.model_cache: OrderedDict[tuple[str, str], tuple[YOLO, YOLODetector]] = OrderedDict()
+        self.model_cache: OrderedDict[tuple[str, str], tuple[YOLO, YOLODetector]] = (
+            OrderedDict()
+        )
         self.max_cache_size = getattr(config, "max_cache_size", 3)
         if getattr(config, "disable_internal_cache", False):
             self.max_cache_size = 0
@@ -38,12 +40,17 @@ class YOLOInferenceModel(BaseInferenceModel):
             self.model, self.detector = self.model_cache[key]
             self.model_cache.move_to_end(key)
             self.is_initialized = True
-            self.logger.logger.info(f"Loaded YOLO model from cache (product={product}, area={area})")
+            self.logger.logger.info(
+                f"Loaded YOLO model from cache (product={product}, area={area})"
+            )
             return True
 
         try:
             self.logger.logger.info("Initializing YOLO model...")
-            weights_key = (os.path.abspath(str(self.config.weights)), str(self.config.device))
+            weights_key = (
+                os.path.abspath(str(self.config.weights)),
+                str(self.config.device),
+            )
             should_warmup = weights_key not in self._warmup_registry
 
             self.model = YOLO(self.config.weights)
@@ -59,22 +66,33 @@ class YOLOInferenceModel(BaseInferenceModel):
                     h, w = self.config.imgsz
                     dummy = np.zeros((h, w, 3), dtype=np.uint8)
                     with torch.inference_mode():
-                        _ = self.model(dummy, conf=self.config.conf_thres, iou=self.config.iou_thres)
+                        _ = self.model(
+                            dummy,
+                            conf=self.config.conf_thres,
+                            iou=self.config.iou_thres,
+                        )
                     self._warmup_registry.add(weights_key)
                 except Exception as warmup_err:
-                    self.logger.logger.warning("YOLO warmup failed: %s", warmup_err, exc_info=warmup_err)
+                    self.logger.logger.warning(
+                        "YOLO warmup failed: %s", warmup_err, exc_info=warmup_err
+                    )
 
             if self.max_cache_size > 0:
                 self.model_cache[key] = (self.model, self.detector)
                 self.model_cache.move_to_end(key)
                 if len(self.model_cache) > self.max_cache_size:
-                    old_key, (old_model, _) = self.model_cache.popitem(last=False)
+                    old_key, (old_model, _) = self.model_cache.popitem(
+                        last=False)
                     try:
                         del old_model
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
                     except Exception as release_err:
-                        self.logger.logger.warning("Failed to release YOLO model resources: %s", release_err, exc_info=release_err)
+                        self.logger.logger.warning(
+                            "Failed to release YOLO model resources: %s",
+                            release_err,
+                            exc_info=release_err,
+                        )
                     self.logger.logger.info(
                         f"Evicted cached YOLO model: product={old_key[0]}, area={old_key[1]}"
                     )
@@ -88,18 +106,27 @@ class YOLOInferenceModel(BaseInferenceModel):
             self.logger.logger.exception("Failed to initialize YOLO model")
             raise ModelInitializationError(str(exc)) from exc
         except Exception as exc:
-            self.logger.logger.exception("Unexpected error during YOLO model initialization")
-            raise ModelInitializationError("YOLO initialization failed") from exc
+            self.logger.logger.exception(
+                "Unexpected error during YOLO model initialization"
+            )
+            raise ModelInitializationError(
+                "YOLO initialization failed") from exc
 
-    def preprocess_image(self, frame: np.ndarray, product: str, area: str) -> np.ndarray:
+    def preprocess_image(
+        self, frame: np.ndarray, product: str, area: str
+    ) -> np.ndarray:
         target_size = self.config.imgsz
-        resized_img = self.image_utils.letterbox(frame, size=target_size, fill_color=(128, 128, 128))
+        resized_img = self.image_utils.letterbox(
+            frame, size=target_size, fill_color=(128, 128, 128)
+        )
         self.logger.logger.debug(
             f"Preprocessing image: original={frame.shape[:2]}, target={target_size}"
         )
         return resized_img
 
-    def infer(self, image: np.ndarray, product: str, area: str, output_path: str | None = None) -> Dict[str, Any]:
+    def infer(
+        self, image: np.ndarray, product: str, area: str, output_path: str | None = None
+    ) -> Dict[str, Any]:
         if not self.is_initialized:
             raise RuntimeError("YOLO model is not initialized")
 
@@ -108,12 +135,18 @@ class YOLOInferenceModel(BaseInferenceModel):
             processed_image = self.preprocess_image(image, product, area)
             expected_items = self.config.get_items_by_area(product, area)
             if not expected_items:
-                raise ModelInferenceError(f"Invalid product/area combination: {product},{area}")
+                raise ModelInferenceError(
+                    f"Invalid product/area combination: {product},{area}"
+                )
 
             amp_ctx = autocast if self.config.device != "cpu" else nullcontext
             with torch.inference_mode():
                 with amp_ctx():
-                    prediction = self.model(processed_image, conf=self.config.conf_thres, iou=self.config.iou_thres)
+                    prediction = self.model(
+                        processed_image,
+                        conf=self.config.conf_thres,
+                        iou=self.config.iou_thres,
+                    )
 
             result_frame, detections, missing_items = self.detector.process_detections(
                 prediction, processed_image, image, expected_items
@@ -133,12 +166,22 @@ class YOLOInferenceModel(BaseInferenceModel):
             unexpected_items: list[str] = []
             try:
                 expected_set = {str(x).strip() for x in (expected_items or [])}
-                detected_names = [str(d.get("class", "")).strip() for d in (detections or [])]
-                unexpected_items = sorted({n for n in detected_names if n and n not in expected_set})
-                if unexpected_items and getattr(self.config, "fail_on_unexpected", True):
+                detected_names = [
+                    str(d.get("class", "")).strip() for d in (detections or [])
+                ]
+                unexpected_items = sorted(
+                    {n for n in detected_names if n and n not in expected_set}
+                )
+                if unexpected_items and getattr(
+                    self.config, "fail_on_unexpected", True
+                ):
                     status = "FAIL"
             except Exception as item_err:
-                self.logger.logger.warning("Failed to compute unexpected items: %s", item_err, exc_info=item_err)
+                self.logger.logger.warning(
+                    "Failed to compute unexpected items: %s",
+                    item_err,
+                    exc_info=item_err,
+                )
                 unexpected_items = []
 
             inference_time = time.time() - start_time

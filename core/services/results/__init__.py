@@ -1,4 +1,4 @@
-﻿"""Public exports for results services."""
+"""Public exports for results services."""
 
 from .handler import ResultHandler
 from .excel_buffer import ExcelWorkbookBuffer

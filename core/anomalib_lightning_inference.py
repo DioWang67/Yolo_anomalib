@@ -21,12 +21,14 @@ from matplotlib import colormaps
 logging.getLogger("anomalib").setLevel(logging.INFO)
 logging.getLogger("lightning").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning, module="anomalib")
-warnings.filterwarnings("ignore", message=".*F1Score class exists for backwards compatibility.*")
+warnings.filterwarnings(
+    "ignore", message=".*F1Score class exists for backwards compatibility.*"
+)
 warnings.filterwarnings("ignore", message=".*ckpt_path is not provided.*")
 
 if sys.platform == "win32":
     pathlib.PosixPath = pathlib.WindowsPath
-sys.stdout.reconfigure(encoding='utf-8')
+sys.stdout.reconfigure(encoding="utf-8")
 
 _engine = None
 _models = {}
@@ -40,6 +42,7 @@ _current_area = None
 _current_ckpt_path = None
 _thresholds = {}  # 新增：儲存各產品區域的閾值
 
+
 # anomalib_lightning_inference.py, initialize 方法中
 def initialize(config: dict = None, product: str = None, area: str = None) -> None:
     global _engine, _models, _output_dir, _transform, _is_initialized, _current_product, _current_area, _current_ckpt_path, _thresholds
@@ -52,42 +55,66 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
             )
             _current_product = product
             _current_area = area
-            _current_ckpt_path = _models[model_key]['ckpt_path']
+            _current_ckpt_path = _models[model_key]["ckpt_path"]
             return
 
         try:
-            logging.getLogger("anomalib").info(f"開始初始化 Anomalib 模型 (產品: {product}, 區域: {area})")
-            parser = LightningArgumentParser(description="Inference on Anomaly models in Lightning format.")
-            parser.add_lightning_class_args(AnomalyModule, "model", subclass_mode=True)
-            parser.add_lightning_class_args(Callback, "--callbacks", subclass_mode=True, required=False)
-            parser.add_argument("--ckpt_path", type=str, required=True, help="Path to model weights.")
-            parser.add_argument("--output", type=str, required=False, default="./patchcore_outputs")
-            parser.add_class_arguments(PredictDataset, "--data", instantiate=False)
+            logging.getLogger("anomalib").info(
+                f"開始初始化 Anomalib 模型 (產品: {product}, 區域: {area})"
+            )
+            parser = LightningArgumentParser(
+                description="Inference on Anomaly models in Lightning format."
+            )
+            parser.add_lightning_class_args(
+                AnomalyModule, "model", subclass_mode=True)
+            parser.add_lightning_class_args(
+                Callback, "--callbacks", subclass_mode=True, required=False
+            )
+            parser.add_argument(
+                "--ckpt_path", type=str, required=True, help="Path to model weights."
+            )
+            parser.add_argument(
+                "--output", type=str, required=False, default="./patchcore_outputs"
+            )
+            parser.add_class_arguments(
+                PredictDataset, "--data", instantiate=False)
 
             args = Namespace()
-            args.output = config.get('output', './patchcore_outputs')
-            args.data = config.get('data', {})
-            args.show = config.get('show', False)
-            args.model = Namespace(**config.get('model', {'class_path': 'anomalib.models.Patchcore'}))
+            args.output = config.get("output", "./patchcore_outputs")
+            args.data = config.get("data", {})
+            args.show = config.get("show", False)
+            args.model = Namespace(
+                **config.get("model", {"class_path": "anomalib.models.Patchcore"})
+            )
 
-            if product and area and config.get('models'):
-                models = config.get('models', {})
+            if product and area and config.get("models"):
+                models = config.get("models", {})
                 if product not in models or area not in models[product]:
-                    raise ValueError(f"未找到 {product},{area} 的檢查點，請在 config.yaml 中指定")
+                    raise ValueError(
+                        f"未找到 {product},{area} 的檢查點，請在 config.yaml 中指定"
+                    )
                 model_config = models[product][area]
-                args.ckpt_path = model_config.get('ckpt_path')
-                threshold = model_config.get('threshold', 0.5)
+                args.ckpt_path = model_config.get("ckpt_path")
+                threshold = model_config.get("threshold", 0.5)
                 _thresholds[model_key] = threshold
-                logging.getLogger("anomalib").info(f"選擇檢查點: {args.ckpt_path} (產品: {product}, 區域: {area}, 閾值: {threshold})")
+                logging.getLogger("anomalib").info(
+                    f"選擇檢查點: {args.ckpt_path} (產品: {product}, 區域: {area}, 閾值: {threshold})"
+                )
             else:
-                raise ValueError("必須提供產品和區域，並在 config.yaml 中指定檢查點路徑")
+                raise ValueError(
+                    "必須提供產品和區域，並在 config.yaml 中指定檢查點路徑"
+                )
 
             if not args.ckpt_path:
-                raise ValueError("檢查點路徑未提供，請在 config.yaml 中指定有效的 ckpt_path")
+                raise ValueError(
+                    "檢查點路徑未提供，請在 config.yaml 中指定有效的 ckpt_path"
+                )
             if not os.path.exists(args.ckpt_path):
                 raise ValueError(f"檢查點檔案不存在: {args.ckpt_path}")
 
-            logging.getLogger("anomalib").info(f"正在載入檢查點: {args.ckpt_path}, 模型類型: {args.model.class_path}")
+            logging.getLogger("anomalib").info(
+                f"正在載入檢查點: {args.ckpt_path}, 模型類型: {args.model.class_path}"
+            )
             current_date = datetime.now().strftime("%Y%m%d")
             args.output = args.output.replace("YYYYMMDD", current_date)
 
@@ -99,7 +126,7 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
                         callbacks=None,
                         devices="auto",
                         enable_progress_bar=False,
-                        logger=False
+                        logger=False,
                     )
                     logging.getLogger("anomalib").info("Engine 初始化成功")
 
@@ -112,9 +139,10 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
                 _model = model_class.load_from_checkpoint(args.ckpt_path)
                 if _model is None:
                     raise ValueError(f"模型載入失敗: {args.ckpt_path}")
-                logging.getLogger("anomalib").info(f"成功載入檢查點: {args.ckpt_path}")
+                logging.getLogger("anomalib").info(
+                    f"成功載入檢查點: {args.ckpt_path}")
 
-            _models[model_key] = {'model': _model, 'ckpt_path': args.ckpt_path}
+            _models[model_key] = {"model": _model, "ckpt_path": args.ckpt_path}
             _output_dir = args.output
             _transform = args.data.get("transform")
             os.makedirs(_output_dir, exist_ok=True)
@@ -123,21 +151,35 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
             _current_product = product
             _current_area = area
             _current_ckpt_path = args.ckpt_path
-            logging.getLogger("anomalib").info(f"模型初始化完成 (產品: {product}, 區域: {area}, 檢查點: {args.ckpt_path}, 閾值: {_thresholds[model_key]})")
+            logging.getLogger("anomalib").info(
+                f"模型初始化完成 (產品: {product}, 區域: {area}, 檢查點: {args.ckpt_path}, 閾值: {_thresholds[model_key]})"
+            )
             logging.getLogger("anomalib").info(f"輸出目錄: {_output_dir}")
 
         except Exception as e:
-            logging.getLogger("anomalib").error(f"模型初始化失敗 (產品: {product}, 區域: {area}): {str(e)}")
+            logging.getLogger("anomalib").error(
+                f"模型初始化失敗 (產品: {product}, 區域: {area}): {str(e)}"
+            )
             raise
+
+
 def initialize_product_models(config: dict = None, product: str = None) -> None:
-    if not product or not config.get('models') or product not in config['models']:
+    if not product or not config.get("models") or product not in config["models"]:
         raise ValueError(f"無效的機種: {product} 或未定義模型")
-    
+
     logging.getLogger("anomalib").info(f"正在初始化機種 {product} 的所有區域模型")
-    for area in config['models'][product]:
+    for area in config["models"][product]:
         initialize(config, product, area)
 
-def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing: bool = True, product: str = None, area: str = None, output_path: str = None) -> dict:
+
+def lightning_inference(
+    image_path: str,
+    thread_safe: bool = True,
+    enable_timing: bool = True,
+    product: str = None,
+    area: str = None,
+    output_path: str = None,
+) -> dict:
     global _engine, _models, _output_dir, _transform, _inference_lock
 
     model_key = (product, area)
@@ -149,22 +191,29 @@ def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing
 
     img = cv2.imread(image_path)
     if img is None:
-        return {"image_path": image_path, "error": "影像讀取失敗", "product": product, "area": area}
+        return {
+            "image_path": image_path,
+            "error": "影像讀取失敗",
+            "product": product,
+            "area": area,
+        }
     if img.shape[:2] != (640, 640):
-        logging.getLogger("anomalib").warning(f"輸入圖像尺寸 {img.shape[:2]} 不符合預期 640x640")
+        logging.getLogger("anomalib").warning(
+            f"輸入圖像尺寸 {img.shape[:2]} 不符合預期 640x640"
+        )
 
     timings = {}
     start_time = time.time()
-    
+
     try:
         dataset_start = time.time()
         dataset = PredictDataset(path=image_path, transform=_transform)
         dataloader = DataLoader(
-            dataset, 
-            batch_size=16, 
+            dataset,
+            batch_size=16,
             num_workers=0,
             pin_memory=False,
-            persistent_workers=False
+            persistent_workers=False,
         )
         if enable_timing:
             timings["dataset_creation"] = round(time.time() - dataset_start, 4)
@@ -174,39 +223,68 @@ def lightning_inference(image_path: str, thread_safe: bool = True, enable_timing
             with _inference_lock:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    predictions = _engine.predict(model=_models[model_key]['model'], dataloaders=[dataloader], ckpt_path=_models[model_key]['ckpt_path'])
+                    predictions = _engine.predict(
+                        model=_models[model_key]["model"],
+                        dataloaders=[dataloader],
+                        ckpt_path=_models[model_key]["ckpt_path"],
+                    )
         else:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                predictions = _engine.predict(model=_models[model_key]['model'], dataloaders=[dataloader], ckpt_path=_models[model_key]['ckpt_path'])
-        
+                predictions = _engine.predict(
+                    model=_models[model_key]["model"],
+                    dataloaders=[dataloader],
+                    ckpt_path=_models[model_key]["ckpt_path"],
+                )
+
         if not predictions:
-            return {"image_path": image_path, "error": "未取得推論結果", "product": product, "area": area}
+            return {
+                "image_path": image_path,
+                "error": "未取得推論結果",
+                "product": product,
+                "area": area,
+            }
 
         if enable_timing:
             timings["model_inference"] = round(time.time() - predict_start, 4)
 
         process_start = time.time()
         for pred in predictions:
-            result = _process_prediction(pred, image_path, product, area, output_path, enable_timing=enable_timing)
+            result = _process_prediction(
+                pred,
+                image_path,
+                product,
+                area,
+                output_path,
+                enable_timing=enable_timing,
+            )
             if enable_timing:
-                timings["result_processing"] = round(time.time() - process_start, 4)
+                timings["result_processing"] = round(
+                    time.time() - process_start, 4)
                 result["timings"] = timings
-            
+
             total_time = time.time() - start_time
             result["inference_time"] = round(total_time, 4)
-            result["ckpt_path"] = _models[model_key]['ckpt_path']
+            result["ckpt_path"] = _models[model_key]["ckpt_path"]
             return result
 
     except Exception as e:
         return {
-            "image_path": image_path, 
+            "image_path": image_path,
             "error": f"圖片處理失敗: {str(e)}",
-            "inference_time": round(time.time() - start_time, 4)
+            "inference_time": round(time.time() - start_time, 4),
         }
 
+
 # anomalib_lightning_inference.py, _process_prediction 方法中
-def _process_prediction(pred, image_path: str, product: str, area: str, output_path: str = None, enable_timing: bool = False):
+def _process_prediction(
+    pred,
+    image_path: str,
+    product: str,
+    area: str,
+    output_path: str = None,
+    enable_timing: bool = False,
+):
     try:
         model_key = (product, area)
         threshold = _thresholds.get(model_key, 0.5)
@@ -216,13 +294,25 @@ def _process_prediction(pred, image_path: str, product: str, area: str, output_p
 
         anomaly_map = pred.get("anomaly_maps", None)
         if anomaly_map is None:
-            logging.getLogger("anomalib").error(f"未找到異常熱圖，預測內容: {pred.keys()}")
-            return {"image_path": image_path, "error": "未找到異常熱圖", "product": product, "area": area}
+            logging.getLogger("anomalib").error(
+                f"未找到異常熱圖，預測內容: {pred.keys()}"
+            )
+            return {
+                "image_path": image_path,
+                "error": "未找到異常熱圖",
+                "product": product,
+                "area": area,
+            }
 
         original_image = cv2.imread(image_path)
         if original_image is None:
             logging.getLogger("anomalib").error(f"無法讀取圖片: {image_path}")
-            return {"image_path": image_path, "error": "無法讀取圖片", "product": product, "area": area}
+            return {
+                "image_path": image_path,
+                "error": "無法讀取圖片",
+                "product": product,
+                "area": area,
+            }
 
         original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
         heatmap_3d = anomaly_map[0].cpu().numpy()
@@ -230,30 +320,42 @@ def _process_prediction(pred, image_path: str, product: str, area: str, output_p
         if heatmap_3d.ndim == 3 and heatmap_3d.shape[-1] > 1:
             heatmap_3d = heatmap_3d.mean(axis=-1)
 
-        heatmap_3d = cv2.resize(heatmap_3d, (original_image.shape[1], original_image.shape[0]))
+        heatmap_3d = cv2.resize(
+            heatmap_3d, (original_image.shape[1], original_image.shape[0])
+        )
 
         normalization_method = "score_based"
         if normalization_method == "score_based":
             if heatmap_3d.max() - heatmap_3d.min() == 0:
-                normalized_heatmap = np.zeros_like(heatmap_3d, dtype=np.float32)
+                normalized_heatmap = np.zeros_like(
+                    heatmap_3d, dtype=np.float32)
                 threshold_mask = np.zeros_like(heatmap_3d, dtype=bool)
-                logging.getLogger("anomalib").warning(f"熱圖正規化失敗，min={heatmap_3d.min()}, max={heatmap_3d.max()}")
+                logging.getLogger("anomalib").warning(
+                    f"熱圖正規化失敗，min={heatmap_3d.min()}, max={heatmap_3d.max()}"
+                )
             else:
-                normalized_heatmap = (heatmap_3d - heatmap_3d.min()) / np.ptp(heatmap_3d)
+                normalized_heatmap = (heatmap_3d - heatmap_3d.min()) / np.ptp(
+                    heatmap_3d
+                )
                 dynamic_threshold = 0.95 if anomaly_score < 0.1 else threshold
                 threshold_mask = normalized_heatmap > dynamic_threshold
                 logging.getLogger("anomalib").info(
                     f"使用分數調整閾值模式，動態閾值: {dynamic_threshold:.4f} (原閾值: {threshold}, 異常分數: {anomaly_score:.4f})"
                 )
 
-        colored_heatmap = cv2.applyColorMap((normalized_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
+        colored_heatmap = cv2.applyColorMap(
+            (normalized_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET
+        )
         colored_heatmap = cv2.cvtColor(colored_heatmap, cv2.COLOR_BGR2RGB)
         overlay_image = original_image.copy()
 
         if np.any(threshold_mask):
             overlay_image[threshold_mask] = cv2.addWeighted(
-                colored_heatmap[threshold_mask].reshape(-1, 3), 0.4,
-                original_image[threshold_mask].reshape(-1, 3), 0.6, 0
+                colored_heatmap[threshold_mask].reshape(-1, 3),
+                0.4,
+                original_image[threshold_mask].reshape(-1, 3),
+                0.6,
+                0,
             ).reshape(-1, 3)
             anomaly_pixel_count = np.sum(threshold_mask)
             total_pixels = threshold_mask.size
@@ -262,20 +364,30 @@ def _process_prediction(pred, image_path: str, product: str, area: str, output_p
                 f"像素級閾值過濾 (方法: {normalization_method}, 閾值: {dynamic_threshold})，異常像素: {anomaly_pixel_count}/{total_pixels} ({anomaly_ratio:.2%})"
             )
         else:
-            logging.getLogger("anomalib").info(f"無像素超過閾值 (方法: {normalization_method})，顯示原圖")
+            logging.getLogger("anomalib").info(
+                f"無像素超過閾值 (方法: {normalization_method})，顯示原圖"
+            )
 
         is_anomaly = anomaly_score > threshold
         status_str = "anomaly" if is_anomaly else "normal"
 
         # 使用提供的 output_path，如果沒有則生成新路徑
-        if output_path and os.path.dirname(output_path) != "Result/YYYYMMDD/TEMP/annotated/anomalib":
+        if (
+            output_path
+            and os.path.dirname(output_path)
+            != "Result/YYYYMMDD/TEMP/annotated/anomalib"
+        ):
             heatmap_path = output_path
         else:
             current_date = datetime.now().strftime("%Y%m%d")
             time_stamp = datetime.now().strftime("%H%M%S")
             heatmap_path = os.path.join(
-                "Result", current_date, status_str, "annotated", "anomalib",
-                f"anomalib_{product}_{area}_{time_stamp}_{anomaly_score:.4f}.jpg"
+                "Result",
+                current_date,
+                status_str,
+                "annotated",
+                "anomalib",
+                f"anomalib_{product}_{area}_{time_stamp}_{anomaly_score:.4f}.jpg",
             )
         os.makedirs(os.path.dirname(heatmap_path), exist_ok=True)
 
@@ -288,39 +400,54 @@ def _process_prediction(pred, image_path: str, product: str, area: str, output_p
             "anomaly_score": anomaly_score,
             "threshold": threshold,
             "is_anomaly": is_anomaly,
-            "anomaly_pixel_count": np.sum(threshold_mask) if 'threshold_mask' in locals() else 0,
-            "total_pixels": threshold_mask.size if 'threshold_mask' in locals() else 0,
-            "anomaly_pixel_ratio": np.sum(threshold_mask) / threshold_mask.size if 'threshold_mask' in locals() and threshold_mask.size > 0 else 0.0,
+            "anomaly_pixel_count": (
+                np.sum(threshold_mask) if "threshold_mask" in locals() else 0
+            ),
+            "total_pixels": threshold_mask.size if "threshold_mask" in locals() else 0,
+            "anomaly_pixel_ratio": (
+                np.sum(threshold_mask) / threshold_mask.size
+                if "threshold_mask" in locals() and threshold_mask.size > 0
+                else 0.0
+            ),
             "heatmap_path": heatmap_path,
             "product": product,
             "area": area,
-            "ckpt_path": _models.get((product, area), {}).get("ckpt_path", "")
+            "ckpt_path": _models.get((product, area), {}).get("ckpt_path", ""),
         }
 
     except Exception as e:
         logging.getLogger("anomalib").error(f"處理預測結果失敗: {str(e)}")
-        return {"image_path": image_path, "error": f"處理預測結果失敗: {str(e)}", "product": product, "area": area}
+        return {
+            "image_path": image_path,
+            "error": f"處理預測結果失敗: {str(e)}",
+            "product": product,
+            "area": area,
+        }
+
 
 def set_threshold(product: str, area: str, threshold: float) -> None:
     """動態設定特定產品區域的閾值"""
     global _thresholds
     model_key = (product, area)
     _thresholds[model_key] = threshold
-    logging.getLogger("anomalib").info(f"已設定 {product},{area} 的閾值為: {threshold}")
+    logging.getLogger("anomalib").info(
+        f"已設定 {product},{area} 的閾值為: {threshold}")
+
 
 def get_threshold(product: str, area: str) -> float:
     """取得特定產品區域的閾值"""
     model_key = (product, area)
     return _thresholds.get(model_key, 0.5)
 
+
 def get_status():
     return {
         "initialized": _is_initialized,
-        "model_loaded": {k: v['model'] is not None for k, v in _models.items()},
+        "model_loaded": {k: v["model"] is not None for k, v in _models.items()},
         "engine_ready": _engine is not None,
         "output_dir": _output_dir,
         "current_product": _current_product,
         "current_area": _current_area,
         "current_ckpt_path": _current_ckpt_path,
-        "thresholds": _thresholds  # 新增：顯示所有閾值設定
+        "thresholds": _thresholds,  # 新增：顯示所有閾值設定
     }

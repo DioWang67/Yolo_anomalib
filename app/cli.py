@@ -16,7 +16,8 @@ def run_cli(system) -> None:
         return
 
     available_products = [
-        d for d in os.listdir(models_base)
+        d
+        for d in os.listdir(models_base)
         if os.path.isdir(os.path.join(models_base, d))
     ]
     if not available_products:
@@ -37,7 +38,8 @@ def run_cli(system) -> None:
 
     product_dir = os.path.join(models_base, product)
     available_areas = [
-        d for d in os.listdir(product_dir)
+        d
+        for d in os.listdir(product_dir)
         if os.path.isdir(os.path.join(product_dir, d))
     ]
 
@@ -63,14 +65,16 @@ def run_cli(system) -> None:
                 print("推理類型只能是: yolo 或 anomalib")
                 continue
 
-            config_path = os.path.join(models_base, product, area, inference_type, "config.yaml")
+            config_path = os.path.join(
+                models_base, product, area, inference_type, "config.yaml"
+            )
             if not os.path.exists(config_path):
                 print(f"模型設定不存在: {config_path}")
                 continue
 
             result = system.detect(product, area, inference_type)
-            status = result.get('status', '')
-            error_msg = result.get('error') or result.get('error_message', '')
+            status = result.get("status", "")
+            error_msg = result.get("error") or result.get("error_message", "")
             print("\n=== 檢測結果 ===")
             print(f"狀態 {status}")
             print(f"機種: {result.get('product', '')}")
@@ -78,7 +82,7 @@ def run_cli(system) -> None:
             print(f"類型: {result.get('inference_type', '')}")
             if error_msg:
                 print(f"錯誤訊息: {error_msg}")
-            if status == 'ERROR':
+            if status == "ERROR":
                 print("====================\n")
                 continue
             print(f"檢查點 {result.get('ckpt_path', '')}")
@@ -89,10 +93,10 @@ def run_cli(system) -> None:
             print(f"預處理影像 {result.get('preprocessed_image_path', '')}")
             print(f"熱度圖 {result.get('heatmap_path', '')}")
             print(f"裁切影像: {result.get('cropped_paths', [])}")
-            color_info = result.get('color_check')
+            color_info = result.get("color_check")
             if color_info:
-                status_text = 'PASS' if color_info.get('is_ok') else 'FAIL'
-                diff_val = color_info.get('diff')
+                status_text = "PASS" if color_info.get("is_ok") else "FAIL"
+                diff_val = color_info.get("diff")
                 print(f"顏色檢測: {status_text}, 差異: {diff_val}")
             else:
                 print("顏色檢測: 未執行")
@@ -104,6 +108,8 @@ def run_cli(system) -> None:
             break
         except Exception as e:
             logger.logger.error(f"指令處理失敗: {str(e)}")
+
+
 """Simple interactive CLI to run one-shot detections.
 
 Features:

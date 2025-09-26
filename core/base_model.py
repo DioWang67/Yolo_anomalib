@@ -2,6 +2,7 @@
 from core.logger import DetectionLogger
 import torch
 
+
 class BaseInferenceModel:
     def __init__(self, config):
         self.config = config
@@ -16,7 +17,7 @@ class BaseInferenceModel:
         raise NotImplementedError
 
     def shutdown(self):
-        
+
         if self.model:
             del self.model
         if torch.cuda.is_available():

@@ -17,19 +17,25 @@ class AnomalibInferenceModel(BaseInferenceModel):
 
     def initialize(self, product: str = None, area: str = None) -> bool:
         try:
-            self.logger.logger.info(f"正在初始化 Anomalib 模型 (產品: {product}, 區域: {area})...")
+            self.logger.logger.info(
+                f"正在初始化 Anomalib 模型 (產品: {product}, 區域: {area})..."
+            )
             anomalib_config = self.config.anomalib_config
             if not anomalib_config:
                 raise ValueError("Anomalib 配置缺失")
             initialize(config=anomalib_config, product=product, area=area)
             self.is_initialized = True
-            self.logger.logger.info(f"Anomalib 模型初始化成功 (產品: {product}, 區域: {area})")
+            self.logger.logger.info(
+                f"Anomalib 模型初始化成功 (產品: {product}, 區域: {area})"
+            )
             return True
         except Exception as e:
             self.logger.logger.error(f"Anomalib 模型初始化失敗: {str(e)}")
             return False
 
-    def infer(self, image: np.ndarray, product: str, area: str, output_path: str = None):
+    def infer(
+        self, image: np.ndarray, product: str, area: str, output_path: str = None
+    ):
         if not self.is_initialized:
             self.initialize(product, area)
             if not self.is_initialized:
@@ -42,12 +48,13 @@ class AnomalibInferenceModel(BaseInferenceModel):
             processed_image = self.image_utils.letterbox(
                 cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
                 size=self.config.imgsz,
-                fill_color=(0, 0, 0)
+                fill_color=(0, 0, 0),
             )
 
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 tmp_path = tmp.name
-                cv2.imwrite(tmp_path, cv2.cvtColor(processed_image, cv2.COLOR_RGB2BGR))
+                cv2.imwrite(tmp_path, cv2.cvtColor(
+                    processed_image, cv2.COLOR_RGB2BGR))
 
             result = lightning_inference(
                 tmp_path,
@@ -55,19 +62,19 @@ class AnomalibInferenceModel(BaseInferenceModel):
                 enable_timing=True,
                 product=product,
                 area=area,
-                output_path=output_path
+                output_path=output_path,
             )
 
             if not result:
                 raise RuntimeError("Anomalib 推論未返回結果")
             if not isinstance(result, dict):
                 raise RuntimeError("Anomalib 推論回傳非預期格式")
-            error_msg = result.get('error')
+            error_msg = result.get("error")
             if error_msg:
                 raise RuntimeError(error_msg)
 
-            anomaly_score = result.get('anomaly_score', 0.0)
-            threshold = self.config.anomalib_config.get('threshold', 0.5)
+            anomaly_score = result.get("anomaly_score", 0.0)
+            threshold = self.config.anomalib_config.get("threshold", 0.5)
             is_anomaly = anomaly_score > threshold
             status = "FAIL" if is_anomaly else "PASS"
 
@@ -85,10 +92,10 @@ class AnomalibInferenceModel(BaseInferenceModel):
                 "inference_time": inference_time,
                 "processed_image": processed_image,
                 "result_frame": processed_image,
-                "output_path": result.get('heatmap_path', ''),
+                "output_path": result.get("heatmap_path", ""),
                 "expected_items": [],
                 "product": product,
-                "area": area
+                "area": area,
             }
 
         except Exception as e:

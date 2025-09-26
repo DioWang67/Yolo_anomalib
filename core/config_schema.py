@@ -1,19 +1,23 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
 try:  # pragma: no cover - depends on pydantic availability/version
     from pydantic import BaseModel, Field
+
     try:  # pydantic v2
         from pydantic import ConfigDict, field_validator as _field_validator
+
         _VALIDATOR_MODE = "v2"
     except ImportError:  # pragma: no cover - pydantic v1 fallback
         ConfigDict = None  # type: ignore
         from pydantic import validator as _validator  # type: ignore
+
         _VALIDATOR_MODE = "v1"
 except Exception:  # pragma: no cover - pydantic not installed
     try:
         from pydantic.v1 import BaseModel, Field, validator as _validator  # type: ignore
+
         ConfigDict = None  # type: ignore
         _VALIDATOR_MODE = "v1"
     except Exception:  # pragma: no cover - no pydantic available
@@ -56,16 +60,20 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         MV_CC_GetImageBuffer_nMsec: Optional[int] = 10000
         current_product: Optional[str] = None
         current_area: Optional[str] = None
-        expected_items: Dict[str, Dict[str, List[str]]] = Field(default_factory=dict)
+        expected_items: Dict[str, Dict[str, List[str]]
+                             ] = Field(default_factory=dict)
         enable_yolo: Optional[bool] = True
         enable_anomalib: Optional[bool] = False
         enable_color_check: Optional[bool] = False
         color_model_path: Optional[str] = None
         color_threshold_overrides: Optional[Dict[str, float]] = None
-        color_rules_overrides: Optional[Dict[str, Dict[str, Optional[float]]]] = None
+        color_rules_overrides: Optional[Dict[str,
+                                             Dict[str, Optional[float]]]] = None
         output_dir: Optional[str] = "Result"
         anomalib_config: Optional[Dict[str, Any]] = None
-        position_config: Dict[str, Dict[str, Dict[str, Any]]] = Field(default_factory=dict)
+        position_config: Dict[str, Dict[str, Dict[str, Any]]] = Field(
+            default_factory=dict
+        )
         max_cache_size: Optional[int] = 3
         buffer_limit: Optional[int] = 10
         flush_interval: Optional[float] = None
@@ -84,7 +92,8 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         fail_on_unexpected: Optional[bool] = True
 
         if _VALIDATOR_MODE == "v2":
-            model_config = ConfigDict(extra="allow")  # type: ignore[assignment]
+            # type: ignore[assignment]
+            model_config = ConfigDict(extra="allow")
 
             @_field_validator("imgsz", mode="before")  # type: ignore[misc]
             def _coerce_imgsz(cls, value: Any) -> Any:
@@ -149,7 +158,8 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         max_cache_size: Optional[int] = None
 
         if _VALIDATOR_MODE == "v2":
-            model_config = ConfigDict(extra="allow")  # type: ignore[assignment]
+            # type: ignore[assignment]
+            model_config = ConfigDict(extra="allow")
 
             @_field_validator("imgsz", mode="before")  # type: ignore[misc]
             def _coerce_imgsz(cls, value: Any) -> Any:
@@ -175,6 +185,7 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
                 if value is None:
                     return None
                 return _normalize_sequence(value)
+
 else:
     GlobalConfigSchema = None  # type: ignore
     ModelConfigSchema = None  # type: ignore

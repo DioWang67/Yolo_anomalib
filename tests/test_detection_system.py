@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import os
 import numpy as np
 import pytest
@@ -17,7 +17,7 @@ class FakeEngine:
 
     def infer(self, image, product, area, inference_type_enum, output_path=None):
         self.infer_calls += 1
-        status = "FAIL" if getattr(self, 'force_fail', False) else "PASS"
+        status = "FAIL" if getattr(self, "force_fail", False) else "PASS"
         if inference_type_enum.value == "anomalib":
             return {
                 "inference_type": "anomalib",
@@ -31,7 +31,7 @@ class FakeEngine:
                 "inference_type": "yolo",
                 "status": status,
                 "detections": [],
-                "missing_items": [] if status == "PASS" else ['missing'],
+                "missing_items": [] if status == "PASS" else ["missing"],
                 "processed_image": np.zeros_like(image),
             }
 
@@ -58,7 +58,9 @@ class FakeSink:
 
     def get_annotated_path(self, **kwargs):
         # Return a dummy path for anomalib TEMP
-        return os.path.join("Result", "YYYYMMDD", "TEMP", "annotated", "anomalib", "temp.jpg")
+        return os.path.join(
+            "Result", "YYYYMMDD", "TEMP", "annotated", "anomalib", "temp.jpg"
+        )
 
     def save(self, **kwargs):
         self.saved.append(kwargs)
@@ -89,10 +91,13 @@ def tmp_result_dir(tmp_path):
 class DummyCam:
     def __init__(self, config):
         pass
+
     def initialize(self):
         return True
+
     def shutdown(self):
         pass
+
     def capture_frame(self):
         return None
 
@@ -100,13 +105,17 @@ class DummyCam:
 def _mk_system(monkeypatch, tmp_result_dir):
     # Prevent real camera and real sink during DetectionSystem.__init__
     import core.detection_system as ds
+
     monkeypatch.setattr(ds, "CameraController", DummyCam, raising=True)
     created = []
+
     def _fake_sink_factory(config, base_dir, logger=None):
         s = FakeSink()
         created.append(s)
         return s
-    monkeypatch.setattr(ds, "ExcelImageResultSink", _fake_sink_factory, raising=True)
+
+    monkeypatch.setattr(ds, "ExcelImageResultSink",
+                        _fake_sink_factory, raising=True)
 
     def fake_load_config(self, _):
         return DetectionConfig(
@@ -146,7 +155,9 @@ def _mk_system(monkeypatch, tmp_result_dir):
             fail_on_unexpected=False,
         )
 
-    monkeypatch.setattr(ds.DetectionSystem, "load_config", fake_load_config, raising=False)
+    monkeypatch.setattr(
+        ds.DetectionSystem, "load_config", fake_load_config, raising=False
+    )
     sys = DetectionSystem()
     # Use the created fake sink
     fake_sink = created[0]
@@ -178,6 +189,7 @@ def test_detect_calls_flush_anomalib(monkeypatch, tmp_result_dir):
     assert sink.flushed == 1
     assert "error" in out
     assert len(sink.saved) == 1
+
 
 def test_detect_flush_on_failure(monkeypatch, tmp_result_dir):
     sys, sink = _mk_system(monkeypatch, tmp_result_dir)

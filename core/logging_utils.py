@@ -23,7 +23,9 @@ def install_context_filter(root: logging.Logger) -> None:
         root.addFilter(filter_instance)
     else:
         # Reuse the existing instance on the root logger
-        filter_instance = next(flt for flt in root.filters if isinstance(flt, ContextFilter))
+        filter_instance = next(
+            flt for flt in root.filters if isinstance(flt, ContextFilter)
+        )
     for handler in root.handlers:
         if not _has_context_filter(handler):
             handler.addFilter(filter_instance)

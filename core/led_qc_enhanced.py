@@ -75,7 +75,8 @@ class _Model:
             )
 
         if not colors:
-            raise ValueError("advanced color model has no valid avg_color_hist entries")
+            raise ValueError(
+                "advanced color model has no valid avg_color_hist entries")
 
         return cls(
             hist_bins=(int(bins[0]), int(bins[1]), int(bins[2])),
@@ -84,7 +85,9 @@ class _Model:
         )
 
 
-def _compute_hsv3d_hist(image_bgr, bins: Tuple[int, int, int]) -> Tuple[List[float], Dict[str, float]]:
+def _compute_hsv3d_hist(
+    image_bgr, bins: Tuple[int, int, int]
+) -> Tuple[List[float], Dict[str, float]]:
     """Compute normalized HSV 3D histogram on pixels with V>30.
 
     Returns (hist, metrics) where metrics includes S p90 and V p50 for optional white checks.
@@ -95,6 +98,7 @@ def _compute_hsv3d_hist(image_bgr, bins: Tuple[int, int, int]) -> Tuple[List[flo
     if np is not None:
         try:
             import cv2  # type: ignore
+
             img = image_bgr
             if not isinstance(img, np.ndarray):
                 img = np.array(image_bgr, dtype=np.uint8)  # type: ignore
@@ -117,13 +121,24 @@ def _compute_hsv3d_hist(image_bgr, bins: Tuple[int, int, int]) -> Tuple[List[flo
                 s_idx = np.clip(s_idx, 0, sb - 1)
                 v_idx = np.clip(v_idx, 0, vb - 1)
                 idx = (h_idx * sb * vb + s_idx * vb + v_idx).ravel()
-                hist = np.bincount(idx, minlength=hb * sb * vb).astype(np.float32)
+                hist = np.bincount(idx, minlength=hb *
+                                   sb * vb).astype(np.float32)
                 if hist.sum() > 0:
                     hist /= hist.sum()
-                return hist.tolist(), {"s_p90": s_p90, "s_p10": s_p10, "v_p50": v_p50, "v_p95": v_p95}
+                return hist.tolist(), {
+                    "s_p90": s_p90,
+                    "s_p10": s_p10,
+                    "v_p50": v_p50,
+                    "v_p95": v_p95,
+                }
             else:
                 total_bins = hb * sb * vb
-                return [0.0] * total_bins, {"s_p90": 0.0, "s_p10": 0.0, "v_p50": 0.0, "v_p95": 0.0}
+                return [0.0] * total_bins, {
+                    "s_p90": 0.0,
+                    "s_p10": 0.0,
+                    "v_p50": 0.0,
+                    "v_p95": 0.0,
+                }
         except Exception:
             pass
 
@@ -181,11 +196,15 @@ def _l1(a: List[float], b: List[float]) -> float:
     if np is not None:
         aa = np.asarray(a, dtype=np.float32)
         bb = np.asarray(b, dtype=np.float32)
-        sa = aa.sum(); sb = bb.sum()
-        if sa > 0: aa = aa / sa
-        if sb > 0: bb = bb / sb
+        sa = aa.sum()
+        sb = bb.sum()
+        if sa > 0:
+            aa = aa / sa
+        if sb > 0:
+            bb = bb / sb
         return float(np.sum(np.abs(aa - bb)))
-    sa = sum(a); sb = sum(b)
+    sa = sum(a)
+    sb = sum(b)
     if sa > 0:
         a = [x / sa for x in a]
     if sb > 0:
@@ -210,10 +229,13 @@ class LEDQCEnhanced:
         model = _Model.from_dict(data)
         return cls(model)
 
-    def check(self, image_bgr, allowed_colors: Optional[Iterable[str]] = None) -> LEDQCAdvancedResult:
+    def check(
+        self, image_bgr, allowed_colors: Optional[Iterable[str]] = None
+    ) -> LEDQCAdvancedResult:
         hist, metrics = _compute_hsv3d_hist(image_bgr, self.model.hist_bins)
 
-        allowed = set(c.lower() for c in allowed_colors) if allowed_colors else None
+        allowed = set(c.lower()
+                      for c in allowed_colors) if allowed_colors else None
 
         best_name = ""
         best_diff = float("inf")
@@ -227,10 +249,15 @@ class LEDQCEnhanced:
             if d < best_diff:
                 best_diff = float(d)
                 best_name = c.name
-                best_thr = float(c.hist_thr) if c.hist_thr is not None else float(self.model.default_hist_thr)
+                best_thr = (
+                    float(c.hist_thr)
+                    if c.hist_thr is not None
+                    else float(self.model.default_hist_thr)
+                )
 
         if not scores:
-            raise ValueError("no colors to compare (check allowed_colors filter)")
+            raise ValueError(
+                "no colors to compare (check allowed_colors filter)")
 
         # Base decision by histogram threshold
         is_ok = best_diff <= best_thr
@@ -252,28 +279,58 @@ class LEDQCEnhanced:
         # Apply per-color overrides if provided
         rules = self._color_rules_overrides.get(name_l)
         if isinstance(rules, dict):
-            if "s_p90_max" in rules: s_p90_max = rules.get("s_p90_max")
-            if "s_p10_min" in rules: s_p10_min = rules.get("s_p10_min")
-            if "v_p50_min" in rules: v_p50_min = rules.get("v_p50_min")
-            if "v_p95_max" in rules: v_p95_max = rules.get("v_p95_max")
+            if "s_p90_max" in rules:
+                s_p90_max = rules.get("s_p90_max")
+            if "s_p10_min" in rules:
+                s_p10_min = rules.get("s_p10_min")
+            if "v_p50_min" in rules:
+                v_p50_min = rules.get("v_p50_min")
+            if "v_p95_max" in rules:
+                v_p95_max = rules.get("v_p95_max")
 
         # Evaluate rules (None means disabled)
         conds = []
         if s_p90_max is not None:
-            conds.append((s_p90 <= float(s_p90_max), f"(S) s_p90={s_p90:.1f} > max={float(s_p90_max):.1f}"))
+            conds.append(
+                (
+                    s_p90 <= float(s_p90_max),
+                    f"(S) s_p90={s_p90:.1f} > max={float(s_p90_max):.1f}",
+                )
+            )
         if s_p10_min is not None:
-            conds.append((s_p10 >= float(s_p10_min), f"(S-min) s_p10={s_p10:.1f} < min={float(s_p10_min):.1f}"))
+            conds.append(
+                (
+                    s_p10 >= float(s_p10_min),
+                    f"(S-min) s_p10={s_p10:.1f} < min={float(s_p10_min):.1f}",
+                )
+            )
         if v_p50_min is not None:
-            conds.append((v_p50 >= float(v_p50_min), f"(V) v_p50={v_p50:.1f} < min={float(v_p50_min):.1f}"))
+            conds.append(
+                (
+                    v_p50 >= float(v_p50_min),
+                    f"(V) v_p50={v_p50:.1f} < min={float(v_p50_min):.1f}",
+                )
+            )
         if v_p95_max is not None:
-            conds.append((v_p95 <= float(v_p95_max), f"(V-max) v_p95={v_p95:.1f} > max={float(v_p95_max):.1f}"))
+            conds.append(
+                (
+                    v_p95 <= float(v_p95_max),
+                    f"(V-max) v_p95={v_p95:.1f} > max={float(v_p95_max):.1f}",
+                )
+            )
 
         if conds:
             try:
                 import logging
+
                 lg = logging.getLogger(__name__)
                 if not (best_diff <= best_thr):
-                    lg.info("Color hist FAIL: color=%s diff=%.2f > thr=%.2f", best_name, best_diff, best_thr)
+                    lg.info(
+                        "Color hist FAIL: color=%s diff=%.2f > thr=%.2f",
+                        best_name,
+                        best_diff,
+                        best_thr,
+                    )
                 for ok, msg in conds:
                     if not ok:
                         lg.info("%s rule FAIL %s", best_name, msg)
@@ -285,9 +342,12 @@ class LEDQCEnhanced:
             if not (best_diff <= best_thr):
                 try:
                     import logging
+
                     logging.getLogger(__name__).info(
                         "Color hist FAIL: color=%s diff=%.2f > thr=%.2f",
-                        best_name, best_diff, best_thr,
+                        best_name,
+                        best_diff,
+                        best_thr,
                     )
                 except Exception:
                     pass
@@ -321,7 +381,9 @@ class LEDQCEnhanced:
 
     # apply_white_overrides removed (use apply_color_rules_overrides with key 'White')
 
-    def apply_color_rules_overrides(self, overrides: Dict[str, Dict[str, Optional[float]]]) -> None:
+    def apply_color_rules_overrides(
+        self, overrides: Dict[str, Dict[str, Optional[float]]]
+    ) -> None:
         """Set per-color rules overrides mapping. Keys are color names (case-insensitive)."""
         try:
             m: Dict[str, Dict[str, Optional[float]]] = {}
@@ -346,4 +408,3 @@ __all__ = [
     "LEDQCEnhanced",
     "LEDQCAdvancedResult",
 ]
-

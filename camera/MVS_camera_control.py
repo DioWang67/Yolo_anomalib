@@ -1,9 +1,9 @@
-
 from MvImport.MvCameraControl_class import *
 import numpy as np
 import cv2
 import time
-import os 
+import os
+
 
 class MVSCamera:
     def __init__(self, config):
@@ -17,7 +17,7 @@ class MVSCamera:
         self.save_image = False
         self.auto_exposure = False
         self.save_path = "captured_images"
-        self.config =  config
+        self.config = config
 
         # if not os.path.exists(self.save_path):
         #     os.makedirs(self.save_path)
@@ -29,7 +29,7 @@ class MVSCamera:
             return ret == 0
         except:
             return False
-        
+
     def set_resolution(self, width, height):
         """設定解析度"""
         ret = self.cam.MV_CC_SetIntValue("Width", width)
@@ -46,11 +46,8 @@ class MVSCamera:
         return True
 
     def _initialize_supported_features(self):
-        features_to_check = {
-            'ExposureAuto': '自動曝光',
-            'TriggerMode': '觸發模式'
-        }
-        
+        features_to_check = {"ExposureAuto": "自動曝光", "TriggerMode": "觸發模式"}
+
         self.supported_features = {}
         for feature, description in features_to_check.items():
             supported = self._check_feature_support(feature)
@@ -84,13 +81,13 @@ class MVSCamera:
 
         self._initialize_supported_features()
         try:
-            if self.supported_features.get('ExposureAuto', False):
+            if self.supported_features.get("ExposureAuto", False):
                 self.cam.MV_CC_SetEnumValue("ExposureAuto", 0)
                 print("已關閉自動曝光")
 
             self.set_exposure_time(self.config.exposure_time)
             self.set_gain(self.config.gain)
-            
+
         except Exception as e:
             print(f"初始化相機參數時發生錯誤: {str(e)}")
             return False
@@ -116,7 +113,8 @@ class MVSCamera:
         return True
 
     def set_exposure_time(self, exposure_time):
-        ret = self.cam.MV_CC_SetFloatValue("ExposureTime", float(exposure_time))
+        ret = self.cam.MV_CC_SetFloatValue(
+            "ExposureTime", float(exposure_time))
         if ret != 0:
             print(f"設定曝光時間失敗! ret[0x{ret:x}]")
             return False
@@ -124,10 +122,10 @@ class MVSCamera:
         return True
 
     def toggle_auto_exposure(self):
-        if not self.supported_features.get('ExposureAuto', False):
+        if not self.supported_features.get("ExposureAuto", False):
             print("此相機不支援自動曝光功能")
             return False
-        
+
         self.auto_exposure = not self.auto_exposure
         value = 2 if self.auto_exposure else 0
         ret = self.cam.MV_CC_SetEnumValue("ExposureAuto", value)
@@ -150,15 +148,31 @@ class MVSCamera:
 
             frame = self._get_frame_internal()
             if frame is not None:
-                cv2.putText(frame, f"FPS: {self.current_fps:.1f}", (10, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                cv2.putText(
+                    frame,
+                    f"FPS: {self.current_fps:.1f}",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (0, 255, 0),
+                    2,
+                )
                 if self.auto_exposure:
-                    cv2.putText(frame, "Auto Exposure: ON", (10, 60), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    cv2.putText(
+                        frame,
+                        "Auto Exposure: ON",
+                        (10, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1,
+                        (0, 255, 0),
+                        2,
+                    )
                 if self.save_image:
                     try:
                         timestamp = time.strftime("%Y%m%d_%H%M%S")
-                        filename = os.path.join(self.save_path, f"captured_image_{timestamp}.jpg")
+                        filename = os.path.join(
+                            self.save_path, f"captured_image_{timestamp}.jpg"
+                        )
                         success = cv2.imwrite(filename, frame)
                         if success:
                             print(f"影像已成功保存: {filename}")
@@ -168,7 +182,7 @@ class MVSCamera:
                         print(f"保存影像時發生錯誤: {str(e)}")
                     finally:
                         self.save_image = False
-                
+
                 return frame
             else:
                 print("獲取影像失敗!")
@@ -183,13 +197,26 @@ class MVSCamera:
         try:
             stOutFrame = MV_FRAME_OUT()
 
-            ret = self.cam.MV_CC_GetImageBuffer(stOutFrame, self.config.MV_CC_GetImageBuffer_nMsec)
+            ret = self.cam.MV_CC_GetImageBuffer(
+                stOutFrame, self.config.MV_CC_GetImageBuffer_nMsec
+            )
             if ret == 0:
                 try:
                     pData = (c_ubyte * stOutFrame.stFrameInfo.nFrameLen)()
-                    cdll.msvcrt.memcpy(byref(pData), stOutFrame.pBufAddr, stOutFrame.stFrameInfo.nFrameLen)
-                    data = np.frombuffer(pData, count=int(stOutFrame.stFrameInfo.nFrameLen), dtype=np.uint8)
-                    bayer_img = data.reshape((stOutFrame.stFrameInfo.nHeight, stOutFrame.stFrameInfo.nWidth))
+                    cdll.msvcrt.memcpy(
+                        byref(pData),
+                        stOutFrame.pBufAddr,
+                        stOutFrame.stFrameInfo.nFrameLen,
+                    )
+                    data = np.frombuffer(
+                        pData,
+                        count=int(stOutFrame.stFrameInfo.nFrameLen),
+                        dtype=np.uint8,
+                    )
+                    bayer_img = data.reshape(
+                        (stOutFrame.stFrameInfo.nHeight,
+                         stOutFrame.stFrameInfo.nWidth)
+                    )
                     rgb_img = cv2.cvtColor(bayer_img, cv2.COLOR_BayerRG2RGB)
                     # 轉換為 BGR 以符合 OpenCV 預設格式，避免顏色顯示錯誤
                     bgr_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
@@ -216,45 +243,52 @@ class MVSCamera:
             print(f"重新連線失敗: {str(e)}")
             return False
 
-
     def create_control_window(self):
         """創建參數調整視窗"""
-        cv2.namedWindow('Controls')
-        
+        cv2.namedWindow("Controls")
+
         # 只創建支援的控制項
-        if self.supported_features.get('ExposureTime', False):
-            cv2.createTrackbar('Exposure (us)', 'Controls', 5000, 20000, 
-                             lambda x: self.set_exposure_time(x))
-        
-        if self.supported_features.get('Gain', False):
-            cv2.createTrackbar('Gain', 'Controls', 5, 15, 
-                             lambda x: self.set_gain(float(x)))
+        if self.supported_features.get("ExposureTime", False):
+            cv2.createTrackbar(
+                "Exposure (us)",
+                "Controls",
+                5000,
+                20000,
+                lambda x: self.set_exposure_time(x),
+            )
+
+        if self.supported_features.get("Gain", False):
+            cv2.createTrackbar(
+                "Gain", "Controls", 5, 15, lambda x: self.set_gain(float(x))
+            )
 
     def process_key(self, key):
         """處理鍵盤輸入"""
-        if key == ord('s'):  # 按's'保存圖片
+        if key == ord("s"):  # 按's'保存圖片
             self.save_image = True
             print("準備保存下一幀影像...")
-        elif key == ord('a'):  # 按'a'切換自動曝光
+        elif key == ord("a"):  # 按'a'切換自動曝光
             self.toggle_auto_exposure()
-        elif key == ord('q'):  # 按'q'退出
+        elif key == ord("q"):  # 按'q'退出
             return False
         return True
-    
-    
+
     def _basic_connect(self, device_index):
         # 將原始的連接代碼移到這個內部方法
-        stDeviceList = cast(self.deviceList.pDeviceInfo[device_index], POINTER(MV_CC_DEVICE_INFO)).contents
+        stDeviceList = cast(
+            self.deviceList.pDeviceInfo[device_index], POINTER(
+                MV_CC_DEVICE_INFO)
+        ).contents
         ret = self.cam.MV_CC_CreateHandle(stDeviceList)
         if ret != 0:
             print("創建相機句柄失敗! ret[0x%x]" % ret)
             return False
-        
+
         ret = self.cam.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
         if ret != 0:
             print("打開設備失敗! ret[0x%x]" % ret)
             return False
-        
+
         return self._setup_initial_parameters()
 
     def _setup_initial_parameters(self):
@@ -289,7 +323,8 @@ class MVSCamera:
 
     def set_exposure_time(self, exposure_time):
         """設定曝光時間（微秒）"""
-        ret = self.cam.MV_CC_SetFloatValue("ExposureTime", float(exposure_time))
+        ret = self.cam.MV_CC_SetFloatValue(
+            "ExposureTime", float(exposure_time))
         if ret != 0:
             print(f"設定曝光時間失敗! ret[0x{ret:x}]")
             return False
@@ -330,15 +365,12 @@ class MVSCamera:
         if ret != 0:
             print(f"獲取參數範圍失敗! ret[0x{ret:x}]")
             return None
-        return {
-            "current": stParam.fCurValue,
-            "max": stParam.fMax,
-            "min": stParam.fMin
-        }
-
+        return {"current": stParam.fCurValue, "max": stParam.fMax, "min": stParam.fMin}
 
     def enum_devices(self):
-        ret = MvCamera.MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, self.deviceList)
+        ret = MvCamera.MV_CC_EnumDevices(
+            MV_GIGE_DEVICE | MV_USB_DEVICE, self.deviceList
+        )
         if ret != 0:
             print("列舉設備失敗! ret[0x%x]" % ret)
             return False
@@ -356,20 +388,29 @@ class MVSCamera:
 
     def create_control_window(self):
         """創建參數調整視窗（根據支援的功能）"""
-        cv2.namedWindow('Controls')
-        
+        cv2.namedWindow("Controls")
+
         # 基本參數（通常都支援）
-        cv2.createTrackbar('Exposure (us)', 'Controls', 5000, 20000, 
-                          lambda x: self.set_exposure_time(x))
-        cv2.createTrackbar('Gain', 'Controls', 5, 15, 
-                          lambda x: self.set_gain(float(x)))
-        
-            
-        if self.supported_features.get('Contrast', False):
-            cv2.createTrackbar('Contrast', 'Controls', 100, 200, 
-                             lambda x: self.set_contrast(x))
+        cv2.createTrackbar(
+            "Exposure (us)",
+            "Controls",
+            5000,
+            20000,
+            lambda x: self.set_exposure_time(x),
+        )
+        cv2.createTrackbar("Gain", "Controls", 5, 15,
+                           lambda x: self.set_gain(float(x)))
+
+        if self.supported_features.get("Contrast", False):
+            cv2.createTrackbar(
+                "Contrast", "Controls", 100, 200, lambda x: self.set_contrast(
+                    x)
+            )
+
+
 if __name__ == "__main__":
     from core.config import DetectionConfig
+
     config_path = "config.yaml"
     config = DetectionConfig.from_yaml(config_path)
     camera = MVSCamera(config)
@@ -377,24 +418,24 @@ if __name__ == "__main__":
         if camera.connect_to_camera():
             try:
                 camera.create_control_window()
-                
+
                 print("\n控制說明:")
                 print("'s': 保存當前影像")
                 print("'a': 切換自動曝光模式")
                 print("'q': 退出程式")
-                
+
                 while True:
                     frame = camera.get_frame()
                     if frame is not None:
                         frame = cv2.resize(frame, (640, 640))
                         cv2.imshow("Camera Frame", frame)
-                        
+
                         key = cv2.waitKey(1) & 0xFF
                         if not camera.process_key(key):
                             break
                     else:
                         print("獲取影像失敗!")
-                        
+
             except KeyboardInterrupt:
                 print("\n中斷執行，停止獲取影像")
             finally:

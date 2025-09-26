@@ -17,7 +17,9 @@ class Step:
 
 
 class ColorCheckStep(Step):
-    def __init__(self, color_service: ColorCheckerService, logger, options: dict | None = None) -> None:
+    def __init__(
+        self, color_service: ColorCheckerService, logger, options: dict | None = None
+    ) -> None:
         self.color_service = color_service
         self.logger = logger
         self.options = options or {}
@@ -42,8 +44,11 @@ class ColorCheckStep(Step):
                     f"Color check {state} (idx={it.index}, class={it.class_name}, pred={it.best_color}, diff={it.diff:.2f}, thr={it.threshold:.2f})"
                 )
         if total > max_log:
-            self.logger.info(f"Color check logs truncated: {total-max_log} more items...")
-        self.logger.info(f"Color check summary: total={total}, fail={fail_cnt}")
+            self.logger.info(
+                f"Color check logs truncated: {total-max_log} more items..."
+            )
+        self.logger.info(
+            f"Color check summary: total={total}, fail={fail_cnt}")
         # Enforce FAIL when color check is enabled and any item fails
         try:
             if not bool(ctx.color_result.get("is_ok", True)):
@@ -54,7 +59,9 @@ class ColorCheckStep(Step):
 
 
 class SaveResultsStep(Step):
-    def __init__(self, sink: ExcelImageResultSink, logger, options: dict | None = None) -> None:
+    def __init__(
+        self, sink: ExcelImageResultSink, logger, options: dict | None = None
+    ) -> None:
         self.sink = sink
         self.logger = logger
         self.options = options or {}
@@ -99,7 +106,9 @@ class SaveResultsStep(Step):
             ctx.save_result = {"status": "ERROR", "error": str(exc)}
             return
         flush_mode = str(self.options.get("flush", "always")).lower()
-        should_flush = flush_mode == "always" or (flush_mode == "fail" and str(ctx.status).upper() != "PASS")
+        should_flush = flush_mode == "always" or (
+            flush_mode == "fail" and str(ctx.status).upper() != "PASS"
+        )
         if should_flush:
             try:
                 self.sink.flush()
@@ -108,7 +117,9 @@ class SaveResultsStep(Step):
 
 
 class PositionCheckStep(Step):
-    def __init__(self, logger, product: str, area: str, options: dict | None = None) -> None:
+    def __init__(
+        self, logger, product: str, area: str, options: dict | None = None
+    ) -> None:
         self.logger = logger
         self.product = product
         self.area = area
@@ -119,12 +130,17 @@ class PositionCheckStep(Step):
         detections = ctx.result.get("detections", []) or []
         if not detections:
             return
-        validator = PositionValidator(ctx.config or self.options.get("config"), self.product, self.area)
+        validator = PositionValidator(
+            ctx.config or self.options.get("config"), self.product, self.area
+        )
 
         # If not enabled in config, allow forcing via options
         enabled = False
         try:
-            enabled = bool(validator.config.is_position_check_enabled(self.product, self.area))
+            enabled = bool(
+                validator.config.is_position_check_enabled(
+                    self.product, self.area)
+            )
         except Exception:
             pass
         if not enabled and not self.options.get("force", False):

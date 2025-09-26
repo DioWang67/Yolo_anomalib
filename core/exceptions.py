@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 class ModelError(RuntimeError):
     """Base exception for model-related failures."""
 
