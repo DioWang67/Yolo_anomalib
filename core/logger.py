@@ -8,7 +8,11 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from core.logging_utils import ContextFilter
 
-_CONFIG_STATE: Dict[str, Optional[str]] = {"configured": False, "log_dir": None, "log_file": None}
+_CONFIG_STATE: Dict[str, Optional[str]] = {
+    "configured": False,
+    "log_dir": None,
+    "log_file": None,
+}
 
 
 def _resolve_level(level: int | str) -> str:
@@ -98,7 +102,9 @@ def configure_logging(
     )
 
     root = logging.getLogger()
-    context_filter = next((f for f in root.filters if isinstance(f, ContextFilter)), None)
+    context_filter = next(
+        (f for f in root.filters if isinstance(f, ContextFilter)), None
+    )
     if context_filter is None:
         context_filter = ContextFilter()
         root.addFilter(context_filter)
@@ -106,7 +112,11 @@ def configure_logging(
         if not any(isinstance(f, ContextFilter) for f in handler.filters):
             handler.addFilter(context_filter)
 
-    _CONFIG_STATE = {"configured": True, "log_dir": str(log_dir_path), "log_file": str(log_file)}
+    _CONFIG_STATE = {
+        "configured": True,
+        "log_dir": str(log_dir_path),
+        "log_file": str(log_file),
+    }
     return log_file
 
 
@@ -116,11 +126,15 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
 
 
 class DetectionLogger:
-    def __init__(self, log_dir: str = "logs", logger_name: str = "core.detection") -> None:
+    def __init__(
+        self, log_dir: str = "logs", logger_name: str = "core.detection"
+    ) -> None:
         configure_logging(log_dir=log_dir)
         self.logger = logging.getLogger(logger_name)
 
-    def log_detection(self, status: str, detections: Sequence[Dict[str, Any]] | None) -> None:
+    def log_detection(
+        self, status: str, detections: Sequence[Dict[str, Any]] | None
+    ) -> None:
         self.logger.info("Detection status: %s", status)
         items = list(detections or [])
         try:
@@ -150,11 +164,17 @@ class DetectionLogger:
                     average,
                 )
         except Exception:
-            self.logger.exception("Detection aggregation failed; falling back to per-detection logs")
+            self.logger.exception(
+                "Detection aggregation failed; falling back to per-detection logs"
+            )
             for det in items:
                 cls = det.get("class", "-")
                 confidence = det.get("confidence")
-                conf_str = f"{float(confidence):.2f}" if isinstance(confidence, (int, float)) else str(confidence)
+                conf_str = (
+                    f"{float(confidence):.2f}"
+                    if isinstance(confidence, (int, float))
+                    else str(confidence)
+                )
                 self.logger.info("Class: %s, Confidence: %s", cls, conf_str)
 
     def log_anomaly(self, status: str, anomaly_score: float) -> None:

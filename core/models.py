@@ -80,7 +80,9 @@ class DetectionResultModel:
             "area": self.area,
             "inference_type": self.inference_type,
             "ckpt_path": self.ckpt_path,
-            "anomaly_score": self.anomaly_score if self.anomaly_score is not None else "",
+            "anomaly_score": (
+                self.anomaly_score if self.anomaly_score is not None else ""
+            ),
             "detections": [d.to_dict() for d in (self.detections or [])],
             "missing_items": list(self.missing_items or []),
             "original_image_path": self.original_image_path,
@@ -91,4 +93,3 @@ class DetectionResultModel:
             "color_check": self.color_check.to_dict() if self.color_check else None,
             "error": self.error,
         }
-

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import queue
 import threading
@@ -11,7 +11,9 @@ import cv2
 class ImageWriteError(RuntimeError):
     """Raised when cv2.imwrite fails (even if fallback succeeds)."""
 
-    def __init__(self, path: str, original_exc: Exception, recovered: bool = False) -> None:
+    def __init__(
+        self, path: str, original_exc: Exception, recovered: bool = False
+    ) -> None:
         self.path = path
         self.original_exc = original_exc
         self.recovered = recovered
@@ -51,7 +53,9 @@ class ImageWriteQueue:
     def stats(self) -> ImageWriteStats:
         return self._stats
 
-    def write_sync(self, path: str, image, params: Optional[Sequence[int]] = None) -> None:
+    def write_sync(
+        self, path: str, image, params: Optional[Sequence[int]] = None
+    ) -> None:
         self._write_sync(path, image, params)
 
     def enqueue(self, path: str, image, params: Optional[Sequence[int]] = None) -> None:
@@ -67,7 +71,9 @@ class ImageWriteQueue:
                     qsize = None
                 if qsize is not None and qsize >= self.warn_threshold:
                     maxsize = self.maxsize or "unbounded"
-                    self.logger.warning(f"Image queue backlog at {qsize}/{maxsize} items")
+                    self.logger.warning(
+                        f"Image queue backlog at {qsize}/{maxsize} items"
+                    )
         except queue.Full:
             self._stats.overflows += 1
             self.logger.warning(
@@ -93,13 +99,16 @@ class ImageWriteQueue:
             pass
         remaining = getattr(self._queue, "unfinished_tasks", 0)
         if remaining:
-            self.logger.warning(f"Image queue shutdown with {remaining} pending tasks")
+            self.logger.warning(
+                f"Image queue shutdown with {remaining} pending tasks")
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    def _write_sync(self, path: str, image, params: Optional[Sequence[int]] = None) -> None:
+    def _write_sync(
+        self, path: str, image, params: Optional[Sequence[int]] = None
+    ) -> None:
         try:
             if params is not None:
                 ok = cv2.imwrite(path, image, params)
@@ -118,8 +127,12 @@ class ImageWriteQueue:
                 recovered = True
             except Exception as fallback_exc:
                 self._stats.errors += 1
-                self.logger.error(f"Image write fallback failed ({path}): {fallback_exc}")
-                raise ImageWriteError(path, fallback_exc, recovered=False) from fallback_exc
+                self.logger.error(
+                    f"Image write fallback failed ({path}): {fallback_exc}"
+                )
+                raise ImageWriteError(
+                    path, fallback_exc, recovered=False
+                ) from fallback_exc
             raise ImageWriteError(path, exc, recovered=recovered) from exc
 
     def _worker_loop(self) -> None:
@@ -154,4 +167,3 @@ class ImageWriteQueue:
                 pass
             finally:
                 self._queue.task_done()
-

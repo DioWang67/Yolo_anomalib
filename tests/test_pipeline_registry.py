@@ -1,4 +1,4 @@
-﻿import types
+import types
 
 import pytest
 
@@ -94,7 +94,9 @@ def test_custom_step_registration_and_autosave_append():
     try:
         env = _make_env(enable_color=False)
         pipeline = build_pipeline(["dummy"], env, {})
-        assert any(isinstance(step, SaveResultsStep) for step in pipeline), "save_results should be appended"
+        assert any(
+            isinstance(step, SaveResultsStep) for step in pipeline
+        ), "save_results should be appended"
         assert isinstance(pipeline[0], _DummyStep)
         assert pipeline[-1].__class__ is SaveResultsStep
     finally:

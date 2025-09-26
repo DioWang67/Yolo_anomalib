@@ -23,7 +23,9 @@ class ResultSink:
 
 
 class ExcelImageResultSink(ResultSink):
-    def __init__(self, config, base_dir: str, logger: DetectionLogger | None = None) -> None:
+    def __init__(
+        self, config, base_dir: str, logger: DetectionLogger | None = None
+    ) -> None:
         """Result sink backed by ResultHandler (images + Excel workbook)."""
         self._handler = ResultHandler(config, base_dir=base_dir, logger=logger)
 

@@ -41,4 +41,6 @@ def resolve_path(p: str | None) -> Path | None:
             continue
     # Fallback to repo-root join even if not exists
     return (Path(__file__).resolve().parents[2] / path).resolve()
+
+
 """Path utilities for robust project-root resolution and relative path handling."""

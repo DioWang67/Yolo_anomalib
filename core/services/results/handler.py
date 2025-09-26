@@ -13,7 +13,11 @@ from ultralytics.utils.plotting import colors
 
 from core.logger import DetectionLogger
 from core.utils import ImageUtils, DetectionResults
-from core.exceptions import ResultExcelWriteError, ResultImageWriteError, ResultPersistenceError
+from core.exceptions import (
+    ResultExcelWriteError,
+    ResultImageWriteError,
+    ResultPersistenceError,
+)
 
 from .excel_buffer import ExcelWorkbookBuffer, format_excel_row
 from .image_queue import ImageWriteError, ImageWriteQueue
@@ -23,28 +27,29 @@ from .path_manager import ResultPathManager, SavePathBundle
 COLUMN_NAMES: List[str] = [
     "\u6642\u9593\u6233\u8a18",  # 時間戳記
     "\u6e2c\u8a66\u7de8\u865f",  # 測試編號
-    "\u7522\u54c1",              # 產品
-    "\u5340\u57df",              # 區域
+    "\u7522\u54c1",  # 產品
+    "\u5340\u57df",  # 區域
     "\u6a21\u578b\u985e\u578b",  # 模型類型
-    "\u7d50\u679c",              # 結果
+    "\u7d50\u679c",  # 結果
     "\u4fe1\u5fc3\u5206\u6578",  # 信心分數
     "\u7570\u5e38\u5206\u6578",  # 異常分數
     "\u984f\u8272\u6aa2\u6e2c\u72c0\u614b",  # 顏色檢測狀態
-    "\u984f\u8272\u5dee\u7570\u503c",        # 顏色差異值
-    "\u932f\u8aa4\u8a0a\u606f",              # 錯誤訊息
+    "\u984f\u8272\u5dee\u7570\u503c",  # 顏色差異值
+    "\u932f\u8aa4\u8a0a\u606f",  # 錯誤訊息
     "\u6a19\u8a3b\u5f71\u50cf\u8def\u5f91",  # 標註影像路徑
     "\u539f\u59cb\u5f71\u50cf\u8def\u5f91",  # 原始影像路徑
     "\u9810\u8655\u7406\u5716\u50cf\u8def\u5f91",  # 預處理圖像路徑
-    "\u7570\u5e38\u71b1\u5716\u8def\u5f91",        # 異常熱圖路徑
-    "\u88c1\u526a\u5716\u50cf\u8def\u5f91",        # 裁剪圖像路徑
-    "\u6aa2\u67e5\u9ede\u8def\u5f91",              # 檢查點路徑
+    "\u7570\u5e38\u71b1\u5716\u8def\u5f91",  # 異常熱圖路徑
+    "\u88c1\u526a\u5716\u50cf\u8def\u5f91",  # 裁剪圖像路徑
+    "\u6aa2\u67e5\u9ede\u8def\u5f91",  # 檢查點路徑
 ]
 
 
 class ResultHandler:
     """Handle result persistence (images + Excel workbook with buffering)."""
 
-    def __init__(self, config, base_dir: str = "Result", logger: DetectionLogger | None = None) -> None:
+    def __init__(self, config, base_dir: str = "Result",
+                 logger: DetectionLogger | None = None) -> None:
         if is_dataclass(config):
             cfg_dict = asdict(config)
         elif isinstance(config, dict):
@@ -73,8 +78,14 @@ class ResultHandler:
         )
 
         queue_size = int(self._cfg_get("image_queue_maxsize", 1000) or 1000)
-        warn_threshold = float(self._cfg_get("image_queue_warn_threshold", 0.8) or 0.8)
-        self._img_queue = ImageWriteQueue(self.logger.logger, maxsize=queue_size, warn_threshold=warn_threshold)
+        warn_threshold = float(
+            self._cfg_get(
+                "image_queue_warn_threshold",
+                0.8) or 0.8)
+        self._img_queue = ImageWriteQueue(
+            self.logger.logger,
+            maxsize=queue_size,
+            warn_threshold=warn_threshold)
 
         atexit.register(self.close)
 
@@ -90,7 +101,9 @@ class ResultHandler:
         area: Optional[str],
         anomaly_score: Optional[float] = None,
     ) -> str:
-        return self.path_manager.get_annotated_path(status, detector, product, area, anomaly_score)
+        return self.path_manager.get_annotated_path(
+            status, detector, product, area, anomaly_score
+        )
 
     def save_results(
         self,
@@ -121,30 +134,61 @@ class ResultHandler:
             save_flags = self._resolve_save_flags(status)
             jpeg_quality = int(self._cfg_get("jpeg_quality", 95) or 95)
             png_compression = int(self._cfg_get("png_compression", 3) or 3)
-            imwrite_params_jpg = [int(cv2.IMWRITE_JPEG_QUALITY), int(max(1, min(100, jpeg_quality)))]
-            imwrite_params_png = [int(cv2.IMWRITE_PNG_COMPRESSION), int(max(0, min(9, png_compression)))]
+            imwrite_params_jpg = [
+                int(cv2.IMWRITE_JPEG_QUALITY),
+                int(max(1, min(100, jpeg_quality))),
+            ]
+            imwrite_params_png = [
+                int(cv2.IMWRITE_PNG_COMPRESSION),
+                int(max(0, min(9, png_compression))),
+            ]
 
-            original_path = bundle.original_path if save_flags["original"] else ""
-            preprocessed_path = bundle.preprocessed_path if save_flags["processed"] else ""
-            annotated_path = bundle.annotated_path if save_flags["annotated"] else ""
+            original_path = (
+                bundle.original_path if save_flags["original"] else ""
+            )
+            preprocessed_path = (
+                (
+                    bundle.preprocessed_path
+                    if save_flags["processed"]
+                    else ""
+                )
+            )
+            annotated_path = (
+                bundle.annotated_path if save_flags["annotated"] else ""
+            )
             cropped_paths: List[str] = []
             heatmap_dest_path = ""
 
             if save_flags["original"]:
-                self._img_queue.enqueue(original_path, frame, imwrite_params_jpg)
+                self._img_queue.enqueue(
+                    original_path, frame, imwrite_params_jpg)
             if save_flags["processed"]:
-                target_params = imwrite_params_png if preprocessed_path.lower().endswith(".png") else imwrite_params_jpg
-                self._img_queue.enqueue(preprocessed_path, processed_image, target_params)
+                target_params = (
+                    imwrite_params_png
+                    if preprocessed_path.lower().endswith(".png")
+                    else imwrite_params_jpg
+                )
+                self._img_queue.enqueue(
+                    preprocessed_path,
+                    processed_image,
+                    target_params,
+                )
 
             detector_lower = (detector or "").lower()
             if detector_lower == "yolo" and save_flags["annotated"]:
                 annotated_frame = processed_image.copy()
                 crop_source = processed_image
-                self._annotate_yolo_frame(annotated_frame, detections, color_result, status)
+                self._annotate_yolo_frame(
+                    annotated_frame, detections, color_result, status
+                )
                 self._img_queue.write_sync(
                     annotated_path,
                     annotated_frame,
-                    imwrite_params_jpg if annotated_path.lower().endswith(".jpg") else imwrite_params_png,
+                    (
+                        imwrite_params_jpg
+                        if annotated_path.lower().endswith(".jpg")
+                        else imwrite_params_png
+                    ),
                 )
                 if save_flags["crops"] and detections:
                     cropped_paths = self._save_crops(
@@ -156,12 +200,18 @@ class ResultHandler:
                         timestamp_text=bundle.timestamp,
                         params=imwrite_params_png,
                     )
-            elif save_flags["annotated"] and detector_lower == "anomalib" and heatmap_path and os.path.exists(heatmap_path):
+            elif (
+                save_flags["annotated"]
+                and detector_lower == "anomalib"
+                and heatmap_path
+                and os.path.exists(heatmap_path)
+            ):
                 heatmap_dest_path = annotated_path or bundle.annotated_path
                 try:
                     shutil.copy2(heatmap_path, heatmap_dest_path)
                 except Exception as copy_exc:
-                    self.logger.logger.warning(f"Heatmap copy failed: {copy_exc}")
+                    self.logger.logger.warning(
+                        f"Heatmap copy failed: {copy_exc}")
                     heatmap_dest_path = heatmap_path
             elif save_flags["annotated"]:
                 heatmap_dest_path = annotated_path
@@ -213,7 +263,9 @@ class ResultHandler:
 
     def close(self) -> None:
         def _warn(action: str, exc: Exception) -> None:
-            self.logger.logger.warning(f"{action} during ResultHandler.close failed: {exc}", exc_info=exc)
+            self.logger.logger.warning(
+                f"{action} during ResultHandler.close failed: {exc}",
+                exc_info=exc)
 
         operations = [
             ("Excel flush", self._excel.flush),
@@ -229,9 +281,13 @@ class ResultHandler:
 
         stats = self._img_queue.stats
         if stats.overflows:
-            self.logger.logger.warning(f"Image queue overflow occurred {stats.overflows} times")
+            self.logger.logger.warning(
+                f"Image queue overflow occurred {stats.overflows} times"
+            )
         if stats.errors:
-            self.logger.logger.warning(f"Image writer encountered {stats.errors} errors")
+            self.logger.logger.warning(
+                f"Image writer encountered {stats.errors} errors"
+            )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -246,10 +302,15 @@ class ResultHandler:
         only_fail = bool(self._cfg_get("save_fail_only", False))
         should_save_images = (status != "PASS") if only_fail else True
         return {
-            "original": bool(self._cfg_get("save_original", True)) and should_save_images,
-            "processed": bool(self._cfg_get("save_processed", True)) and should_save_images,
-            "annotated": bool(self._cfg_get("save_annotated", True)) and should_save_images,
-            "crops": bool(self._cfg_get("save_crops", True)) and should_save_images,
+            "original": bool(self._cfg_get("save_original", True))
+            and should_save_images,
+            "processed": bool(self._cfg_get("save_processed", True))
+            and should_save_images,
+            "annotated": bool(self._cfg_get("save_annotated", True))
+            and should_save_images,
+            "crops": (
+                bool(self._cfg_get("save_crops", True)) and should_save_images
+            ),
         }
 
     def _build_excel_row(
@@ -272,21 +333,29 @@ class ResultHandler:
         color_result: Dict[str, Any] | None,
     ) -> List[Any]:
         cols = self.columns
-        confidence_scores = ";".join(
-            f"{det['class']}:{det['confidence']:.2f}" for det in detections
-        ) if detections else ""
+        confidence_scores = (
+            ";".join(
+                f"{det['class']}:{det['confidence']:.2f}"
+                for det in detections
+            )
+            if detections
+            else ""
+        )
         error_message = ""
         if status != "PASS":
             error_message = (
-                f"缺少元件: {', '.join(missing_items)}" if missing_items else "異常分數超出閾值"
+                f"缺少元件: {', '.join(missing_items)}"
+                if missing_items
+                else "異常分數超出閾值"
             )
         color_status = ""
         diff_value = ""
         if color_result:
-            color_status = "PASS" if color_result.get("is_ok", False) else "FAIL"
+            color_status = "PASS" if color_result.get(
+                "is_ok", False) else "FAIL"
             diff_value = ";".join(
-                f"{item.get('diff', 0):.2f}" for item in color_result.get("items", [])
-            )
+                f"{item.get('diff', 0):.2f}" for item in color_result.get(
+                    "items", []))
 
         row_dict = {
             cols[0]: timestamp,
@@ -328,9 +397,13 @@ class ResultHandler:
                 break
             x1, y1, x2, y2 = det["bbox"]
             x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(crop_source.shape[1], x2), min(crop_source.shape[0], y2)
+            x2 = min(crop_source.shape[1], x2)
+            y2 = min(crop_source.shape[0], y2)
             cropped_img = crop_source[y1:y2, x1:x2]
-            crop_name = f"{bundle.detector_prefix}_{product}_{area}_{timestamp_text}_{det['class']}_{idx}.png"
+            crop_name = (
+                f"{bundle.detector_prefix}_{product}_{area}_"
+                f"{timestamp_text}_{det['class']}_{idx}.png"
+            )
             crop_path = os.path.join(bundle.cropped_dir, crop_name)
             self._img_queue.enqueue(crop_path, cropped_img, params)
             cropped_paths.append(crop_path)
@@ -345,8 +418,17 @@ class ResultHandler:
     ) -> None:
         status_text = str(status or "").upper()
         if status_text:
-            status_color = (0, 255, 0) if status_text == "PASS" else (0, 0, 255)
-            self.image_utils.draw_label(frame, f"Result: {status_text}", (10, 40), status_color, font_scale=1.1, thickness=2)
+            status_color = (
+                0, 255, 0) if status_text == "PASS" else (
+                0, 0, 255)
+            self.image_utils.draw_label(
+                frame,
+                f"Result: {status_text}",
+                (10, 40),
+                status_color,
+                font_scale=1.1,
+                thickness=2,
+            )
         if detections:
             color_items = []
             try:
@@ -369,17 +451,23 @@ class ResultHandler:
             self._draw_color_summary(frame, color_result, origin_y=80)
             self._highlight_color_failures(frame, detections, color_result)
 
-    def _draw_detection_box(self, frame: np.ndarray, detection: Dict[str, Any]) -> None:
+    def _draw_detection_box(self, frame: np.ndarray,
+                            detection: Dict[str, Any]) -> None:
         x1, y1, x2, y2 = detection["bbox"]
         label = f"{detection['class']} {detection['confidence']:.2f}"
         color = colors(detection["class_id"], True)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         self.image_utils.draw_label(frame, label, (x1, y1 - 10), color)
 
-    def _draw_fail_indices(self, frame: np.ndarray, indices: List[int]) -> None:
+    def _draw_fail_indices(
+            self,
+            frame: np.ndarray,
+            indices: List[int]) -> None:
         try:
             text = f"NG idx: {', '.join(str(i) for i in indices)}"
-            self.image_utils.draw_label(frame, text, (10, 10), (0, 0, 255), font_scale=1.0, thickness=2)
+            self.image_utils.draw_label(
+                frame, text, (10, 10), (0, 0, 255), font_scale=1.0, thickness=2
+            )
         except Exception:
             pass
 
@@ -390,14 +478,14 @@ class ResultHandler:
         color_result: Dict[str, Any] | None,
     ) -> None:
         try:
-            items = (color_result or {}).get('items', []) or []
+            items = (color_result or {}).get("items", []) or []
             for idx, det in enumerate(detections or []):
                 if idx >= len(items):
                     continue
                 item = items[idx]
-                if not item.get('is_ok', True):
+                if not item.get("is_ok", True):
                     color = (0, 0, 255)
-                    x1, y1, x2, y2 = det['bbox']
+                    x1, y1, x2, y2 = det["bbox"]
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         except Exception:
             pass
@@ -410,10 +498,17 @@ class ResultHandler:
     ) -> None:
         try:
             text_x = 10
-            text_y = origin_y if origin_y is not None else max(50, frame.shape[0] - 120)
+            text_y = origin_y if origin_y is not None else max(
+                50, frame.shape[0] - 120)
             status = "PASS" if color_result.get("is_ok", False) else "FAIL"
             color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
-            self.image_utils.draw_label(frame, f"Color: {status}", (text_x, text_y), color, font_scale=1.0, thickness=2)
+            self.image_utils.draw_label(
+                frame,
+                f"Color: {status}",
+                (text_x, text_y),
+                color,
+                font_scale=1.0,
+                thickness=2,
+            )
         except Exception:
             pass
-

@@ -6,6 +6,7 @@ from app.cli import run_cli
 from core.logger import configure_logging
 import argparse
 import os
+
 try:
     import cv2  # type: ignore
 except Exception:
@@ -15,18 +16,28 @@ except Exception:
 def setup_logging() -> None:
     configure_logging()
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
 
 
 if __name__ == "__main__":
     setup_logging()
-    parser = argparse.ArgumentParser(description="YOLO/Anomalib detection runner")
+    parser = argparse.ArgumentParser(
+        description="YOLO/Anomalib detection runner")
     parser.add_argument("--product", type=str, help="產品機種", required=False)
     parser.add_argument("--area", type=str, help="區域", required=False)
-    parser.add_argument("--type", dest="infer_type", type=str, choices=["yolo", "anomalib"], help="推理類型", required=False)
-    parser.add_argument("--image", type=str, help="指定輸入影像路徑（可選）", required=False)
+    parser.add_argument(
+        "--type",
+        dest="infer_type",
+        type=str,
+        choices=["yolo", "anomalib"],
+        help="推理類型",
+        required=False,
+    )
+    parser.add_argument(
+        "--image", type=str, help="指定輸入影像路徑（可選）", required=False
+    )
     args = parser.parse_args()
 
     system = DetectionSystem()
@@ -35,19 +46,22 @@ if __name__ == "__main__":
             frame = None
             if args.image:
                 if cv2 is None:
-                    logging.getLogger(__name__).error("缺少 OpenCV，無法讀取 --image 檔案")
+                    logging.getLogger(__name__).error(
+                        "缺少 OpenCV，無法讀取 --image 檔案"
+                    )
                 elif not os.path.exists(args.image):
                     logging.getLogger(__name__).error(f"影像檔案不存在: {args.image}")
                 else:
                     frame = cv2.imread(args.image)
                     if frame is None:
-                        logging.getLogger(__name__).error(f"影像讀取失敗: {args.image}")
+                        logging.getLogger(__name__).error(
+                            f"影像讀取失敗: {args.image}")
 
-
-
-            result = system.detect(args.product, args.area, args.infer_type, frame=frame)
-            status = result.get('status', '')
-            error_msg = result.get('error') or result.get('error_message', '')
+            result = system.detect(
+                args.product, args.area, args.infer_type, frame=frame
+            )
+            status = result.get("status", "")
+            error_msg = result.get("error") or result.get("error_message", "")
             print("\n=== 檢測結果 ===")
             print(f"狀態 {status}")
             print(f"機種: {result.get('product', '')}")
@@ -55,7 +69,7 @@ if __name__ == "__main__":
             print(f"類型: {result.get('inference_type', '')}")
             if error_msg:
                 print(f"錯誤訊息: {error_msg}")
-            if status == 'ERROR':
+            if status == "ERROR":
                 print("====================\n")
             else:
                 print(f"檢查點 {result.get('ckpt_path', '')}")
@@ -66,10 +80,10 @@ if __name__ == "__main__":
                 print(f"預處理影像 {result.get('preprocessed_image_path', '')}")
                 print(f"熱度圖 {result.get('heatmap_path', '')}")
                 print(f"裁切影像: {result.get('cropped_paths', [])}")
-                color_info = result.get('color_check')
+                color_info = result.get("color_check")
                 if color_info:
-                    status_text = 'PASS' if color_info.get('is_ok') else 'FAIL'
-                    diff_val = color_info.get('diff')
+                    status_text = "PASS" if color_info.get("is_ok") else "FAIL"
+                    diff_val = color_info.get("diff")
                     print(f"顏色檢測: {status_text}, 差異: {diff_val}")
                 else:
                     print("顏色檢測: 未執行")

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 import shutil
@@ -41,7 +41,9 @@ class ExcelWorkbookBuffer:
         self.ws = self.wb.active
         self._timer: Optional[threading.Timer] = None
         if self.flush_interval:
-            self._timer = threading.Timer(self.flush_interval, self._periodic_flush)
+            self._timer = threading.Timer(
+                self.flush_interval, self._periodic_flush
+            )
             self._timer.daemon = True
             self._timer.start()
 
@@ -75,15 +77,26 @@ class ExcelWorkbookBuffer:
                 self.logger.info(f"Excel 已更新: {self.path}")
                 return ExcelFlushResult(success=True, rows_written=len(rows))
             except PermissionError:
-                self.logger.error(f"權限不足，無法寫入 {self.path}，請檢查檔案是否開啟或權限設定")
+                self.logger.error(
+                    (
+                        f"權限不足，無法寫入 {self.path}，"
+                        "請檢查檔案是否開啟或權限設定"
+                    )
+                )
             except Exception as exc:
                 self.logger.error(f"寫入 Excel 發生錯誤 (第{attempt + 1}次重試): {exc}")
             time.sleep(0.5)
         if os.path.exists(self.backup_path):
             shutil.copy(self.backup_path, self.path)
-            self.logger.warning(f"已從備份還原 Excel: {self.path}")
+            self.logger.warning(
+                f"已從備份還原 Excel: {self.path}"
+            )
             os.remove(self.backup_path)
-        return ExcelFlushResult(success=False, rows_written=0, error="flush_failed")
+        return ExcelFlushResult(
+            success=False,
+            rows_written=0,
+            error="flush_failed"
+        )
 
     def next_test_id(self, pending_count: int = 0) -> int:
         return self.ws.max_row + pending_count
@@ -111,7 +124,9 @@ class ExcelWorkbookBuffer:
             self.flush()
         finally:
             if self.flush_interval:
-                self._timer = threading.Timer(self.flush_interval, self._periodic_flush)
+                self._timer = threading.Timer(
+                    self.flush_interval, self._periodic_flush
+                )
                 self._timer.daemon = True
                 self._timer.start()
 
@@ -124,4 +139,3 @@ def format_excel_row(columns: List[str], data: Dict[str, Any]) -> List[Any]:
             value = value.strftime("%Y-%m-%d %H:%M:%S")
         row.append(value)
     return row
-

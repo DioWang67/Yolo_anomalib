@@ -3,7 +3,9 @@ import pytest
 
 @pytest.mark.gui
 def test_gui_smoke(monkeypatch, tmp_path):
-    _ = pytest.importorskip("PyQt5.QtWidgets", reason="PyQt5 is required for GUI smoke test")
+    _ = pytest.importorskip(
+        "PyQt5.QtWidgets", reason="PyQt5 is required for GUI smoke test"
+    )
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 
     from PyQt5.QtWidgets import QApplication
@@ -36,7 +38,8 @@ def test_gui_smoke(monkeypatch, tmp_path):
         def shutdown(self):
             self.shutdown_calls += 1
 
-    monkeypatch.setattr(GUI, "DetectionSystem", StubDetectionSystem, raising=True)
+    monkeypatch.setattr(GUI, "DetectionSystem",
+                        StubDetectionSystem, raising=True)
 
     app = QApplication.instance() or QApplication([])
 
@@ -56,5 +59,3 @@ def test_gui_smoke(monkeypatch, tmp_path):
     app.processEvents()
     assert window.detection_system.shutdown_calls == 1
     window.deleteLater()
-
-

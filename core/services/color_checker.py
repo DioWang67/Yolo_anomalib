@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Iterable, List, Optional, Dict, Any
+
+from typing import List, Optional, Dict, Any
 
 import numpy as np
 
@@ -25,7 +25,8 @@ class ColorCheckerService:
         self,
         model_path: str,
         overrides: Optional[Dict[str, float]] = None,
-        rules_overrides: Optional[Dict[str, Dict[str, Optional[float]]]] = None,
+        rules_overrides: Optional[Dict[str,
+                                       Dict[str, Optional[float]]]] = None,
     ) -> None:
         """Load/Reload the color model if needed and apply overrides if provided."""
         if self._checker is None or self._model_path != model_path:

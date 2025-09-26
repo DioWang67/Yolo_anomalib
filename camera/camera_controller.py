@@ -8,6 +8,7 @@ from core.logger import DetectionLogger
 from core.config import DetectionConfig
 from camera.MVS_camera_control import MVSCamera
 
+
 class CameraController:
     def __init__(self, config: DetectionConfig):
         self.config = config
@@ -39,7 +40,9 @@ class CameraController:
             if frame is None:
                 self.logger.logger.warning("獲取到空幀")
                 return None
-            self.logger.logger.debug(f"圖像形狀: {frame.shape}, 數據類型: {frame.dtype}")
+            self.logger.logger.debug(
+                f"圖像形狀: {frame.shape}, 數據類型: {frame.dtype}"
+            )
             # 確保返回 BGR 格式
             if frame.shape[2] == 3 and frame.dtype == np.uint8:
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -93,7 +96,7 @@ class CameraController:
             info = {
                 "status": "已連接",
                 "type": "MVS Camera",
-                "initialized": self.is_initialized
+                "initialized": self.is_initialized,
             }
             return info
         except Exception as e:

@@ -15,13 +15,15 @@ def test_yolo_and_anomalib_end_to_end(monkeypatch, tmp_path):
             self.shutdown_calls = 0
 
         def infer(self, image, product, area, infer_name, output_path=None):
-            self.calls.append((product, area, infer_name, output_path is not None))
+            self.calls.append(
+                (product, area, infer_name, output_path is not None))
             frame = np.ones_like(image)
             if infer_name == "yolo":
                 return {
                     "status": "PASS",
                     "detections": [
-                        {"class": "Widget", "bbox": [1, 1, 4, 4], "confidence": 0.9}
+                        {"class": "Widget", "bbox": [
+                            1, 1, 4, 4], "confidence": 0.9}
                     ],
                     "missing_items": [],
                     "processed_image": frame,
@@ -31,7 +33,8 @@ def test_yolo_and_anomalib_end_to_end(monkeypatch, tmp_path):
                 return {
                     "status": "PASS",
                     "anomaly_score": 0.2,
-                    "output_path": output_path or str(base_dir / "anomalib_heatmap.png"),
+                    "output_path": output_path
+                    or str(base_dir / "anomalib_heatmap.png"),
                     "processed_image": frame * 2,
                     "ckpt_path": "anomalib.ckpt",
                 }
@@ -146,8 +149,11 @@ def test_yolo_and_anomalib_end_to_end(monkeypatch, tmp_path):
         )
         return cfg
 
-    monkeypatch.setattr(ds.DetectionSystem, "load_config", fake_load_config, raising=False)
-    monkeypatch.setattr(ds, "ExcelImageResultSink", fake_sink_factory, raising=True)
+    monkeypatch.setattr(
+        ds.DetectionSystem, "load_config", fake_load_config, raising=False
+    )
+    monkeypatch.setattr(ds, "ExcelImageResultSink",
+                        fake_sink_factory, raising=True)
     monkeypatch.setattr(ds, "ModelManager", StubModelManager, raising=True)
     monkeypatch.setattr(ds, "CameraController", DummyCamera, raising=True)
 
@@ -161,7 +167,8 @@ def test_yolo_and_anomalib_end_to_end(monkeypatch, tmp_path):
     assert yolo_result["area"] == "A"
     assert yolo_result["detections"][0]["class"] == "Widget"
 
-    anomalib_result = system.detect("Widget", "A", "anomalib", frame=frame.copy())
+    anomalib_result = system.detect(
+        "Widget", "A", "anomalib", frame=frame.copy())
     assert anomalib_result["status"] == "PASS"
     assert pytest.approx(anomalib_result["anomaly_score"], rel=1e-6) == 0.2
     assert anomalib_result["heatmap_path"] == "anomalib_annotated.png"

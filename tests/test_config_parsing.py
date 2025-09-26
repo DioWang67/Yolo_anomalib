@@ -1,4 +1,4 @@
-﻿import textwrap
+import textwrap
 
 import pytest
 
@@ -12,21 +12,27 @@ def write_config(tmp_path, text):
 
 
 def test_from_yaml_requires_weights(tmp_path):
-    cfg_path = write_config(tmp_path, """
+    cfg_path = write_config(
+        tmp_path,
+        """
         device: cuda:0
-    """)
+    """,
+    )
     with pytest.raises(ConfigValidationError):
         DetectionConfig.from_yaml(str(cfg_path))
 
 
 def test_from_yaml_normalizes_pipeline_and_numeric(tmp_path):
-    cfg_path = write_config(tmp_path, """
+    cfg_path = write_config(
+        tmp_path,
+        """
         weights: "models/model.pt"
         pipeline: [save_results]
         jpeg_quality: 88
         png_compression: 7
         max_crops_per_frame: 5
-    """)
+    """,
+    )
     cfg = DetectionConfig.from_yaml(str(cfg_path))
     assert cfg.pipeline == ["save_results"]
     assert cfg.jpeg_quality == 88
