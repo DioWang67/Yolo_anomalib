@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
-import pandas as pd
-from openpyxl import load_workbook
+import pandas as pd  # type: ignore[import]
+from openpyxl import load_workbook  # type: ignore[import]
 
 
 @dataclass

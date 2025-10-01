@@ -1,5 +1,5 @@
 import os
-from typing import Any
+from typing import Any, Dict, Optional, Tuple, Type, cast
 import cv2
 import numpy as np
 import warnings
@@ -17,7 +17,6 @@ import threading
 import time
 import logging
 from datetime import datetime
-from matplotlib import colormaps
 
 logging.getLogger("anomalib").setLevel(logging.INFO)
 logging.getLogger("lightning").setLevel(logging.ERROR)
@@ -28,46 +27,63 @@ warnings.filterwarnings(
 warnings.filterwarnings("ignore", message=".*ckpt_path is not provided.*")
 
 if sys.platform == "win32":
-    pathlib.PosixPath = pathlib.WindowsPath
-sys.stdout.reconfigure(encoding="utf-8")
+    pathlib.PosixPath = cast(Type[pathlib.Path], pathlib.WindowsPath)  # type: ignore[misc,assignment]
+if hasattr(sys.stdout, "reconfigure"):
+    cast(Any, sys.stdout).reconfigure(encoding="utf-8")
 
-_engine = None
-_models = {}
-_output_dir = None
-_transform = None
+ModelKey = Tuple[str, str]
+
+_engine: Optional[Engine] = None
+_models: Dict[ModelKey, Dict[str, Any]] = {}
+_output_dir: Optional[str] = None
+_transform: Any | None = None
 _inference_lock = threading.Lock()
 _initialization_lock = threading.Lock()
-_is_initialized = {}
-_current_product = None
-_current_area = None
-_current_ckpt_path = None
-_thresholds = {}  # 新增：儲存各產品區域的閾值
+_is_initialized: Dict[ModelKey, bool] = {}
+_current_product: Optional[str] = None
+_current_area: Optional[str] = None
+_current_ckpt_path: Optional[str] = None
+_thresholds: Dict[ModelKey, float] = {}  # Stores thresholds per product/area
 
 
 # anomalib_lightning_inference.py, initialize 方法中
-def initialize(config: dict = None, product: str = None, area: str = None) -> None:
-    global _engine, _models, _output_dir, _transform, _is_initialized, _current_product, _current_area, _current_ckpt_path, _thresholds
+def initialize(
+    config: Optional[Dict[str, Any]] = None,
+    product: Optional[str] = None,
+    area: Optional[str] = None,
+) -> None:
+    global _engine, _models, _output_dir, _transform, _is_initialized
+    global _current_product, _current_area, _current_ckpt_path, _thresholds
+
+    if config is None:
+        raise ValueError("config is required for initialize()")
+    if product is None or area is None:
+        raise ValueError("product and area are required for initialize()")
+
+    model_key: ModelKey = (product, area)
 
     with _initialization_lock:
-        model_key = (product, area)
-        if model_key in _is_initialized and _is_initialized[model_key]:
-            logging.getLogger("anomalib").info(
-                f"模型已針對 {product},{area} 初始化，檢查點: {_models[model_key]['ckpt_path']}，跳過重複初始化"
+        if _is_initialized.get(model_key):
+            prior_ckpt = _models[model_key]["ckpt_path"]
+            message = (
+                f"Models for {product},{area} already initialized; checkpoint: {prior_ckpt}. Skipping reinitialization."
             )
+            logging.getLogger("anomalib").info(message)
             _current_product = product
             _current_area = area
-            _current_ckpt_path = _models[model_key]["ckpt_path"]
+            _current_ckpt_path = prior_ckpt
             return
 
         try:
             logging.getLogger("anomalib").info(
-                f"開始初始化 Anomalib 模型 (產品: {product}, 區域: {area})"
+                f"Initializing Anomalib model (product: {product}, area: {area})"
             )
             parser = LightningArgumentParser(
                 description="Inference on Anomaly models in Lightning format."
             )
             parser.add_lightning_class_args(
-                AnomalyModule, "model", subclass_mode=True)
+                AnomalyModule, "model", subclass_mode=True
+            )
             parser.add_lightning_class_args(
                 Callback, "--callbacks", subclass_mode=True, required=False
             )
@@ -78,44 +94,41 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
                 "--output", type=str, required=False, default="./patchcore_outputs"
             )
             parser.add_class_arguments(
-                PredictDataset, "--data", instantiate=False)
+                PredictDataset, "--data", instantiate=False
+            )
 
             args = Namespace()
-            args.output = config.get("output", "./patchcore_outputs")
-            args.data = config.get("data", {})
-            args.show = config.get("show", False)
+            args.output = str(config.get("output", "./patchcore_outputs"))
+            args.data = config.get("data", {}) or {}
+            args.show = bool(config.get("show", False))
             args.model = Namespace(
                 **config.get("model", {"class_path": "anomalib.models.Patchcore"})
             )
 
-            if product and area and config.get("models"):
-                models = config.get("models", {})
-                if product not in models or area not in models[product]:
-                    raise ValueError(
-                        f"未找到 {product},{area} 的檢查點，請在 config.yaml 中指定"
-                    )
-                model_config = models[product][area]
-                args.ckpt_path = model_config.get("ckpt_path")
-                threshold = model_config.get("threshold", 0.5)
-                _thresholds[model_key] = threshold
-                logging.getLogger("anomalib").info(
-                    f"選擇檢查點: {args.ckpt_path} (產品: {product}, 區域: {area}, 閾值: {threshold})"
-                )
-            else:
+            models_cfg = config.get("models") or {}
+            if product not in models_cfg or area not in models_cfg.get(product, {}):
                 raise ValueError(
-                    "必須提供產品和區域，並在 config.yaml 中指定檢查點路徑"
+                    f"Missing checkpoint for {product},{area}; please configure it in config.yaml"
                 )
+            model_config = models_cfg[product][area]
+            args.ckpt_path = model_config.get("ckpt_path")
+            threshold = float(model_config.get("threshold", 0.5))
+            _thresholds[model_key] = threshold
+            logging.getLogger("anomalib").info(
+                f"Using checkpoint: {args.ckpt_path} (product: {product}, area: {area}, threshold: {threshold})"
+            )
 
             if not args.ckpt_path:
                 raise ValueError(
-                    "檢查點路徑未提供，請在 config.yaml 中指定有效的 ckpt_path"
+                    "Checkpoint path not provided; configure a valid ckpt_path in config.yaml"
                 )
-            if not os.path.exists(args.ckpt_path):
-                raise ValueError(f"檢查點檔案不存在: {args.ckpt_path}")
+            if not os.path.exists(str(args.ckpt_path)):
+                raise ValueError(f"Checkpoint file not found: {args.ckpt_path}")
 
-            logging.getLogger("anomalib").info(
-                f"正在載入檢查點: {args.ckpt_path}, 模型類型: {args.model.class_path}"
+            message = (
+                f"Loading checkpoint: {args.ckpt_path}, model type: {args.model.class_path}"
             )
+            logging.getLogger("anomalib").info(message)
             current_date = datetime.now().strftime("%Y%m%d")
             args.output = args.output.replace("YYYYMMDD", current_date)
 
@@ -129,7 +142,7 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
                         enable_progress_bar=False,
                         logger=False,
                     )
-                    logging.getLogger("anomalib").info("Engine 初始化成功")
+                    logging.getLogger("anomalib").info("Engine initialized")
 
             model_class_path = args.model.class_path
             module_name, class_name = model_class_path.rsplit(".", 1)
@@ -139,9 +152,10 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
                 warnings.simplefilter("ignore")
                 _model = model_class.load_from_checkpoint(args.ckpt_path)
                 if _model is None:
-                    raise ValueError(f"模型載入失敗: {args.ckpt_path}")
+                    raise ValueError(f"Failed to read image: {args.ckpt_path}")
                 logging.getLogger("anomalib").info(
-                    f"成功載入檢查點: {args.ckpt_path}")
+                    f"Loaded checkpoint: {args.ckpt_path}"
+                )
 
             _models[model_key] = {"model": _model, "ckpt_path": args.ckpt_path}
             _output_dir = args.output
@@ -151,49 +165,66 @@ def initialize(config: dict = None, product: str = None, area: str = None) -> No
             _is_initialized[model_key] = True
             _current_product = product
             _current_area = area
-            _current_ckpt_path = args.ckpt_path
-            logging.getLogger("anomalib").info(
-                f"模型初始化完成 (產品: {product}, 區域: {area}, 檢查點: {args.ckpt_path}, 閾值: {_thresholds[model_key]})"
+            _current_ckpt_path = str(args.ckpt_path)
+            message = (
+                f"Failed to read image? (??: {product}, ??: {area}, ???: {args.ckpt_path}, "
+                f"??: {_thresholds[model_key]})"
             )
-            logging.getLogger("anomalib").info(f"輸出目錄: {_output_dir}")
+            logging.getLogger("anomalib").info(message)
+            logging.getLogger("anomalib").info(f"Output directory: {_output_dir}")
 
-        except Exception as e:
+        except Exception as exc:
             logging.getLogger("anomalib").error(
-                f"模型初始化失敗 (產品: {product}, 區域: {area}): {str(e)}"
+                f"Model initialization failed (product: {product}, area: {area}): {str(exc)}"
             )
             raise
 
 
-def initialize_product_models(config: dict = None, product: str = None) -> None:
-    if not product or not config.get("models") or product not in config["models"]:
-        raise ValueError(f"無效的機種: {product} 或未定義模型")
+def initialize_product_models(
+    config: Optional[Dict[str, Any]] = None,
+    product: Optional[str] = None,
+) -> None:
+    if config is None:
+        raise ValueError("config is required for initialize_product_models()")
+    if product is None:
+        raise ValueError("product is required for initialize_product_models()")
 
-    logging.getLogger("anomalib").info(f"正在初始化機種 {product} 的所有區域模型")
-    for area in config["models"][product]:
-        initialize(config, product, area)
+    models_cfg = config.get("models") or {}
+    if product not in models_cfg:
+        raise ValueError(f"No model configuration found for product {product}")
+
+    logging.getLogger("anomalib").info(
+        f"Initializing Anomalib models for all areas of {product}"
+    )
+    for area_name in models_cfg[product]:
+        initialize(config, product, area_name)
 
 
 def lightning_inference(
     image_path: str,
     thread_safe: bool = True,
     enable_timing: bool = True,
-    product: str | None = None,
-    area: str | None = None,
-    output_path: str | None = None,
-) -> dict[str, Any]:
+    product: Optional[str] = None,
+    area: Optional[str] = None,
+    output_path: Optional[str] = None,
+) -> Dict[str, Any]:
     global _engine, _models, _output_dir, _transform, _inference_lock, _is_initialized
 
-    model_key = (product, area)
-    if model_key not in _is_initialized or not _is_initialized[model_key]:
-        # 若你想維持 raise，也可以；但建議統一錯誤型態（回傳或 raise 二擇一）
-        raise RuntimeError(f"模型未針對 {product},{area} 初始化，請先呼叫 initialize()")
+    if product is None or area is None:
+        raise ValueError("product and area are required for inference")
+
+    model_key: ModelKey = (product, area)
+    if not _is_initialized.get(model_key):
+        raise RuntimeError(
+            f"Failed to read image? {product},{area}????? initialize()"
+        )
 
     if not os.path.exists(image_path):
         return {
             "image_path": image_path,
             "product": product,
             "area": area,
-            "error": "圖片檔案不存在",
+            "error": "Failed to read image?",
         }
 
     img = cv2.imread(image_path)
@@ -202,15 +233,14 @@ def lightning_inference(
             "image_path": image_path,
             "product": product,
             "area": area,
-            "error": "影像讀取失敗",
+            "error": "Failed to read image",
         }
 
     if img.shape[:2] != (640, 640):
-        logging.getLogger("anomalib").warning(
-            f"輸入圖像尺寸 {img.shape[:2]} 不符合預期 640x640"
-        )
+        warn_msg = f"Failed to read image {img.shape[:2]} ????? 640x640"
+        logging.getLogger("anomalib").warning(warn_msg)
 
-    timings: dict[str, float] = {}
+    timings: Dict[str, float] = {}
     start_time = time.time()
 
     try:
@@ -228,16 +258,19 @@ def lightning_inference(
 
         predict_start = time.time()
 
-        def _do_predict():
+        if _engine is None:
+            raise RuntimeError("Engine is not initialized")
+
+        def _do_predict() -> tuple[list[Any], str]:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                # 先把 model 資料抓出，避免另一執行緒 mutate 時 race（最小化）
                 model_info = _models[model_key]
-                return _engine.predict(
+                outputs = _engine.predict(
                     model=model_info["model"],
                     dataloaders=[dataloader],
                     ckpt_path=model_info["ckpt_path"],
-                ), model_info["ckpt_path"]
+                )
+                return list(outputs or []), str(model_info["ckpt_path"])
 
         if thread_safe:
             with _inference_lock:
@@ -245,29 +278,25 @@ def lightning_inference(
         else:
             predictions, ckpt_path = _do_predict()
 
-        # 轉 list 避免 generator/iterator 的真假值判斷或重複迭代問題
-        predictions = list(predictions) if predictions is not None else []
-
         if not predictions:
             return {
                 "image_path": image_path,
                 "product": product,
                 "area": area,
-                "error": "未取得推論結果",
+                "error": "Failed to read image????",
             }
 
         if enable_timing:
             timings["model_inference"] = round(time.time() - predict_start, 4)
 
         process_start = time.time()
-        # 你的做法只取第一筆；若非預期，請在此改為彙整
         pred = predictions[0]
         result = _process_prediction(
             pred,
             image_path,
             product,
             area,
-            output_path,
+            output_path=output_path,
             enable_timing=enable_timing,
         )
 
@@ -277,57 +306,58 @@ def lightning_inference(
 
         total_time = time.time() - start_time
         result["inference_time"] = round(total_time, 4)
-        # 統一成字串，避免 Path 造成型別不一致
-        result["ckpt_path"] = str(ckpt_path)
-        # 確保固定欄位存在
+        result["ckpt_path"] = ckpt_path
         result.setdefault("image_path", image_path)
         result.setdefault("product", product)
         result.setdefault("area", area)
         return result
 
-    except Exception as e:
+    except Exception as exc:
         return {
             "image_path": image_path,
             "product": product,
             "area": area,
-            "error": f"圖片處理失敗: {str(e)}",
+            "error": f"Failed to read image: {str(exc)}",
             "inference_time": round(time.time() - start_time, 4),
         }
 
+
 # anomalib_lightning_inference.py, _process_prediction 方法中
 def _process_prediction(
-    pred,
+    pred: Dict[str, Any],
     image_path: str,
     product: str,
     area: str,
-    output_path: str = None,
+    output_path: Optional[str] = None,
     enable_timing: bool = False,
-):
+) -> Dict[str, Any]:
     try:
-        model_key = (product, area)
+        model_key: ModelKey = (product, area)
         threshold = _thresholds.get(model_key, 0.5)
-        anomaly_score = pred.get("pred_scores", 0.0)
-        if anomaly_score is not None:
-            anomaly_score = anomaly_score.item()
+        anomaly_score_raw = pred.get("pred_scores", 0.0)
+        if anomaly_score_raw is not None and hasattr(anomaly_score_raw, "item"):
+            anomaly_score = float(anomaly_score_raw.item())
+        else:
+            anomaly_score = float(anomaly_score_raw or 0.0)
 
-        anomaly_map = pred.get("anomaly_maps", None)
+        anomaly_map = pred.get("anomaly_maps")
         if anomaly_map is None:
             logging.getLogger("anomalib").error(
-                f"未找到異常熱圖，預測內容: {pred.keys()}"
+                f"Anomaly heatmap missing; keys: {list(pred.keys())}"
             )
             return {
                 "image_path": image_path,
-                "error": "未找到異常熱圖",
+                "error": "Anomaly heatmap missing",
                 "product": product,
                 "area": area,
             }
 
         original_image = cv2.imread(image_path)
         if original_image is None:
-            logging.getLogger("anomalib").error(f"無法讀取圖片: {image_path}")
+            logging.getLogger("anomalib").error(f"Failed to read image: {image_path}")
             return {
                 "image_path": image_path,
-                "error": "無法讀取圖片",
+                "error": "Failed to read image",
                 "product": product,
                 "area": area,
             }
@@ -342,24 +372,24 @@ def _process_prediction(
             heatmap_3d, (original_image.shape[1], original_image.shape[0])
         )
 
-        normalization_method = "score_based"
-        if normalization_method == "score_based":
-            if heatmap_3d.max() - heatmap_3d.min() == 0:
-                normalized_heatmap = np.zeros_like(
-                    heatmap_3d, dtype=np.float32)
-                threshold_mask = np.zeros_like(heatmap_3d, dtype=bool)
-                logging.getLogger("anomalib").warning(
-                    f"熱圖正規化失敗，min={heatmap_3d.min()}, max={heatmap_3d.max()}"
-                )
-            else:
-                normalized_heatmap = (heatmap_3d - heatmap_3d.min()) / np.ptp(
-                    heatmap_3d
-                )
-                dynamic_threshold = 0.95 if anomaly_score < 0.1 else threshold
-                threshold_mask = normalized_heatmap > dynamic_threshold
-                logging.getLogger("anomalib").info(
-                    f"使用分數調整閾值模式，動態閾值: {dynamic_threshold:.4f} (原閾值: {threshold}, 異常分數: {anomaly_score:.4f})"
-                )
+        dynamic_threshold = threshold
+        if heatmap_3d.max() - heatmap_3d.min() == 0:
+            normalized_heatmap = np.zeros_like(heatmap_3d, dtype=np.float32)
+            threshold_mask = np.zeros_like(heatmap_3d, dtype=bool)
+            message = (
+                f"Heatmap has no variation (min={heatmap_3d.min()}, max={heatmap_3d.max()})"
+            )
+            logging.getLogger("anomalib").warning(message)
+        else:
+            normalized_heatmap = (heatmap_3d - heatmap_3d.min()) / np.ptp(heatmap_3d)
+            dynamic_threshold = 0.95 if anomaly_score < 0.1 else threshold
+            threshold_mask = normalized_heatmap > dynamic_threshold
+            message = (
+                "Score-based threshold adjustment, dynamic threshold: "
+                f"{dynamic_threshold:.4f} (base: {threshold}, "
+                f"anomaly score: {anomaly_score:.4f})"
+            )
+            logging.getLogger("anomalib").info(message)
 
         colored_heatmap = cv2.applyColorMap(
             (normalized_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET
@@ -375,21 +405,26 @@ def _process_prediction(
                 0.6,
                 0,
             ).reshape(-1, 3)
-            anomaly_pixel_count = np.sum(threshold_mask)
-            total_pixels = threshold_mask.size
+            anomaly_pixel_count = int(np.sum(threshold_mask))
+            total_pixels = int(threshold_mask.size)
             anomaly_ratio = anomaly_pixel_count / total_pixels
-            logging.getLogger("anomalib").info(
-                f"像素級閾值過濾 (方法: {normalization_method}, 閾值: {dynamic_threshold})，異常像素: {anomaly_pixel_count}/{total_pixels} ({anomaly_ratio:.2%})"
+            message = (
+                "Pixel-level threshold filtering (method: score_based, threshold: "
+                f"{dynamic_threshold}), anomaly pixels: {anomaly_pixel_count}/{total_pixels} "
+                f"({anomaly_ratio:.2%})"
             )
+            logging.getLogger("anomalib").info(message)
         else:
             logging.getLogger("anomalib").info(
-                f"無像素超過閾值 (方法: {normalization_method})，顯示原圖"
+                "No pixel exceeds the threshold (method: score_based); displaying original image"
             )
+            anomaly_pixel_count = 0
+            total_pixels = int(threshold_mask.size)
+            anomaly_ratio = 0.0
 
         is_anomaly = anomaly_score > threshold
         status_str = "anomaly" if is_anomaly else "normal"
 
-        # 使用提供的 output_path，如果沒有則生成新路徑
         if (
             output_path
             and os.path.dirname(output_path)
@@ -407,37 +442,33 @@ def _process_prediction(
                 "anomalib",
                 f"anomalib_{product}_{area}_{time_stamp}_{anomaly_score:.4f}.jpg",
             )
-        os.makedirs(os.path.dirname(heatmap_path), exist_ok=True)
 
+        os.makedirs(os.path.dirname(heatmap_path), exist_ok=True)
         overlay_image_bgr = cv2.cvtColor(overlay_image, cv2.COLOR_RGB2BGR)
         cv2.imwrite(heatmap_path, overlay_image_bgr)
-        logging.getLogger("anomalib").info(f"結果圖片儲存至: {heatmap_path}")
+        logging.getLogger("anomalib").info(f"Saved annotated heatmap to: {heatmap_path}")
 
         return {
             "image_path": image_path,
             "anomaly_score": anomaly_score,
             "threshold": threshold,
             "is_anomaly": is_anomaly,
-            "anomaly_pixel_count": (
-                np.sum(threshold_mask) if "threshold_mask" in locals() else 0
-            ),
-            "total_pixels": threshold_mask.size if "threshold_mask" in locals() else 0,
-            "anomaly_pixel_ratio": (
-                np.sum(threshold_mask) / threshold_mask.size
-                if "threshold_mask" in locals() and threshold_mask.size > 0
-                else 0.0
-            ),
+            "anomaly_pixel_count": anomaly_pixel_count,
+            "total_pixels": total_pixels,
+            "anomaly_pixel_ratio": anomaly_ratio,
             "heatmap_path": heatmap_path,
             "product": product,
             "area": area,
-            "ckpt_path": _models.get((product, area), {}).get("ckpt_path", ""),
+            "ckpt_path": _models.get(model_key, {}).get("ckpt_path", ""),
         }
 
-    except Exception as e:
-        logging.getLogger("anomalib").error(f"處理預測結果失敗: {str(e)}")
+    except Exception as exc:
+        logging.getLogger("anomalib").error(
+            f"Processing prediction failed: {str(exc)}"
+        )
         return {
             "image_path": image_path,
-            "error": f"處理預測結果失敗: {str(e)}",
+            "error": f"Processing prediction failed: {str(exc)}",
             "product": product,
             "area": area,
         }

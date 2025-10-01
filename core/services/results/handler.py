@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import cv2
 import numpy as np
-from ultralytics.utils.plotting import colors
+from ultralytics.utils.plotting import colors  # type: ignore[import]
 
 from core.logger import DetectionLogger
 from core.utils import ImageUtils, DetectionResults
@@ -50,7 +50,7 @@ class ResultHandler:
 
     def __init__(self, config, base_dir: str = "Result",
                  logger: DetectionLogger | None = None) -> None:
-        if is_dataclass(config):
+        if is_dataclass(config) and not isinstance(config, type):
             cfg_dict = asdict(config)
         elif isinstance(config, dict):
             cfg_dict = dict(config)
@@ -438,7 +438,7 @@ class ResultHandler:
                 thickness=2,
             )
         if detections:
-            color_items = []
+            color_items: List[Dict[str, Any]] = []
             try:
                 color_items = (color_result or {}).get("items", []) or []
             except Exception:

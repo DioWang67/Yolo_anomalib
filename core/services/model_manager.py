@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from collections import OrderedDict
 import copy
-import yaml
+import yaml  # type: ignore[import]
 
 from core.config import DetectionConfig
 from core.logger import DetectionLogger
@@ -45,7 +45,8 @@ class ModelManager:
                 initialize_product_models as _anoma_init,
             )
 
-            _anoma_init(config.anomalib_config, product)
+            anomalib_cfg = config.anomalib_config or {}
+            _anoma_init(anomalib_cfg, product)
             self.logger.logger.info(
                 f"Anomalib models initialized for {product}")
         except Exception as e:
