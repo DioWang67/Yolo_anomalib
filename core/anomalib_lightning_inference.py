@@ -1,4 +1,5 @@
 import os
+from typing import Any
 import cv2
 import numpy as np
 import warnings
@@ -176,33 +177,40 @@ def lightning_inference(
     image_path: str,
     thread_safe: bool = True,
     enable_timing: bool = True,
-    product: str = None,
-    area: str = None,
-    output_path: str = None,
-) -> dict:
-    global _engine, _models, _output_dir, _transform, _inference_lock
+    product: str | None = None,
+    area: str | None = None,
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    global _engine, _models, _output_dir, _transform, _inference_lock, _is_initialized
 
     model_key = (product, area)
     if model_key not in _is_initialized or not _is_initialized[model_key]:
+        # 若你想維持 raise，也可以；但建議統一錯誤型態（回傳或 raise 二擇一）
         raise RuntimeError(f"模型未針對 {product},{area} 初始化，請先呼叫 initialize()")
 
     if not os.path.exists(image_path):
-        return {"image_path": image_path, "error": "圖片檔案不存在"}
+        return {
+            "image_path": image_path,
+            "product": product,
+            "area": area,
+            "error": "圖片檔案不存在",
+        }
 
     img = cv2.imread(image_path)
     if img is None:
         return {
             "image_path": image_path,
-            "error": "影像讀取失敗",
             "product": product,
             "area": area,
+            "error": "影像讀取失敗",
         }
+
     if img.shape[:2] != (640, 640):
         logging.getLogger("anomalib").warning(
             f"輸入圖像尺寸 {img.shape[:2]} 不符合預期 640x640"
         )
 
-    timings = {}
+    timings: dict[str, float] = {}
     start_time = time.time()
 
     try:
@@ -219,62 +227,72 @@ def lightning_inference(
             timings["dataset_creation"] = round(time.time() - dataset_start, 4)
 
         predict_start = time.time()
-        if thread_safe:
-            with _inference_lock:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    predictions = _engine.predict(
-                        model=_models[model_key]["model"],
-                        dataloaders=[dataloader],
-                        ckpt_path=_models[model_key]["ckpt_path"],
-                    )
-        else:
+
+        def _do_predict():
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                predictions = _engine.predict(
-                    model=_models[model_key]["model"],
+                # 先把 model 資料抓出，避免另一執行緒 mutate 時 race（最小化）
+                model_info = _models[model_key]
+                return _engine.predict(
+                    model=model_info["model"],
                     dataloaders=[dataloader],
-                    ckpt_path=_models[model_key]["ckpt_path"],
-                )
+                    ckpt_path=model_info["ckpt_path"],
+                ), model_info["ckpt_path"]
+
+        if thread_safe:
+            with _inference_lock:
+                predictions, ckpt_path = _do_predict()
+        else:
+            predictions, ckpt_path = _do_predict()
+
+        # 轉 list 避免 generator/iterator 的真假值判斷或重複迭代問題
+        predictions = list(predictions) if predictions is not None else []
 
         if not predictions:
             return {
                 "image_path": image_path,
-                "error": "未取得推論結果",
                 "product": product,
                 "area": area,
+                "error": "未取得推論結果",
             }
 
         if enable_timing:
             timings["model_inference"] = round(time.time() - predict_start, 4)
 
         process_start = time.time()
-        for pred in predictions:
-            result = _process_prediction(
-                pred,
-                image_path,
-                product,
-                area,
-                output_path,
-                enable_timing=enable_timing,
-            )
-            if enable_timing:
-                timings["result_processing"] = round(
-                    time.time() - process_start, 4)
-                result["timings"] = timings
+        # 你的做法只取第一筆；若非預期，請在此改為彙整
+        pred = predictions[0]
+        result = _process_prediction(
+            pred,
+            image_path,
+            product,
+            area,
+            output_path,
+            enable_timing=enable_timing,
+        )
 
-            total_time = time.time() - start_time
-            result["inference_time"] = round(total_time, 4)
-            result["ckpt_path"] = _models[model_key]["ckpt_path"]
-            return result
+        if enable_timing:
+            timings["result_processing"] = round(time.time() - process_start, 4)
+            result["timings"] = timings
+
+        total_time = time.time() - start_time
+        result["inference_time"] = round(total_time, 4)
+        # 統一成字串，避免 Path 造成型別不一致
+        result["ckpt_path"] = str(ckpt_path)
+        # 確保固定欄位存在
+        result.setdefault("image_path", image_path)
+        result.setdefault("product", product)
+        result.setdefault("area", area)
+        return result
 
     except Exception as e:
         return {
             "image_path": image_path,
+            "product": product,
+            "area": area,
             "error": f"圖片處理失敗: {str(e)}",
             "inference_time": round(time.time() - start_time, 4),
         }
-
 
 # anomalib_lightning_inference.py, _process_prediction 方法中
 def _process_prediction(

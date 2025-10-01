@@ -207,11 +207,19 @@ class ResultHandler:
                 and os.path.exists(heatmap_path)
             ):
                 heatmap_dest_path = annotated_path or bundle.annotated_path
-                try:
-                    shutil.copy2(heatmap_path, heatmap_dest_path)
-                except Exception as copy_exc:
-                    self.logger.logger.warning(
-                        f"Heatmap copy failed: {copy_exc}")
+                if heatmap_dest_path:
+                    src_norm = os.path.normcase(os.path.abspath(heatmap_path))
+                    dest_norm = os.path.normcase(os.path.abspath(heatmap_dest_path))
+                    if src_norm != dest_norm:
+                        try:
+                            shutil.copy2(heatmap_path, heatmap_dest_path)
+                        except Exception as copy_exc:
+                            self.logger.logger.warning(
+                                f"Heatmap copy failed: {copy_exc}")
+                            heatmap_dest_path = heatmap_path
+                    else:
+                        heatmap_dest_path = heatmap_path
+                else:
                     heatmap_dest_path = heatmap_path
             elif save_flags["annotated"]:
                 heatmap_dest_path = annotated_path

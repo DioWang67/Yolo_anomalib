@@ -40,9 +40,11 @@ class ColorCheckStep(Step):
                 fail_cnt += 1
             if idx < max_log:
                 state = "PASS" if it.is_ok else "FAIL"
-                self.logger.info(
-                    f"Color check {state} (idx={it.index}, class={it.class_name}, pred={it.best_color}, diff={it.diff:.2f}, thr={it.threshold:.2f})"
+                message = (
+                    f"Color check {state} (idx={it.index}, class={it.class_name}, pred={it.best_color}, "
+                    f"diff={it.diff:.2f}, thr={it.threshold:.2f})"
                 )
+                self.logger.info(message)
         if total > max_log:
             self.logger.info(
                 f"Color check logs truncated: {total-max_log} more items..."

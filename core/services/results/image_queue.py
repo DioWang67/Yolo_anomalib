@@ -58,7 +58,8 @@ class ImageWriteQueue:
     ) -> None:
         self._write_sync(path, image, params)
 
-    def enqueue(self, path: str, image, params: Optional[Sequence[int]] = None) -> None:
+    def enqueue(self, path: str, image,
+                params: Optional[Sequence[int]] = None) -> None:
         if self.maxsize == 0:
             self._write_sync(path, image, params)
             return
