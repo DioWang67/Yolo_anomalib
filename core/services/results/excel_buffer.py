@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""具備備份與批次寫入的 Excel 緩衝寫手，降低寫入失敗風險。"""
+
 import os
 import shutil
 import threading

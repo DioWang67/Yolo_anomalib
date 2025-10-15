@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+"""負責載入 LED 色彩模型並對偵測結果進行色彩檢查的服務。"""
 
 from typing import List, Optional, Dict, Any
 

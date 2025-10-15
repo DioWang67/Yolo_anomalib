@@ -1,3 +1,5 @@
+"""互動式命令列介面，可在無 GUI 環境下執行檢測。"""
+
 import os
 from pathlib import Path
 
@@ -110,10 +112,3 @@ def run_cli(system) -> None:
             logger.logger.error(f"指令處理失敗: {str(e)}")
 
 
-"""Simple interactive CLI to run one-shot detections.
-
-Features:
-- Enumerate products/areas by scanning models/ tree
-- Prompt user for product/area/backend type
-- Call DetectionSystem.detect(...) and print a compact summary
-"""

@@ -122,6 +122,32 @@ class DetectionSystem:
             )
             self.camera = None
 
+    def disconnect_camera(self) -> None:
+        """Release the active camera instance and mark it unavailable."""
+        self.logger.logger.info("Disconnecting camera...")
+        if self.camera:
+            try:
+                self.camera.shutdown()
+            except Exception as e:
+                self.logger.logger.warning(f"Camera shutdown raised: {e}")
+        self.camera = None
+
+    def reconnect_camera(self) -> bool:
+        """Attempt to reinitialize the camera after a manual disconnect."""
+        self.disconnect_camera()
+        self.logger.logger.info("Reconnecting camera...")
+        self.initialize_camera()
+        connected = self.is_camera_connected()
+        if connected:
+            self.logger.logger.info("Camera reconnected successfully")
+        else:
+            self.logger.logger.error("Camera reconnect failed")
+        return connected
+
+    def is_camera_connected(self) -> bool:
+        """Return True if a camera controller is initialized and ready."""
+        return bool(self.camera and getattr(self.camera, "is_initialized", False))
+
     def load_model_configs(self, product: str, area: str, inference_type: str) -> None:
         """Switch to a specific (product, area, type) model configuration.
 
