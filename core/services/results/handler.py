@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional
 
 import cv2
 import numpy as np
-from ultralytics.utils.plotting import colors  # type: ignore[import]
 
 from core.logger import DetectionLogger
 from core.utils import ImageUtils, DetectionResults
@@ -19,7 +18,10 @@ from core.exceptions import (
     ResultPersistenceError,
 )
 
-from .excel_buffer import ExcelWorkbookBuffer, format_excel_row
+from .annotations import annotate_yolo_frame
+from .crops import save_detection_crops
+from .excel_buffer import ExcelWorkbookBuffer
+from .excel_formatter import build_excel_row
 from .image_queue import ImageWriteError, ImageWriteQueue
 from .path_manager import ResultPathManager, SavePathBundle
 
@@ -178,8 +180,8 @@ class ResultHandler:
             if detector_lower == "yolo" and save_flags["annotated"]:
                 annotated_frame = processed_image.copy()
                 crop_source = processed_image
-                self._annotate_yolo_frame(
-                    annotated_frame, detections, color_result, status
+                annotate_yolo_frame(
+                    self.image_utils, annotated_frame, detections, color_result, status
                 )
                 self._img_queue.write_sync(
                     annotated_path,
@@ -191,7 +193,10 @@ class ResultHandler:
                     ),
                 )
                 if save_flags["crops"] and detections:
-                    cropped_paths = self._save_crops(
+                    max_crops = self._cfg_get("max_crops_per_frame", None)
+                    limit = int(max_crops) if max_crops is not None else None
+                    cropped_paths = save_detection_crops(
+                        self._img_queue,
                         crop_source=crop_source,
                         detections=detections,
                         bundle=bundle,
@@ -199,6 +204,7 @@ class ResultHandler:
                         area=area,
                         timestamp_text=bundle.timestamp,
                         params=imwrite_params_png,
+                        limit=limit,
                     )
             elif (
                 save_flags["annotated"]
@@ -224,7 +230,9 @@ class ResultHandler:
             elif save_flags["annotated"]:
                 heatmap_dest_path = annotated_path
 
-            excel_row = self._build_excel_row(
+            test_id = self._excel.next_test_id(self._excel.pending_rows())
+            excel_row = build_excel_row(
+                self.columns,
                 timestamp=timestamp,
                 status=status,
                 detector=detector,
@@ -240,6 +248,7 @@ class ResultHandler:
                 cropped_paths=cropped_paths,
                 ckpt_path=ckpt_path,
                 color_result=color_result,
+                test_id=test_id,
             )
             try:
                 self._excel.append(excel_row)
@@ -321,202 +330,3 @@ class ResultHandler:
             ),
         }
 
-    def _build_excel_row(
-        self,
-        *,
-        timestamp: datetime,
-        status: str,
-        detector: str,
-        product: Optional[str],
-        area: Optional[str],
-        detections: List[Dict[str, Any]],
-        missing_items: List[str],
-        anomaly_score: float | None,
-        annotated_path: str,
-        original_path: str,
-        preprocessed_path: str,
-        heatmap_path: str,
-        cropped_paths: List[str],
-        ckpt_path: Optional[str],
-        color_result: Dict[str, Any] | None,
-    ) -> List[Any]:
-        cols = self.columns
-        confidence_scores = (
-            ";".join(
-                f"{det['class']}:{det['confidence']:.2f}"
-                for det in detections
-            )
-            if detections
-            else ""
-        )
-        error_message = ""
-        if status != "PASS":
-            error_message = (
-                f"缺少元件: {', '.join(missing_items)}"
-                if missing_items
-                else "異常分數超出閾值"
-            )
-        color_status = ""
-        diff_value = ""
-        if color_result:
-            color_status = "PASS" if color_result.get(
-                "is_ok", False) else "FAIL"
-            diff_value = ";".join(
-                f"{item.get('diff', 0):.2f}" for item in color_result.get(
-                    "items", []))
-
-        row_dict = {
-            cols[0]: timestamp,
-            cols[1]: self._excel.next_test_id(self._excel.pending_rows()),
-            cols[2]: product or "",
-            cols[3]: area or "",
-            cols[4]: detector,
-            cols[5]: status,
-            cols[6]: confidence_scores,
-            cols[7]: anomaly_score if anomaly_score is not None else "",
-            cols[8]: color_status,
-            cols[9]: diff_value,
-            cols[10]: error_message,
-            cols[11]: annotated_path,
-            cols[12]: original_path,
-            cols[13]: preprocessed_path,
-            cols[14]: heatmap_path,
-            cols[15]: ";".join(cropped_paths) if cropped_paths else "",
-            cols[16]: ckpt_path or "",
-        }
-        return format_excel_row(cols, row_dict)
-
-    def _save_crops(
-        self,
-        *,
-        crop_source: np.ndarray,
-        detections: List[Dict[str, Any]],
-        bundle: SavePathBundle,
-        product: Optional[str],
-        area: Optional[str],
-        timestamp_text: str,
-        params: List[int],
-    ) -> List[str]:
-        cropped_paths: List[str] = []
-        max_crops = self._cfg_get("max_crops_per_frame", None)
-        limit = int(max_crops) if max_crops is not None else None
-        for idx, det in enumerate(detections):
-            if limit is not None and idx >= limit:
-                break
-            x1, y1, x2, y2 = det["bbox"]
-            x1, y1 = max(0, x1), max(0, y1)
-            x2 = min(crop_source.shape[1], x2)
-            y2 = min(crop_source.shape[0], y2)
-            cropped_img = crop_source[y1:y2, x1:x2]
-            crop_name = (
-                f"{bundle.detector_prefix}_{product}_{area}_"
-                f"{timestamp_text}_{det['class']}_{idx}.png"
-            )
-            crop_path = os.path.join(bundle.cropped_dir, crop_name)
-            self._img_queue.enqueue(crop_path, cropped_img, params)
-            cropped_paths.append(crop_path)
-        return cropped_paths
-
-    def _annotate_yolo_frame(
-        self,
-        frame: np.ndarray,
-        detections: List[Dict[str, Any]],
-        color_result: Dict[str, Any] | None,
-        status: str,
-    ) -> None:
-        status_text = str(status or "").upper()
-        if status_text:
-            status_color = (
-                0, 255, 0) if status_text == "PASS" else (
-                0, 0, 255)
-            self.image_utils.draw_label(
-                frame,
-                f"Result: {status_text}",
-                (10, 40),
-                status_color,
-                font_scale=1.1,
-                thickness=2,
-            )
-        if detections:
-            color_items: List[Dict[str, Any]] = []
-            try:
-                color_items = (color_result or {}).get("items", []) or []
-            except Exception:
-                color_items = []
-            fail_indices: List[int] = []
-            for idx, det in enumerate(detections):
-                self._draw_detection_box(frame, det)
-                if idx < len(color_items):
-                    item = color_items[idx]
-                    try:
-                        if not item.get("is_ok", True):
-                            fail_indices.append(idx)
-                    except Exception:
-                        pass
-            # if fail_indices:
-            #     self._draw_fail_indices(frame, fail_indices)
-        if color_result:
-            self._draw_color_summary(frame, color_result, origin_y=80)
-            self._highlight_color_failures(frame, detections, color_result)
-
-    def _draw_detection_box(self, frame: np.ndarray,
-                            detection: Dict[str, Any]) -> None:
-        x1, y1, x2, y2 = detection["bbox"]
-        label = f"{detection['class']} {detection['confidence']:.2f}"
-        color = colors(detection["class_id"], True)
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        self.image_utils.draw_label(frame, label, (x1, y1 - 10), color)
-
-    def _draw_fail_indices(
-            self,
-            frame: np.ndarray,
-            indices: List[int]) -> None:
-        try:
-            text = f"NG idx: {', '.join(str(i) for i in indices)}"
-            self.image_utils.draw_label(
-                frame, text, (10, 10), (0, 0, 255), font_scale=1.0, thickness=2
-            )
-        except Exception:
-            pass
-
-    def _highlight_color_failures(
-        self,
-        frame: np.ndarray,
-        detections: List[Dict[str, Any]],
-        color_result: Dict[str, Any] | None,
-    ) -> None:
-        try:
-            items = (color_result or {}).get("items", []) or []
-            for idx, det in enumerate(detections or []):
-                if idx >= len(items):
-                    continue
-                item = items[idx]
-                if not item.get("is_ok", True):
-                    color = (0, 0, 255)
-                    x1, y1, x2, y2 = det["bbox"]
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        except Exception:
-            pass
-
-    def _draw_color_summary(
-        self,
-        frame: np.ndarray,
-        color_result: Dict[str, Any],
-        origin_y: Optional[int] = None,
-    ) -> None:
-        try:
-            text_x = 10
-            text_y = origin_y if origin_y is not None else max(
-                50, frame.shape[0] - 120)
-            status = "PASS" if color_result.get("is_ok", False) else "FAIL"
-            color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
-            self.image_utils.draw_label(
-                frame,
-                f"Color: {status}",
-                (text_x, text_y),
-                color,
-                font_scale=1.0,
-                thickness=2,
-            )
-        except Exception:
-            pass
