@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""負責載入並驗證偵測流程與後端設定的配置管理器。"""
+
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path

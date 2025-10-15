@@ -1,3 +1,5 @@
+"""檢查偵測結果是否落在預期位置容許範圍內。"""
+
 from typing import Dict, List, Any
 import logging
 

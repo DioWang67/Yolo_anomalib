@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""以執行緒佇列非同步寫入影像，避免阻塞主流程。"""
+
 import queue
 import threading
 from dataclasses import dataclass

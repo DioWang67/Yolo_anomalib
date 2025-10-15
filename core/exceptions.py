@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""定義模型初始化、推論與結果儲存相關的例外階層。"""
+
 
 class ModelError(RuntimeError):
     """Base exception for model-related failures."""

@@ -1,3 +1,5 @@
+"""簡易工具，用來尋找程式碼中既定關鍵字所在行號。"""
+
 from pathlib import Path
 
 entries = {

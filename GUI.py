@@ -1,3 +1,5 @@
+"""以 PyQt5 實作的桌面介面，用於操作與監看檢測流程。"""
+
 import sys
 import os
 import json
@@ -235,6 +237,9 @@ class DetectionSystemGUI(QMainWindow):
         self.available_areas = {}
         self.current_result = None
         self.selected_image_path = None
+        self.use_camera_chk = None
+        self.reconnect_camera_btn = None
+        self.disconnect_camera_btn = None
         # Models base path and settings
         self._base_dir = os.path.abspath(os.path.dirname(__file__))
         self._config_path = os.path.join(self._base_dir, "config.yaml")
@@ -242,6 +247,7 @@ class DetectionSystemGUI(QMainWindow):
         self._settings = QSettings()
 
         self.init_ui()
+        self.update_camera_controls()
         self.init_system()
         self.load_available_models()
         # 快捷鍵
@@ -426,9 +432,21 @@ class DetectionSystemGUI(QMainWindow):
         # Camera/Image toggle
         try:
             self.use_camera_chk = QCheckBox("使用相機")
-            self.use_camera_chk.setChecked(True)
             self.use_camera_chk.toggled.connect(self.on_use_camera_toggled)
             button_layout.addWidget(self.use_camera_chk)
+        except Exception:
+            pass
+        try:
+            camera_btn_layout = QHBoxLayout()
+            self.reconnect_camera_btn = QPushButton("重新連線相機")
+            self.reconnect_camera_btn.clicked.connect(
+                self.handle_reconnect_camera)
+            camera_btn_layout.addWidget(self.reconnect_camera_btn)
+            self.disconnect_camera_btn = QPushButton("斷開相機")
+            self.disconnect_camera_btn.clicked.connect(
+                self.handle_disconnect_camera)
+            camera_btn_layout.addWidget(self.disconnect_camera_btn)
+            button_layout.addLayout(camera_btn_layout)
         except Exception:
             pass
 
@@ -564,9 +582,21 @@ class DetectionSystemGUI(QMainWindow):
             self.detection_system = DetectionSystem(
                 config_path=self._config_path)
             self.log_message("檢測系統初始化成功")
+            if (
+                getattr(self, "use_camera_chk", None)
+                and self.detection_system
+                and self.detection_system.is_camera_connected()
+            ):
+                self.use_camera_chk.setChecked(True)
         except Exception as e:
             self.log_message(f"檢測系統初始化失敗: {str(e)}")
             QMessageBox.critical(self, "系統錯誤", f"無法初始化偵測系統\n{str(e)}")
+
+        finally:
+            try:
+                self.update_camera_controls()
+            except Exception:
+                pass
 
     def load_available_models(self):
         """載入可用模型"""
@@ -660,6 +690,100 @@ class DetectionSystemGUI(QMainWindow):
             if types:
                 self.inference_combo.addItems(types)
 
+
+    def is_detection_running(self) -> bool:
+        """Return True if a detection worker is running."""
+        return bool(self.worker and self.worker.isRunning())
+
+    def update_camera_controls(self):
+        """Sync camera-related widgets with the current state."""
+        try:
+            running = self.is_detection_running()
+            detection_system = getattr(self, "detection_system", None)
+            camera_connected = bool(
+                detection_system and detection_system.is_camera_connected()
+            )
+            if getattr(self, "reconnect_camera_btn", None):
+                self.reconnect_camera_btn.setEnabled(
+                    not running
+                )
+            if getattr(self, "disconnect_camera_btn", None):
+                self.disconnect_camera_btn.setEnabled(
+                    camera_connected and not running
+                )
+            if getattr(self, "use_camera_chk", None):
+                if not camera_connected and self.use_camera_chk.isChecked():
+                    self.use_camera_chk.blockSignals(True)
+                    self.use_camera_chk.setChecked(False)
+                    self.use_camera_chk.blockSignals(False)
+                self.use_camera_chk.setEnabled(camera_connected and not running)
+            if not camera_connected:
+                if getattr(self, "pick_image_btn", None):
+                    self.pick_image_btn.setEnabled(True)
+                if getattr(self, "clear_image_btn", None):
+                    self.clear_image_btn.setEnabled(
+                        bool(getattr(self, "selected_image_path", None))
+                    )
+        except Exception:
+            pass
+
+    def handle_reconnect_camera(self):
+        """Manually reconnect the camera via detection system."""
+        if self.is_detection_running():
+            QMessageBox.warning(self, "無法操作", "檢測進行中，請先停止檢測")
+            return
+        if not self.detection_system:
+            self.init_system()
+            if not self.detection_system:
+                return
+        self.log_message("嘗試重新連線相機...")
+        try:
+            success = self.detection_system.reconnect_camera()
+        except Exception as e:
+            success = False
+            self.log_message(f"重新連線相機失敗: {e}")
+            QMessageBox.critical(self, "相機錯誤", f"重新連線相機失敗：\n{e}")
+        else:
+            if success:
+                self.log_message("相機已重新連線")
+                QMessageBox.information(self, "相機狀態", "相機已重新連線")
+                if getattr(self, "use_camera_chk", None):
+                    self.use_camera_chk.blockSignals(True)
+                    self.use_camera_chk.setChecked(True)
+                    self.use_camera_chk.blockSignals(False)
+                    self.on_use_camera_toggled(True)
+            else:
+                self.log_message("相機重新連線失敗")
+                QMessageBox.critical(
+                    self,
+                    "相機錯誤",
+                    "無法重新連線相機，請檢查硬體或連線狀態。",
+                )
+        self.update_camera_controls()
+
+    def handle_disconnect_camera(self):
+        """Allow user to disconnect the camera manually."""
+        if self.is_detection_running():
+            QMessageBox.warning(self, "無法操作", "檢測進行中，請先停止檢測")
+            return
+        if not self.detection_system:
+            QMessageBox.information(self, "相機狀態", "尚未初始化檢測系統。")
+            return
+        self.log_message("手動斷開相機...")
+        try:
+            self.detection_system.disconnect_camera()
+            self.log_message("相機已斷開")
+            QMessageBox.information(self, "相機狀態", "相機已手動斷開。")
+        except Exception as e:
+            self.log_message(f"相機斷開失敗: {e}")
+            QMessageBox.critical(self, "相機錯誤", f"斷開相機失敗：\n{e}")
+        if getattr(self, "use_camera_chk", None):
+            self.use_camera_chk.blockSignals(True)
+            self.use_camera_chk.setChecked(False)
+            self.use_camera_chk.blockSignals(False)
+            self.on_use_camera_toggled(False)
+        self.update_camera_controls()
+
     def update_start_enabled(self):
         """根據選擇是否完整，自動啟用/停用開始檢測按鈕"""
         try:
@@ -726,11 +850,13 @@ class DetectionSystemGUI(QMainWindow):
                 self.start_btn.setEnabled(True)
                 self.stop_btn.setEnabled(False)
                 self.status_widget.set_status("error")
+                self.update_camera_controls()
                 return
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.status_widget.set_status("running")
+        self.update_camera_controls()
 
         # 清空圖像
         self.original_image.clear()
@@ -764,6 +890,7 @@ class DetectionSystemGUI(QMainWindow):
                 self.start_btn.setEnabled(True)
                 self.stop_btn.setEnabled(False)
                 self.status_widget.set_status("idle")
+                self.update_camera_controls()
                 return
 
         self.worker = DetectionWorker(
@@ -786,6 +913,7 @@ class DetectionSystemGUI(QMainWindow):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.status_widget.set_status("idle")
+        self.update_camera_controls()
         self.log_message("檢測已取消")
 
     def on_detection_complete(self, result):
@@ -800,6 +928,7 @@ class DetectionSystemGUI(QMainWindow):
         self.stop_btn.setEnabled(False)
 
         self.save_btn.setEnabled(True)
+        self.update_camera_controls()
 
         # 根據結果設定狀態
 
@@ -911,6 +1040,7 @@ class DetectionSystemGUI(QMainWindow):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.status_widget.set_status("error")
+        self.update_camera_controls()
 
         self.log_message(f"檢測錯誤: {error_msg}")
         QMessageBox.critical(self, "檢測錯誤", f"檢測過程中發生錯誤\n{error_msg}")
@@ -969,50 +1099,63 @@ class DetectionSystemGUI(QMainWindow):
             if getattr(self, "clear_image_btn", None):
                 self.clear_image_btn.setEnabled(False)
             if getattr(self, "use_camera_chk", None):
-                self.use_camera_chk.setChecked(True)
+                camera_ready = bool(
+                    self.detection_system
+                    and self.detection_system.is_camera_connected()
+                )
+                if camera_ready:
+                    self.use_camera_chk.setChecked(True)
+                else:
+                    self.use_camera_chk.setChecked(False)
+            self.update_camera_controls()
         except Exception:
             pass
 
     def on_use_camera_toggled(self, checked):
         """切換 使用相機 / 使用影像 模式"""
         try:
+            if self.is_detection_running():
+                return
+            detection_system = getattr(self, "detection_system", None)
+            camera_ready = bool(
+                detection_system and detection_system.is_camera_connected()
+            )
             if checked:
-                # 簡易偵測相機可用性
-                ok = False
-                try:
-                    cap = cv2.VideoCapture(0)
-                    ok = cap is not None and cap.isOpened()
-                    if cap:
-                        cap.release()
-                except Exception:
-                    ok = False
-                if not ok:
+                if not camera_ready:
                     QMessageBox.warning(
-                        self, "相機不可用", "找不到可用相機，請改用選圖模式。"
+                        self, "相機不可用", "目前相機尚未連線，請先重新連線。"
                     )
-                    self.use_camera_chk.setChecked(False)
+                    if getattr(self, "use_camera_chk", None):
+                        self.use_camera_chk.blockSignals(True)
+                        self.use_camera_chk.setChecked(False)
+                        self.use_camera_chk.blockSignals(False)
+                    self.log_message("切換相機模式失敗：相機未連線")
                     return
-                # 使用相機 → 停用清除鈕與選圖鈕
                 self.selected_image_path = None
                 if getattr(self, "pick_image_btn", None):
                     self.pick_image_btn.setEnabled(False)
                 if getattr(self, "clear_image_btn", None):
                     self.clear_image_btn.setEnabled(False)
                 if getattr(self, "image_path_label", None):
-                    self.image_path_label.setText("使用相機輸入（可切換選圖）")
+                    self.image_path_label.setText("使用相機輸入（檢測時自動拍攝）")
             else:
-                # 使用影像 → 啟用選圖鈕
                 if getattr(self, "pick_image_btn", None):
                     self.pick_image_btn.setEnabled(True)
                 if getattr(self, "clear_image_btn", None):
                     self.clear_image_btn.setEnabled(
-                        bool(self.selected_image_path))
+                        bool(self.selected_image_path)
+                    )
                 if not self.selected_image_path and getattr(
                     self, "image_path_label", None
                 ):
-                    self.image_path_label.setText("請選擇影像（或切回相機）")
+                    self.image_path_label.setText("請選擇影像或重新連線相機")
         except Exception:
             pass
+        finally:
+            try:
+                self.update_camera_controls()
+            except Exception:
+                pass
 
     def open_config(self):
         """開啟設定檔"""

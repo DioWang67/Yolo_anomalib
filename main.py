@@ -1,3 +1,5 @@
+"""程式命令列進入點，可直接執行推論或啟動互動模式。"""
+
 import sys
 import logging
 

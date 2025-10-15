@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+"""高階 YOLO 推論封裝，提供快取、前處理與驗證工具。"""
 
 import os
 import time

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""將不同推論後端的輸出格式化，供後續流程共用。"""
+
 from typing import Any, Dict
 import numpy as np
 
@@ -58,16 +60,3 @@ def normalize_result(
     return out
 
 
-"""
-Result adapter to normalize backend-specific outputs.
-
-All downstream steps/sinks expect the following keys:
-- status: 'PASS' | 'FAIL' | 'ERROR'
-- detections: list of dicts
-- missing_items: list of str
-- processed_image: np.ndarray (BGR)
-- anomaly_score: float | None
-- output_path: path to heatmap/overlay (anomalib-like) or ''
-- ckpt_path: model checkpoint path or ''
-- inference_type: backend key
-"""
