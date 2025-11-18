@@ -3,6 +3,9 @@ import numpy as np
 import cv2
 import time
 import os
+import logging
+
+_camera_logger = logging.getLogger("camera.mvs")
 
 
 class MVSCamera:
@@ -368,16 +371,30 @@ class MVSCamera:
         return {"current": stParam.fCurValue, "max": stParam.fMax, "min": stParam.fMin}
 
     def enum_devices(self):
+        transport_mask = MV_GIGE_DEVICE | MV_USB_DEVICE
+        _camera_logger.info(
+            "Enumerating Hikrobot devices (transport_mask=0x%x)", transport_mask
+        )
         ret = MvCamera.MV_CC_EnumDevices(
-            MV_GIGE_DEVICE | MV_USB_DEVICE, self.deviceList
+            transport_mask, self.deviceList
         )
         if ret != 0:
-            print("列舉設備失敗! ret[0x%x]" % ret)
+            print("枚举设备失败! ret[0x%x]" % ret)
+            _camera_logger.error(
+                "MV_CC_EnumDevices failed (ret=0x%x). Verify camera connection, driver service, and power.",
+                ret,
+            )
             return False
         if self.deviceList.nDeviceNum == 0:
-            print("找不到設備!")
+            print("没有找到任何设备")
+            _camera_logger.warning(
+                "MV_CC_EnumDevices succeeded but returned zero devices. Check cables, hubs, and whether another app is using the camera."
+            )
             return False
-        print(f"找到 {self.deviceList.nDeviceNum} 台設備!")
+        print(f"找到 {self.deviceList.nDeviceNum} 台设备")
+        _camera_logger.info(
+            "EnumDevices discovered %d device(s).", self.deviceList.nDeviceNum
+        )
         return True
 
     def close(self):

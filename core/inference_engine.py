@@ -13,7 +13,7 @@ try:
     from core.anomalib_inference_model import AnomalibInferenceModel
 except Exception:  # pragma: no cover
     AnomalibInferenceModel = None  # type: ignore
-from core.logger import DetectionLogger
+from core.logging_config import DetectionLogger
 from core.config import DetectionConfig
 
 

@@ -1,0 +1,65 @@
+weights: "D:/Git/robotlearning/yolo11_inference/models/PCBA3/A/yolo/best.pt"
+device: "cpu"
+conf_thres: 0.4
+iou_thres: 0.45
+imgsz: [640, 640]
+timeout: 1
+current_product: "PCBA3"
+enable_yolo: true
+output_dir: Result
+
+expected_items:
+  PCBA3:
+    A:
+      - C22B
+      - J5-1
+      - J5-2
+      - J6
+      - J7
+
+
+position_config:
+  PCBA3:
+    A:
+      # 是否啟用位置檢查
+      enabled: true
+      
+      # 檢測模式 (bbox: 邊界框模式)
+      mode: bbox
+      
+      # 容差值（預設為百分比，如需像素值請設定 tolerance_unit: pixel）
+      tolerance: 10.0  # 表示圖像尺寸的 5%
+      
+      # 容差單位: "percent" 或 "pixel"
+      tolerance_unit: percent
+      
+      # 圖像尺寸（如果不設定，會從全域配置取得）
+      imgsz: 640
+      expected_boxes:
+        J5-1:
+          x1: 442
+          y1: 244
+          x2: 557
+          y2: 352
+        J5-2:
+          x1: 170
+          y1: 248
+          x2: 285
+          y2: 351
+        C22B:
+          x1: 365
+          y1: 264
+          x2: 414
+          y2: 337
+        J7:
+          x1: 367
+          y1: 333
+          x2: 500
+          y2: 428
+        J6:
+          x1: 243
+          y1: 352
+          x2: 357
+          y2: 430
+      imgsz: 640
+

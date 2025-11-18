@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from core.logger import DetectionLogger, configure_logging, get_logger, reset_logging
+from core.logging_config import DetectionLogger, configure_logging, get_logger, reset_logging
 
 
 @pytest.fixture(autouse=True)

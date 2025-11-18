@@ -5,7 +5,7 @@ import logging
 
 from core.detection_system import DetectionSystem
 from app.cli import run_cli
-from core.logger import configure_logging
+from core.logging_config import configure_logging
 import argparse
 import os
 
