@@ -69,6 +69,8 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         color_threshold_overrides: Optional[Dict[str, float]] = None
         color_rules_overrides: Optional[Dict[str,
                                              Dict[str, Optional[float]]]] = None
+        color_checker_type: Optional[str] = "led_qc"
+        color_score_threshold: Optional[float] = None
         output_dir: Optional[str] = "Result"
         anomalib_config: Optional[Dict[str, Any]] = None
         position_config: Dict[str, Dict[str, Dict[str, Any]]] = Field(
@@ -137,6 +139,8 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         enable_anomalib: Optional[bool] = None
         enable_color_check: Optional[bool] = None
         color_model_path: Optional[str] = None
+        color_checker_type: Optional[str] = None
+        color_score_threshold: Optional[float] = None
         expected_items: Optional[Dict[str, Dict[str, List[str]]]] = None
         position_config: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None
         anomalib_config: Optional[Dict[str, Any]] = None

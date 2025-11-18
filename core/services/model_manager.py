@@ -6,7 +6,7 @@ import copy
 import yaml  # type: ignore[import]
 
 from core.config import DetectionConfig
-from core.logger import DetectionLogger
+from core.logging_config import DetectionLogger
 from core.inference_engine import InferenceEngine
 from core.path_utils import project_root, resolve_path
 from core.config_validation import validate_model_cfg
@@ -98,6 +98,17 @@ class ModelManager:
         base_config.color_rules_overrides = cfg.get(
             "color_rules_overrides", getattr(
                 base_config, "color_rules_overrides", None))
+        base_config.color_checker_type = str(
+            cfg.get(
+                "color_checker_type",
+                getattr(base_config, "color_checker_type", "led_qc"),
+            )
+            or "led_qc"
+        )
+        base_config.color_score_threshold = cfg.get(
+            "color_score_threshold",
+            getattr(base_config, "color_score_threshold", None),
+        )
         # optional custom backends config (name -> {class_path, enabled, ...})
         base_config.backends = cfg.get(
             "backends", getattr(base_config, "backends", None)

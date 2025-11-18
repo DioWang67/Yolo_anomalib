@@ -7,7 +7,7 @@ import cv2
 
 from core.anomalib_lightning_inference import lightning_inference
 from core.config import DetectionConfig
-from core.logger import DetectionLogger
+from core.logging_config import DetectionLogger
 from core.services.results.handler import ResultHandler
 from core.utils import ImageUtils
 

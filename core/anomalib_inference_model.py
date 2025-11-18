@@ -7,7 +7,7 @@ from core.base_model import BaseInferenceModel
 
 from core.anomalib_lightning_inference import initialize, lightning_inference
 from core.utils import ImageUtils
-from core.logger import DetectionLogger
+from core.logging_config import DetectionLogger
 
 
 class AnomalibInferenceModel(BaseInferenceModel):

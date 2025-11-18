@@ -1,6 +1,6 @@
 weights: "models/LED/A/yolo/LED_color_mixing_best.pt"
-exposure_time: "20000"  # 20000 LED:200
-gain: "0.0" #15
+exposure_time: "51170.0000"  # 20000 LED:200
+gain: "23.0" #15
 MV_CC_GetImageBuffer_nMsec: 10000
 timeout: 1
 width: 3072

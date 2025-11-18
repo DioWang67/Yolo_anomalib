@@ -1,5 +1,5 @@
 # core/base_model.py
-from core.logger import DetectionLogger
+from core.logging_config import DetectionLogger
 import torch
 
 

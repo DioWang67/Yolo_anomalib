@@ -1,74 +1,141 @@
-"""檢查偵測結果是否落在預期位置容許範圍內。"""
+"""Position validation utilities for YOLO detections."""
 
-from typing import Dict, List, Any
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional, Tuple
 import logging
+
+logger = logging.getLogger(__name__)
 
 
 class PositionValidator:
-    def __init__(self, config, product: str, area: str):
+    """Validate whether detection centers stay within the expected tolerance."""
+
+    def __init__(self, config, product: str, area: str) -> None:
         self.config = config
         self.product = product
         self.area = area
         self.pos_config = self.config.get_position_config(product, area) or {}
-        self.expected_boxes = self.pos_config.get("expected_boxes", {})
+        self.expected_boxes: Dict[str, Dict[str, float]] = self.pos_config.get(
+            "expected_boxes", {}
+        )
+        self.mode = str(self.pos_config.get("mode", "bbox")).lower()
 
-    def validate(
-        self, detections: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        self.imgsz = self._get_image_size()
+        self.tolerance_px = self._calculate_tolerance_px()
+        self._validate_config()
+        self.expected_centers = self._precompute_expected_centers()
+
+    # ------------------------------------------------------------------
+    # Configuration helpers
+    # ------------------------------------------------------------------
+    def _get_image_size(self) -> int:
+        area_imgsz = self.pos_config.get("imgsz")
+        if area_imgsz:
+            return int(area_imgsz if isinstance(area_imgsz, (int, float)) else area_imgsz[0])
+
+        global_imgsz = getattr(self.config, "imgsz", None)
+        if global_imgsz:
+            return int(global_imgsz if isinstance(global_imgsz, (int, float)) else global_imgsz[0])
+
+        logger.warning("imgsz missing in position config; fallback to 640")
+        return 640
+
+    def _calculate_tolerance_px(self) -> float:
+        tolerance = float(self.pos_config.get("tolerance", 0.0))
+        tolerance_unit = str(self.pos_config.get("tolerance_unit", "percent")).lower()
+        if tolerance_unit == "pixel":
+            return tolerance
+        return self.imgsz * (tolerance / 100.0)
+
+    def _validate_config(self) -> None:
+        for class_name, box in self.expected_boxes.items():
+            missing = [key for key in ("x1", "y1", "x2", "y2") if key not in box]
+            if missing:
+                logger.error("Expected box for %s is missing keys: %s", class_name, missing)
+                continue
+
+            x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
+            if x1 >= x2 or y1 >= y2:
+                logger.error(
+                    "Invalid box for %s: x1>=x2 or y1>=y2 (x1=%s, x2=%s, y1=%s, y2=%s)",
+                    class_name,
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                )
+            if x1 < 0 or y1 < 0 or x2 > self.imgsz or y2 > self.imgsz:
+                logger.warning(
+                    "Expected box for %s is outside image size %s: (%s, %s, %s, %s)",
+                    class_name,
+                    self.imgsz,
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                )
+
+    def _precompute_expected_centers(self) -> Dict[str, Tuple[float, float]]:
+        centers: Dict[str, Tuple[float, float]] = {}
+        for class_name, box in self.expected_boxes.items():
+            try:
+                cx = (float(box["x1"]) + float(box["x2"])) / 2.0
+                cy = (float(box["y1"]) + float(box["y2"])) / 2.0
+                centers[class_name] = (cx, cy)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Failed to compute expected center for %s: %s", class_name, exc)
+        return centers
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def validate(self, detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Annotate detections with position meta-data."""
         for det in detections:
             if "cx" not in det or "cy" not in det:
-                det["position_status"] = "UNKNOWN"
+                self._mark_unknown(det, reason="missing center coordinates")
                 continue
-            status = self.is_position_correct(
-                det.get("class"), float(
-                    det.get("cx", 0.0)), float(det.get("cy", 0.0))
-            )
+
+            try:
+                cx = float(det["cx"])
+                cy = float(det["cy"])
+            except (TypeError, ValueError):
+                self._mark_error(det, reason="invalid center values", payload=det)
+                continue
+
+            if not self._is_valid_coordinate(cx, cy):
+                self._mark_invalid(det, cx, cy)
+                continue
+
+            class_name = det.get("class", "")
+            (
+                status,
+                error_distance,
+                offset,
+                expected_center,
+                edge_distance,
+            ) = self._check_position(class_name, cx, cy)
+
             det["position_status"] = status
-        return detections
-
-    def is_position_correct(
-        self, class_name: str, cx: float, cy: float
-    ) -> str:
-        box = self.expected_boxes.get(class_name)
-        if not box:
-            return "UNEXPECTED"
-
-        imgsz = self.config.imgsz[0]
-        tolerance_ratio = self.config.get_tolerance_ratio(
-            self.product, self.area)
-        tolerance_px = imgsz * tolerance_ratio
-
-        x1, y1 = box["x1"] - tolerance_px, box["y1"] - tolerance_px
-        x2, y2 = box["x2"] + tolerance_px, box["y2"] + tolerance_px
-
-        dx = min(abs(cx - x1), abs(cx - x2)) if cx < x1 or cx > x2 else 0
-        dy = min(abs(cy - y1), abs(cy - y2)) if cy < y1 or cy > y2 else 0
-
-        if dx == 0 and dy == 0:
-            return "CORRECT"
-        try:
-            logging.getLogger(__name__).debug(
-                (
-                    "Position error: class=%s, dx=%.1f, dy=%.1f, tol_px=%.1f, "
-                    "x=[%.1f,%.1f], y=[%.1f,%.1f], center=(%.1f,%.1f)"
-                ),
-                class_name,
-                dx,
-                dy,
-                tolerance_px,
-                x1,
-                x2,
-                y1,
-                y2,
-                cx,
-                cy,
+            det["position_error"] = error_distance
+            det["position_offset"] = {"dx": offset[0], "dy": offset[1]}
+            det["position_expected_center"] = (
+                {"cx": expected_center[0], "cy": expected_center[1]}
+                if expected_center
+                else None
             )
-        except Exception:
-            pass
-        return "WRONG"
+            det["position_edge_distance"] = edge_distance
+        return detections
 
     def has_wrong_position(self, detections: List[Dict[str, Any]]) -> bool:
         return any(det.get("position_status") == "WRONG" for det in detections)
+
+    def has_unexpected_position(self, detections: List[Dict[str, Any]]) -> bool:
+        return any(det.get("position_status") == "UNEXPECTED" for det in detections)
+
+    def get_position_errors(self, detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [det for det in detections if det.get("position_status") in {"WRONG", "UNEXPECTED"}]
 
     def evaluate_status(
         self, detections: List[Dict[str, Any]], missing_items: List[str]
@@ -80,3 +147,142 @@ class PositionValidator:
             if missing_items:
                 return "FAIL"
         return "PASS"
+
+    def get_summary(self, detections: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return {
+            "total": len(detections),
+            "correct": sum(1 for d in detections if d.get("position_status") == "CORRECT"),
+            "wrong": sum(1 for d in detections if d.get("position_status") == "WRONG"),
+            "unexpected": sum(1 for d in detections if d.get("position_status") == "UNEXPECTED"),
+            "unknown": sum(1 for d in detections if d.get("position_status") == "UNKNOWN"),
+            "tolerance_px": self.tolerance_px,
+            "imgsz": self.imgsz,
+        }
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _mark_unknown(self, det: Dict[str, Any], *, reason: str) -> None:
+        det["position_status"] = "UNKNOWN"
+        det["position_error"] = None
+        det["position_offset"] = None
+        det["position_expected_center"] = None
+        det["position_edge_distance"] = None
+        logger.warning("Position check skipped (%s): %s", reason, det)
+
+    def _mark_invalid(self, det: Dict[str, Any], cx: float, cy: float) -> None:
+        det["position_status"] = "INVALID"
+        det["position_error"] = None
+        det["position_offset"] = None
+        det["position_expected_center"] = None
+        det["position_edge_distance"] = None
+        logger.warning(
+            "Detection out of image bounds: class=%s, cx=%.2f, cy=%.2f, size=%s",
+            det.get("class", ""),
+            cx,
+            cy,
+            self.imgsz,
+        )
+
+    def _mark_error(self, det: Dict[str, Any], *, reason: str, payload: Any) -> None:
+        det["position_status"] = "ERROR"
+        det["position_error"] = None
+        det["position_offset"] = None
+        det["position_expected_center"] = None
+        det["position_edge_distance"] = None
+        logger.error("Position validation failed (%s): %s", reason, payload)
+
+    def _is_valid_coordinate(self, cx: float, cy: float) -> bool:
+        return 0 <= cx <= self.imgsz and 0 <= cy <= self.imgsz
+
+    def _check_position(
+        self, class_name: str, cx: float, cy: float
+    ) -> Tuple[str, Optional[float], Tuple[float, float], Optional[Tuple[float, float]], float]:
+        box = self.expected_boxes.get(class_name)
+        if not box:
+            return "UNEXPECTED", None, (0.0, 0.0), None, 0.0
+
+        error_distance, dx, dy, expected_center, edge_distance = self._compute_position_error(
+            class_name, cx, cy, box
+        )
+
+        if error_distance <= self.tolerance_px:
+            status = "CORRECT"
+        else:
+            status = "WRONG"
+            logger.debug(
+                "Position mismatch: class=%s, center=(%.1f, %.1f), expected=%s, offset=(%.1f, %.1f), "
+                "distance=%.1fpx, tolerance=%.1fpx, mode=%s",
+                class_name,
+                cx,
+                cy,
+                expected_center,
+                dx,
+                dy,
+                error_distance,
+                self.tolerance_px,
+                self.mode,
+            )
+
+        return status, error_distance, (dx, dy), expected_center, edge_distance
+
+    @staticmethod
+    def _point_to_rect_distance(
+        px: float,
+        py: float,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+    ) -> float:
+        if px < x1:
+            dx = x1 - px
+        elif px > x2:
+            dx = px - x2
+        else:
+            dx = 0.0
+
+        if py < y1:
+            dy = y1 - py
+        elif py > y2:
+            dy = py - y2
+        else:
+            dy = 0.0
+
+        return (dx ** 2 + dy ** 2) ** 0.5
+
+    def _compute_position_error(
+        self,
+        class_name: str,
+        cx: float,
+        cy: float,
+        box: Dict[str, Any],
+    ) -> Tuple[float, float, float, Optional[Tuple[float, float]], float]:
+        edge_distance = self._point_to_rect_distance(
+            cx,
+            cy,
+            float(box["x1"]),
+            float(box["y1"]),
+            float(box["x2"]),
+            float(box["y2"]),
+        )
+
+        expected_center = self.expected_centers.get(class_name)
+        dx = dy = 0.0
+        if expected_center:
+            dx = cx - expected_center[0]
+            dy = cy - expected_center[1]
+
+        if self.mode in {"region", "bbox_region"}:
+            return edge_distance, dx, dy, expected_center, edge_distance
+
+        if expected_center is None:
+            return edge_distance, dx, dy, expected_center, edge_distance
+
+        axial_error = max(abs(dx), abs(dy))
+        if edge_distance > 0:
+            error = max(axial_error, edge_distance)
+        else:
+            error = axial_error
+
+        return error, dx, dy, expected_center, edge_distance

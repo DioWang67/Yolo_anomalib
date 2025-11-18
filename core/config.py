@@ -135,6 +135,8 @@ class DetectionConfig:
     # { ColorName: { s_p90_max, s_p10_min, v_p50_min, v_p95_max } }
     color_rules_overrides: Optional[Dict[str,
                                          Dict[str, Optional[float]]]] = None
+    color_checker_type: str = "led_qc"
+    color_score_threshold: Optional[float] = None
     output_dir: str = "Result"
     anomalib_config: Optional[Dict[str, Any]] = None
     position_config: Dict[str, Dict[str, Dict[str, Any]]
@@ -250,6 +252,8 @@ class DetectionConfig:
                 "color_threshold_overrides"
             ),
             "color_rules_overrides": normalized.get("color_rules_overrides"),
+            "color_checker_type": str(normalized.get("color_checker_type") or "led_qc"),
+            "color_score_threshold": normalized.get("color_score_threshold"),
             "output_dir": str(normalized.get("output_dir", "Result")),
             "anomalib_config": normalized.get("anomalib_config"),
             "position_config": dict(normalized.get("position_config", {})),

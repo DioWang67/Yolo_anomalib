@@ -198,3 +198,11 @@ pytest tests/test_pipeline_registry.py
 ## 授權
 本專案屬於內部檢測系統，僅供授權人員使用，未經許可請勿散佈或公開程式碼與模型。
 
+
+## PyInstaller �� GUI.exe
+- uild_exe.bat �w�Ƭ��X PyInstaller ���O�աA�ж� SOURCE_PATH/ENV_PYTHON �n���B��A�κN python -m PyInstaller GUI.py �۰ʳ]�w�C
+- MvImport/MvCameraControl.dll �o�{�w�[�J build�Aexe �}�Ҧb _MEIPASS ��q�ɥΪ��T�u�|���O Windows DLL search�C
+- models/ �Ȧs�ɮס]YOLO .pt�Banomalib ckpt/data�^�w�� add-data�A���ӱK exec �b offline �}�Ҥ��|���o�Ҧ������ؿ�C
+- PyInstaller ���� --hidden-import anomalib --collect-submodules anomalib.models --collect-data anomalib�A�[�k��� core/anomalib_lightning_inference.py �s������ import_module hook����ܪ��{���Ӷi�H�b exe �� load Patchcore/Padim/STFPM ���Ԥ��C
+- �� uild_exe.bat �ᵲ�G exe/log/build/spec �� D:\Git\robotlearning\build_exe�A�{} GUI.exe �}�ҤU���T�{ config.yaml/models �O�_�ڪ��ҷ��C
+

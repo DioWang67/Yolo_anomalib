@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import cv2
 import numpy as np
 
-from core.logger import DetectionLogger
+from core.logging_config import DetectionLogger
 from core.utils import ImageUtils, DetectionResults
 from core.exceptions import (
     ResultExcelWriteError,

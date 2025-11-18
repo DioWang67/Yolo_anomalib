@@ -3,9 +3,57 @@ from typing import Any, Dict, Optional, Tuple, Type, cast
 import cv2
 import numpy as np
 import warnings
+# imgaug (pulled in by anomalib) still expects np.sctypes, which was removed in NumPy 2.x.
+# Shim the attr early so anomalib/imgaug can import when the exe bundles NumPy 2.
+if not hasattr(np, "sctypes"):  # pragma: no cover - exercised only on NumPy>=2
+    _float_types = [t for t in (getattr(np, name, None) for name in (
+        "half",
+        "single",
+        "double",
+        "longdouble",
+    )) if t is not None]
+    _complex_types = [t for t in (getattr(np, name, None) for name in (
+        "csingle",
+        "cdouble",
+        "clongdouble",
+    )) if t is not None]
+    _int_types = [t for t in (getattr(np, name, None) for name in (
+        "byte",
+        "short",
+        "intc",
+        "int_",
+        "longlong",
+    )) if t is not None]
+    _uint_types = [t for t in (getattr(np, name, None) for name in (
+        "ubyte",
+        "ushort",
+        "uintc",
+        "uint",
+        "ulonglong",
+    )) if t is not None]
+    _other_types = [
+        t
+        for t in (
+            getattr(np, name, None)
+            for name in (
+                "bool_",
+                "bytes_",
+                "str_",
+                "void",
+                "datetime64",
+                "timedelta64",
+            )
+        )
+        if t is not None
+    ]
+    np.sctypes = {  # type: ignore[attr-defined]
+        "int": _int_types,
+        "uint": _uint_types,
+        "float": _float_types,
+        "complex": _complex_types,
+        "others": _other_types,
+    }
 from jsonargparse import Namespace
-from lightning.pytorch.cli import LightningArgumentParser
-from lightning.pytorch.callbacks import Callback
 from torch.utils.data import DataLoader
 from anomalib.data import PredictDataset
 from anomalib.engine import Engine
@@ -17,6 +65,29 @@ import threading
 import time
 import logging
 from datetime import datetime
+# ---- Anomalib / jsonargparse 依賴檢查與強制載入 ----
+import jsonargparse
+
+logger = logging.getLogger("anomalib")
+
+try:
+    # 強制載入 signatures extra，讓 PyInstaller 確定收這個子模組
+    import jsonargparse.signatures  # type: ignore  # noqa: F401
+
+    logger.info(
+        "jsonargparse loaded OK (version=%s, file=%s)",
+        getattr(jsonargparse, "__version__", "N/A"),
+        getattr(jsonargparse, "__file__", "N/A"),
+    )
+except Exception as e:  # pragma: no cover - 只用來在 exe 裡除錯
+    logger.error(
+        "Failed to import jsonargparse.signatures: %s (version=%s, file=%s)",
+        e,
+        getattr(jsonargparse, "__version__", "N/A"),
+        getattr(jsonargparse, "__file__", "N/A"),
+    )
+# ---- end jsonargparse check ----
+
 
 logging.getLogger("anomalib").setLevel(logging.INFO)
 logging.getLogger("lightning").setLevel(logging.ERROR)
@@ -78,25 +149,8 @@ def initialize(
             logging.getLogger("anomalib").info(
                 f"Initializing Anomalib model (product: {product}, area: {area})"
             )
-            parser = LightningArgumentParser(
-                description="Inference on Anomaly models in Lightning format."
-            )
-            parser.add_lightning_class_args(
-                AnomalyModule, "model", subclass_mode=True
-            )
-            parser.add_lightning_class_args(
-                Callback, "--callbacks", subclass_mode=True, required=False
-            )
-            parser.add_argument(
-                "--ckpt_path", type=str, required=True, help="Path to model weights."
-            )
-            parser.add_argument(
-                "--output", type=str, required=False, default="./patchcore_outputs"
-            )
-            parser.add_class_arguments(
-                PredictDataset, "--data", instantiate=False
-            )
 
+            # Build the minimal namespace manually to avoid Lightning CLI's optional dependency on jsonargparse[signatures].
             args = Namespace()
             args.output = str(config.get("output", "./patchcore_outputs"))
             args.data = config.get("data", {}) or {}

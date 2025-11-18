@@ -1,0 +1,53 @@
+weights: D:\Git\robotlearning\Yolo11_auto_train\runs\detect\train\weights\best.pt
+device: cpu
+conf_thres: 0.4
+iou_thres: 0.45
+imgsz:
+- 640
+- 640
+timeout: 1
+enable_yolo: true
+output_dir: Result
+current_product: PCBA3
+current_area: A
+expected_items:
+  PCBA3:
+    A:
+    - C22B
+    - J5-1
+    - J5-2
+    - J6
+    - J7
+position_config:
+  PCBA3:
+    A:
+      enabled: true
+      mode: bbox
+      tolerance: 5.0
+      expected_boxes:
+        C22B:
+          x1: 339
+          y1: 299
+          x2: 387
+          y2: 375
+        J5-2:
+          x1: 155
+          y1: 277
+          x2: 261
+          y2: 381
+        J7:
+          x1: 335
+          y1: 369
+          x2: 471
+          y2: 468
+        J6:
+          x1: 212
+          y1: 385
+          x2: 329
+          y2: 465
+        J5-1:
+          x1: 414
+          y1: 281
+          x2: 531
+          y2: 393
+      imgsz: 640

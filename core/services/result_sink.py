@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Dict, Any
 
 from core.services.results.handler import ResultHandler
-from core.logger import DetectionLogger
+from core.logging_config import DetectionLogger
 
 
 class ResultSink:

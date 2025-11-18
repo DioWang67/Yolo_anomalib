@@ -17,7 +17,7 @@ from core.services.model_manager import ModelManager
 import numpy as np
 
 from core.config import DetectionConfig
-from core.logger import DetectionLogger
+from core.logging_config import DetectionLogger
 from core.inference_engine import InferenceEngine
 from camera.camera_controller import CameraController
 from core.services.color_checker import ColorCheckerService
@@ -245,12 +245,19 @@ class DetectionSystem:
                                     rules_over = crov
                     except Exception:
                         pass
+                    checker_type = getattr(
+                        self.config, "color_checker_type", "led_qc") or "led_qc"
+                    default_threshold = getattr(
+                        self.config, "color_score_threshold", None)
                     self.color_service.ensure_loaded(
                         self.config.color_model_path,
                         overrides=overrides,
                         rules_overrides=rules_over,
+                        checker_type=checker_type,
+                        default_threshold=default_threshold,
                     )
-                    run_logger.info("Color checker loaded (LEDQCEnhanced)")
+                    run_logger.info(
+                        f"Color checker loaded ({checker_type})")
                 except Exception as e:
                     run_logger.error(f"Color checker init failed: {str(e)}")
 

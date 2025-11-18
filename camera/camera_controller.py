@@ -4,7 +4,7 @@
 import cv2
 import numpy as np
 from typing import Optional
-from core.logger import DetectionLogger
+from core.logging_config import DetectionLogger
 from core.config import DetectionConfig
 from camera.MVS_camera_control import MVSCamera
 

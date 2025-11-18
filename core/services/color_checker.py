@@ -8,6 +8,7 @@ import numpy as np
 
 from core.led_qc_enhanced import LEDQCEnhanced
 from core.models import ColorCheckItemResult, ColorCheckResult
+from core.stats_color_checker import StatsColorChecker
 
 
 class ColorCheckerService:
@@ -19,8 +20,9 @@ class ColorCheckerService:
     """
 
     def __init__(self) -> None:
-        self._checker: Optional[LEDQCEnhanced] = None
+        self._checker: Optional[Any] = None
         self._model_path: Optional[str] = None
+        self._checker_type: str = "led_qc"
 
     def ensure_loaded(
         self,
@@ -28,11 +30,49 @@ class ColorCheckerService:
         overrides: Optional[Dict[str, float]] = None,
         rules_overrides: Optional[Dict[str,
                                        Dict[str, Optional[float]]]] = None,
+        checker_type: str = "led_qc",
+        default_threshold: Optional[float] = None,
     ) -> None:
         """Load/Reload the color model if needed and apply overrides if provided."""
-        if self._checker is None or self._model_path != model_path:
+        checker_type = (checker_type or "led_qc").lower()
+        need_reload = (
+            self._checker is None
+            or self._model_path != model_path
+            or self._checker_type != checker_type
+        )
+        if need_reload and checker_type == "stats":
+            self._checker = StatsColorChecker.from_json(
+                model_path,
+                default_threshold=default_threshold or None,
+                color_thresholds=overrides,
+            )
+            if default_threshold is not None:
+                try:
+                    self._checker.set_default_threshold(default_threshold)
+                except Exception:
+                    pass
+            self._checker_type = checker_type
+            self._model_path = model_path
+            overrides = None  # already applied during creation
+            rules_overrides = None
+        elif need_reload:
             self._checker = LEDQCEnhanced.from_json(model_path)
             self._model_path = model_path
+            self._checker_type = checker_type
+
+        if checker_type == "stats":
+            if default_threshold is not None:
+                try:
+                    self._checker.set_default_threshold(default_threshold)
+                except Exception:
+                    pass
+            if overrides:
+                try:
+                    self._checker.apply_threshold_overrides(overrides)
+                except Exception:
+                    pass
+            return
+
         # Apply threshold overrides (case-insensitive) if provided
         if overrides:
             try:
