@@ -9,6 +9,7 @@ Responsibilities:
 Public entrypoint: DetectionSystem.detect(product, area, inference_type, frame=None)
 """
 
+from typing import Any, Dict, Tuple
 import os
 import shutil
 from pathlib import Path
@@ -65,6 +66,7 @@ class DetectionSystem:
             self.logger, max_cache_size=self.config.max_cache_size
         )
         self.color_service = ColorCheckerService()
+        self._color_override_cache: Dict[str, Dict[str, Any]] = {}
         self.initialize_camera()
 
     def _resolve_output_dir(self) -> Path:
@@ -121,6 +123,78 @@ class DetectionSystem:
                 "Camera disabled; using dummy image for detection"
             )
             self.camera = None
+
+    def _load_color_override_bundle(
+        self, product: str, area: str, inference_type: str
+    ) -> Tuple[
+        Dict[str, float] | None, Dict[str, Dict[str, Any]] | None
+    ]:
+        overrides = getattr(self.config, "color_threshold_overrides", None)
+        rules_over = getattr(self.config, "color_rules_overrides", None)
+        cfg_path = (
+            PROJECT_ROOT
+            / "models"
+            / product
+            / area
+            / inference_type
+            / "config.yaml"
+        )
+        cache_key = str(cfg_path)
+        try:
+            stat = cfg_path.stat()
+        except FileNotFoundError:
+            self._color_override_cache.pop(cache_key, None)
+            return overrides, rules_over
+
+        cached = self._color_override_cache.get(cache_key)
+        if cached and cached.get("mtime") == stat.st_mtime:
+            cached_overrides = cached.get("overrides")
+            cached_rules = cached.get("rules")
+            return (
+                cached_overrides if cached_overrides is not None else overrides,
+                cached_rules if cached_rules is not None else rules_over,
+            )
+
+        try:
+            import yaml as _yaml  # type: ignore
+        except Exception:
+            return overrides, rules_over
+
+        try:
+            with cfg_path.open("r", encoding="utf-8") as handle:
+                model_cfg = _yaml.safe_load(handle) or {}
+        except Exception as exc:
+            self.logger.logger.warning(
+                "Failed to reload color overrides from %s: %s",
+                cfg_path,
+                exc,
+            )
+            return overrides, rules_over
+
+        disk_overrides = model_cfg.get("color_threshold_overrides")
+        if not isinstance(disk_overrides, dict) or not disk_overrides:
+            disk_overrides = None
+        disk_rules = model_cfg.get("color_rules_overrides")
+        if not isinstance(disk_rules, dict) or not disk_rules:
+            disk_rules = None
+
+        self._color_override_cache[cache_key] = {
+            "mtime": stat.st_mtime,
+            "overrides": disk_overrides,
+            "rules": disk_rules,
+        }
+        if len(self._color_override_cache) > 32:
+            try:
+                first_key = next(iter(self._color_override_cache.keys()))
+                if first_key != cache_key:
+                    self._color_override_cache.pop(first_key, None)
+            except StopIteration:
+                pass
+
+        return (
+            disk_overrides if disk_overrides is not None else overrides,
+            disk_rules if disk_rules is not None else rules_over,
+        )
 
     def disconnect_camera(self) -> None:
         """Release the active camera instance and mark it unavailable."""
@@ -217,38 +291,15 @@ class DetectionSystem:
             # Ensure color checker ready if enabled
             if self.config.enable_color_check and self.config.color_model_path:
                 try:
-                    # Load latest overrides from model-level YAML (even if engine is cached)
-                    overrides = getattr(
-                        self.config, "color_threshold_overrides", None)
-                    rules_over = getattr(
-                        self.config, "color_rules_overrides", None)
-                    try:
-                        import yaml as _yaml
-
-                        _cfg_path = str(
-                            PROJECT_ROOT
-                            / "models"
-                            / product
-                            / area
-                            / inference_type
-                            / "config.yaml"
-                        )
-                        if os.path.exists(_cfg_path):
-                            with open(_cfg_path, "r", encoding="utf-8") as _f:
-                                _model_cfg = _yaml.safe_load(_f) or {}
-                                ov = _model_cfg.get(
-                                    "color_threshold_overrides")
-                                if isinstance(ov, dict) and ov:
-                                    overrides = ov
-                                crov = _model_cfg.get("color_rules_overrides")
-                                if isinstance(crov, dict) and crov:
-                                    rules_over = crov
-                    except Exception:
-                        pass
+                    overrides, rules_over = self._load_color_override_bundle(
+                        product, area, inference_type
+                    )
                     checker_type = getattr(
-                        self.config, "color_checker_type", "led_qc") or "led_qc"
+                        self.config, "color_checker_type", "led_qc"
+                    ) or "led_qc"
                     default_threshold = getattr(
-                        self.config, "color_score_threshold", None)
+                        self.config, "color_score_threshold", None
+                    )
                     self.color_service.ensure_loaded(
                         self.config.color_model_path,
                         overrides=overrides,
@@ -257,7 +308,8 @@ class DetectionSystem:
                         default_threshold=default_threshold,
                     )
                     run_logger.info(
-                        f"Color checker loaded ({checker_type})")
+                        f"Color checker loaded ({checker_type})"
+                    )
                 except Exception as e:
                     run_logger.error(f"Color checker init failed: {str(e)}")
 

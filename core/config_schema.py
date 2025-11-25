@@ -44,6 +44,16 @@ def _normalize_sequence(value: Any, *, expect_len: int | None = None) -> Any:
     raise ValueError("expected list/tuple")
 
 
+def _normalize_output_dir(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if trimmed:
+            return trimmed
+    raise ValueError("output_dir must be a non-empty string")
+
+
 if BaseModel is not None:  # pragma: no cover - runtime optional
 
     class GlobalConfigSchema(BaseModel):
@@ -107,6 +117,10 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
                     return None
                 return _normalize_sequence(value)
 
+            @_field_validator("output_dir", mode="before")  # type: ignore[misc]
+            def _validate_output_dir(cls, value: Any) -> Any:
+                return _normalize_output_dir(value)
+
         elif _VALIDATOR_MODE == "v1":
 
             class Config:
@@ -121,6 +135,10 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
                 if value is None:
                     return None
                 return _normalize_sequence(value)
+
+            @_validator("output_dir", pre=True)  # type: ignore[misc]
+            def _validate_output_dir(cls, value: Any) -> Any:
+                return _normalize_output_dir(value)
 
     class ModelConfigSchema(BaseModel):
         device: Optional[str] = None
@@ -175,6 +193,12 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
                     return None
                 return _normalize_sequence(value)
 
+            @_field_validator("output_dir", mode="before")  # type: ignore[misc]
+            def _validate_model_output_dir(cls, value: Any) -> Any:
+                if value is None:
+                    return None
+                return _normalize_output_dir(value)
+
         elif _VALIDATOR_MODE == "v1":
 
             class Config:
@@ -189,6 +213,12 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
                 if value is None:
                     return None
                 return _normalize_sequence(value)
+
+            @_validator("output_dir", pre=True)  # type: ignore[misc]
+            def _validate_model_output_dir(cls, value: Any) -> Any:
+                if value is None:
+                    return None
+                return _normalize_output_dir(value)
 
 else:
     GlobalConfigSchema = None  # type: ignore

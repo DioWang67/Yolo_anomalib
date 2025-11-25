@@ -57,7 +57,8 @@ class ModelManager:
     def _apply_model_config(
             self,
             base_config: DetectionConfig,
-            cfg: dict) -> None:
+            cfg: dict,
+            context: str | None = None) -> None:
         """
         Apply per-model overrides into the shared DetectionConfig instance.
         """
@@ -76,7 +77,24 @@ class ModelManager:
         base_config.position_config = cfg.get(
             "position_config", base_config.position_config
         )
-        base_config.output_dir = cfg.get("output_dir", base_config.output_dir)
+        if "output_dir" in cfg:
+            raw_output_dir = cfg.get("output_dir")
+            if raw_output_dir:
+                path_str = str(raw_output_dir).strip()
+                if path_str:
+                    base_config.output_dir = path_str
+                else:
+                    self.logger.logger.warning(
+                        "Model config %s provided whitespace output_dir; keeping %s",
+                        context or "unknown",
+                        base_config.output_dir,
+                    )
+            else:
+                self.logger.logger.warning(
+                    "Model config %s provided empty output_dir; keeping %s",
+                    context or "unknown",
+                    base_config.output_dir,
+                )
         base_config.anomalib_config = cfg.get("anomalib_config")
         base_config.weights = cfg.get(
             "weights", getattr(
@@ -176,7 +194,8 @@ class ModelManager:
             self.logger.logger.error(f"Model config validation failed: {e}")
             raise
 
-        self._apply_model_config(base_config, cfg)
+        context = f"{product}/{area}/{inference_type}"
+        self._apply_model_config(base_config, cfg, context)
 
         engine = InferenceEngine(base_config)
         if not engine.initialize():
