@@ -8,3 +8,4 @@ height: 2048
 enable_yolo: true
 enable_anomalib: false
 max_cache_size: 3
+output_dir: "D:/Git/robotlearning/build_exe/Result"

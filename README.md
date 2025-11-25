@@ -33,7 +33,8 @@ YOLO11 Inference 將 YOLO 目標偵測與 Anomalib 異常偵測整合為單一�
 - 影像讀取失敗：檔案存在但 OpenCV 讀不到，請確認路徑權限與檔案是否為支援格式。
 - 未取得推論結果：anomalib 未回傳任何預測，通常是 ckpt/輸入影像不符，檢查 config 與模型版本是否一致。
 - Anomalib 推論未返回結果 / 回傳非預期格式：代表推論程序異常結束，請先觀察 logs/ 下同時間點的日誌再重試。
-- Excel 未更新：確認 Result/<日期>/results.xlsx 是否被其他程式占用；必要時執行 esult_sink.flush() 或重新啟動服務。
+- Excel 未更新：確認 Result/<日期>/results.xlsx 是否被其他程式占用；必要時執行 
+esult_sink.flush() 或重新啟動服務。
 
 ## 測試與上線前檢查
 1. 執行 pytest -q tests，確保核心流程正常。
@@ -123,6 +124,8 @@ requirements.txt           # Python 套件相依
   - `enable_color_check`、`color_model_path`：開啟 LEDQCEnhanced 與色彩模型檔案。
   - `expected_items`：定義每站應出現的元件名稱，缺失會標記在結果中。
   - `position_config`：每個工作站的座標容忍度設定，可搭配 `PositionCheckStep`。
+  - `output_dir`：可單獨指定此模型輸出的根目錄；若省略就沿用全域 `config.yaml`，不得為空字串。
+  - `exposure_time` / `gain` / `MV_CC_GetImageBuffer_nMsec` / `timeout` / `width` / `height`：可針對各站別覆寫相機參數，未設定時會回退到全域值。
 - **Anomalib** 主要欄位：
   - `ckpt_path`：Lightning checkpoint 路徑。
   - `threshold`：異常分數門檻，決定 PASS/FAIL。
@@ -205,4 +208,3 @@ pytest tests/test_pipeline_registry.py
 - models/ �Ȧs�ɮס]YOLO .pt�Banomalib ckpt/data�^�w�� add-data�A���ӱK exec �b offline �}�Ҥ��|���o�Ҧ������ؿ�C
 - PyInstaller ���� --hidden-import anomalib --collect-submodules anomalib.models --collect-data anomalib�A�[�k��� core/anomalib_lightning_inference.py �s������ import_module hook����ܪ��{���Ӷi�H�b exe �� load Patchcore/Padim/STFPM ���Ԥ��C
 - �� uild_exe.bat �ᵲ�G exe/log/build/spec �� D:\Git\robotlearning\build_exe�A�{} GUI.exe �}�ҤU���T�{ config.yaml/models �O�_�ڪ��ҷ��C
-
