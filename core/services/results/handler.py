@@ -25,6 +25,10 @@ from .excel_formatter import build_excel_row
 from .image_queue import ImageWriteError, ImageWriteQueue
 from .path_manager import ResultPathManager, SavePathBundle
 
+# Minimal color helper (compatible with ultralytics.colors signature)
+def colors(class_id, bgr=True):
+    return (0, 255, 0)
+
 # Excel column titles (stored as unicode escapes to avoid encoding issues)
 COLUMN_NAMES: List[str] = [
     "\u6642\u9593\u6233\u8a18",  # 時間戳記

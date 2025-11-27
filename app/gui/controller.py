@@ -5,10 +5,12 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 
 from app.gui.workers import DetectionWorker
-from core.detection_system import DetectionSystem
+
+if TYPE_CHECKING:  # pragma: no cover
+    from core.detection_system import DetectionSystem
 
 
 def _list_subdirectories(path: Path) -> List[str]:
@@ -73,16 +75,22 @@ class DetectionController:
         config_path: Path,
         catalog: ModelCatalog,
         logger: Optional[logging.Logger] = None,
+        detection_cls: Optional[Any] = None,
     ) -> None:
         self._config_path = config_path
         self.catalog = catalog
         self._logger = logger or logging.getLogger(__name__)
-        self._system: Optional[DetectionSystem] = None
+        self._system: Optional[Any] = None
+        self._detection_cls = detection_cls
 
     @property
-    def detection_system(self) -> DetectionSystem:
+    def detection_system(self) -> Any:
         if self._system is None:
-            self._system = DetectionSystem(config_path=str(self._config_path))
+            cls = self._detection_cls
+            if cls is None:
+                from core.detection_system import DetectionSystem as _DS
+                cls = _DS
+            self._system = cls(config_path=str(self._config_path))
             self._logger.debug("Detection system initialized with %s", self._config_path)
         return self._system
 
