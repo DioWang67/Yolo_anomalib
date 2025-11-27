@@ -11,6 +11,13 @@ test:
 test-fast:
 	$(PYTEST) -m "not gui"
 
+## Run a lightweight critical subset (result sink, model manager, core engines)
+test-important:
+	$(PYTEST) tests/test_result_handler.py \
+		tests/test_model_manager_overrides.py \
+		tests/test_detection_system.py \
+		tests/test_yolo_inference_model.py
+
 ## Execute end-to-end workflow tests only
 test-e2e:
 	$(PYTEST) tests/test_e2e_workflow.py

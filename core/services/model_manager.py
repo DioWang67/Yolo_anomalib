@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections import OrderedDict
+from pathlib import Path
 import copy
 import yaml  # type: ignore[import]
 
@@ -58,31 +59,35 @@ class ModelManager:
             self,
             base_config: DetectionConfig,
             cfg: dict,
-            context: str | None = None) -> None:
+            context: str | None = None,
+            model_cfg_dir: Path | None = None) -> None:
         """
         Apply per-model overrides into the shared DetectionConfig instance.
         """
         base_config.device = cfg.get("device", base_config.device)
         base_config.conf_thres = cfg.get("conf_thres", base_config.conf_thres)
         base_config.iou_thres = cfg.get("iou_thres", base_config.iou_thres)
-        base_config.imgsz = tuple(cfg.get("imgsz", base_config.imgsz))
+        if "imgsz" in cfg and cfg.get("imgsz") is not None:
+            base_config.imgsz = tuple(cfg.get("imgsz"))  # type: ignore[arg-type]
         base_config.enable_yolo = cfg.get(
             "enable_yolo", base_config.enable_yolo)
         base_config.enable_anomalib = cfg.get(
             "enable_anomalib", base_config.enable_anomalib
         )
-        base_config.expected_items = cfg.get(
-            "expected_items", base_config.expected_items
-        )
-        base_config.position_config = cfg.get(
-            "position_config", base_config.position_config
-        )
+        if "expected_items" in cfg and cfg.get("expected_items") is not None:
+            base_config.expected_items = cfg.get("expected_items")
+        if "position_config" in cfg and cfg.get("position_config") is not None:
+            base_config.position_config = cfg.get("position_config")
         if "output_dir" in cfg:
             raw_output_dir = cfg.get("output_dir")
             if raw_output_dir:
                 path_str = str(raw_output_dir).strip()
                 if path_str:
-                    base_config.output_dir = path_str
+                    resolved = Path(path_str)
+                    if not resolved.is_absolute():
+                        base = model_cfg_dir or PROJECT_ROOT
+                        resolved = (base / resolved).resolve()
+                    base_config.output_dir = str(resolved)
                 else:
                     self.logger.logger.warning(
                         "Model config %s provided whitespace output_dir; keeping %s",
@@ -95,7 +100,8 @@ class ModelManager:
                     context or "unknown",
                     base_config.output_dir,
                 )
-        base_config.anomalib_config = cfg.get("anomalib_config")
+        if "anomalib_config" in cfg and cfg.get("anomalib_config") is not None:
+            base_config.anomalib_config = cfg.get("anomalib_config")
         base_config.weights = cfg.get(
             "weights", getattr(
                 base_config, "weights", ""))
@@ -104,18 +110,27 @@ class ModelManager:
                 base_config, "enable_color_check", False))
         color_model_path = cfg.get("color_model_path", None)
         if color_model_path:
-            base_config.color_model_path = str(resolve_path(color_model_path))
-        else:
-            base_config.color_model_path = None
+            color_path_obj = Path(color_model_path)
+            resolved_color = None
+            if not color_path_obj.is_absolute() and model_cfg_dir:
+                resolved_color = (model_cfg_dir /
+                                  color_path_obj).resolve()
+            else:
+                resolved_color = resolve_path(color_model_path)
+            base_config.color_model_path = (
+                str(resolved_color) if resolved_color else base_config.color_model_path
+            )
         # optional color threshold overrides (per-color hist_thr)
-        base_config.color_threshold_overrides = cfg.get(
-            "color_threshold_overrides",
-            getattr(base_config, "color_threshold_overrides", None),
-        )
+        if "color_threshold_overrides" in cfg:
+            base_config.color_threshold_overrides = cfg.get(
+                "color_threshold_overrides",
+                getattr(base_config, "color_threshold_overrides", None),
+            )
         # optional per-color rules overrides
-        base_config.color_rules_overrides = cfg.get(
-            "color_rules_overrides", getattr(
-                base_config, "color_rules_overrides", None))
+        if "color_rules_overrides" in cfg:
+            base_config.color_rules_overrides = cfg.get(
+                "color_rules_overrides", getattr(
+                    base_config, "color_rules_overrides", None))
         base_config.color_checker_type = str(
             cfg.get(
                 "color_checker_type",
@@ -128,9 +143,10 @@ class ModelManager:
             getattr(base_config, "color_score_threshold", None),
         )
         # optional custom backends config (name -> {class_path, enabled, ...})
-        base_config.backends = cfg.get(
-            "backends", getattr(base_config, "backends", None)
-        )
+        if "backends" in cfg and cfg.get("backends") is not None:
+            base_config.backends = cfg.get(
+                "backends", getattr(base_config, "backends", None)
+            )
         # optional pipeline and steps overrides
         if "pipeline" in cfg:
             base_config.pipeline = cfg.get("pipeline")
@@ -195,7 +211,9 @@ class ModelManager:
             raise
 
         context = f"{product}/{area}/{inference_type}"
-        self._apply_model_config(base_config, cfg, context)
+        model_cfg_dir = Path(model_config_path).resolve().parent
+        self._apply_model_config(
+            base_config, cfg, context, model_cfg_dir=model_cfg_dir)
 
         engine = InferenceEngine(base_config)
         if not engine.initialize():

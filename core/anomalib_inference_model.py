@@ -14,6 +14,9 @@ class AnomalibInferenceModel(BaseInferenceModel):
     def __init__(self, config):
         super().__init__(config)
         self.image_utils = ImageUtils()
+        # Reuse a stable temp file path to avoid frequent creation/deletion
+        self._tmp_path = os.path.join(
+            tempfile.gettempdir(), f"anomalib_infer_{os.getpid()}.jpg")
 
     def initialize(self, product: str = None, area: str = None) -> bool:
         try:
@@ -51,10 +54,9 @@ class AnomalibInferenceModel(BaseInferenceModel):
                 fill_color=(0, 0, 0),
             )
 
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                tmp_path = tmp.name
-                cv2.imwrite(tmp_path, cv2.cvtColor(
-                    processed_image, cv2.COLOR_RGB2BGR))
+            tmp_path = self._tmp_path
+            cv2.imwrite(tmp_path, cv2.cvtColor(
+                processed_image, cv2.COLOR_RGB2BGR))
 
             result = lightning_inference(
                 tmp_path,
@@ -103,8 +105,9 @@ class AnomalibInferenceModel(BaseInferenceModel):
             raise
 
         finally:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
+            try:
+                if tmp_path and os.path.exists(tmp_path):
                     os.remove(tmp_path)
-                except Exception as cleanup_err:
-                    self.logger.logger.warning(f"臨時檔案刪除失敗: {cleanup_err}")
+            except Exception as cleanup_err:
+                self.logger.logger.warning(
+                    f"Temp file cleanup failed: {cleanup_err}")
