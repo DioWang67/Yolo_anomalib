@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""led_qc_enhanced.py
+"""color_qc_enhanced.py
 
 Standalone LED color quality checker for the "advanced" model format
 that contains top-level keys like colors/config/version.
@@ -14,6 +14,7 @@ Key features implemented:
 
 This module is self-contained and does not depend on the simple model.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -29,7 +30,7 @@ except Exception:  # pragma: no cover
 
 # -------------------- Data structures --------------------
 @dataclass
-class LEDQCAdvancedResult:
+class ColorQCAdvancedResult:
     best_color: str
     diff: float
     threshold: float
@@ -75,8 +76,7 @@ class _Model:
             )
 
         if not colors:
-            raise ValueError(
-                "advanced color model has no valid avg_color_hist entries")
+            raise ValueError("advanced color model has no valid avg_color_hist entries")
 
         return cls(
             hist_bins=(int(bins[0]), int(bins[1]), int(bins[2])),
@@ -121,8 +121,7 @@ def _compute_hsv3d_hist(
                 s_idx = np.clip(s_idx, 0, sb - 1)
                 v_idx = np.clip(v_idx, 0, vb - 1)
                 idx = (h_idx * sb * vb + s_idx * vb + v_idx).ravel()
-                hist = np.bincount(idx, minlength=hb *
-                                   sb * vb).astype(np.float32)
+                hist = np.bincount(idx, minlength=hb * sb * vb).astype(np.float32)
                 if hist.sum() > 0:
                     hist /= hist.sum()
                 return hist.tolist(), {
@@ -212,8 +211,8 @@ def _l1(a: List[float], b: List[float]) -> float:
     return sum(abs(x - y) for x, y in zip(a, b))
 
 
-class LEDQCEnhanced:
-    """Enhanced LED QC using the advanced JSON model."""
+class ColorQCEnhanced:
+    """Enhanced color QC using the advanced JSON model."""
 
     def __init__(self, model: _Model) -> None:
         self.model = model
@@ -221,7 +220,7 @@ class LEDQCEnhanced:
         self._color_rules_overrides: Dict[str, Dict[str, Optional[float]]] = {}
 
     @classmethod
-    def from_json(cls, path: Any) -> "LEDQCEnhanced":
+    def from_json(cls, path: Any) -> "ColorQCEnhanced":
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if "colors" not in data:
@@ -231,11 +230,10 @@ class LEDQCEnhanced:
 
     def check(
         self, image_bgr, allowed_colors: Optional[Iterable[str]] = None
-    ) -> LEDQCAdvancedResult:
+    ) -> ColorQCAdvancedResult:
         hist, metrics = _compute_hsv3d_hist(image_bgr, self.model.hist_bins)
 
-        allowed = set(c.lower()
-                      for c in allowed_colors) if allowed_colors else None
+        allowed = set(c.lower() for c in allowed_colors) if allowed_colors else None
 
         best_name = ""
         best_diff = float("inf")
@@ -256,8 +254,7 @@ class LEDQCEnhanced:
                 )
 
         if not scores:
-            raise ValueError(
-                "no colors to compare (check allowed_colors filter)")
+            raise ValueError("no colors to compare (check allowed_colors filter)")
 
         # Base decision by histogram threshold
         is_ok = best_diff <= best_thr
@@ -352,7 +349,7 @@ class LEDQCEnhanced:
                 except Exception:
                     pass
 
-        return LEDQCAdvancedResult(
+        return ColorQCAdvancedResult(
             best_color=best_name,
             diff=float(best_diff),
             threshold=float(best_thr),
@@ -405,6 +402,6 @@ class LEDQCEnhanced:
 
 
 __all__ = [
-    "LEDQCEnhanced",
-    "LEDQCAdvancedResult",
+    "ColorQCEnhanced",
+    "ColorQCAdvancedResult",
 ]

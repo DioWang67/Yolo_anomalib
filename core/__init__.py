@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Optional
-from .led_qc_enhanced import LEDQCEnhanced  # noqa: F401
+from .color_qc_enhanced import ColorQCEnhanced  # noqa: F401
 
 # 可選：用標準 logging 發出偵錯訊息
 import logging
@@ -33,7 +33,7 @@ except Exception:
 
 # -- Always available utilities --
 
-__all__ = ["LEDQCEnhanced"]
+__all__ = ["ColorQCEnhanced"]
 if AnomalibInferenceModel is not None:
     __all__.append("AnomalibInferenceModel")
 

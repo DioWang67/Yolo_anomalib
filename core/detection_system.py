@@ -49,8 +49,7 @@ class DetectionSystem:
         root_dir = project_root()
         if not (root_dir / "config.yaml").exists():
             root_dir = Path(__file__).resolve().parent.parent
-        resolved_config = Path(
-            config_path) if config_path else root_dir / "config.yaml"
+        resolved_config = Path(config_path) if config_path else root_dir / "config.yaml"
         resolved_config = resolved_config.resolve()
         self.config_path = resolved_config
         self.config = self.load_config(resolved_config)
@@ -126,18 +125,11 @@ class DetectionSystem:
 
     def _load_color_override_bundle(
         self, product: str, area: str, inference_type: str
-    ) -> Tuple[
-        Dict[str, float] | None, Dict[str, Dict[str, Any]] | None
-    ]:
+    ) -> Tuple[Dict[str, float] | None, Dict[str, Dict[str, Any]] | None]:
         overrides = getattr(self.config, "color_threshold_overrides", None)
         rules_over = getattr(self.config, "color_rules_overrides", None)
         cfg_path = (
-            PROJECT_ROOT
-            / "models"
-            / product
-            / area
-            / inference_type
-            / "config.yaml"
+            PROJECT_ROOT / "models" / product / area / inference_type / "config.yaml"
         )
         cache_key = str(cfg_path)
         try:
@@ -294,9 +286,10 @@ class DetectionSystem:
                     overrides, rules_over = self._load_color_override_bundle(
                         product, area, inference_type
                     )
-                    checker_type = getattr(
-                        self.config, "color_checker_type", "led_qc"
-                    ) or "led_qc"
+                    checker_type = (
+                        getattr(self.config, "color_checker_type", "color_qc")
+                        or "color_qc"
+                    )
                     default_threshold = getattr(
                         self.config, "color_score_threshold", None
                     )
@@ -307,9 +300,7 @@ class DetectionSystem:
                         checker_type=checker_type,
                         default_threshold=default_threshold,
                     )
-                    run_logger.info(
-                        f"Color checker loaded ({checker_type})"
-                    )
+                    run_logger.info(f"Color checker loaded ({checker_type})")
                 except Exception as e:
                     run_logger.error(f"Color checker init failed: {str(e)}")
 
@@ -414,8 +405,7 @@ class DetectionSystem:
                     anomaly_score=result.get("anomaly_score"),
                 )
                 if output_path != correct_output_path and os.path.exists(output_path):
-                    os.makedirs(os.path.dirname(
-                        correct_output_path), exist_ok=True)
+                    os.makedirs(os.path.dirname(correct_output_path), exist_ok=True)
                     try:
                         shutil.move(output_path, correct_output_path)
                         result["output_path"] = correct_output_path
@@ -430,8 +420,7 @@ class DetectionSystem:
                         if os.path.isdir(old_dir) and not os.listdir(old_dir):
                             os.rmdir(old_dir)
                     except Exception as cleanup_err:
-                        run_logger.warning(
-                            f"Cleanup temp dir failed: {cleanup_err}")
+                        run_logger.warning(f"Cleanup temp dir failed: {cleanup_err}")
                 else:
                     run_logger.info(f"Output path OK: {correct_output_path}")
                     result["output_path"] = correct_output_path
@@ -447,8 +436,7 @@ class DetectionSystem:
 
             # Logging summary with final status
             if inference_type_name == "anomalib":
-                self.logger.log_anomaly(
-                    status, result.get("anomaly_score", 0.0))
+                self.logger.log_anomaly(status, result.get("anomaly_score", 0.0))
             else:
                 self.logger.log_detection(status, result.get("detections", []))
 
@@ -461,23 +449,20 @@ class DetectionSystem:
                     c = ctx.color_result or {}
                     if isinstance(c, dict) and (not c.get("is_ok", True)):
                         items = c.get("items", []) or []
-                        fail_cnt = sum(
-                            1 for it in items if not it.get("is_ok", False))
+                        fail_cnt = sum(1 for it in items if not it.get("is_ok", False))
                         run_logger.info(
                             f"Fail reason - color mismatch: {fail_cnt}/{len(items)} items failed"
                         )
                     unexp = result.get("unexpected_items", [])
                     if unexp:
-                        run_logger.info(
-                            f"Fail reason - unexpected items: {unexp}")
+                        run_logger.info(f"Fail reason - unexpected items: {unexp}")
                     pos_wrong = [
                         d.get("class")
                         for d in (result.get("detections", []) or [])
                         if d.get("position_status") == "WRONG"
                     ]
                     if pos_wrong:
-                        run_logger.info(
-                            f"Fail reason - position wrong: {pos_wrong}")
+                        run_logger.info(f"Fail reason - position wrong: {pos_wrong}")
             except Exception:
                 pass
 

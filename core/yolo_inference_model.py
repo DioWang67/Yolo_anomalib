@@ -160,9 +160,20 @@ class YOLOInferenceModel(BaseInferenceModel):
                 det["cx"] = (x1 + x2) / 2
                 det["cy"] = (y1 + y2) / 2
 
-            validator = PositionValidator(self.config, product, area)
-            detections = validator.validate(detections)
-            status = validator.evaluate_status(detections, missing_items)
+            # Position check can be toggled per product/area; skip entirely when disabled
+            position_enabled = False
+            try:
+                position_enabled = self.config.is_position_check_enabled(product, area)
+            except Exception:
+                position_enabled = False
+
+            if position_enabled:
+                validator = PositionValidator(self.config, product, area)
+                detections = validator.validate(detections)
+                status = validator.evaluate_status(detections, missing_items)
+            else:
+                # When disabled, keep status purely based on missing items here
+                status = "FAIL" if missing_items else "PASS"
 
             unexpected_items: list[str] = []
             try:

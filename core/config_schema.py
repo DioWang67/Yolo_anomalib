@@ -70,16 +70,14 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         MV_CC_GetImageBuffer_nMsec: Optional[int] = 10000
         current_product: Optional[str] = None
         current_area: Optional[str] = None
-        expected_items: Dict[str, Dict[str, List[str]]
-                             ] = Field(default_factory=dict)
+        expected_items: Dict[str, Dict[str, List[str]]] = Field(default_factory=dict)
         enable_yolo: Optional[bool] = True
         enable_anomalib: Optional[bool] = False
         enable_color_check: Optional[bool] = False
         color_model_path: Optional[str] = None
         color_threshold_overrides: Optional[Dict[str, float]] = None
-        color_rules_overrides: Optional[Dict[str,
-                                             Dict[str, Optional[float]]]] = None
-        color_checker_type: Optional[str] = "led_qc"
+        color_rules_overrides: Optional[Dict[str, Dict[str, Optional[float]]]] = None
+        color_checker_type: Optional[str] = "color_qc"
         color_score_threshold: Optional[float] = None
         output_dir: Optional[str] = "Result"
         anomalib_config: Optional[Dict[str, Any]] = None

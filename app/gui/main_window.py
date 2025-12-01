@@ -1,14 +1,12 @@
-﻿"""以 PyQt5 實作的桌面介面，用於操作與監看檢測流程。"""
+"""以 PyQt5 實作的桌面介面，用於操作與監看檢測流程。"""
 
 from __future__ import annotations
-
 import logging
 import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
 import importlib
 
 
@@ -29,12 +27,12 @@ def _get_detection_class():
 
     return _CoreDetectionSystem
 
+
 import cv2
 import numpy as np
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
-
 from app.gui.controller import DetectionController, ModelCatalog
 from app.gui.preferences import PreferencesManager
 from app.gui.utils import load_image_with_retry
@@ -72,7 +70,6 @@ class DetectionSystemGUI(QMainWindow):
             detection_cls=_get_detection_class(),
         )
         self._skip_system_init = bool(os.environ.get("PYTEST_CURRENT_TEST"))
-
         self.init_ui()
         self.update_camera_controls()
         if not self._skip_system_init:
@@ -85,7 +82,9 @@ class DetectionSystemGUI(QMainWindow):
                     self.controller._system = stub_cls()  # type: ignore[attr-defined]
                 except Exception:
                     try:
-                        self.controller._system = stub_cls(config_path=str(self._config_path))  # type: ignore[attr-defined]
+                        self.controller._system = stub_cls(
+                            config_path=str(self._config_path)
+                        )  # type: ignore[attr-defined]
                     except Exception:
                         self.controller._system = None
             try:
@@ -99,10 +98,8 @@ class DetectionSystemGUI(QMainWindow):
             QShortcut(QKeySequence("F5"), self).activated.connect(
                 self.load_available_models
             )
-            QShortcut(QKeySequence("Ctrl+O"),
-                      self).activated.connect(self.open_config)
-            QShortcut(QKeySequence("Ctrl+S"),
-                      self).activated.connect(self.save_config)
+            QShortcut(QKeySequence("Ctrl+O"), self).activated.connect(self.open_config)
+            QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_config)
         except Exception:
             pass
         # Restore window geometry/state
@@ -165,30 +162,21 @@ class DetectionSystemGUI(QMainWindow):
             }
         """
         )
-
-        # 中央元件
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-
-        # 主要佈局
-        main_layout = QHBoxLayout(central_widget)
-
-        # 控制面板
+        main_layout = QVBoxLayout(central_widget)
+        main_splitter = QSplitter(Qt.Horizontal)
         control_panel = build_control_panel(self)
-        main_layout.addWidget(control_panel, 1)
-
-        # 中間的圖像顯示區域
         image_area = build_image_area(self)
-        main_layout.addWidget(image_area, 3)
-
-        # 右側的資訊面板
         info_panel = build_info_panel(self)
-        main_layout.addWidget(info_panel, 1)
-
-        # 狀態列
+        main_splitter.addWidget(control_panel)
+        main_splitter.addWidget(image_area)
+        main_splitter.addWidget(info_panel)
+        main_splitter.setStretchFactor(0, 0)
+        main_splitter.setStretchFactor(1, 2)
+        main_splitter.setStretchFactor(2, 1)
+        main_layout.addWidget(main_splitter)
         self.statusBar().showMessage("系統就緒")
-
-        # 選單列
         build_menu_bar(self)
 
     def init_system(self):
@@ -205,52 +193,43 @@ class DetectionSystemGUI(QMainWindow):
         except Exception as e:
             self.log_message(f"檢測系統初始化失敗: {str(e)}")
             QMessageBox.critical(self, "系統錯誤", f"無法初始化偵測系統\n{str(e)}")
-
         finally:
             try:
                 self.update_camera_controls()
             except Exception:
                 pass
 
-
     def load_available_models(self):
-        """???J?i??????T"""
+        """載入可用模型資訊"""
         try:
             base_path = Path(self._models_base)
             if not base_path.exists():
-                self.log_message("???? models ????")
+                self.log_message("找不到 models 目錄")
                 return
-
             # Recreate catalog based on current models base to avoid stale entries
             self._catalog = ModelCatalog(base_path)
             self.controller.catalog = self._catalog
             self._catalog.refresh()
             self.available_products = self._catalog.products()
             self.product_combo.clear()
-
             self.available_areas = {
                 product: self._catalog.areas(product)
                 for product in self.available_products
             }
-
             if self.available_products:
                 self.product_combo.addItems(self.available_products)
-
-                last_prod, last_area, last_infer = self.preferences.restore_last_selection()
-
+                last_prod, last_area, last_infer = (
+                    self.preferences.restore_last_selection()
+                )
                 if last_prod and last_prod in self.available_products:
                     self.product_combo.setCurrentText(last_prod)
-
                 self.on_product_changed(self.product_combo.currentText())
-
                 try:
                     if last_area and last_area in self.available_areas.get(
                         self.product_combo.currentText(), []
                     ):
                         self.area_combo.setCurrentText(last_area)
-
                     self.on_area_changed(self.area_combo.currentText())
-
                     available_types = [
                         self.inference_combo.itemText(i)
                         for i in range(self.inference_combo.count())
@@ -261,50 +240,41 @@ class DetectionSystemGUI(QMainWindow):
                     pass
             else:
                 self.product_combo.clear()
-
-            self.log_message(f"???J?F {len(self.available_products)} ?????]?w")
-
-        except Exception as exc:
-            self.log_message(f"???J??????o????~: {exc}")
-
-            self.available_areas = {
-                product: self._catalog.areas(product)
-                for product in self.available_products
-            }
-
-            if self.available_products:
-                self.product_combo.addItems(self.available_products)
-
-                last_prod, last_area, last_infer = self.preferences.restore_last_selection()
-
-                if last_prod and last_prod in self.available_products:
-                    self.product_combo.setCurrentText(last_prod)
-
-                self.on_product_changed(self.product_combo.currentText())
-
-                try:
-                    if last_area and last_area in self.available_areas.get(
-                        self.product_combo.currentText(), []
-                    ):
-                        self.area_combo.setCurrentText(last_area)
-
-                    self.on_area_changed(self.area_combo.currentText())
-
-                    available_types = [
-                        self.inference_combo.itemText(i)
-                        for i in range(self.inference_combo.count())
-                    ]
-                    if last_infer and last_infer in available_types:
-                        self.inference_combo.setCurrentText(last_infer)
-                except Exception:
-                    pass
-            else:
-                self.product_combo.clear()
-
             self.log_message(f"載入了 {len(self.available_products)} 組模型設定")
-
+        except Exception as exc:
+            self.log_message(f"載入模型資料時發生錯誤: {exc}")
+            self.available_areas = {
+                product: self._catalog.areas(product)
+                for product in self.available_products
+            }
+            if self.available_products:
+                self.product_combo.addItems(self.available_products)
+                last_prod, last_area, last_infer = (
+                    self.preferences.restore_last_selection()
+                )
+                if last_prod and last_prod in self.available_products:
+                    self.product_combo.setCurrentText(last_prod)
+                self.on_product_changed(self.product_combo.currentText())
+                try:
+                    if last_area and last_area in self.available_areas.get(
+                        self.product_combo.currentText(), []
+                    ):
+                        self.area_combo.setCurrentText(last_area)
+                    self.on_area_changed(self.area_combo.currentText())
+                    available_types = [
+                        self.inference_combo.itemText(i)
+                        for i in range(self.inference_combo.count())
+                    ]
+                    if last_infer and last_infer in available_types:
+                        self.inference_combo.setCurrentText(last_infer)
+                except Exception:
+                    pass
+            else:
+                self.product_combo.clear()
+            self.log_message(f"載入了 {len(self.available_products)} 組模型設定")
         except Exception as exc:
             self.log_message(f"載入模型資料發生錯誤: {exc}")
+
     def on_product_changed(self, product):
         """產品選擇變更時的處理"""
         self.area_combo.clear()
@@ -327,7 +297,6 @@ class DetectionSystemGUI(QMainWindow):
         if types:
             self.inference_combo.addItems(types)
 
-
     def is_detection_running(self) -> bool:
         """Return True if a detection worker is running."""
         return bool(self.worker and self.worker.isRunning())
@@ -340,13 +309,9 @@ class DetectionSystemGUI(QMainWindow):
             if self.controller.has_system():
                 camera_connected = self.controller.is_camera_connected()
             if getattr(self, "reconnect_camera_btn", None):
-                self.reconnect_camera_btn.setEnabled(
-                    not running
-                )
+                self.reconnect_camera_btn.setEnabled(not running)
             if getattr(self, "disconnect_camera_btn", None):
-                self.disconnect_camera_btn.setEnabled(
-                    camera_connected and not running
-                )
+                self.disconnect_camera_btn.setEnabled(camera_connected and not running)
             if getattr(self, "use_camera_chk", None):
                 if not camera_connected and self.use_camera_chk.isChecked():
                     self.use_camera_chk.blockSignals(True)
@@ -363,12 +328,14 @@ class DetectionSystemGUI(QMainWindow):
         except Exception:
             pass
 
-
-
     def handle_reconnect_camera(self):
         """Manually reconnect the camera via detection system."""
         if self.is_detection_running():
-            QMessageBox.warning(self, "Camera Operation", "Detection in progress. Stop before reconnecting.")
+            QMessageBox.warning(
+                self,
+                "Camera Operation",
+                "Detection in progress. Stop before reconnecting.",
+            )
             return
         if not self.controller.has_system():
             self.init_system()
@@ -402,10 +369,16 @@ class DetectionSystemGUI(QMainWindow):
     def handle_disconnect_camera(self):
         """Allow user to disconnect the camera manually."""
         if self.is_detection_running():
-            QMessageBox.warning(self, "Camera Operation", "Detection in progress. Stop before disconnecting.")
+            QMessageBox.warning(
+                self,
+                "Camera Operation",
+                "Detection in progress. Stop before disconnecting.",
+            )
             return
         if not self.controller.has_system():
-            QMessageBox.information(self, "Camera Status", "Detection system is not initialized yet.")
+            QMessageBox.information(
+                self, "Camera Status", "Detection system is not initialized yet."
+            )
             return
         self.log_message("Disconnecting camera...")
         try:
@@ -421,6 +394,7 @@ class DetectionSystemGUI(QMainWindow):
             self.use_camera_chk.blockSignals(False)
             self.on_use_camera_toggled(False)
         self.update_camera_controls()
+
     def update_start_enabled(self):
         """根據選擇是否完整，自動啟用/停用開始檢測按鈕"""
         try:
@@ -433,18 +407,18 @@ class DetectionSystemGUI(QMainWindow):
         except Exception:
             pass
 
-
-
     def start_detection(self):
         """Launch detection workflow."""
         product = self.product_combo.currentText()
         area = self.area_combo.currentText()
         inference_type = self.inference_combo.currentText()
-
         if not all([product, area, inference_type]):
-            QMessageBox.warning(self, "Missing Parameters", "Select product, area, and inference type before starting detection.")
+            QMessageBox.warning(
+                self,
+                "Missing Parameters",
+                "Select product, area, and inference type before starting detection.",
+            )
             return
-
         if not self._catalog.config_exists(product, area, inference_type):
             config_path = self._catalog.config_path(product, area, inference_type)
             QMessageBox.critical(
@@ -453,7 +427,6 @@ class DetectionSystemGUI(QMainWindow):
                 f"Configuration file not found:\n{config_path}",
             )
             return
-
         if not self.controller.has_system():
             QMessageBox.critical(
                 self,
@@ -469,27 +442,22 @@ class DetectionSystemGUI(QMainWindow):
                 return
         else:
             self.detection_system = self.controller.detection_system
-
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.status_widget.set_status("running")
         self.update_camera_controls()
-
         self.original_image.clear()
         self.processed_image.clear()
         self.result_image.clear()
-
         self.log_message(
             f"Start detection - product: {product}, area: {area}, type: {inference_type}"
         )
-
         frame = None
         use_cam = True
         try:
             use_cam = bool(self.use_camera_chk.isChecked())
         except Exception:
             pass
-
         if not use_cam:
             selected = getattr(self, "selected_image_path", None)
             if selected:
@@ -497,13 +465,14 @@ class DetectionSystemGUI(QMainWindow):
                 if image is not None:
                     frame = image
             if frame is None:
-                QMessageBox.warning(self, "Input Source", "Select an image file or enable camera input.")
+                QMessageBox.warning(
+                    self, "Input Source", "Select an image file or enable camera input."
+                )
                 self.start_btn.setEnabled(True)
                 self.stop_btn.setEnabled(False)
                 self.status_widget.set_status("idle")
                 self.update_camera_controls()
                 return
-
         self.worker = self.controller.build_worker(
             product,
             area,
@@ -513,6 +482,7 @@ class DetectionSystemGUI(QMainWindow):
         self.worker.result_ready.connect(self.on_detection_complete)
         self.worker.error_occurred.connect(self.on_detection_error)
         self.worker.start()
+
     def stop_detection(self):
         """停止檢測"""
         if self.worker and self.worker.isRunning():
@@ -522,7 +492,6 @@ class DetectionSystemGUI(QMainWindow):
             except Exception:
                 self.worker.terminate()
                 self.worker.wait()
-
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.status_widget.set_status("idle")
@@ -531,97 +500,59 @@ class DetectionSystemGUI(QMainWindow):
 
     def on_detection_complete(self, result):
         """檢測完成回調"""
-
         self.current_result = result
-
         # 更新界面
-
         self.start_btn.setEnabled(True)
-
         self.stop_btn.setEnabled(False)
-
         self.save_btn.setEnabled(True)
         self.update_camera_controls()
-
         # 根據結果設定狀態
-
         status = result.get("status", "ERROR")
-
         if status == "PASS":
-
             self.status_widget.set_status("success")
-
         elif status == "FAIL":
-
             self.status_widget.set_status("warning")
-
         elif status == "ERROR":
-
             self.status_widget.set_status("error")
-
         else:
-
             self.status_widget.set_status("warning")
-
         # 更新結果顯示
-
         self.result_widget.update_result(result)
-
         # 顯示圖像（考慮非同步寫檔延遲）
-
         load_image_with_retry(
             self.original_image,
             result.get("original_image_path"),
             on_fail=lambda: self.original_image.setText("尚無原始影像（可能未保存）"),
         )
-
         load_image_with_retry(
             self.processed_image,
             result.get("preprocessed_image_path"),
             on_fail=lambda: self.processed_image.setText("尚無預處理影像"),
         )
-
         annotated_path = result.get("annotated_path")
-
         heatmap_path = result.get("heatmap_path")
 
         def show_result_frame():
-
             rf = result.get("result_frame", None)
-
             if isinstance(rf, np.ndarray) and getattr(rf, "size", 0) > 0:
-
                 try:
-
                     import tempfile
 
-                    temp_dir = os.path.join(
-                        tempfile.gettempdir(), "ai_detect_preview")
-
+                    temp_dir = os.path.join(tempfile.gettempdir(), "ai_detect_preview")
                     os.makedirs(temp_dir, exist_ok=True)
-
                     fname = (
                         f"annotated_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.jpg"
                     )
-
                     temp_path = os.path.join(temp_dir, fname)
-
                     cv2.imwrite(temp_path, rf)
-
                     self.result_image.set_image(temp_path)
-
                 except Exception:
-
                     self.result_image.setText("無法載入結果影像")
-
             else:
-
                 self.result_image.setText("無法載入結果影像")
 
         def load_heatmap():
-
             if heatmap_path:
-
                 load_image_with_retry(
                     self.result_image,
                     heatmap_path,
@@ -629,9 +560,7 @@ class DetectionSystemGUI(QMainWindow):
                     delay_ms=200,
                     on_fail=show_result_frame,
                 )
-
             else:
-
                 show_result_frame()
 
         load_image_with_retry(
@@ -641,11 +570,8 @@ class DetectionSystemGUI(QMainWindow):
             delay_ms=200,
             on_fail=load_heatmap,
         )
-
         self.log_message(f"檢測完成 - 狀態: {status}")
-
         # 狀態列
-
         self.statusBar().showMessage(f"檢測完成 - {status}", 5000)
 
     def on_detection_error(self, error_msg):
@@ -654,25 +580,22 @@ class DetectionSystemGUI(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.status_widget.set_status("error")
         self.update_camera_controls()
-
         self.log_message(f"檢測錯誤: {error_msg}")
         QMessageBox.critical(self, "檢測錯誤", f"檢測過程中發生錯誤\n{error_msg}")
 
-
-        
     def save_results(self):
         """Save the latest detection result to disk."""
         if not self.current_result:
-            QMessageBox.warning(self, "No Result", "There is no detection result to save yet.")
+            QMessageBox.warning(
+                self, "No Result", "There is no detection result to save yet."
+            )
             return
-
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Detection Result",
             f"detection_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
             "JSON files (*.json)",
         )
-
         if file_path:
             try:
                 self.controller.save_result_json(Path(file_path), self.current_result)
@@ -682,7 +605,10 @@ class DetectionSystemGUI(QMainWindow):
                 )
             except Exception as exc:
                 self.log_message(f"Failed to save result: {exc}")
-                QMessageBox.critical(self, "Save Error", f"Unable to save result:\n{exc}")
+                QMessageBox.critical(
+                    self, "Save Error", f"Unable to save result:\n{exc}"
+                )
+
     def pick_image(self):
         """選擇影像"""
         fname, _ = QFileDialog.getOpenFileName(
@@ -711,7 +637,11 @@ class DetectionSystemGUI(QMainWindow):
             if getattr(self, "clear_image_btn", None):
                 self.clear_image_btn.setEnabled(False)
             if getattr(self, "use_camera_chk", None):
-                camera_ready = self.controller.is_camera_connected() if self.controller.has_system() else False
+                camera_ready = (
+                    self.controller.is_camera_connected()
+                    if self.controller.has_system()
+                    else False
+                )
                 if camera_ready:
                     self.use_camera_chk.setChecked(True)
                 else:
@@ -750,9 +680,7 @@ class DetectionSystemGUI(QMainWindow):
                 if getattr(self, "pick_image_btn", None):
                     self.pick_image_btn.setEnabled(True)
                 if getattr(self, "clear_image_btn", None):
-                    self.clear_image_btn.setEnabled(
-                        bool(self.selected_image_path)
-                    )
+                    self.clear_image_btn.setEnabled(bool(self.selected_image_path))
                 if not self.selected_image_path and getattr(
                     self, "image_path_label", None
                 ):
@@ -817,7 +745,6 @@ class DetectionSystemGUI(QMainWindow):
             else:
                 event.ignore()
                 return
-
         if self.controller.has_system():
             self.controller.shutdown()
         try:
@@ -829,26 +756,21 @@ class DetectionSystemGUI(QMainWindow):
             )
         except Exception:
             pass
-
         event.accept()
 
 
 def main():
     app = QApplication(sys.argv)
-
     # 設定應用程式資訊
     app.setApplicationName("AI 檢測系統")
     app.setApplicationVersion("1.0")
     app.setOrganizationName("AI Detection Lab")
-
     # 設定預設字體
     font = QFont("Microsoft JhengHei", 9)
     app.setFont(font)
-
     # 建立主視窗
     window = DetectionSystemGUI()
     window.show()
-
     sys.exit(app.exec_())
 
 

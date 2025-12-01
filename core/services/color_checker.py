@@ -6,13 +6,13 @@ from typing import List, Optional, Dict, Any
 
 import numpy as np
 
-from core.led_qc_enhanced import LEDQCEnhanced
+from core.color_qc_enhanced import ColorQCEnhanced
 from core.models import ColorCheckItemResult, ColorCheckResult
 from core.stats_color_checker import StatsColorChecker
 
 
 class ColorCheckerService:
-    """Wrapper around LEDQCEnhanced that manages model lifecycle.
+    """Wrapper around ColorQCEnhanced that manages model lifecycle.
 
     Responsibilities:
     - Load advanced JSON color model (once per path change)
@@ -22,19 +22,20 @@ class ColorCheckerService:
     def __init__(self) -> None:
         self._checker: Optional[Any] = None
         self._model_path: Optional[str] = None
-        self._checker_type: str = "led_qc"
+        self._checker_type: str = "color_qc"
 
     def ensure_loaded(
         self,
         model_path: str,
         overrides: Optional[Dict[str, float]] = None,
-        rules_overrides: Optional[Dict[str,
-                                       Dict[str, Optional[float]]]] = None,
-        checker_type: str = "led_qc",
+        rules_overrides: Optional[Dict[str, Dict[str, Optional[float]]]] = None,
+        checker_type: str = "color_qc",
         default_threshold: Optional[float] = None,
     ) -> None:
         """Load/Reload the color model if needed and apply overrides if provided."""
-        checker_type = (checker_type or "led_qc").lower()
+        checker_type = (checker_type or "color_qc").lower()
+        if checker_type == "led_qc":
+            checker_type = "color_qc"  # backward compatibility alias
         need_reload = (
             self._checker is None
             or self._model_path != model_path
@@ -56,7 +57,7 @@ class ColorCheckerService:
             overrides = None  # already applied during creation
             rules_overrides = None
         elif need_reload:
-            self._checker = LEDQCEnhanced.from_json(model_path)
+            self._checker = ColorQCEnhanced.from_json(model_path)
             self._model_path = model_path
             self._checker_type = checker_type
 
