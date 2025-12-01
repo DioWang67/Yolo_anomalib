@@ -12,8 +12,8 @@ class StatusWidget(QWidget):
     """Small status dashboard showing current system state."""
 
     _STATUS_COLORS: Dict[str, tuple[str, str]] = {
-        "idle": ("#6c757d", "系統待命中"),
-        "running": ("#ffc107", "檢測執行中..."),
+        "idle": ("#6c757d", "系統待命"),
+        "running": ("#ffc107", "檢測進行中..."),
         "success": ("#28a745", "檢測完成"),
         "error": ("#dc3545", "檢測錯誤"),
         "warning": ("#fd7e14", "警告"),
@@ -59,7 +59,7 @@ class StatusWidget(QWidget):
         self.set_status("idle")
 
     def set_status(self, status: str) -> None:
-        color, text = self._STATUS_COLORS.get(status, ("#6c757d", "未知狀態"))
+        color, text = self._STATUS_COLORS.get(status, ("#6c757d", "狀態未知"))
         self._status_indicator.setStyleSheet(f"color: {color};")
         self._status_text.setText(text)
 
@@ -124,7 +124,6 @@ class ResultDisplayWidget(QWidget):
             }
         """
         )
-        self._result_text.setMaximumHeight(200)
         self._result_text.setReadOnly(True)
 
         layout.addWidget(title)
@@ -133,32 +132,64 @@ class ResultDisplayWidget(QWidget):
 
     def update_result(self, result: dict) -> None:
         """Render detection result details into the text panel."""
-        text = "=== 檢測結果 ===\n"
-        text += f"狀態: {result.get('status', 'N/A')}\n"
-        text += f"產品: {result.get('product', 'N/A')}\n"
-        text += f"區域: {result.get('area', 'N/A')}\n"
-        text += f"類型: {result.get('inference_type', 'N/A')}\n"
-        text += f"模型路徑: {result.get('ckpt_path', 'N/A')}\n"
+        lines = []
+        status = result.get("status", "N/A")
+        product = result.get("product", "N/A")
+        area = result.get("area", "N/A")
+        inference_type = result.get("inference_type", "N/A")
+        ckpt_path = result.get("ckpt_path", "N/A")
+        ckpt_name = os.path.basename(ckpt_path) if ckpt_path else "N/A"
+
+        lines.append("=== 檢測摘要 ===")
+        lines.append(f"狀態: {status}")
+        lines.append(f"產品 / 區域: {product} / {area}")
+        lines.append(f"類型: {inference_type}")
+        lines.append(f"模型: {ckpt_name}")
+
+        lines.append("\n=== 數據 ===")
+        detections = result.get("detections", []) or []
+        lines.append(f"偵測數量: {len(detections)}")
 
         anomaly_score = result.get("anomaly_score")
-        if anomaly_score or anomaly_score in (0, 0.0):
-            text += f"異常分數: {anomaly_score}\n"
+        if anomaly_score is not None:
+            lines.append(f"異常分數: {anomaly_score}")
 
-        detections = result.get("detections", [])
-        if detections:
-            text += f"檢測到的項目數量: {len(detections)}\n"
-            for idx, det in enumerate(detections[:3]):
-                text += f"  - 項目{idx + 1}: {det}\n"
+        missing = result.get("missing_items") or []
+        if isinstance(missing, (list, tuple)):
+            lines.append(f"缺失項目: {len(missing)}")
+        else:
+            lines.append(f"缺失項目: {missing}")
 
-        missing = result.get("missing_items")
+        unexpected = result.get("unexpected_items") or []
+        if isinstance(unexpected, (list, tuple)):
+            lines.append(f"未預期項目: {len(unexpected)}")
+
+        lines.append("\n=== 缺失列表 ===")
         if missing:
-            text += f"缺失項目: {missing}\n"
-            try:
-                if isinstance(missing, list) and missing:
-                    text += "缺失項目列表:\n"
-                    text += "\n".join(f"  - {item}" for item in missing) + "\n"
-            except Exception:
-                pass
+            for item in missing:
+                lines.append(f"- {item}")
+        else:
+            lines.append("無")
 
-        text += "==================="
-        self._result_text.setPlainText(text)
+        lines.append("\n=== 未預期項目 ===")
+        if unexpected:
+            for item in unexpected:
+                lines.append(f"- {item}")
+        else:
+            lines.append("無")
+
+        if detections:
+            lines.append("\n=== 偵測細節 (前 5 筆) ===")
+            for idx, det in enumerate(detections[:5], start=1):
+                cls = det.get("class", "N/A")
+                conf = det.get("confidence", det.get("conf", None))
+                pos_status = det.get("position_status")
+                parts = [f"{idx}. {cls}"]
+                if conf is not None:
+                    parts.append(f"conf={conf:.3f}" if isinstance(conf, (int, float)) else f"conf={conf}")
+                if pos_status:
+                    parts.append(f"pos={pos_status}")
+                lines.append(" | ".join(parts))
+
+        lines.append("===================")
+        self._result_text.setPlainText("\n".join(lines))

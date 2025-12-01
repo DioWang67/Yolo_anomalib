@@ -39,7 +39,7 @@ def build_control_panel(gui: "DetectionSystemGUI") -> QGroupBox:
         )
     except Exception:
         pass
-    product_layout.addWidget(QLabel("產品:"))
+    product_layout.addWidget(QLabel("產品："))
     product_layout.addWidget(gui.product_combo)
     product_group.setLayout(product_layout)
     layout.addWidget(product_group)
@@ -54,7 +54,7 @@ def build_control_panel(gui: "DetectionSystemGUI") -> QGroupBox:
         )
     except Exception:
         pass
-    area_layout.addWidget(QLabel("區域:"))
+    area_layout.addWidget(QLabel("區域："))
     area_layout.addWidget(gui.area_combo)
     area_group.setLayout(area_layout)
     layout.addWidget(area_group)
@@ -68,7 +68,7 @@ def build_control_panel(gui: "DetectionSystemGUI") -> QGroupBox:
         )
     except Exception:
         pass
-    inference_layout.addWidget(QLabel("類型:"))
+    inference_layout.addWidget(QLabel("類型："))
     inference_layout.addWidget(gui.inference_combo)
     inference_group.setLayout(inference_layout)
     layout.addWidget(inference_group)
@@ -101,7 +101,7 @@ def build_control_panel(gui: "DetectionSystemGUI") -> QGroupBox:
         pass
     try:
         camera_btn_layout = QHBoxLayout()
-        gui.reconnect_camera_btn = QPushButton("重新連線相機")
+        gui.reconnect_camera_btn = QPushButton("重新連接相機")
         gui.reconnect_camera_btn.clicked.connect(gui.handle_reconnect_camera)
         camera_btn_layout.addWidget(gui.reconnect_camera_btn)
         gui.disconnect_camera_btn = QPushButton("斷開相機")
@@ -114,7 +114,7 @@ def build_control_panel(gui: "DetectionSystemGUI") -> QGroupBox:
     gui.pick_image_btn = QPushButton("選擇影像...")
     gui.pick_image_btn.setStyleSheet("QPushButton { background-color: #17a2b8; }")
     gui.pick_image_btn.clicked.connect(gui.pick_image)
-    gui.image_path_label = QLabel("未選擇影像（可使用相機/載入影像）")
+    gui.image_path_label = QLabel("未選擇影像；可使用相機或載入影像")
     gui.image_path_label.setStyleSheet("color: #6c757d;")
     button_layout.addWidget(gui.pick_image_btn)
     button_layout.addWidget(gui.image_path_label)
@@ -131,7 +131,6 @@ def build_control_panel(gui: "DetectionSystemGUI") -> QGroupBox:
 
     layout.addStretch()
     panel.setLayout(layout)
-    panel.setMaximumWidth(250)
     return panel
 
 
@@ -169,7 +168,6 @@ def build_info_panel(gui: "DetectionSystemGUI") -> QWidget:
 
     gui.log_text = QTextEdit()
     gui.log_text.setFont(QFont("Consolas", 8))
-    gui.log_text.setMaximumHeight(150)
     gui.log_text.setStyleSheet(
         """
         QTextEdit {
@@ -186,7 +184,6 @@ def build_info_panel(gui: "DetectionSystemGUI") -> QWidget:
     layout.addWidget(log_group)
 
     panel.setLayout(layout)
-    panel.setMaximumWidth(300)
     return panel
 
 

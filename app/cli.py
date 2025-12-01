@@ -110,5 +110,3 @@ def run_cli(system) -> None:
             break
         except Exception as e:
             logger.logger.error(f"指令處理失敗: {str(e)}")
-
-

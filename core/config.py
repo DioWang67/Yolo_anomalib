@@ -16,7 +16,7 @@ try:  # pragma: no cover - runtime optional depending on pydantic version
 except Exception:  # pragma: no cover
     try:
         from pydantic.v1 import (
-            ValidationError as _ValidationError  # type: ignore
+            ValidationError as _ValidationError,  # type: ignore
         )
     except Exception:  # pragma: no cover
         _ValidationError = None  # type: ignore
@@ -62,8 +62,7 @@ def _format_validation_error(exc: Exception) -> str:
 
 def _ensure_schema(schema: Any, label: str) -> Any:
     if schema is None or _to_dict is None:
-        logger.warning(
-            "Pydantic schemas unavailable; skipping %s validation", label)
+        logger.warning("Pydantic schemas unavailable; skipping %s validation", label)
         return None
     return schema
 
@@ -98,8 +97,7 @@ def _coerce_imgsz(
         return default
     if isinstance(value, (list, tuple)) and len(value) == 2:
         return int(value[0]), int(value[1])
-    raise ConfigValidationError(
-        "imgsz must contain exactly two numeric values")
+    raise ConfigValidationError("imgsz must contain exactly two numeric values")
 
 
 @dataclass
@@ -124,8 +122,7 @@ class DetectionConfig:
     MV_CC_GetImageBuffer_nMsec: int = 10000
     current_product: Optional[str] = None
     current_area: Optional[str] = None
-    expected_items: Dict[str, Dict[str, List[str]]
-                         ] = field(default_factory=dict)
+    expected_items: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
     enable_yolo: bool = True
     enable_anomalib: bool = False
     enable_color_check: bool = False
@@ -133,21 +130,18 @@ class DetectionConfig:
     color_threshold_overrides: Optional[Dict[str, float]] = None
     # Optional per-color rules overrides:
     # { ColorName: { s_p90_max, s_p10_min, v_p50_min, v_p95_max } }
-    color_rules_overrides: Optional[Dict[str,
-                                         Dict[str, Optional[float]]]] = None
-    color_checker_type: str = "led_qc"
+    color_rules_overrides: Optional[Dict[str, Dict[str, Optional[float]]]] = None
+    color_checker_type: str = "color_qc"
     color_score_threshold: Optional[float] = None
     output_dir: str = "Result"
     anomalib_config: Optional[Dict[str, Any]] = None
-    position_config: Dict[str, Dict[str, Dict[str, Any]]
-                          ] = field(default_factory=dict)
+    position_config: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
     max_cache_size: int = 3
     buffer_limit: int = 1
     flush_interval: Optional[float] = None
     pipeline: Optional[List[str]] = None
     steps: Dict[str, Any] = field(default_factory=dict)
-    backends: Optional[Dict[str, Dict[str, Any]]
-                       ] = None  # extra/custom backends
+    backends: Optional[Dict[str, Dict[str, Any]]] = None  # extra/custom backends
     # Avoid duplicating cache with YOLO internal cache (default: disable)
     disable_internal_cache: bool = True
     # Saving controls
@@ -168,19 +162,13 @@ class DetectionConfig:
         normalized = _normalize_with_schema(
             GlobalConfigSchema, payload, source, "Global"
         )
-        normalized["imgsz"] = _coerce_imgsz(
-            normalized.get("imgsz"), default=(640, 640))
+        normalized["imgsz"] = _coerce_imgsz(normalized.get("imgsz"), default=(640, 640))
         return normalized
 
     @staticmethod
-    def normalize_model_dict(
-        payload: Dict[str, Any],
-        source: str
-    ) -> Dict[str, Any]:
-        normalized = _normalize_with_schema(
-            ModelConfigSchema, payload, source, "Model")
-        normalized["imgsz"] = _coerce_imgsz(
-            normalized.get("imgsz"), default=None)
+    def normalize_model_dict(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
+        normalized = _normalize_with_schema(ModelConfigSchema, payload, source, "Model")
+        normalized["imgsz"] = _coerce_imgsz(normalized.get("imgsz"), default=None)
         return normalized
 
     @classmethod
@@ -195,9 +183,7 @@ class DetectionConfig:
                 raw = yaml.safe_load(handle)
         except yaml.YAMLError as exc:  # pragma: no cover -
             # unlikely parse error
-            raise ConfigLoadError(
-                f"Failed to parse YAML {config_path}: {exc}"
-            ) from exc
+            raise ConfigLoadError(f"Failed to parse YAML {config_path}: {exc}") from exc
         except OSError as exc:
             raise ConfigLoadError(
                 f"Unable to read config {config_path}: {exc}"
@@ -219,12 +205,10 @@ class DetectionConfig:
 
         pipeline_raw = normalized.get("pipeline")
         pipeline_value = (
-            list(pipeline_raw) if isinstance(
-                pipeline_raw, (list, tuple)) else None
+            list(pipeline_raw) if isinstance(pipeline_raw, (list, tuple)) else None
         )
         backends_raw = normalized.get("backends")
-        backends_value = dict(backends_raw) if isinstance(
-            backends_raw, dict) else None
+        backends_value = dict(backends_raw) if isinstance(backends_raw, dict) else None
 
         kwargs: Dict[str, Any] = {
             "weights": str(weights),
@@ -248,11 +232,11 @@ class DetectionConfig:
             "enable_anomalib": bool(normalized.get("enable_anomalib", False)),
             "enable_color_check": bool(normalized.get("enable_color_check", False)),
             "color_model_path": normalized.get("color_model_path"),
-            "color_threshold_overrides": normalized.get(
-                "color_threshold_overrides"
-            ),
+            "color_threshold_overrides": normalized.get("color_threshold_overrides"),
             "color_rules_overrides": normalized.get("color_rules_overrides"),
-            "color_checker_type": str(normalized.get("color_checker_type") or "led_qc"),
+            "color_checker_type": str(
+                normalized.get("color_checker_type") or "color_qc"
+            ),
             "color_score_threshold": normalized.get("color_score_threshold"),
             "output_dir": str(normalized.get("output_dir", "Result")),
             "anomalib_config": normalized.get("anomalib_config"),

@@ -11,7 +11,7 @@ import json
 import cv2
 import numpy as np
 
-from core.led_qc_enhanced import LEDQCAdvancedResult
+from core.color_qc_enhanced import ColorQCAdvancedResult
 
 # Default sampling thresholds
 DEFAULT_SAT_THRESHOLD = 20.0
@@ -173,7 +173,9 @@ def _improved_match_ratio(
         mean_b = float(np.mean(lab_vals[:, 2]))
         expected_a = float(color_range.lab_mean[1])
         expected_b = float(color_range.lab_mean[2])
-        lab_chroma_dist = np.sqrt((mean_a - expected_a) ** 2 + (mean_b - expected_b) ** 2)
+        lab_chroma_dist = np.sqrt(
+            (mean_a - expected_a) ** 2 + (mean_b - expected_b) ** 2
+        )
         lab_chroma_similarity = np.exp(-lab_chroma_dist / 20.0)
 
     if color_name in {"orange", "red"}:
@@ -197,7 +199,7 @@ def _is_black_image(hsv_img: np.ndarray) -> Tuple[bool, float]:
     h, w = hsv_img.shape[:2]
     margin_y = int(h * 0.15)
     margin_x = int(w * 0.15)
-    center_region = hsv_img[margin_y:h - margin_y, margin_x:w - margin_x]
+    center_region = hsv_img[margin_y : h - margin_y, margin_x : w - margin_x]
     if center_region.size == 0:
         center_region = hsv_img
 
@@ -221,7 +223,7 @@ def _is_black_image(hsv_img: np.ndarray) -> Tuple[bool, float]:
 def _detect_yellow_special(hsv_img: np.ndarray) -> Tuple[bool, float]:
     h, w = hsv_img.shape[:2]
     margin = int(min(h, w) * 0.15)
-    center = hsv_img[margin:h - margin, margin:w - margin]
+    center = hsv_img[margin : h - margin, margin : w - margin]
     if center.size == 0:
         center = hsv_img
 
@@ -237,7 +239,9 @@ def _detect_yellow_special(hsv_img: np.ndarray) -> Tuple[bool, float]:
     )
     yellow_ratio = float(np.count_nonzero(yellow_mask)) / max(yellow_mask.size, 1)
     orange_like_mask = (h_vals < 20) & (h_vals > 5) & (s_vals > 100)
-    orange_ratio = float(np.count_nonzero(orange_like_mask)) / max(orange_like_mask.size, 1)
+    orange_ratio = float(np.count_nonzero(orange_like_mask)) / max(
+        orange_like_mask.size, 1
+    )
     return (yellow_ratio > 0.25 and yellow_ratio > orange_ratio * 1.3), yellow_ratio
 
 
@@ -272,7 +276,9 @@ class StatsColorChecker:
         lab_margin: Sequence[float] | float | None = None,
     ) -> "StatsColorChecker":
         stats_path = Path(stats_path)
-        ranges = _load_color_ranges(stats_path, hsv_margin=hsv_margin, lab_margin=lab_margin)
+        ranges = _load_color_ranges(
+            stats_path, hsv_margin=hsv_margin, lab_margin=lab_margin
+        )
         return cls(
             ranges,
             default_threshold=default_threshold,
@@ -284,7 +290,7 @@ class StatsColorChecker:
         image_bgr: np.ndarray,
         *,
         allowed_colors: Optional[Iterable[str]] = None,
-    ) -> LEDQCAdvancedResult:
+    ) -> ColorQCAdvancedResult:
         ranges = self._filter_ranges(allowed_colors)
         if not ranges:
             ranges = self._ranges
@@ -324,7 +330,7 @@ class StatsColorChecker:
         self,
         score_map: Dict[str, float],
         debug: Dict[str, object],
-    ) -> LEDQCAdvancedResult:
+    ) -> ColorQCAdvancedResult:
         best_name, best_score = ("", 0.0)
         for name, score in score_map.items():
             if best_name == "" or score > best_score:
@@ -335,7 +341,9 @@ class StatsColorChecker:
             best_name = next(iter(self._ranges))
             best_score = 0.0
 
-        threshold = self._color_thresholds.get(best_name.lower(), self._default_threshold)
+        threshold = self._color_thresholds.get(
+            best_name.lower(), self._default_threshold
+        )
         is_ok = best_score >= threshold
         metrics = {
             "score": float(best_score),
@@ -344,8 +352,10 @@ class StatsColorChecker:
             "debug": debug,
         }
         ordered_scores = sorted(score_map.items(), key=lambda kv: kv[1], reverse=True)
-        return LEDQCAdvancedResult(
-            best_color=self._ranges.get(best_name, self._ranges[next(iter(self._ranges))]).name,
+        return ColorQCAdvancedResult(
+            best_color=self._ranges.get(
+                best_name, self._ranges[next(iter(self._ranges))]
+            ).name,
             diff=float(max(0.0, 1.0 - best_score)),
             threshold=float(max(0.0, 1.0 - threshold)),
             is_ok=is_ok,
@@ -390,5 +400,5 @@ class StatsColorChecker:
         margin = int(min(h, w) * CENTER_MARGIN_RATIO)
         if margin <= 0 or margin * 2 >= h or margin * 2 >= w:
             return img
-        cropped = img[margin:h - margin, margin:w - margin]
+        cropped = img[margin : h - margin, margin : w - margin]
         return cropped if cropped.size else img
