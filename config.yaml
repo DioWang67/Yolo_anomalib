@@ -1,6 +1,9 @@
+# yolo11_inference Configuration
+# For configuration template and detailed explanations, see config.example.yaml
+
 weights: "models/LED/A/yolo/LED_color_mixing_best.pt"
-exposure_time: "51170.0000"  # 20000 LED:200
-gain: "23.0" #15
+exposure_time: "51170.0000"
+gain: "23.0"
 MV_CC_GetImageBuffer_nMsec: 10000
 timeout: 1
 width: 3072
@@ -8,4 +11,7 @@ height: 2048
 enable_yolo: true
 enable_anomalib: false
 max_cache_size: 3
-output_dir: "D:/Git/robotlearning/build_exe/Result"
+
+# Output directory - use relative path for better portability
+# Change this to your desired output location
+output_dir: "./Result"

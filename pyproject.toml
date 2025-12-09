@@ -1,0 +1,182 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yolo11-inference"
+version = "0.1.0"
+description = "Industrial vision inspection system integrating YOLO object detection and Anomalib anomaly detection"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Proprietary"}
+authors = [
+    {name = "DioWang", email = "a0983743448@gmail.com"}
+]
+keywords = ["yolo", "anomaly-detection", "computer-vision", "quality-inspection", "industrial-vision"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Manufacturing",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+
+dependencies = [
+    # Core inference
+    "torch==2.4.1",
+    "torchvision==0.19.1",
+    "lightning==2.4.0",
+    "anomalib==1.2.0",
+    "ultralytics==8.3.156",
+    
+    # Data processing
+    "numpy==1.26.4",
+    "opencv-python==4.9.0.80",
+    "pillow==10.4.0",
+    "pandas==2.3.1",
+    "openpyxl==3.1.5",
+    "matplotlib==3.9.2",
+    "scikit-learn==1.5.2",
+    "scipy==1.13.1",
+    
+    # Anomalib support
+    "kornia==0.8.1",
+    "timm==1.0.19",
+    "einops==0.8.1",
+    "FrEIA==0.2",
+    "python-dotenv==1.1.1",
+    "open-clip-torch==3.1.0",
+    
+    # Utilities
+    "jsonargparse==4.34.0",
+    "pydantic>=1.10,<3.0",
+    "PyYAML==6.0.2",
+    "requests==2.32.3",
+    "tqdm==4.67.1",
+    "typing_extensions==4.12.2",
+]
+
+[project.optional-dependencies]
+gui = [
+    "PyQt5==5.15.11",
+]
+
+dev = [
+    "pytest==8.3.3",
+    "pytest-cov>=4.0.0",
+    "pytest-qt>=4.2.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "build>=0.10.0",
+    "twine>=4.0.0",
+]
+
+[project.scripts]
+yolo11-inference = "main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "app*", "camera*"]
+exclude = ["tests*", "docs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--verbose",
+    "--strict-markers",
+    "--ignore=core/performance_test.py",
+]
+markers = [
+    "gui: GUI smoke tests that require PyQt5 (offscreen)",
+    "slow: Slow running tests",
+    "integration: Integration tests",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = [
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "build",
+    "dist",
+    "MvImport",
+    "Runtime",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E203", # whitespace before ':'
+    "E501", # line too long (handled by line-length)
+    "B008", # do not perform function calls in argument defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+"patch_gui2.py" = ["E501"]
+"MvImport/*" = ["E501", "F401", "F403"]
+"tests/*" = ["B011"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "cv2.*",
+    "ultralytics.*",
+    "anomalib.*",
+    "lightning.*",
+    "kornia.*",
+    "timm.*",
+    "einops.*",
+    "FrEIA.*",
+]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["core", "app", "camera"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+    "*/performance_test.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
