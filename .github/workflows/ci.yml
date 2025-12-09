@@ -33,7 +33,7 @@ jobs:
     
     - name: Type check with mypy
       run: |
-        mypy core app --ignore-missing-imports
+        mypy core app --ignore-missing-imports --explicit-package-bases --exclude MvImport
       continue-on-error: true
 
   test:
