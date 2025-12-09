@@ -200,81 +200,55 @@ class DetectionSystemGUI(QMainWindow):
             except Exception:
                 pass
 
+    def _update_model_combos(self):
+        """Populates and sets the product, area, and inference type combo boxes."""
+        self.available_products = self._catalog.products()
+        self.product_combo.clear()
+        self.area_combo.clear()
+        self.inference_combo.clear()
+
+        self.available_areas = {
+            product: self._catalog.areas(product) for product in self.available_products
+        }
+
+        if not self.available_products:
+            self.log_message("No models found in the models directory.")
+            return
+
+        self.product_combo.addItems(self.available_products)
+        last_prod, last_area, last_infer = self.preferences.restore_last_selection()
+
+        if last_prod and last_prod in self.available_products:
+            self.product_combo.setCurrentText(last_prod)
+
+        self.on_product_changed(self.product_combo.currentText())
+
+        if last_area and last_area in self.available_areas.get(self.product_combo.currentText(), []):
+            self.area_combo.setCurrentText(last_area)
+
+        self.on_area_changed(self.area_combo.currentText())
+
+        available_types = [self.inference_combo.itemText(i) for i in range(self.inference_combo.count())]
+        if last_infer and last_infer in available_types:
+            self.inference_combo.setCurrentText(last_infer)
+
     def load_available_models(self):
-        """載入可用模型資訊"""
+        """Loads available model information from the filesystem."""
         try:
             base_path = Path(self._models_base)
             if not base_path.exists():
-                self.log_message("找不到 models 目錄")
+                self.log_message(f"Models directory not found at: {base_path}")
                 return
-            # Recreate catalog based on current models base to avoid stale entries
+
             self._catalog = ModelCatalog(base_path)
             self.controller.catalog = self._catalog
             self._catalog.refresh()
-            self.available_products = self._catalog.products()
-            self.product_combo.clear()
-            self.available_areas = {
-                product: self._catalog.areas(product)
-                for product in self.available_products
-            }
-            if self.available_products:
-                self.product_combo.addItems(self.available_products)
-                last_prod, last_area, last_infer = (
-                    self.preferences.restore_last_selection()
-                )
-                if last_prod and last_prod in self.available_products:
-                    self.product_combo.setCurrentText(last_prod)
-                self.on_product_changed(self.product_combo.currentText())
-                try:
-                    if last_area and last_area in self.available_areas.get(
-                        self.product_combo.currentText(), []
-                    ):
-                        self.area_combo.setCurrentText(last_area)
-                    self.on_area_changed(self.area_combo.currentText())
-                    available_types = [
-                        self.inference_combo.itemText(i)
-                        for i in range(self.inference_combo.count())
-                    ]
-                    if last_infer and last_infer in available_types:
-                        self.inference_combo.setCurrentText(last_infer)
-                except Exception:
-                    pass
-            else:
-                self.product_combo.clear()
-            self.log_message(f"載入了 {len(self.available_products)} 組模型設定")
+
+            self._update_model_combos()
+            self.log_message(f"Loaded {len(self.available_products)} model configurations.")
         except Exception as exc:
-            self.log_message(f"載入模型資料時發生錯誤: {exc}")
-            self.available_areas = {
-                product: self._catalog.areas(product)
-                for product in self.available_products
-            }
-            if self.available_products:
-                self.product_combo.addItems(self.available_products)
-                last_prod, last_area, last_infer = (
-                    self.preferences.restore_last_selection()
-                )
-                if last_prod and last_prod in self.available_products:
-                    self.product_combo.setCurrentText(last_prod)
-                self.on_product_changed(self.product_combo.currentText())
-                try:
-                    if last_area and last_area in self.available_areas.get(
-                        self.product_combo.currentText(), []
-                    ):
-                        self.area_combo.setCurrentText(last_area)
-                    self.on_area_changed(self.area_combo.currentText())
-                    available_types = [
-                        self.inference_combo.itemText(i)
-                        for i in range(self.inference_combo.count())
-                    ]
-                    if last_infer and last_infer in available_types:
-                        self.inference_combo.setCurrentText(last_infer)
-                except Exception:
-                    pass
-            else:
-                self.product_combo.clear()
-            self.log_message(f"載入了 {len(self.available_products)} 組模型設定")
-        except Exception as exc:
-            self.log_message(f"載入模型資料發生錯誤: {exc}")
+            self.log_message(f"Error loading model data: {exc}")
+            QMessageBox.critical(self, "Model Loading Error", f"Failed to load model data:\n{exc}")
 
     def on_product_changed(self, product):
         """產品選擇變更時的處理"""

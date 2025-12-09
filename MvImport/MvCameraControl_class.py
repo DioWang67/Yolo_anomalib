@@ -18,21 +18,49 @@ if getattr(sys, 'frozen', False):  # PyInstaller 打包後
 else:  # 開發環境
     dll_path = r"D:\Git\robotlearning\yolo_inference\Runtime\MvCameraControl.dll"
 
-# 嘗試載入 DLL
-try:
-    MvCamCtrldll = WinDLL(dll_path)
-    print("DLL loaded successfully!")
-except Exception as e:
-    print(f"Failed to load DLL: {e}")
-    sys.exit(1)
+# Platform-specific DLL loading
+MvCamCtrldll = None
+if sys.platform == "win32":
+    # 嘗試載入 DLL
+    try:
+        MvCamCtrldll = WinDLL(dll_path)
+        print("DLL loaded successfully!")
+    except Exception as e:
+        print(f"Failed to load DLL: {e}")
+        # In a non-interactive environment (like tests), we should not exit.
+        # Let the application handle the failure.
+        if sys.stdout.isatty():
+            sys.exit(1)
+        else:
+            # Raise an exception that can be caught by the application layer
+            raise ImportError(f"Failed to load MvCameraControl.dll: {e}")
 
-
-# Python3.8版本修改Dll加载策略, 默认不再搜索Path环境变量, 同时增加winmode参数以兼容旧版本
-dllname = "MvCameraControl.dll"
-if "winmode" in ctypes.WinDLL.__init__.__code__.co_varnames:
-    MvCamCtrldll = WinDLL(dllname, winmode=0)
+    if MvCamCtrldll:
+        # Python3.8版本修改Dll加载策略, 默认不再搜索Path环境变量, 同时增加winmode参数以兼容旧版本
+        dllname = "MvCameraControl.dll"
+        try:
+            if "winmode" in ctypes.WinDLL.__init__.__code__.co_varnames:
+                MvCamCtrldll = WinDLL(dllname, winmode=0)
+            else:
+                MvCamCtrldll = WinDLL(dllname)
+        except Exception as e:
+            print(f"Failed to re-load DLL with winmode: {e}")
+            if sys.stdout.isatty():
+                sys.exit(1)
+            else:
+                raise ImportError(f"Failed to re-load MvCameraControl.dll: {e}")
 else:
-    MvCamCtrldll = WinDLL(dllname)
+    # On non-Windows platforms, create a mock object to allow tests to run.
+    # The actual camera functionality will not work, but the application can start
+    # and the test suite can mock out the camera controller.
+    class MockMvCamCtrldll:
+        def __getattr__(self, name):
+            def dummy_func(*args, **kwargs):
+                # Return a default value, e.g., 0 for success
+                return 0
+            return dummy_func
+    MvCamCtrldll = MockMvCamCtrldll()
+    print("Running on non-Windows platform. Using mock camera DLL.")
 
 
 # 用于回调函数传入相机实例

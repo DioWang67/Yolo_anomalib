@@ -103,15 +103,20 @@ class YOLOInferenceModel(BaseInferenceModel):
                 f"YOLO model initialized (device={self.config.device}, product={product}, area={area})"
             )
             return True
-        except (FileNotFoundError, RuntimeError) as exc:
-            self.logger.logger.exception("Failed to initialize YOLO model")
-            raise ModelInitializationError(str(exc)) from exc
-        except Exception as exc:
-            self.logger.logger.exception(
-                "Unexpected error during YOLO model initialization"
+        except FileNotFoundError as exc:
+            self.logger.logger.error(
+                f"YOLO model weights file not found: {self.config.weights}"
             )
             raise ModelInitializationError(
-                "YOLO initialization failed") from exc
+                f"Model weights file not found: {self.config.weights}"
+            ) from exc
+        except RuntimeError as exc:
+            self.logger.logger.exception(
+                "Runtime error (e.g., CUDA issue) during YOLO model initialization"
+            )
+            raise ModelInitializationError(
+                "A runtime error occurred during model loading"
+            ) from exc
 
     def preprocess_image(
         self, frame: np.ndarray, product: str, area: str
