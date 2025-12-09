@@ -9,13 +9,44 @@ pip_log.txt
 *.venv/
 venv/
 env/
+.venv/
+
+# 建構和分發
+build/
+dist/
+*.egg
+*.whl
+
+# 測試和覆蓋率
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# 型別檢查和 Linting
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+
+# 使用者配置檔案 (應使用 config.example.yaml 作為範本)
+config.yaml
 
 # 臨時檔案
 Result/tmp/
 tmp_*.jpg
-*.jpg
 *.tmp
 debug_heatmap.jpg
+
+# 輸出影像 (保留目錄結構但忽略內容)
+*.jpg
+*.png
+*.jpeg
 
 # 日誌檔案
 logs/
@@ -28,14 +59,19 @@ Result/*/preprocessed/
 Result/*/cropped/
 Result/results.xlsx
 Result/
-# 模型檢查點和大檔案
+
+# 模型檢查點和大檔案 (通常應使用 Git LFS)
 *.ckpt
 *.pt
 *.pth
+*.onnx
+*.engine
+*.trt
 
 # 環境和敏感資訊
 .env
 *.env
+.env.local
 
 # IDE 和編輯器檔案
 .vscode/
@@ -44,3 +80,22 @@ Result/
 *~
 .DS_Store
 Thumbs.db
+*.code-workspace
+
+# 運行時資料
+Runtime/
+MvImport/*.log
+
+# Windows 批次檔產生的臨時檔案
+*.exe
+*.bat.bak
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# pyenv
+.python-version
+
+# 其他
+.antigravityignore

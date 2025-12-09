@@ -1,95 +1,333 @@
-# picture-tool
+# yolo11_inference
 
-影像處理與 YOLO 自動化訓練/驗證工具，提供 CLI 與 PyQt GUI。涵蓋格式轉換、資料增強、分割、訓練/評估、批次推論、顏色檢測、位置驗證等流程，並內建任務預設組合。
+工業視覺檢測系統，整合 YOLO 物件偵測與 Anomalib 異常檢測，支援多產品/多站別的品質檢測流程。
+
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 
 ## 主要功能
-- 影像格式轉換、YOLO/一般影像增強、資料分割、資料品質檢查與增強預覽。
-- YOLO11 訓練與評估（GPU/CPU 自動偵測），可匯出檢測設定。
-- LED 顏色檢測：以 SAM 建模/多張/批次檢測，產出 JSON/CSV。
-- 批次推論、報告生成，以及 PyQt GUI 控制面板。
-- 任務管線可由 CLI、GUI 選擇或預設套用。
+
+- 🎯 **YOLO11 物件偵測**: 零件定位、缺件檢查、位置校驗
+- 🔍 **Anomalib 異常檢測**: 表面刮傷、髒污、異物檢測
+- 📷 **工業相機整合**: 支援海康威視 MVS SDK
+- 🎨 **LED 顏色檢測**: 統計式顏色驗證
+- 🖥️ **雙介面支援**: CLI 命令列 + PyQt5 GUI
+- 📊 **結果管理**: Excel 報表輸出、影像標註保存
+- 🔄 **多產品支援**: 靈活的產品/區域/類型配置體系
 
 ## 專案結構
+
 ```
-Yolo11_auto_train/
-├─ src/picture_tool/           # 程式主體
-│  ├─ anomaly/ augment/ color/ format/ infer/ position/ split/ train/ ...
-│  ├─ gui/                     # PyQt GUI
-│  ├─ pipeline/                # 管線組裝與工具
-│  ├─ resources/               # 內建範例設定
-│  └─ main_pipeline.py         # CLI 入口
-├─ configs/                    # 可覆蓋的設定 (default_pipeline.yaml, gui_presets.yaml)
-├─ models/, data/, reports/, runs/ ...
-├─ README.md, pyproject.toml, requirements-dev.txt
+yolo11_inference/
+├── core/                       # 核心推理引擎
+│   ├── yolo_inference_model.py        # YOLO 推理後端
+│   ├── anomalib_inference_model.py    # Anomalib 推理後端
+│   ├── detection_system.py            # 主編排器
+│   ├── detector.py                    # YOLO 偵測邏輯
+│   ├── position_validator.py          # 位置校驗器
+│   ├── services/                      # 服務層
+│   │   ├── model_manager.py           # 模型管理 (LRU 快取)
+│   │   ├── color_checker.py           # 顏色檢查服務
+│   │   └── result_sink.py             # 結果持久化
+│   └── pipeline/                      # 管道架構
+│       ├── registry.py                # 步驟註冊
+│       ├── steps.py                   # 處理步驟
+│       └── context.py                 # 執行上下文
+├── app/                        # 應用層
+│   ├── cli.py                         # 命令列介面
+│   └── gui/                           # PyQt5 圖形介面
+├── camera/                     # 工業相機控制
+│   ├── MVS_camera_control.py          # MVS SDK 封裝
+│   └── camera_controller.py           # 相機控制器
+├── tests/                      # 測試套件 (52 個測試)
+├── models/                     # 模型權重目錄
+│   └── <product>/
+│       └── <area>/
+│           ├── yolo/
+│           │   └── config.yaml
+│           └── anomalib/
+│               └── config.yaml
+├── Result/                     # 輸出結果
+├── docs/                       # 文檔
+│   └── TECH_GUIDE.md                  # 技術深度指南 (1153 行)
+├── config.yaml                 # 全域配置
+├── config.example.yaml         # 配置範本
+├── requirements.txt            # 核心依賴
+├── requirements-dev.txt        # 開發依賴
+├── pyproject.toml              # 專案配置
+└── README.md                   # 本文件
 ```
 
 ## 安裝
+
+### 前置需求
+
+- Python 3.10 或更高版本
+- CUDA 12.1+ (若使用 GPU)
+- 海康威視相機 SDK (若使用實體相機)
+
+### 基本安裝
+
 ```bash
-python -m pip install .
-python -m pip install .[gui]        # 需要 PyQt5 GUI 時
+# 克隆專案
+git clone <repository-url>
+cd yolo11_inference
+
+# 建立虛擬環境
+python -m venv .venv
+
+# 啟動虛擬環境
+# Windows PowerShell:
+.venv\Scripts\Activate.ps1
+# Windows CMD:
+.venv\Scripts\activate.bat
+# Linux/macOS:
+source .venv/bin/activate
+
+# 安裝核心依賴
+pip install -r requirements.txt
+
+# (可選) 安裝 GUI 支援
+pip install PyQt5==5.15.11
+
+# (開發模式) 安裝開發工具
+pip install -r requirements-dev.txt
+pip install -e .
 ```
 
-開發環境建議：
+### 使用 pyproject.toml 安裝
+
 ```bash
-python -m venv .venv
-. .venv/Scripts/activate  # PowerShell
-pip install -r requirements-dev.txt
+# 僅核心功能
+pip install -e .
+
+# 包含 GUI
+pip install -e .[gui]
+
+# 包含開發工具
 pip install -e .[dev,gui]
 ```
 
 ## 快速開始
-CLI 範例：
+
+### 1. 配置設定
+
+複製配置範本並根據您的環境調整：
+
 ```bash
-picture-tool-pipeline --config configs/default_pipeline.yaml --tasks full
+cp config.example.yaml config.yaml
+# 編輯 config.yaml，設定模型路徑、相機參數等
 ```
 
-GUI：
-```bash
-picture-tool-gui --config configs/gui_presets.yaml
+### 2. 準備模型
+
+將訓練好的 YOLO 模型放置到對應目錄：
+
+```
+models/
+└── LED/                    # 產品名稱
+    └── A/                  # 區域名稱
+        └── yolo/           # 推理類型
+            ├── config.yaml # 模型配置
+            └── best.pt     # 模型權重
 ```
 
-顏色檢測（LED）：
+### 3. 執行推理
+
+#### CLI 互動模式
+
 ```bash
-picture-tool-color-verify \
-  --input-dir data/led_qc/infer \
-  --color-stats reports/led_qc/color_stats.json \
-  --expected-map reports/led_qc/expected.csv
+python main.py
+# 根據提示選擇產品、區域和推理類型
 ```
 
-## Position Validation 使用指南
-`position_validation` 任務用來檢查偵測中心是否落在預期範圍，會輸出 `position_validation.json`。
+#### CLI 單次推理
 
-1) 設定檔（例如 `configs/default_pipeline.yaml` 或你的 config）填寫：
-```yaml
-yolo_training:
-  position_validation:
-    enabled: true
-    product: Cable1            # 必填
-    area: A                    # 必填
-    config_path: ./models/yolo/position_config.yaml  # 或直接填 config: {...}
-    sample_dir: ./data/split/val/images              # 選填，預設 dataset_dir/val/images
-    weights: null              # 選填，預設 runs/detect/<name>/weights/best.pt
-    output_dir: ./reports/position_validation        # 選填
-    conf: 0.25                 # 選填
-    device: auto               # 選填
-    tolerance_override: null   # 選填，百分比
-```
-2) 確認 `yolo_training.project/name` 指向已訓練的 run 目錄 (預設 `runs/detect/train`) 且有 weights。
-3) 執行任務：GUI 勾選「Position Validation」，或 CLI `--tasks position_validation`。
-4) 結果輸出：`runs/detect/<name>/position_validation/position_validation.json`（或 `output_dir`），包含每張影像與整體摘要。
-
-若 `enabled: false` 則會略過且不輸出。
-
-## 任務與預設
-- 任務 key（需與 `TASK_HANDLERS` 對應）：`format_conversion`, `anomaly_detection`, `yolo_augmentation`, `image_augmentation`, `dataset_splitter`, `yolo_train`, `yolo_evaluation`, `generate_report`, `dataset_lint`, `aug_preview`, `color_inspection`, `color_verification`, `batch_inference`, `position_validation`。
-- GUI/CLI 可用 `configs/default_pipeline.yaml` 的 `pipeline.tasks` 或 `configs/gui_presets.yaml` 的 presets 來一次套用任務。
-
-## 測試與開發
 ```bash
-ruff check src tests
-pytest --cov=picture_tool
+# 使用相機拍照並推理
+python main.py --product LED --area A --type yolo
+
+# 使用指定影像推理
+python main.py --product LED --area A --type yolo --image path/to/image.jpg
+```
+
+#### GUI 模式
+
+```bash
+python GUI.py
+```
+
+### 4. 查看結果
+
+結果將保存到 `Result/` 目錄（或 `config.yaml` 中指定的 `output_dir`）：
+
+- 標註影像：`Result/<timestamp>_annotated.jpg`
+- Excel 報表：`Result/detection_results.xlsx`
+
+## 測試
+
+```bash
+# 執行所有測試
+make test
+
+# 快速測試（跳過 GUI）
+make test-fast
+
+# 執行特定測試
+pytest tests/test_yolo_inference_model.py -v
+
+# 產生覆蓋率報告
+pytest --cov=core --cov=app --cov-report=html
+```
+
+## 開發
+
+### 程式碼品質檢查
+
+```bash
+# Linting (ruff)
+ruff check .
+
+# 型別檢查 (mypy)
+mypy core app
+
+# 格式化
+ruff format .
+```
+
+### 建構與發布
+
+```bash
+# 建構套件
 python -m build
+
+# 上傳到 PyPI (若開源)
+twine upload dist/*
+```
+
+## 配置說明
+
+### 全域配置 (config.yaml)
+
+主要配置項目：
+
+| 配置項 | 說明 | 範例值 |
+|-------|------|--------|
+| `weights` | YOLO 模型權重路徑 | `models/LED/A/yolo/best.pt` |
+| `enable_yolo` | 啟用 YOLO 推理 | `true` |
+| `enable_anomalib` | 啟用 Anomalib 推理 | `false` |
+| `max_cache_size` | 模型快取大小 (LRU) | `3` |
+| `output_dir` | 結果輸出目錄 | `./Result` |
+| `exposure_time` | 相機曝光時間 (μs) | `51170` |
+| `gain` | 相機增益 | `23.0` |
+
+完整配置範例請參考 `config.example.yaml`。
+
+### 模型特定配置
+
+每個產品/區域/類型可有獨立配置：
+
+```yaml
+# models/LED/A/yolo/config.yaml
+imgsz: 640
+conf_thres: 0.25
+iou_thres: 0.45
+device: "auto"
+
+position_check:
+  enabled: true
+  tolerance_px: 10
+  tolerance_pct: 0.05
+
+expected_items:
+  - J1
+  - J2
+  - LED1
+```
+
+## 位置驗證 (Position Validation)
+
+`position_validator` 用於檢查偵測物件的中心位置是否符合預期範圍。
+
+### 配置範例
+
+```yaml
+# models/<product>/<area>/yolo/position_config.yaml
+LED:
+  A:
+    J1:
+      cx: 512
+      cy: 384
+      w: 64
+      h: 48
+      tolerance_px: 10      # 絕對容差 (像素)
+      tolerance_pct: 0.05   # 相對容差 (5%)
+```
+
+### 驗證流程
+
+1. YOLO 推理獲得偵測框
+2. 計算每個偵測物件的中心座標
+3. 與預期位置比對，檢查是否在容差範圍內
+4. 輸出驗證報告 (JSON)
+
+詳細說明請參考 `docs/TECH_GUIDE.md`。
+
+## 文檔
+
+- 📖 [技術深度指南](docs/TECH_GUIDE.md) - 1153 行從 JR 到 SR 的完整教學
+- 📝 配置範本：`config.example.yaml`
+- 🧪 測試範例：`tests/` 目錄
+
+## 常見問題
+
+### Q: 如何添加新產品？
+
+```bash
+# 1. 建立目錄結構
+mkdir -p models/<new_product>/<area>/yolo
+
+# 2. 放置模型權重
+cp your_model.pt models/<new_product>/<area>/yolo/best.pt
+
+# 3. 建立配置檔案
+cp config.example.yaml models/<new_product>/<area>/yolo/config.yaml
+# 編輯 config.yaml 調整參數
+
+# 4. 執行推理
+python main.py --product <new_product> --area <area> --type yolo
+```
+
+### Q: 如何優化推理速度？
+
+1. **使用 GPU**: 確保 CUDA 可用
+2. **混合精度**: `config.yaml` 中啟用 FP16
+3. **批次推理**: 對多張影像使用批次處理（進階）
+4. **TensorRT**: 匯出模型為 TensorRT 引擎（進階）
+
+詳見 `docs/TECH_GUIDE.md` 第 8 節「效能工程手冊」。
+
+### Q: 測試失敗怎麼辦？
+
+```bash
+# 檢查依賴版本
+pip list
+
+# 重新安裝依賴
+pip install -r requirements.txt --force-reinstall
+
+# 執行單一測試並查看詳細輸出
+pytest tests/test_yolo_inference_model.py -v -s
 ```
 
 ## 授權
-預設為專案內標示的 Proprietary License；如需開源請同步更新 pyproject.toml 與 LICENSE。
+
+Proprietary License - 專有授權，未經許可不得分發或使用。
+
+## 致謝
+
+本專案使用以下開源套件：
+- [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
+- [Anomalib](https://github.com/openvinotoolkit/anomalib)
+- [PyTorch](https://pytorch.org/)
+- [PyTorch Lightning](https://lightning.ai/)

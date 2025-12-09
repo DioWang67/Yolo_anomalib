@@ -1,0 +1,54 @@
+# yolo11_inference Configuration Template
+# Copy this file to config.yaml and adjust the values for your environment
+
+# YOLO Model Weights Path (relative to project root or absolute path)
+# Example: models/LED/A/yolo/LED_color_mixing_best.pt
+weights: "models/LED/A/yolo/LED_color_mixing_best.pt"
+
+# Camera Settings
+# Exposure time in microseconds (e.g., 51170 = 51.17ms)
+exposure_time: "51170.0000"
+
+# Gain value (adjust based on lighting conditions)
+# Typical range: 0-24, higher values increase brightness but may introduce noise
+gain: "23.0"
+
+# Camera image acquisition timeout in milliseconds
+MV_CC_GetImageBuffer_nMsec: 10000
+
+# General timeout setting (seconds)
+timeout: 1
+
+# Image Resolution
+width: 3072
+height: 2048
+
+# Inference Backend Flags
+enable_yolo: true
+enable_anomalib: false
+
+# Model Cache Settings
+# Maximum number of models to keep in memory (LRU eviction)
+max_cache_size: 3
+
+# Output Directory (relative to project root or absolute path)
+# Use environment variable: ${PROJECT_ROOT}/Result
+# Or relative path: ./Result
+# Or absolute path: D:/Path/To/Result
+output_dir: "./Result"
+
+# Advanced Settings (Optional)
+
+# Inference Image Size (for letterbox preprocessing)
+# imgsz: 640
+
+# Device Selection
+# Options: "auto", "cpu", "cuda", "cuda:0", "cuda:1", etc.
+# device: "auto"
+
+# Mixed Precision Inference (FP16 for GPU acceleration)
+# use_amp: true
+
+# Logging Level
+# Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+# log_level: "INFO"
