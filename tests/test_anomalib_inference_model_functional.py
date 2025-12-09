@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
 import os
-import numpy as np
+
 import cv2
+import numpy as np
 import pytest
 
-from core.anomalib_inference_model import AnomalibInferenceModel
 from core import anomalib_inference_model as aim  # 直接 patch 模組內名稱
+from core.anomalib_inference_model import AnomalibInferenceModel
 
 # ------------------ 測試用輔助 ------------------
 

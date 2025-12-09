@@ -9,6 +9,7 @@ def test_gui_smoke(monkeypatch, tmp_path):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 
     from PyQt5.QtWidgets import QApplication
+
     import GUI
 
     class StubDetectionSystem:

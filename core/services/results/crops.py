@@ -1,28 +1,28 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
-from .path_manager import SavePathBundle
 from .image_queue import ImageWriteQueue
+from .path_manager import SavePathBundle
 
 
 def save_detection_crops(
     queue: ImageWriteQueue,
     crop_source: np.ndarray,
-    detections: List[Dict[str, Any]],
+    detections: list[dict[str, Any]],
     bundle: SavePathBundle,
     *,
-    product: Optional[str],
-    area: Optional[str],
+    product: str | None,
+    area: str | None,
     timestamp_text: str,
-    params: List[int],
-    limit: Optional[int] = None,
-) -> List[str]:
+    params: list[int],
+    limit: int | None = None,
+) -> list[str]:
     """Persist detection crops and return their paths."""
-    cropped_paths: List[str] = []
+    cropped_paths: list[str] = []
     for idx, det in enumerate(detections):
         if limit is not None and idx >= limit:
             break

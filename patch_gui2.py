@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from pathlib import Path
 
 text = Path("GUI.py").read_text(encoding="utf-8")

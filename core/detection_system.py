@@ -9,24 +9,25 @@ Responsibilities:
 Public entrypoint: DetectionSystem.detect(product, area, inference_type, frame=None)
 """
 
-from typing import Any, Dict, Tuple
 import os
 import shutil
 from pathlib import Path
-from core.path_utils import project_root
-from core.services.model_manager import ModelManager
+from typing import Any
+
 import numpy as np
 
-from core.config import DetectionConfig
-from core.logging_config import DetectionLogger
-from core.inference_engine import InferenceEngine
 from camera.camera_controller import CameraController
-from core.services.color_checker import ColorCheckerService
-from core.services.result_sink import ExcelImageResultSink
+from core.config import DetectionConfig
+from core.inference_engine import InferenceEngine
+from core.logging_config import DetectionLogger
+from core.logging_utils import context_adapter
+from core.path_utils import project_root
 from core.pipeline.context import DetectionContext
 from core.pipeline.registry import PipelineEnv, build_pipeline, default_pipeline
-from core.logging_utils import context_adapter
 from core.result_adapter import normalize_result
+from core.services.color_checker import ColorCheckerService
+from core.services.model_manager import ModelManager
+from core.services.result_sink import ExcelImageResultSink
 
 
 class _InferenceTypeToken(str):
@@ -65,7 +66,7 @@ class DetectionSystem:
             self.logger, max_cache_size=self.config.max_cache_size
         )
         self.color_service = ColorCheckerService()
-        self._color_override_cache: Dict[str, Dict[str, Any]] = {}
+        self._color_override_cache: dict[str, dict[str, Any]] = {}
         self.initialize_camera()
 
     def _resolve_output_dir(self) -> Path:
@@ -125,7 +126,7 @@ class DetectionSystem:
 
     def _load_color_override_bundle(
         self, product: str, area: str, inference_type: str
-    ) -> Tuple[Dict[str, float] | None, Dict[str, Dict[str, Any]] | None]:
+    ) -> tuple[dict[str, float] | None, dict[str, dict[str, Any]] | None]:
         overrides = getattr(self.config, "color_threshold_overrides", None)
         rules_over = getattr(self.config, "color_rules_overrides", None)
         cfg_path = (

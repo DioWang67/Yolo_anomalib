@@ -10,7 +10,7 @@ from core.pipeline.registry import (
     register_step,
     unregister_step,
 )
-from core.pipeline.steps import Step, ColorCheckStep, SaveResultsStep
+from core.pipeline.steps import ColorCheckStep, SaveResultsStep, Step
 
 
 class _StubLogger:
@@ -85,7 +85,7 @@ def test_default_pipeline_skips_color_when_disabled():
 def test_custom_step_registration_and_autosave_append():
     class _DummyStep(Step):
         def run(self, ctx):  # pragma: no cover - simple no-op for registry testing
-            setattr(ctx, "dummy_step_ran", True)
+            ctx.dummy_step_ran = True
 
     def factory(env: PipelineEnv, options):
         return _DummyStep()

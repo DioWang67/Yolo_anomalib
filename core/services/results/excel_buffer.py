@@ -6,9 +6,10 @@ import os
 import shutil
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 import pandas as pd  # type: ignore[import]
 from openpyxl import load_workbook  # type: ignore[import]
@@ -18,7 +19,7 @@ from openpyxl import load_workbook  # type: ignore[import]
 class ExcelFlushResult:
     success: bool
     rows_written: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
@@ -26,14 +27,14 @@ class ExcelWorkbookBuffer:
     """Buffered Excel writer with backups and optional periodic flush."""
 
     path: str
-    columns: List[str]
+    columns: list[str]
     buffer_limit: int
     logger: Any
-    flush_interval: Optional[float] = None
-    workbook_kwargs: Dict[str, Any] = field(default_factory=dict)
+    flush_interval: float | None = None
+    workbook_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        self.buffer: List[List[Any]] = []
+        self.buffer: list[list[Any]] = []
         self._lock = threading.Lock()
         self.backup_path = self.path + ".bak"
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -41,7 +42,7 @@ class ExcelWorkbookBuffer:
             self._initialize_excel()
         self.wb = load_workbook(self.path, **self.workbook_kwargs)
         self.ws = self.wb.active
-        self._timer: Optional[threading.Timer] = None
+        self._timer: threading.Timer | None = None
         if self.flush_interval:
             self._timer = threading.Timer(
                 self.flush_interval, self._periodic_flush
@@ -80,10 +81,10 @@ class ExcelWorkbookBuffer:
                 return ExcelFlushResult(success=True, rows_written=len(rows))
             except PermissionError:
                 self.logger.error(
-                    (
+
                         f"權限不足，無法寫入 {self.path}，"
                         "請檢查檔案是否開啟或權限設定"
-                    )
+
                 )
             except Exception as exc:
                 self.logger.error(f"寫入 Excel 發生錯誤 (第{attempt + 1}次重試): {exc}")
@@ -133,8 +134,8 @@ class ExcelWorkbookBuffer:
                 self._timer.start()
 
 
-def format_excel_row(columns: List[str], data: Dict[str, Any]) -> List[Any]:
-    row: List[Any] = []
+def format_excel_row(columns: list[str], data: dict[str, Any]) -> list[Any]:
+    row: list[Any] = []
     for col in columns:
         value = data.get(col, "")
         if isinstance(value, datetime):

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QAction,
@@ -25,7 +24,7 @@ if TYPE_CHECKING:
     from app.gui.main_window import DetectionSystemGUI
 
 
-def build_control_panel(gui: "DetectionSystemGUI") -> QGroupBox:
+def build_control_panel(gui: DetectionSystemGUI) -> QGroupBox:
     panel = QGroupBox("控制面板")
     layout = QVBoxLayout()
 
@@ -134,7 +133,7 @@ def build_control_panel(gui: "DetectionSystemGUI") -> QGroupBox:
     return panel
 
 
-def build_image_area(gui: "DetectionSystemGUI") -> QGroupBox:
+def build_image_area(gui: DetectionSystemGUI) -> QGroupBox:
     area = QGroupBox("影像預覽")
     layout = QVBoxLayout()
 
@@ -153,7 +152,7 @@ def build_image_area(gui: "DetectionSystemGUI") -> QGroupBox:
     return area
 
 
-def build_info_panel(gui: "DetectionSystemGUI") -> QWidget:
+def build_info_panel(gui: DetectionSystemGUI) -> QWidget:
     panel = QWidget()
     layout = QVBoxLayout()
 
@@ -187,7 +186,7 @@ def build_info_panel(gui: "DetectionSystemGUI") -> QWidget:
     return panel
 
 
-def build_menu_bar(gui: "DetectionSystemGUI") -> QMenuBar:
+def build_menu_bar(gui: DetectionSystemGUI) -> QMenuBar:
     menubar = gui.menuBar()
 
     file_menu = menubar.addMenu("檔案")

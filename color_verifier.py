@@ -8,9 +8,9 @@ import argparse
 import csv
 import json
 import logging
+from collections.abc import Callable, Iterable, MutableMapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, MutableMapping, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -56,13 +56,13 @@ class ColorRange:
     hsv_max: np.ndarray
     lab_min: np.ndarray
     lab_max: np.ndarray
-    hsv_mean: Optional[np.ndarray] = None
-    lab_mean: Optional[np.ndarray] = None
-    coverage_mean: Optional[float] = None
-    hsv_p10: Optional[np.ndarray] = None
-    hsv_p90: Optional[np.ndarray] = None
-    lab_p10: Optional[np.ndarray] = None
-    lab_p90: Optional[np.ndarray] = None
+    hsv_mean: np.ndarray | None = None
+    lab_mean: np.ndarray | None = None
+    coverage_mean: float | None = None
+    hsv_p10: np.ndarray | None = None
+    hsv_p90: np.ndarray | None = None
+    lab_p10: np.ndarray | None = None
+    lab_p90: np.ndarray | None = None
 
 
 @dataclass
@@ -89,13 +89,13 @@ class StripOptions:
 class ColorDecision:
     image: Path
     predicted_color: str
-    expected_color: Optional[str]
+    expected_color: str | None
     confidence: float
     status: str
-    ratios: Dict[str, float]
-    debug_info: Dict[str, object] = None
+    ratios: dict[str, float]
+    debug_info: dict[str, object] = None
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         result = {
             "image": str(self.image),
             "predicted_color": self.predicted_color,
@@ -112,13 +112,13 @@ class ColorDecision:
 
 @dataclass
 class DecisionContext:
-    ratios: Dict[str, float]
-    debug_info: Dict[str, object]
+    ratios: dict[str, float]
+    debug_info: dict[str, object]
     hsv_img: np.ndarray
     lab_img: np.ndarray
 
 
-DecisionRule = Callable[[str, float, "DecisionContext"], Optional[Tuple[str, float]]]
+DecisionRule = Callable[[str, float, "DecisionContext"], tuple[str, float] | None]
 
 
 # ============= 新增: 核心改進函數 =============
@@ -134,7 +134,7 @@ def improved_match_ratio(
     lab_vals: np.ndarray,
     color_range: ColorRange,
     color_name: str
-) -> Tuple[float, Dict[str, float]]:
+) -> tuple[float, dict[str, float]]:
     """改進的匹配比例計算"""
     if hsv_vals.size == 0 or lab_vals.size == 0:
         return 0.0, {}
@@ -236,7 +236,7 @@ def separate_orange_red_improved(
     lab_vals: np.ndarray,
     orange_score: float,
     red_score: float
-) -> Tuple[str, float, Dict]:
+) -> tuple[str, float, dict]:
     """改進的 Orange vs Red 分離"""
     if len(hsv_vals) == 0:
         return ("Red" if red_score >= orange_score else "Orange", max(red_score, orange_score), {})
@@ -301,8 +301,8 @@ def _evaluate_image_improved(
     image: np.ndarray,
     hsv_img: np.ndarray,
     lab_img: np.ndarray,
-    color_ranges: Dict[str, ColorRange],
-) -> Tuple[Dict[str, float], Dict[str, np.ndarray], Dict[str, object]]:
+    color_ranges: dict[str, ColorRange],
+) -> tuple[dict[str, float], dict[str, np.ndarray], dict[str, object]]:
     """整合改進邏輯的圖片評估函數"""
     debug_info = {}
     h, w = hsv_img.shape[:2]
@@ -313,7 +313,7 @@ def _evaluate_image_improved(
     debug_info["black_confidence"] = float(black_conf)
 
     if is_black and "Black" in color_ranges:
-        ratios = {color: 0.0 for color in color_ranges.keys()}
+        ratios = dict.fromkeys(color_ranges.keys(), 0.0)
         ratios["Black"] = black_conf
         masks = {color: np.zeros(hsv_img.shape[:2], dtype=bool) for color in color_ranges.keys()}
         masks["Black"] = np.ones(hsv_img.shape[:2], dtype=bool)
@@ -325,7 +325,7 @@ def _evaluate_image_improved(
     debug_info["yellow_confidence"] = float(yellow_conf)
 
     if is_yellow and "Yellow" in color_ranges:
-        ratios = {color: 0.0 for color in color_ranges.keys()}
+        ratios = dict.fromkeys(color_ranges.keys(), 0.0)
         ratios["Yellow"] = yellow_conf
         masks = {color: np.zeros(hsv_img.shape[:2], dtype=bool) for color in color_ranges.keys()}
         masks["Yellow"] = np.ones(hsv_img.shape[:2], dtype=bool)
@@ -343,7 +343,7 @@ def _evaluate_image_improved(
     valid_lab = center_lab[sat_mask].reshape(-1, 3)
 
     if len(valid_hsv) < 50:
-        ratios = {color: 0.0 for color in color_ranges.keys()}
+        ratios = dict.fromkeys(color_ranges.keys(), 0.0)
         if "Black" in ratios:
             ratios["Black"] = 0.7
         masks = {color: np.zeros(hsv_img.shape[:2], dtype=bool) for color in color_ranges.keys()}
@@ -365,7 +365,7 @@ def _evaluate_image_improved(
     return ratios, masks, debug_info
 
 
-def _is_black_image(hsv_img: np.ndarray, s_thresh: float, v_thresh: float) -> Tuple[bool, float]:
+def _is_black_image(hsv_img: np.ndarray, s_thresh: float, v_thresh: float) -> tuple[bool, float]:
     """檢測是否為黑色圖片"""
     h, w = hsv_img.shape[:2]
     margin_y = int(h * 0.15)
@@ -393,7 +393,7 @@ def _is_black_image(hsv_img: np.ndarray, s_thresh: float, v_thresh: float) -> Tu
     return is_black, confidence
 
 
-def _detect_yellow_special(hsv_img: np.ndarray) -> Tuple[bool, float]:
+def _detect_yellow_special(hsv_img: np.ndarray) -> tuple[bool, float]:
     """快速檢測黃色"""
     h, w = hsv_img.shape[:2]
     margin = int(min(h, w) * 0.15)
@@ -437,7 +437,7 @@ def _extract_center_pixels(img: np.ndarray, margin_ratio: float = CENTER_MARGIN_
     return center if center.size else img
 
 
-def _initial_prediction(ratios: Dict[str, float]) -> Tuple[str, float]:
+def _initial_prediction(ratios: dict[str, float]) -> tuple[str, float]:
     if not ratios:
         raise ValueError("No ratios provided for prediction.")
     return max(ratios.items(), key=lambda item: item[1])
@@ -447,7 +447,7 @@ def _apply_color_rules(
     predicted_color: str,
     confidence: float,
     context: DecisionContext,
-) -> Tuple[str, float]:
+) -> tuple[str, float]:
     for rule in _COLOR_RULES:
         result = rule(predicted_color, confidence, context)
         if result is not None:
@@ -459,7 +459,7 @@ def _rule_black(
     predicted_color: str,
     confidence: float,
     context: DecisionContext,
-) -> Optional[Tuple[str, float]]:
+) -> tuple[str, float] | None:
     if context.debug_info.get("is_black_detected") and "Black" in context.ratios:
         new_conf = context.debug_info.get("black_confidence", confidence)
         return "Black", new_conf
@@ -470,7 +470,7 @@ def _rule_yellow(
     predicted_color: str,
     confidence: float,
     context: DecisionContext,
-) -> Optional[Tuple[str, float]]:
+) -> tuple[str, float] | None:
     if context.debug_info.get("is_yellow_detected") and "Yellow" in context.ratios:
         new_conf = context.debug_info.get("yellow_confidence", confidence)
         return "Yellow", new_conf
@@ -481,7 +481,7 @@ def _rule_orange_red_tiebreak(
     predicted_color: str,
     confidence: float,
     context: DecisionContext,
-) -> Optional[Tuple[str, float]]:
+) -> tuple[str, float] | None:
     ratios = context.ratios
     if (
         "Orange" not in ratios
@@ -522,7 +522,7 @@ def _rule_green_correction(
     predicted_color: str,
     confidence: float,
     context: DecisionContext,
-) -> Optional[Tuple[str, float]]:
+) -> tuple[str, float] | None:
     if predicted_color != "Red" or "Green" not in context.ratios:
         return None
 
@@ -544,7 +544,7 @@ def _rule_green_correction(
     return None
 
 
-_COLOR_RULES: List[DecisionRule] = [
+_COLOR_RULES: list[DecisionRule] = [
     _rule_black,
     _rule_yellow,
     _rule_orange_red_tiebreak,
@@ -573,7 +573,7 @@ def load_color_ranges(
     stats_path: Path,
     hsv_margin: Sequence[float] | float = (0.0, 0.0, 0.0),
     lab_margin: Sequence[float] | float = (0.0, 0.0, 0.0),
-) -> Dict[str, ColorRange]:
+) -> dict[str, ColorRange]:
     if not stats_path.exists():
         raise FileNotFoundError(stats_path)
     payload = json.loads(stats_path.read_text(encoding="utf-8"))
@@ -583,14 +583,14 @@ def load_color_ranges(
 
     hsv_margin_vec = _margin_vector(hsv_margin, 0.0)
     lab_margin_vec = _margin_vector(lab_margin, 0.0)
-    ranges: Dict[str, ColorRange] = {}
+    ranges: dict[str, ColorRange] = {}
     for color, stats in summary.items():
         hsv_min = np.asarray(stats["hsv_min"], dtype=np.float32) - hsv_margin_vec
         hsv_max = np.asarray(stats["hsv_max"], dtype=np.float32) + hsv_margin_vec
         lab_min = np.asarray(stats["lab_min"], dtype=np.float32) - lab_margin_vec
         lab_max = np.asarray(stats["lab_max"], dtype=np.float32) + lab_margin_vec
 
-        def _optional_array(key: str) -> Optional[np.ndarray]:
+        def _optional_array(key: str) -> np.ndarray | None:
             if key not in stats:
                 return None
             return np.asarray(stats[key], dtype=np.float32)
@@ -612,8 +612,8 @@ def load_color_ranges(
     return ranges
 
 
-def _load_expected_map(path: Optional[Path]) -> Dict[str, str]:
-    lookup: Dict[str, str] = {}
+def _load_expected_map(path: Path | None) -> dict[str, str]:
+    lookup: dict[str, str] = {}
     if not path:
         return lookup
     path = path.resolve()
@@ -641,7 +641,7 @@ def _resolve_expected_color(
     lookup: MutableMapping[str, str],
     known_colors: Iterable[str],
     infer_from_name: bool,
-) -> Optional[str]:
+) -> str | None:
     name = image_path.name.lower()
     if name in lookup:
         return lookup[name]
@@ -658,19 +658,19 @@ def verify_directory(
     input_dir: Path,
     color_stats: Path,
     *,
-    output_json: Optional[Path] = None,
-    output_csv: Optional[Path] = None,
+    output_json: Path | None = None,
+    output_csv: Path | None = None,
     recursive: bool = False,
-    expected_map: Optional[Path] = None,
+    expected_map: Path | None = None,
     infer_expected_from_name: bool = True,
     hsv_margin: Sequence[float] | float = (0.0, 0.0, 0.0),
     lab_margin: Sequence[float] | float = (0.0, 0.0, 0.0),
     ratio_threshold: float = 0.35,
     debug_plot: bool = False,
-    debug_dir: Optional[Path] = None,
-    logger: Optional[logging.Logger] = None,
+    debug_dir: Path | None = None,
+    logger: logging.Logger | None = None,
     **kwargs
-) -> Tuple[Dict[str, object], List[ColorDecision]]:
+) -> tuple[dict[str, object], list[ColorDecision]]:
     logger = logger or logging.getLogger(__name__)
     input_dir = input_dir.resolve()
     if not input_dir.exists():
@@ -679,7 +679,7 @@ def verify_directory(
     ranges = load_color_ranges(color_stats.resolve(), hsv_margin, lab_margin)
     expected_lookup = _load_expected_map(expected_map)
 
-    debug_root: Optional[Path] = None
+    debug_root: Path | None = None
     if debug_plot:
         base = debug_dir or (output_json.parent if output_json else input_dir)
         debug_root = (Path(base) / "color_debug").resolve()
@@ -695,7 +695,7 @@ def verify_directory(
     if not images:
         raise FileNotFoundError(f"No images with suffix {SUPPORTED_FORMATS} in {input_dir}")
 
-    results: List[ColorDecision] = []
+    results: list[ColorDecision] = []
     counters = {"total": 0, "matched": 0, "mismatched": 0, "predicted_only": 0, "low_confidence": 0}
 
     for image_path in images:
@@ -817,10 +817,10 @@ def visualize_debug(
     image_bgr: np.ndarray,
     predicted_color: str,
     confidence: float,
-    ratios: Dict[str, float],
+    ratios: dict[str, float],
     mask: np.ndarray,
     output_path: Path,
-    debug_info: Dict[str, object] = None,
+    debug_info: dict[str, object] = None,
 ) -> None:
     try:
         import matplotlib.pyplot as plt
@@ -914,7 +914,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     logging.basicConfig(

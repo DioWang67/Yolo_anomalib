@@ -1,13 +1,13 @@
 """以 PyQt5 實作的桌面介面，用於操作與監看檢測流程。"""
 
 from __future__ import annotations
+
+import importlib
 import logging
 import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-import importlib
 
 
 def _get_detection_class():
@@ -33,6 +33,7 @@ import numpy as np
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
+
 from app.gui.controller import DetectionController, ModelCatalog
 from app.gui.preferences import PreferencesManager
 from app.gui.utils import load_image_with_retry

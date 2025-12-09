@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import queue
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional, Sequence
 
 import cv2
 
@@ -56,12 +56,12 @@ class ImageWriteQueue:
         return self._stats
 
     def write_sync(
-        self, path: str, image, params: Optional[Sequence[int]] = None
+        self, path: str, image, params: Sequence[int] | None = None
     ) -> None:
         self._write_sync(path, image, params)
 
     def enqueue(self, path: str, image,
-                params: Optional[Sequence[int]] = None) -> None:
+                params: Sequence[int] | None = None) -> None:
         if self.maxsize == 0:
             self._write_sync(path, image, params)
             return
@@ -110,7 +110,7 @@ class ImageWriteQueue:
     # ------------------------------------------------------------------
 
     def _write_sync(
-        self, path: str, image, params: Optional[Sequence[int]] = None
+        self, path: str, image, params: Sequence[int] | None = None
     ) -> None:
         try:
             if params is not None:
@@ -118,7 +118,7 @@ class ImageWriteQueue:
             else:
                 ok = cv2.imwrite(path, image)
             if ok is False:
-                raise IOError("cv2.imwrite returned False")
+                raise OSError("cv2.imwrite returned False")
         except Exception as exc:
             self._stats.errors += 1
             self.logger.error(f"Image write failed ({path}): {exc}")
@@ -126,7 +126,7 @@ class ImageWriteQueue:
             try:
                 ok = cv2.imwrite(path, image)
                 if ok is False:
-                    raise IOError("cv2.imwrite returned False")
+                    raise OSError("cv2.imwrite returned False")
                 recovered = True
             except Exception as fallback_exc:
                 self._stats.errors += 1

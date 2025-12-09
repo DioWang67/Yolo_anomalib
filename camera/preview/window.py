@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, Tuple
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QLabel,
@@ -32,12 +31,12 @@ class CameraPreviewWindow(QMainWindow):
         resize_width: int,
         use_luma: bool,
         ema_alpha: float,
-        fixed_threshold: Optional[int],
+        fixed_threshold: int | None,
         auto_k_sigma: float,
         warmup_frames: int,
-        roi: Optional[Tuple[int, int, int, int]],
+        roi: tuple[int, int, int, int] | None,
         scale_quality: str,
-        target_fps: Optional[float],
+        target_fps: float | None,
         reopen_failures: int,
     ) -> None:
         super().__init__()
@@ -54,10 +53,10 @@ class CameraPreviewWindow(QMainWindow):
         self.target_fps = target_fps
         self.reopen_failures = max(1, reopen_failures)
 
-        self._last_gray: Optional[np.ndarray] = None
-        self._ema_mean: Optional[float] = None
-        self._ema_ratio: Optional[float] = None
-        self._fps_ema: Optional[float] = None
+        self._last_gray: np.ndarray | None = None
+        self._ema_mean: float | None = None
+        self._ema_ratio: float | None = None
+        self._fps_ema: float | None = None
         self._last_tick = cv2.getTickCount()
         self._consecutive_fail = 0
 

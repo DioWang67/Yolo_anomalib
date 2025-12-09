@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 
 @dataclass
@@ -31,10 +30,10 @@ class ResultPathManager:
         self,
         status: str,
         detector: str,
-        product: Optional[str],
-        area: Optional[str],
-        anomaly_score: Optional[float] = None,
-        timestamp: Optional[datetime] = None,
+        product: str | None,
+        area: str | None,
+        anomaly_score: float | None = None,
+        timestamp: datetime | None = None,
     ) -> str:
         bundle = self.build_paths(
             status=status,
@@ -52,10 +51,10 @@ class ResultPathManager:
         *,
         status: str,
         detector: str,
-        product: Optional[str],
-        area: Optional[str],
-        anomaly_score: Optional[float],
-        timestamp: Optional[datetime] = None,
+        product: str | None,
+        area: str | None,
+        anomaly_score: float | None,
+        timestamp: datetime | None = None,
     ) -> SavePathBundle:
         timestamp_dt = timestamp or datetime.now()
         date_folder = timestamp_dt.strftime("%Y%m%d")

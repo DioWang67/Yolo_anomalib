@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from typing import Dict
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QPixmap
@@ -11,7 +10,7 @@ from PyQt5.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
 class StatusWidget(QWidget):
     """Small status dashboard showing current system state."""
 
-    _STATUS_COLORS: Dict[str, tuple[str, str]] = {
+    _STATUS_COLORS: dict[str, tuple[str, str]] = {
         "idle": ("#6c757d", "系統待命"),
         "running": ("#ffc107", "檢測進行中..."),
         "success": ("#28a745", "檢測完成"),

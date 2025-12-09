@@ -1,7 +1,7 @@
 """Public exports for results services."""
 
-from .handler import ResultHandler
 from .excel_buffer import ExcelWorkbookBuffer
+from .handler import ResultHandler
 from .image_queue import ImageWriteQueue
 from .path_manager import ResultPathManager, SavePathBundle
 

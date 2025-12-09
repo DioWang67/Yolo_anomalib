@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
 
-from ..camera_controller import CameraController
 from core.config import DetectionConfig
+
+from ..camera_controller import CameraController
 
 
 class CameraSource:
@@ -21,8 +21,8 @@ class CameraSource:
         camera_index: int,
         logger: logging.Logger,
     ) -> None:
-        self._controller: Optional[CameraController] = None
-        self._capture: Optional[cv2.VideoCapture] = None
+        self._controller: CameraController | None = None
+        self._capture: cv2.VideoCapture | None = None
         self._use_opencv = use_opencv
         self._camera_index = camera_index
         self._config_path = config_path
@@ -48,7 +48,7 @@ class CameraSource:
         self.shutdown()
         self._open()
 
-    def read(self) -> Optional[np.ndarray]:
+    def read(self) -> np.ndarray | None:
         """Return the latest frame in BGR format, or None if unavailable."""
         if self._controller:
             return self._controller.capture_frame()

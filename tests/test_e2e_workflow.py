@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from core.config import DetectionConfig
 import core.detection_system as ds
+from core.config import DetectionConfig
 
 
 def test_yolo_and_anomalib_end_to_end(monkeypatch, tmp_path):

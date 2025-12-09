@@ -1,13 +1,13 @@
 """程式命令列進入點，可直接執行推論或啟動互動模式。"""
 
-import sys
-import logging
-
-from core.detection_system import DetectionSystem
-from app.cli import run_cli
-from core.logging_config import configure_logging
 import argparse
+import logging
 import os
+import sys
+
+from app.cli import run_cli
+from core.detection_system import DetectionSystem
+from core.logging_config import configure_logging
 
 try:
     import cv2  # type: ignore

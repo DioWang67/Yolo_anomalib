@@ -2,18 +2,17 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from app.gui.workers import DetectionWorker
 
 if TYPE_CHECKING:  # pragma: no cover
-    from core.detection_system import DetectionSystem
+    pass
 
 
-def _list_subdirectories(path: Path) -> List[str]:
+def _list_subdirectories(path: Path) -> list[str]:
     if not path.exists():
         return []
     entries = [
@@ -30,19 +29,19 @@ class ModelCatalog:
     """Discover available products/areas/inference types from the models directory."""
 
     root: Path
-    _cache: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
+    _cache: dict[str, dict[str, list[str]]] = field(default_factory=dict)
 
     def refresh(self) -> None:
         self._cache.clear()
 
-    def products(self) -> List[str]:
+    def products(self) -> list[str]:
         products = _list_subdirectories(self.root)
         # simple cache invalidation if counts changed
         if set(products) != set(self._cache.keys()):
             self._cache.clear()
         return products
 
-    def areas(self, product: str) -> List[str]:
+    def areas(self, product: str) -> list[str]:
         if product not in self._cache:
             product_dir = self.root / product
             self._cache[product] = {
@@ -50,7 +49,7 @@ class ModelCatalog:
             }
         return self._cache[product]["__areas__"]
 
-    def inference_types(self, product: str, area: str) -> List[str]:
+    def inference_types(self, product: str, area: str) -> list[str]:
         self.areas(product)  # ensure product cached
         key = f"{product}:{area}"
         if key not in self._cache:
@@ -74,13 +73,13 @@ class DetectionController:
         self,
         config_path: Path,
         catalog: ModelCatalog,
-        logger: Optional[logging.Logger] = None,
-        detection_cls: Optional[Any] = None,
+        logger: logging.Logger | None = None,
+        detection_cls: Any | None = None,
     ) -> None:
         self._config_path = config_path
         self.catalog = catalog
         self._logger = logger or logging.getLogger(__name__)
-        self._system: Optional[Any] = None
+        self._system: Any | None = None
         self._detection_cls = detection_cls
 
     @property
@@ -129,13 +128,13 @@ class DetectionController:
         system = self.detection_system
         return DetectionWorker(system, product, area, inference_type, frame=frame)
 
-    def save_result_json(self, file_path: Path, result: Dict[str, object]) -> None:
+    def save_result_json(self, file_path: Path, result: dict[str, object]) -> None:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         with file_path.open("w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         self._logger.debug("Result written to %s", file_path)
 
-    def load_image(self, path: Path) -> Optional[object]:
+    def load_image(self, path: Path) -> object | None:
         if not path.exists():
             return None
         try:

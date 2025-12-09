@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ class PositionValidator:
         self.product = product
         self.area = area
         self.pos_config = self.config.get_position_config(product, area) or {}
-        self.expected_boxes: Dict[str, Dict[str, float]] = self.pos_config.get(
+        self.expected_boxes: dict[str, dict[str, float]] = self.pos_config.get(
             "expected_boxes", {}
         )
         self.mode = str(self.pos_config.get("mode", "bbox")).lower()
@@ -76,8 +76,8 @@ class PositionValidator:
                     y2,
                 )
 
-    def _precompute_expected_centers(self) -> Dict[str, Tuple[float, float]]:
-        centers: Dict[str, Tuple[float, float]] = {}
+    def _precompute_expected_centers(self) -> dict[str, tuple[float, float]]:
+        centers: dict[str, tuple[float, float]] = {}
         for class_name, box in self.expected_boxes.items():
             try:
                 cx = (float(box["x1"]) + float(box["x2"])) / 2.0
@@ -90,7 +90,7 @@ class PositionValidator:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def validate(self, detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def validate(self, detections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Annotate detections with position meta-data."""
         for det in detections:
             if "cx" not in det or "cy" not in det:
@@ -128,17 +128,17 @@ class PositionValidator:
             det["position_edge_distance"] = edge_distance
         return detections
 
-    def has_wrong_position(self, detections: List[Dict[str, Any]]) -> bool:
+    def has_wrong_position(self, detections: list[dict[str, Any]]) -> bool:
         return any(det.get("position_status") == "WRONG" for det in detections)
 
-    def has_unexpected_position(self, detections: List[Dict[str, Any]]) -> bool:
+    def has_unexpected_position(self, detections: list[dict[str, Any]]) -> bool:
         return any(det.get("position_status") == "UNEXPECTED" for det in detections)
 
-    def get_position_errors(self, detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def get_position_errors(self, detections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [det for det in detections if det.get("position_status") in {"WRONG", "UNEXPECTED"}]
 
     def evaluate_status(
-        self, detections: List[Dict[str, Any]], missing_items: List[str]
+        self, detections: list[dict[str, Any]], missing_items: list[str]
     ) -> str:
         if self.config.is_position_check_enabled(self.product, self.area):
             if missing_items or self.has_wrong_position(detections):
@@ -148,7 +148,7 @@ class PositionValidator:
                 return "FAIL"
         return "PASS"
 
-    def get_summary(self, detections: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def get_summary(self, detections: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "total": len(detections),
             "correct": sum(1 for d in detections if d.get("position_status") == "CORRECT"),
@@ -162,7 +162,7 @@ class PositionValidator:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _mark_unknown(self, det: Dict[str, Any], *, reason: str) -> None:
+    def _mark_unknown(self, det: dict[str, Any], *, reason: str) -> None:
         det["position_status"] = "UNKNOWN"
         det["position_error"] = None
         det["position_offset"] = None
@@ -170,7 +170,7 @@ class PositionValidator:
         det["position_edge_distance"] = None
         logger.warning("Position check skipped (%s): %s", reason, det)
 
-    def _mark_invalid(self, det: Dict[str, Any], cx: float, cy: float) -> None:
+    def _mark_invalid(self, det: dict[str, Any], cx: float, cy: float) -> None:
         det["position_status"] = "INVALID"
         det["position_error"] = None
         det["position_offset"] = None
@@ -184,7 +184,7 @@ class PositionValidator:
             self.imgsz,
         )
 
-    def _mark_error(self, det: Dict[str, Any], *, reason: str, payload: Any) -> None:
+    def _mark_error(self, det: dict[str, Any], *, reason: str, payload: Any) -> None:
         det["position_status"] = "ERROR"
         det["position_error"] = None
         det["position_offset"] = None
@@ -197,7 +197,7 @@ class PositionValidator:
 
     def _check_position(
         self, class_name: str, cx: float, cy: float
-    ) -> Tuple[str, Optional[float], Tuple[float, float], Optional[Tuple[float, float]], float]:
+    ) -> tuple[str, float | None, tuple[float, float], tuple[float, float] | None, float]:
         box = self.expected_boxes.get(class_name)
         if not box:
             return "UNEXPECTED", None, (0.0, 0.0), None, 0.0
@@ -256,8 +256,8 @@ class PositionValidator:
         class_name: str,
         cx: float,
         cy: float,
-        box: Dict[str, Any],
-    ) -> Tuple[float, float, float, Optional[Tuple[float, float]], float]:
+        box: dict[str, Any],
+    ) -> tuple[float, float, float, tuple[float, float] | None, float]:
         edge_distance = self._point_to_rect_distance(
             cx,
             cy,

@@ -1,12 +1,13 @@
 # camera_controller.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 import cv2
 import numpy as np
-from typing import Optional
-from core.logging_config import DetectionLogger
-from core.config import DetectionConfig
+
 from camera.MVS_camera_control import MVSCamera
+from core.config import DetectionConfig
+from core.logging_config import DetectionLogger
 
 
 class CameraController:
@@ -31,7 +32,7 @@ class CameraController:
             self.logger.logger.error(f"相機初始化失敗: {str(e)}")
             raise
 
-    def capture_frame(self) -> Optional[np.ndarray]:
+    def capture_frame(self) -> np.ndarray | None:
         if not self.is_initialized:
             raise RuntimeError("相機未初始化")
         try:
@@ -55,7 +56,7 @@ class CameraController:
             self.logger.logger.error(f"拍攝失敗: {str(e)}")
             return None
 
-    def capture_multiple_frames(self, count: int = 3) -> Optional[np.ndarray]:
+    def capture_multiple_frames(self, count: int = 3) -> np.ndarray | None:
         if not self.is_initialized:
             raise RuntimeError("相機未初始化")
         try:

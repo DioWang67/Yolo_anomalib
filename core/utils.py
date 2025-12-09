@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 import cv2
 import numpy as np
@@ -10,8 +10,8 @@ class ImageUtils:
     @staticmethod
     def letterbox(
         img: np.ndarray,
-        size: Tuple[int, int] = (640, 640),
-        fill_color: Tuple[int, int, int] = (128, 128, 128),
+        size: tuple[int, int] = (640, 640),
+        fill_color: tuple[int, int, int] = (128, 128, 128),
     ) -> np.ndarray:
         """Resize an image to size while keeping aspect ratio via padding."""
         h, w = img.shape[:2]
@@ -35,8 +35,8 @@ class ImageUtils:
     def draw_label(
         frame: np.ndarray,
         text: str,
-        position: Tuple[int, int],
-        color: Tuple[int, int, int],
+        position: tuple[int, int],
+        color: tuple[int, int, int],
         font_scale: float = 0.6,
         thickness: int = 2,
     ) -> None:
@@ -53,7 +53,7 @@ class ImageUtils:
     @staticmethod
     def create_result_directories(
         base_dir: str, status: str
-    ) -> Tuple[str, str, str, str, str]:
+    ) -> tuple[str, str, str, str, str]:
         date_folder = datetime.now().strftime("%Y%m%d")
         time_stamp = datetime.now().strftime("%H%M%S")
         result_dir = os.path.join(base_dir, date_folder, status)
@@ -74,9 +74,9 @@ class DetectionResults:
 
     def evaluate_detection(
         self,
-        detections: List[Dict[str, Union[str, float, List[int], int]]],
-        expected_items: List[str],
-    ) -> Tuple[str, List[str]]:
+        detections: list[dict[str, str | float | list[int] | int]],
+        expected_items: list[str],
+    ) -> tuple[str, list[str]]:
         detected_classes = {det["class"] for det in detections}
         missing_items = [
             item for item in expected_items if item not in detected_classes
@@ -86,12 +86,12 @@ class DetectionResults:
 
     def format_detection_data(
         self,
-        detections: List[Dict[str, Union[str, float, List[int], int]]],
+        detections: list[dict[str, str | float | list[int] | int]],
         annotated_path: str,
         original_path: str,
         status: str,
-        missing_items: List[str],
-    ) -> Dict[str, Any]:
+        missing_items: list[str],
+    ) -> dict[str, Any]:
         confidence_scores = ";".join(
             [f"{det['class']}:{det['confidence']:.2f}" for det in detections]
         )

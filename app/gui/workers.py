@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import traceback
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -19,7 +19,7 @@ class DetectionWorker(QThread):
 
     def __init__(
         self,
-        detection_system: "DetectionSystem",
+        detection_system: DetectionSystem,
         product: str,
         area: str,
         inference_type: str,

@@ -1,9 +1,11 @@
-from MvImport.MvCameraControl_class import *
-import numpy as np
-import cv2
-import time
-import os
 import logging
+import os
+import time
+
+import cv2
+import numpy as np
+
+from MvImport.MvCameraControl_class import *
 
 _camera_logger = logging.getLogger("camera.mvs")
 

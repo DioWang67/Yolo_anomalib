@@ -1,16 +1,14 @@
-# -*- coding: utf-8 -*-
 import os
-import io
 import time
-import shutil
+
+import cv2
 import numpy as np
 import pandas as pd
-import cv2
 import pytest
 
+from core.exceptions import ResultImageWriteError
 from core.services.results import handler as rh
 from core.services.results.handler import ResultHandler
-from core.exceptions import ResultImageWriteError
 
 
 # ----------------- 測試輔助項目 -----------------

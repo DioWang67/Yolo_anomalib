@@ -1,11 +1,10 @@
-import os
 from pathlib import Path
 
 import yaml
 
-from core.services.model_manager import ModelManager
 from core.config import DetectionConfig
 from core.logging_config import DetectionLogger
+from core.services.model_manager import ModelManager
 
 
 def _write_global_config(tmp_path: Path, weights_path: Path) -> Path:

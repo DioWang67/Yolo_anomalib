@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -11,7 +10,7 @@ def compute_change_metrics(
     curr_gray: np.ndarray,
     prev_gray: np.ndarray,
     threshold: int,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """Compute normalized mean diff and change ratio between two grayscale frames."""
     if curr_gray.shape != prev_gray.shape:
         raise ValueError("Frame shape mismatch for compute_change_metrics().")
@@ -35,7 +34,7 @@ class AdaptiveCalibrator:
     _ready: bool = False
     _suggest_thr: int = 25
 
-    def update(self, curr_gray: np.ndarray, prev_gray: Optional[np.ndarray]) -> None:
+    def update(self, curr_gray: np.ndarray, prev_gray: np.ndarray | None) -> None:
         if prev_gray is None or prev_gray.shape != curr_gray.shape:
             return
 

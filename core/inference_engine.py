@@ -1,20 +1,20 @@
-from typing import Dict, Any, Type
 from importlib import import_module
+from typing import Any
 
 from core.base_model import BaseInferenceModel
-from core.yolo_inference_model import YOLOInferenceModel
 from core.exceptions import (
     BackendInitializationError,
     BackendNotAvailableError,
     ModelInitializationError,
 )
+from core.yolo_inference_model import YOLOInferenceModel
 
 try:
     from core.anomalib_inference_model import AnomalibInferenceModel
 except Exception:  # pragma: no cover
     AnomalibInferenceModel = None  # type: ignore
-from core.logging_config import DetectionLogger
 from core.config import DetectionConfig
+from core.logging_config import DetectionLogger
 
 
 class InferenceEngine:
@@ -27,7 +27,7 @@ class InferenceEngine:
     def __init__(self, config: DetectionConfig):
         self.config = config
         self.logger = DetectionLogger()
-        self.models: Dict[str, BaseInferenceModel] = {}
+        self.models: dict[str, BaseInferenceModel] = {}
 
     def _register_builtin(self) -> None:
         """No-op for lazy mode. Backends are created on first use in infer()."""
@@ -111,7 +111,7 @@ class InferenceEngine:
                     )
                 try:
                     mod, clsname = class_path.rsplit(".", 1)
-                    cls: Type[BaseInferenceModel] = getattr(
+                    cls: type[BaseInferenceModel] = getattr(
                         import_module(mod), clsname)  # type: ignore[attr-defined]
                     inst = cls(self.config)
                     initializer = getattr(inst, "initialize", None)

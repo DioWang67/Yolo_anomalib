@@ -2,7 +2,8 @@ from __future__ import annotations
 
 """將不同推論後端的輸出格式化，供後續流程共用。"""
 
-from typing import Any, Dict
+from typing import Any
+
 import numpy as np
 
 
@@ -15,8 +16,8 @@ def _ensure_list(v, default=None):
 
 
 def normalize_result(
-    result: Dict[str, Any], inference_type: str, fallback_frame: np.ndarray
-) -> Dict[str, Any]:
+    result: dict[str, Any], inference_type: str, fallback_frame: np.ndarray
+) -> dict[str, Any]:
     """Normalize backend-specific outputs into a common shape.
 
     Ensures presence of keys consumed by downstream pipeline/sinks:
@@ -29,7 +30,7 @@ def normalize_result(
     - ckpt_path: str | ''
     - inference_type: original name (lower)
     """
-    out: Dict[str, Any] = dict(result or {})
+    out: dict[str, Any] = dict(result or {})
     out["inference_type"] = str(inference_type).lower()
 
     # Status

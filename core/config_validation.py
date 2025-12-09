@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Any
 
 from core.path_utils import resolve_path
 
 
 def validate_model_cfg(
-    cfg: Dict[str, Any], product: str, area: str, selected_backend: str | None = None
+    cfg: dict[str, Any], product: str, area: str, selected_backend: str | None = None
 ) -> None:
     """Lightweight validation for model-level config.
 

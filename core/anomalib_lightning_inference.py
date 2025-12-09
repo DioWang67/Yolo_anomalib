@@ -1,8 +1,10 @@
 import os
-from typing import Any, Dict, Optional, Tuple, Type, cast
+import warnings
+from typing import Any, cast
+
 import cv2
 import numpy as np
-import warnings
+
 # imgaug (pulled in by anomalib) still expects np.sctypes, which was removed in NumPy 2.x.
 # Shim the attr early so anomalib/imgaug can import when the exe bundles NumPy 2.
 if not hasattr(np, "sctypes"):  # pragma: no cover - exercised only on NumPy>=2
@@ -53,20 +55,20 @@ if not hasattr(np, "sctypes"):  # pragma: no cover - exercised only on NumPy>=2
         "complex": _complex_types,
         "others": _other_types,
     }
-from jsonargparse import Namespace
-from torch.utils.data import DataLoader
-from anomalib.data import PredictDataset
-from anomalib.engine import Engine
-from anomalib.models import AnomalyModule
-from importlib import import_module
+import logging
 import pathlib
 import sys
 import threading
 import time
-import logging
 from datetime import datetime
+from importlib import import_module
+
 # ---- Anomalib / jsonargparse 依賴檢查與強制載入 ----
 import jsonargparse
+from anomalib.data import PredictDataset
+from anomalib.engine import Engine
+from jsonargparse import Namespace
+from torch.utils.data import DataLoader
 
 logger = logging.getLogger("anomalib")
 
@@ -98,30 +100,30 @@ warnings.filterwarnings(
 warnings.filterwarnings("ignore", message=".*ckpt_path is not provided.*")
 
 if sys.platform == "win32":
-    pathlib.PosixPath = cast(Type[pathlib.Path], pathlib.WindowsPath)  # type: ignore[misc,assignment]
+    pathlib.PosixPath = cast(type[pathlib.Path], pathlib.WindowsPath)  # type: ignore[misc,assignment]
 if hasattr(sys.stdout, "reconfigure"):
     cast(Any, sys.stdout).reconfigure(encoding="utf-8")
 
-ModelKey = Tuple[str, str]
+ModelKey = tuple[str, str]
 
-_engine: Optional[Engine] = None
-_models: Dict[ModelKey, Dict[str, Any]] = {}
-_output_dir: Optional[str] = None
+_engine: Engine | None = None
+_models: dict[ModelKey, dict[str, Any]] = {}
+_output_dir: str | None = None
 _transform: Any | None = None
 _inference_lock = threading.Lock()
 _initialization_lock = threading.Lock()
-_is_initialized: Dict[ModelKey, bool] = {}
-_current_product: Optional[str] = None
-_current_area: Optional[str] = None
-_current_ckpt_path: Optional[str] = None
-_thresholds: Dict[ModelKey, float] = {}  # Stores thresholds per product/area
+_is_initialized: dict[ModelKey, bool] = {}
+_current_product: str | None = None
+_current_area: str | None = None
+_current_ckpt_path: str | None = None
+_thresholds: dict[ModelKey, float] = {}  # Stores thresholds per product/area
 
 
 # anomalib_lightning_inference.py, initialize 方法中
 def initialize(
-    config: Optional[Dict[str, Any]] = None,
-    product: Optional[str] = None,
-    area: Optional[str] = None,
+    config: dict[str, Any] | None = None,
+    product: str | None = None,
+    area: str | None = None,
 ) -> None:
     global _engine, _models, _output_dir, _transform, _is_initialized
     global _current_product, _current_area, _current_ckpt_path, _thresholds
@@ -235,8 +237,8 @@ def initialize(
 
 
 def initialize_product_models(
-    config: Optional[Dict[str, Any]] = None,
-    product: Optional[str] = None,
+    config: dict[str, Any] | None = None,
+    product: str | None = None,
 ) -> None:
     if config is None:
         raise ValueError("config is required for initialize_product_models()")
@@ -258,10 +260,10 @@ def lightning_inference(
     image_path: str,
     thread_safe: bool = True,
     enable_timing: bool = True,
-    product: Optional[str] = None,
-    area: Optional[str] = None,
-    output_path: Optional[str] = None,
-) -> Dict[str, Any]:
+    product: str | None = None,
+    area: str | None = None,
+    output_path: str | None = None,
+) -> dict[str, Any]:
     global _engine, _models, _output_dir, _transform, _inference_lock, _is_initialized
 
     if product is None or area is None:
@@ -294,7 +296,7 @@ def lightning_inference(
         warn_msg = f"Failed to read image {img.shape[:2]} ????? 640x640"
         logging.getLogger("anomalib").warning(warn_msg)
 
-    timings: Dict[str, float] = {}
+    timings: dict[str, float] = {}
     start_time = time.time()
 
     try:
@@ -378,13 +380,13 @@ def lightning_inference(
 
 # anomalib_lightning_inference.py, _process_prediction 方法中
 def _process_prediction(
-    pred: Dict[str, Any],
+    pred: dict[str, Any],
     image_path: str,
     product: str,
     area: str,
-    output_path: Optional[str] = None,
+    output_path: str | None = None,
     enable_timing: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     try:
         model_key: ModelKey = (product, area)
         threshold = _thresholds.get(model_key, 0.5)

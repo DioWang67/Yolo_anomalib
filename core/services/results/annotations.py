@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import cv2
 from ultralytics.utils.plotting import colors  # type: ignore[import]
@@ -12,25 +12,25 @@ COLOR_PANEL_MAX_ITEMS = 8
 def annotate_yolo_frame(
     image_utils: ImageUtils,
     frame: np.ndarray,
-    detections: List[Dict[str, Any]],
-    color_result: Optional[Dict[str, Any]],
+    detections: list[dict[str, Any]],
+    color_result: dict[str, Any] | None,
     status: str,
 ) -> None:
     """Render detection metadata and color check cues onto the frame."""
-    panel_lines: List[Tuple[str, Tuple[int, int, int]]] = []
+    panel_lines: list[tuple[str, tuple[int, int, int]]] = []
     status_text = str(status or "").upper()
     if status_text:
         status_color = (0, 255, 0) if status_text == "PASS" else (0, 0, 255)
         panel_lines.append((f"Result: {status_text}", status_color))
 
-    color_items: List[Dict[str, Any]] = []
+    color_items: list[dict[str, Any]] = []
     if color_result:
         color_items = (color_result or {}).get("items", []) or []
 
-    fail_indices: List[int] = []
+    fail_indices: list[int] = []
     if detections:
         for idx, det in enumerate(detections):
-            color_item: Optional[Dict[str, Any]] = None
+            color_item: dict[str, Any] | None = None
             if idx < len(color_items):
                 color_item = color_items[idx]
             _draw_detection_box(image_utils, frame, det, color_item)
@@ -56,8 +56,8 @@ def annotate_yolo_frame(
 def _draw_detection_box(
     image_utils: ImageUtils,
     frame: np.ndarray,
-    detection: Dict[str, Any],
-    color_item: Optional[Dict[str, Any]] = None,
+    detection: dict[str, Any],
+    color_item: dict[str, Any] | None = None,
 ) -> None:
     x1, y1, x2, y2 = detection["bbox"]
     label = f"{detection['class']} {detection['confidence']:.2f}"
@@ -71,8 +71,8 @@ def _draw_detection_box(
         _draw_color_tag(image_utils, frame, x1, label_y, color_item)
 def _highlight_color_failures(
     frame: np.ndarray,
-    detections: List[Dict[str, Any]],
-    color_result: Dict[str, Any],
+    detections: list[dict[str, Any]],
+    color_result: dict[str, Any],
 ) -> None:
     try:
         items = (color_result or {}).get("items", []) or []
@@ -89,9 +89,9 @@ def _highlight_color_failures(
 
 
 def _build_color_summary_lines(
-    color_result: Dict[str, Any], detections: Optional[List[Dict[str, Any]]] = None
-) -> List[Tuple[str, Tuple[int, int, int]]]:
-    lines: List[Tuple[str, Tuple[int, int, int]]] = []
+    color_result: dict[str, Any], detections: list[dict[str, Any]] | None = None
+) -> list[tuple[str, tuple[int, int, int]]]:
+    lines: list[tuple[str, tuple[int, int, int]]] = []
     try:
         status = "PASS" if color_result.get("is_ok", False) else "FAIL"
         color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
@@ -112,8 +112,8 @@ def _build_color_summary_lines(
 
 def _draw_info_panel(
     frame: np.ndarray,
-    lines: List[Tuple[str, Tuple[int, int, int]]],
-    origin: Tuple[int, int] = (15, 35),
+    lines: list[tuple[str, tuple[int, int, int]]],
+    origin: tuple[int, int] = (15, 35),
 ) -> None:
     if not lines:
         return
@@ -147,7 +147,7 @@ def _draw_color_tag(
     frame: np.ndarray,
     x: int,
     label_y: int,
-    color_item: Dict[str, Any],
+    color_item: dict[str, Any],
 ) -> None:
     try:
         name = str(color_item.get("best_color") or "-")
@@ -173,12 +173,12 @@ def _draw_color_tag(
 
 
 def _format_color_lines(
-    color_result: Dict[str, Any], max_items: Optional[int] = None
-) -> List[tuple[str, bool]]:
-    lines: List[tuple[str, bool]] = []
+    color_result: dict[str, Any], max_items: int | None = None
+) -> list[tuple[str, bool]]:
+    lines: list[tuple[str, bool]] = []
     try:
         items = (color_result or {}).get("items", []) or []
-        ranked: List[tuple[int, int, Dict[str, Any]]] = []
+        ranked: list[tuple[int, int, dict[str, Any]]] = []
         for pos, item in enumerate(items):
             is_ok = bool(item.get("is_ok", True))
             rank = 0 if not is_ok else 1
@@ -207,11 +207,11 @@ def _format_color_lines(
 
 
 def _left_right_color_sequence(
-    detections: List[Dict[str, Any]], color_result: Dict[str, Any]
-) -> List[str]:
+    detections: list[dict[str, Any]], color_result: dict[str, Any]
+) -> list[str]:
     try:
         items = (color_result or {}).get("items", []) or []
-        seq: List[tuple[float, str]] = []
+        seq: list[tuple[float, str]] = []
         for idx, det in enumerate(detections or []):
             if idx >= len(items):
                 continue

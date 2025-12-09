@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """負責載入 LED 色彩模型並對偵測結果進行色彩檢查的服務。"""
 
-from typing import List, Optional, Dict, Any
+from typing import Any
 
 import numpy as np
 
@@ -20,17 +20,17 @@ class ColorCheckerService:
     """
 
     def __init__(self) -> None:
-        self._checker: Optional[Any] = None
-        self._model_path: Optional[str] = None
+        self._checker: Any | None = None
+        self._model_path: str | None = None
         self._checker_type: str = "color_qc"
 
     def ensure_loaded(
         self,
         model_path: str,
-        overrides: Optional[Dict[str, float]] = None,
-        rules_overrides: Optional[Dict[str, Dict[str, Optional[float]]]] = None,
+        overrides: dict[str, float] | None = None,
+        rules_overrides: dict[str, dict[str, float | None]] | None = None,
         checker_type: str = "color_qc",
-        default_threshold: Optional[float] = None,
+        default_threshold: float | None = None,
     ) -> None:
         """Load/Reload the color model if needed and apply overrides if provided."""
         checker_type = (checker_type or "color_qc").lower()
@@ -94,7 +94,7 @@ class ColorCheckerService:
         self,
         frame: np.ndarray,
         processed_image: np.ndarray,
-        detections: List[Dict[str, Any]],
+        detections: list[dict[str, Any]],
     ) -> ColorCheckResult:
         """Run color check on detections.
 
@@ -103,7 +103,7 @@ class ColorCheckerService:
         if self._checker is None:
             raise RuntimeError("ColorChecker not loaded")
 
-        items: List[ColorCheckItemResult] = []
+        items: list[ColorCheckItemResult] = []
         all_ok = True
         if detections:
             proc = processed_image if processed_image is not None else frame
