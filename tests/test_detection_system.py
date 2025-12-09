@@ -1,10 +1,9 @@
-# -*- coding: utf-8 -*-
 import os
+
 import numpy as np
 import pytest
 
 from core.config import DetectionConfig
-
 from core.detection_system import DetectionSystem
 
 

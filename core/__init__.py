@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Optional
-from .color_qc_enhanced import ColorQCEnhanced  # noqa: F401
-
 # 可選：用標準 logging 發出偵錯訊息
 import logging
+from typing import Optional
+
+from .color_qc_enhanced import ColorQCEnhanced  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
 # -- Optional import: anomalib 相關可能缺 --
-AnomalibInferenceModel: Optional[type]  # 明確型別註解
+AnomalibInferenceModel: type | None  # 明確型別註解
 try:  # pragma: no cover
     from .anomalib_inference_model import (
         AnomalibInferenceModel as _AIM,  # noqa: F401

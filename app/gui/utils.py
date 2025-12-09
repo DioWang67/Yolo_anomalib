@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from PyQt5.QtCore import QTimer
 
 
 def load_image_with_retry(
     viewer,
-    path: Optional[str],
+    path: str | None,
     *,
     attempts: int = 5,
     delay_ms: int = 200,
-    on_fail: Optional[Callable[[], None]] = None,
+    on_fail: Callable[[], None] | None = None,
 ) -> None:
     """Attempt to display an image with retries to handle async file writes."""
 

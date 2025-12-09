@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Dict, Any, List
+from typing import Any
 
+from core.exceptions import ResultPersistenceError
 from core.pipeline.context import DetectionContext
+from core.position_validator import PositionValidator
 from core.services.color_checker import ColorCheckerService
 from core.services.result_sink import ExcelImageResultSink
-from core.position_validator import PositionValidator
-from core.exceptions import ResultPersistenceError
 
 
 class Step:
@@ -26,7 +26,7 @@ class ColorCheckStep(Step):
 
     def run(self, ctx: DetectionContext) -> None:
         """Run color check on detections and attach ctx.color_result."""
-        detections: List[Dict[str, Any]] = ctx.result.get("detections", [])
+        detections: list[dict[str, Any]] = ctx.result.get("detections", [])
         c_res = self.color_service.check_items(
             frame=ctx.frame, processed_image=ctx.processed_image, detections=detections
         )

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from logging.config import dictConfig
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
 from core.logging_utils import ContextFilter
 
-_CONFIG_STATE: Dict[str, Optional[str]] = {
+_CONFIG_STATE: dict[str, str | None] = {
     "configured": False,
     "log_dir": None,
     "log_file": None,
@@ -58,7 +59,7 @@ def configure_logging(
 
     level_name = _resolve_level(level)
 
-    handlers: Dict[str, Dict[str, Any]] = {
+    handlers: dict[str, dict[str, Any]] = {
         "file": {
             "class": "logging.FileHandler",
             "level": level_name,
@@ -120,7 +121,7 @@ def configure_logging(
     return log_file
 
 
-def get_logger(name: Optional[str] = None) -> logging.Logger:
+def get_logger(name: str | None = None) -> logging.Logger:
     """Return a logger using the shared configuration."""
     return logging.getLogger(name or "core")
 
@@ -133,14 +134,14 @@ class DetectionLogger:
         self.logger = logging.getLogger(logger_name)
 
     def log_detection(
-        self, status: str, detections: Sequence[Dict[str, Any]] | None
+        self, status: str, detections: Sequence[dict[str, Any]] | None
     ) -> None:
         self.logger.info("Detection status: %s", status)
         items = list(detections or [])
         try:
             from collections import defaultdict
 
-            position_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+            position_map: dict[str, list[dict[str, Any]]] = defaultdict(list)
             for det in items:
                 cls = str(det.get("class", "-"))
                 cx = det.get("cx")
@@ -196,7 +197,7 @@ class DetectionLogger:
                         )
                 return
 
-            confidences: Dict[str, List[float]] = defaultdict(list)
+            confidences: dict[str, list[float]] = defaultdict(list)
             for det in items:
                 cls = str(det.get("class", "-"))
                 try:

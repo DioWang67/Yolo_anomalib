@@ -4,7 +4,6 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
 
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
@@ -12,7 +11,7 @@ from .source import CameraSource
 from .window import CameraPreviewWindow
 
 
-def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for the camera preview utility."""
     parser = argparse.ArgumentParser(
         description="Standalone Qt camera preview tool with change metrics."
@@ -123,7 +122,7 @@ def _setup_logging(level: str) -> logging.Logger:
     return logger
 
 
-def _parse_roi(roi_str: Optional[str]) -> Optional[Tuple[int, int, int, int]]:
+def _parse_roi(roi_str: str | None) -> tuple[int, int, int, int] | None:
     if not roi_str:
         return None
     try:
@@ -137,7 +136,7 @@ def _parse_roi(roi_str: Optional[str]) -> Optional[Tuple[int, int, int, int]]:
         ) from exc
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     logger = _setup_logging(args.log_level)
 
@@ -152,7 +151,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
 
-    def _create_source(use_opencv: bool) -> Tuple[Optional[CameraSource], Optional[str]]:
+    def _create_source(use_opencv: bool) -> tuple[CameraSource | None, str | None]:
         try:
             return CameraSource(
                 use_opencv=use_opencv,

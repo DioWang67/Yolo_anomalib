@@ -1,13 +1,13 @@
 import os
-import cv2
-import time
 import tempfile
+import time
+
+import cv2
 import numpy as np
-from core.base_model import BaseInferenceModel
 
 from core.anomalib_lightning_inference import initialize, lightning_inference
+from core.base_model import BaseInferenceModel
 from core.utils import ImageUtils
-from core.logging_config import DetectionLogger
 
 
 class AnomalibInferenceModel(BaseInferenceModel):

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Dict, Any
+from typing import Any
 
-from core.services.results.handler import ResultHandler
 from core.logging_config import DetectionLogger
+from core.services.results.handler import ResultHandler
 
 
 class ResultSink:
@@ -13,7 +13,7 @@ class ResultSink:
         """Return an output path for annotated images (per status/product/area)."""
         raise NotImplementedError
 
-    def save(self, *args, **kwargs) -> Dict[str, Any]:  # pragma: no cover
+    def save(self, *args, **kwargs) -> dict[str, Any]:  # pragma: no cover
         """Persist results and return paths (original, processed, annotated, ...)."""
         raise NotImplementedError
 
@@ -32,7 +32,7 @@ class ExcelImageResultSink(ResultSink):
     def get_annotated_path(self, *args, **kwargs) -> str:
         return self._handler.get_annotated_path(*args, **kwargs)
 
-    def save(self, *args, **kwargs) -> Dict[str, Any]:
+    def save(self, *args, **kwargs) -> dict[str, Any]:
         return self._handler.save_results(*args, **kwargs)
 
     def flush(self) -> None:

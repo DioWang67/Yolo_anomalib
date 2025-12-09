@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+import copy
 import os
 from collections import OrderedDict
 from pathlib import Path
-import copy
+
 import yaml  # type: ignore[import]
 
 from core.config import DetectionConfig
-from core.logging_config import DetectionLogger
-from core.inference_engine import InferenceEngine
-from core.path_utils import project_root, resolve_path
 from core.config_validation import validate_model_cfg
-
+from core.inference_engine import InferenceEngine
+from core.logging_config import DetectionLogger
+from core.path_utils import project_root, resolve_path
 
 # Repository root (two levels up from core/services)
 # Determine repository root (can be overridden by YOLO11_ROOT env var)
@@ -159,10 +159,10 @@ class ModelManager:
         key = (product, area)
         if key in self._cache and inference_type in self._cache[key]:
             self.logger.logger.info(
-                (
+
                     f"Using cached model: product={product}, "
                     f"area={area}, type={inference_type}"
-                )
+
             )
             engine, cfg_snapshot = self._cache[key][inference_type]
             base_config.__dict__.update(copy.deepcopy(cfg_snapshot.__dict__))
@@ -175,13 +175,15 @@ class ModelManager:
         if not os.path.exists(model_config_path):
             raise FileNotFoundError(f"Model config not found: {model_config_path}")
 
-        with open(model_config_path, "r", encoding="utf-8") as f:
+        with open(model_config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
 
         # Optional pydantic normalization for model-level config
         try:
-            from core.config_schema import ModelConfigSchema  # type: ignore
-            from core.config_schema import _to_dict  # type: ignore
+            from core.config_schema import (
+                ModelConfigSchema,  # type: ignore
+                _to_dict,  # type: ignore
+            )
         except Exception:
             ModelConfigSchema = None  # type: ignore
             _to_dict = None  # type: ignore
@@ -225,7 +227,7 @@ class ModelManager:
                 except Exception:
                     pass
             self.logger.logger.info(
-                (f"Evicted cached model: product={old_key[0]}, area={old_key[1]}")
+                f"Evicted cached model: product={old_key[0]}, area={old_key[1]}"
             )
 
         return engine, base_config

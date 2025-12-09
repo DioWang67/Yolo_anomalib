@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import yaml
 
@@ -68,8 +68,8 @@ def _ensure_schema(schema: Any, label: str) -> Any:
 
 
 def _normalize_with_schema(
-    schema: Any, payload: Dict[str, Any] | None, source: str, scope: str
-) -> Dict[str, Any]:
+    schema: Any, payload: dict[str, Any] | None, source: str, scope: str
+) -> dict[str, Any]:
     data = payload or {}
     if not isinstance(data, dict):
         raise ConfigValidationError(
@@ -82,17 +82,17 @@ def _normalize_with_schema(
         normalized = model(**data)
     except Exception as exc:  # pragma: no cover - pydantic error formatting
         raise ConfigValidationError(
-            (
+
                 f"{scope} configuration invalid ({source}): "
                 f"{_format_validation_error(exc)}"
-            )
+
         ) from exc
     return _to_dict(normalized)  # type: ignore[func-returns-value]
 
 
 def _coerce_imgsz(
-    value: Any, *, default: Optional[Tuple[int, int]] = None
-) -> Optional[Tuple[int, int]]:
+    value: Any, *, default: tuple[int, int] | None = None
+) -> tuple[int, int] | None:
     if value is None:
         return default
     if isinstance(value, (list, tuple)) and len(value) == 2:
@@ -113,35 +113,35 @@ class DetectionConfig:
     device: str = "cpu"
     conf_thres: float = 0.25
     iou_thres: float = 0.45
-    imgsz: Tuple[int, int] = (640, 640)
+    imgsz: tuple[int, int] = (640, 640)
     timeout: int = 2
     exposure_time: str = "1000"
     gain: str = "1.0"
     width: int = 3072
     height: int = 2048
     MV_CC_GetImageBuffer_nMsec: int = 10000
-    current_product: Optional[str] = None
-    current_area: Optional[str] = None
-    expected_items: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
+    current_product: str | None = None
+    current_area: str | None = None
+    expected_items: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     enable_yolo: bool = True
     enable_anomalib: bool = False
     enable_color_check: bool = False
-    color_model_path: Optional[str] = None
-    color_threshold_overrides: Optional[Dict[str, float]] = None
+    color_model_path: str | None = None
+    color_threshold_overrides: dict[str, float] | None = None
     # Optional per-color rules overrides:
     # { ColorName: { s_p90_max, s_p10_min, v_p50_min, v_p95_max } }
-    color_rules_overrides: Optional[Dict[str, Dict[str, Optional[float]]]] = None
+    color_rules_overrides: dict[str, dict[str, float | None]] | None = None
     color_checker_type: str = "color_qc"
-    color_score_threshold: Optional[float] = None
+    color_score_threshold: float | None = None
     output_dir: str = "Result"
-    anomalib_config: Optional[Dict[str, Any]] = None
-    position_config: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
+    anomalib_config: dict[str, Any] | None = None
+    position_config: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     max_cache_size: int = 3
     buffer_limit: int = 1
-    flush_interval: Optional[float] = None
-    pipeline: Optional[List[str]] = None
-    steps: Dict[str, Any] = field(default_factory=dict)
-    backends: Optional[Dict[str, Dict[str, Any]]] = None  # extra/custom backends
+    flush_interval: float | None = None
+    pipeline: list[str] | None = None
+    steps: dict[str, Any] = field(default_factory=dict)
+    backends: dict[str, dict[str, Any]] | None = None  # extra/custom backends
     # Avoid duplicating cache with YOLO internal cache (default: disable)
     disable_internal_cache: bool = True
     # Saving controls
@@ -152,13 +152,13 @@ class DetectionConfig:
     save_fail_only: bool = False
     jpeg_quality: int = 95
     png_compression: int = 3
-    max_crops_per_frame: Optional[int] = None
+    max_crops_per_frame: int | None = None
     fail_on_unexpected: bool = True
 
     @classmethod
     def normalize_global_dict(
-        cls, payload: Dict[str, Any], source: str
-    ) -> Dict[str, Any]:
+        cls, payload: dict[str, Any], source: str
+    ) -> dict[str, Any]:
         normalized = _normalize_with_schema(
             GlobalConfigSchema, payload, source, "Global"
         )
@@ -166,13 +166,13 @@ class DetectionConfig:
         return normalized
 
     @staticmethod
-    def normalize_model_dict(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
+    def normalize_model_dict(payload: dict[str, Any], source: str) -> dict[str, Any]:
         normalized = _normalize_with_schema(ModelConfigSchema, payload, source, "Model")
         normalized["imgsz"] = _coerce_imgsz(normalized.get("imgsz"), default=None)
         return normalized
 
     @classmethod
-    def from_yaml(cls, path: str) -> "DetectionConfig":
+    def from_yaml(cls, path: str) -> DetectionConfig:
         """Load and validate the global configuration YAML file."""
         config_path = Path(path)
         if not config_path.exists():
@@ -210,7 +210,7 @@ class DetectionConfig:
         backends_raw = normalized.get("backends")
         backends_value = dict(backends_raw) if isinstance(backends_raw, dict) else None
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "weights": str(weights),
             "device": normalized.get("device", "cpu"),
             "conf_thres": float(normalized.get("conf_thres", 0.25)),
@@ -267,10 +267,10 @@ class DetectionConfig:
 
         return cls(**kwargs)
 
-    def get_items_by_area(self, product: str, area: str) -> Optional[List[str]]:
+    def get_items_by_area(self, product: str, area: str) -> list[str] | None:
         return self.expected_items.get(product, {}).get(area)
 
-    def get_position_config(self, product: str, area: str) -> Optional[Dict[str, Any]]:
+    def get_position_config(self, product: str, area: str) -> dict[str, Any] | None:
         return self.position_config.get(product, {}).get(area)
 
     def is_position_check_enabled(self, product: str, area: str) -> bool:

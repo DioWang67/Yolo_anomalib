@@ -1,12 +1,9 @@
-# -*- coding: utf-8 -*-
-import os
 import numpy as np
 import pytest
 
-from core.yolo_inference_model import YOLOInferenceModel
-from core.exceptions import ModelInitializationError, ModelInferenceError
 from core import yolo_inference_model as yim  # 直接 patch 模組內名稱
-import cv2
+from core.exceptions import ModelInferenceError, ModelInitializationError
+from core.yolo_inference_model import YOLOInferenceModel
 
 # ------------------ 測試輔助物件 ------------------
 

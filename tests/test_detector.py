@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
+import cv2
 import numpy as np
 import pytest
-import cv2
 import torch
 
-from core.detector import YOLODetector
 from core import detector as det_mod  # 用來 monkeypatch 模組內名稱
+from core.detector import YOLODetector
 
 
 # --------- 測試用替身 ---------

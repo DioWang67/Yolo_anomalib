@@ -6,7 +6,7 @@ import os
 import time
 from collections import OrderedDict
 from contextlib import nullcontext
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import torch
@@ -14,8 +14,8 @@ from torch.cuda.amp import autocast
 from ultralytics import YOLO
 
 from core.base_model import BaseInferenceModel
-from core.exceptions import ModelInitializationError, ModelInferenceError
 from core.detector import YOLODetector
+from core.exceptions import ModelInferenceError, ModelInitializationError
 from core.position_validator import PositionValidator
 from core.utils import ImageUtils
 
@@ -127,7 +127,7 @@ class YOLOInferenceModel(BaseInferenceModel):
 
     def infer(
         self, image: np.ndarray, product: str, area: str, output_path: str | None = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not self.is_initialized:
             raise RuntimeError("YOLO model is not initialized")
 

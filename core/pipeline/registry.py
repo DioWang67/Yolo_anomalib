@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, List, Optional
 
-from core.pipeline.steps import Step, ColorCheckStep, SaveResultsStep, PositionCheckStep
 from core.config import DetectionConfig
+from core.pipeline.steps import ColorCheckStep, PositionCheckStep, SaveResultsStep, Step
 from core.services.color_checker import ColorCheckerService
 from core.services.result_sink import ExcelImageResultSink
 
@@ -19,10 +19,10 @@ class PipelineEnv:
     config: DetectionConfig
 
 
-StepFactory = Callable[[PipelineEnv, Dict], Optional[Step]]
+StepFactory = Callable[[PipelineEnv, dict], Step | None]
 
 
-_REGISTRY: Dict[str, StepFactory] = {}
+_REGISTRY: dict[str, StepFactory] = {}
 
 
 def register_step(name: str, factory: StepFactory) -> None:
@@ -39,14 +39,14 @@ def unregister_step(name: str) -> None:
     _REGISTRY.pop(key, None)
 
 
-def available_steps() -> List[str]:
+def available_steps() -> list[str]:
     """Return the list of registered step names."""
     return sorted(_REGISTRY.keys())
 
 
 def create_step(
-    name: str, env: PipelineEnv, options: Optional[Dict] = None
-) -> Optional[Step]:
+    name: str, env: PipelineEnv, options: dict | None = None
+) -> Step | None:
     """Instantiate a registered step.
 
     Returns None when the factory decides to skip (e.g. disabled feature)."""
@@ -58,10 +58,10 @@ def create_step(
 
 
 def build_pipeline(
-    step_names: Iterable[str], env: PipelineEnv, step_options: Dict[str, Dict]
-) -> List[Step]:
+    step_names: Iterable[str], env: PipelineEnv, step_options: dict[str, dict]
+) -> list[Step]:
     """Create step instances for the provided names in order."""
-    steps: List[Step] = []
+    steps: list[Step] = []
     seen_save = False
     for raw_name in step_names:
         key = str(raw_name).strip().lower()
@@ -87,9 +87,9 @@ def build_pipeline(
     return steps
 
 
-def default_pipeline(env: PipelineEnv) -> List[str]:
+def default_pipeline(env: PipelineEnv) -> list[str]:
     """Return the default pipeline order given current config."""
-    names: List[str] = []
+    names: list[str] = []
     cfg = env.config
     if getattr(cfg, "enable_color_check", False) and getattr(
         cfg, "color_model_path", None
@@ -103,7 +103,7 @@ def default_pipeline(env: PipelineEnv) -> List[str]:
 # Default step registrations
 
 
-def _color_step_factory(env: PipelineEnv, options: Dict) -> Optional[Step]:
+def _color_step_factory(env: PipelineEnv, options: dict) -> Step | None:
     cfg = env.config
     if not getattr(cfg, "enable_color_check", False):
         return None
@@ -119,11 +119,11 @@ def _color_step_factory(env: PipelineEnv, options: Dict) -> Optional[Step]:
     return ColorCheckStep(env.color_service, env.logger, options=options)
 
 
-def _save_step_factory(env: PipelineEnv, options: Dict) -> Optional[Step]:
+def _save_step_factory(env: PipelineEnv, options: dict) -> Step | None:
     return SaveResultsStep(env.result_sink, env.logger, options=options)
 
 
-def _position_step_factory(env: PipelineEnv, options: Dict) -> Optional[Step]:
+def _position_step_factory(env: PipelineEnv, options: dict) -> Step | None:
     return PositionCheckStep(
         env.logger, product=env.product, area=env.area, options=options
     )

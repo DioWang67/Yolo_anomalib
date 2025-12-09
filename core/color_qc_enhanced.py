@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """color_qc_enhanced.py
 
 Standalone LED color quality checker for the "advanced" model format
@@ -17,10 +16,11 @@ This module is self-contained and does not depend on the simple model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
-import json
 import colorsys
+import json
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any
 
 try:
     import numpy as np  # type: ignore
@@ -35,25 +35,25 @@ class ColorQCAdvancedResult:
     diff: float
     threshold: float
     is_ok: bool
-    scores: List[Tuple[str, float]]
-    metrics: Dict[str, float]
+    scores: list[tuple[str, float]]
+    metrics: dict[str, float]
 
 
 @dataclass
 class _ColorEntry:
     name: str
-    avg_color_hist: List[float]
-    hist_thr: Optional[float] = None
+    avg_color_hist: list[float]
+    hist_thr: float | None = None
 
 
 @dataclass
 class _Model:
-    hist_bins: Tuple[int, int, int]
+    hist_bins: tuple[int, int, int]
     default_hist_thr: float
-    colors: List[_ColorEntry]
+    colors: list[_ColorEntry]
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "_Model":
+    def from_dict(cls, data: dict[str, Any]) -> _Model:
         cfg = data.get("config", {})
         bins = cfg.get("hist_bins", [12, 12, 12])
         if not (isinstance(bins, list) and len(bins) == 3):
@@ -61,7 +61,7 @@ class _Model:
         default_hist_thr = float(cfg.get("default_hist_thr", 0.25))
 
         colors_field = data.get("colors", {}) or {}
-        colors: List[_ColorEntry] = []
+        colors: list[_ColorEntry] = []
         for name, c in colors_field.items():
             avg_hist = c.get("avg_color_hist")
             if not isinstance(avg_hist, list) or not avg_hist:
@@ -86,8 +86,8 @@ class _Model:
 
 
 def _compute_hsv3d_hist(
-    image_bgr, bins: Tuple[int, int, int]
-) -> Tuple[List[float], Dict[str, float]]:
+    image_bgr, bins: tuple[int, int, int]
+) -> tuple[list[float], dict[str, float]]:
     """Compute normalized HSV 3D histogram on pixels with V>30.
 
     Returns (hist, metrics) where metrics includes S p90 and V p50 for optional white checks.
@@ -142,9 +142,9 @@ def _compute_hsv3d_hist(
             pass
 
     # Python fallback (slower)
-    pixels: List[Tuple[float, float, float]] = []
-    s_vals: List[float] = []
-    v_vals: List[float] = []
+    pixels: list[tuple[float, float, float]] = []
+    s_vals: list[float] = []
+    v_vals: list[float] = []
     if np is not None and isinstance(image_bgr, np.ndarray):
         img = image_bgr.reshape(-1, 3)
         for b, g, r in img:
@@ -176,7 +176,7 @@ def _compute_hsv3d_hist(
     if ssum > 0:
         hist = [h / ssum for h in hist]
 
-    def _percentile(vals: List[float], p: float) -> float:
+    def _percentile(vals: list[float], p: float) -> float:
         if not vals:
             return 0.0
         vs = sorted(vals)
@@ -191,7 +191,7 @@ def _compute_hsv3d_hist(
     }
 
 
-def _l1(a: List[float], b: List[float]) -> float:
+def _l1(a: list[float], b: list[float]) -> float:
     if np is not None:
         aa = np.asarray(a, dtype=np.float32)
         bb = np.asarray(b, dtype=np.float32)
@@ -217,11 +217,11 @@ class ColorQCEnhanced:
     def __init__(self, model: _Model) -> None:
         self.model = model
         # runtime per-color rules overrides: name(lower) -> rules dict
-        self._color_rules_overrides: Dict[str, Dict[str, Optional[float]]] = {}
+        self._color_rules_overrides: dict[str, dict[str, float | None]] = {}
 
     @classmethod
-    def from_json(cls, path: Any) -> "ColorQCEnhanced":
-        with open(path, "r", encoding="utf-8") as f:
+    def from_json(cls, path: Any) -> ColorQCEnhanced:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         if "colors" not in data:
             raise ValueError("advanced model json must contain 'colors'")
@@ -229,7 +229,7 @@ class ColorQCEnhanced:
         return cls(model)
 
     def check(
-        self, image_bgr, allowed_colors: Optional[Iterable[str]] = None
+        self, image_bgr, allowed_colors: Iterable[str] | None = None
     ) -> ColorQCAdvancedResult:
         hist, metrics = _compute_hsv3d_hist(image_bgr, self.model.hist_bins)
 
@@ -238,7 +238,7 @@ class ColorQCEnhanced:
         best_name = ""
         best_diff = float("inf")
         best_thr = self.model.default_hist_thr
-        scores: List[Tuple[str, float]] = []
+        scores: list[tuple[str, float]] = []
         for c in self.model.colors:
             if allowed and c.name.lower() not in allowed:
                 continue
@@ -268,10 +268,10 @@ class ColorQCEnhanced:
         v_p95 = metrics.get("v_p95", 0.0)
 
         # Base rules: disabled by default; use per-color overrides if configured
-        s_p90_max: Optional[float] = None
-        s_p10_min: Optional[float] = None
-        v_p50_min: Optional[float] = None
-        v_p95_max: Optional[float] = None
+        s_p90_max: float | None = None
+        s_p10_min: float | None = None
+        v_p50_min: float | None = None
+        v_p95_max: float | None = None
 
         # Apply per-color overrides if provided
         rules = self._color_rules_overrides.get(name_l)
@@ -359,7 +359,7 @@ class ColorQCEnhanced:
         )
 
     # --- runtime overrides ---
-    def apply_threshold_overrides(self, overrides: Dict[str, float]) -> None:
+    def apply_threshold_overrides(self, overrides: dict[str, float]) -> None:
         """Override per-color histogram thresholds from a mapping (case-insensitive)."""
         if not overrides:
             return
@@ -379,17 +379,17 @@ class ColorQCEnhanced:
     # apply_white_overrides removed (use apply_color_rules_overrides with key 'White')
 
     def apply_color_rules_overrides(
-        self, overrides: Dict[str, Dict[str, Optional[float]]]
+        self, overrides: dict[str, dict[str, float | None]]
     ) -> None:
         """Set per-color rules overrides mapping. Keys are color names (case-insensitive)."""
         try:
-            m: Dict[str, Dict[str, Optional[float]]] = {}
+            m: dict[str, dict[str, float | None]] = {}
             for k, v in (overrides or {}).items():
                 if not isinstance(v, dict):
                     continue
                 name = str(k).lower()
                 # accept only known keys
-                rule: Dict[str, Optional[float]] = {}
+                rule: dict[str, float | None] = {}
                 for key in ("s_p90_max", "s_p10_min", "v_p50_min", "v_p95_max"):
                     if key in v:
                         val = v.get(key)

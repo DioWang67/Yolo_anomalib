@@ -1,6 +1,7 @@
 # core/base_model.py
-from core.logging_config import DetectionLogger
 import torch
+
+from core.logging_config import DetectionLogger
 
 
 class BaseInferenceModel:

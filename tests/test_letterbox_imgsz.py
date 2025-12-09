@@ -1,7 +1,8 @@
 import numpy as np
+
 from core.config import DetectionConfig
-from core.yolo_inference_model import YOLOInferenceModel
 from core.utils import ImageUtils
+from core.yolo_inference_model import YOLOInferenceModel
 
 
 def test_yolo_preprocess_respects_imgsz():

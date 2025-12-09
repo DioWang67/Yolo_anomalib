@@ -5,32 +5,33 @@ import os
 import shutil
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import cv2
 import numpy as np
 
-from core.logging_config import DetectionLogger
-from core.utils import ImageUtils, DetectionResults
 from core.exceptions import (
     ResultExcelWriteError,
     ResultImageWriteError,
     ResultPersistenceError,
 )
+from core.logging_config import DetectionLogger
+from core.utils import DetectionResults, ImageUtils
 
 from .annotations import annotate_yolo_frame
 from .crops import save_detection_crops
 from .excel_buffer import ExcelWorkbookBuffer
 from .excel_formatter import build_excel_row
 from .image_queue import ImageWriteError, ImageWriteQueue
-from .path_manager import ResultPathManager, SavePathBundle
+from .path_manager import ResultPathManager
+
 
 # Minimal color helper (compatible with ultralytics.colors signature)
 def colors(class_id, bgr=True):
     return (0, 255, 0)
 
 # Excel column titles (stored as unicode escapes to avoid encoding issues)
-COLUMN_NAMES: List[str] = [
+COLUMN_NAMES: list[str] = [
     "\u6642\u9593\u6233\u8a18",  # 時間戳記
     "\u6e2c\u8a66\u7de8\u865f",  # 測試編號
     "\u7522\u54c1",  # 產品
@@ -103,9 +104,9 @@ class ResultHandler:
         self,
         status: str,
         detector: str,
-        product: Optional[str],
-        area: Optional[str],
-        anomaly_score: Optional[float] = None,
+        product: str | None,
+        area: str | None,
+        anomaly_score: float | None = None,
     ) -> str:
         return self.path_manager.get_annotated_path(
             status, detector, product, area, anomaly_score
@@ -114,18 +115,18 @@ class ResultHandler:
     def save_results(
         self,
         frame: np.ndarray,
-        detections: List[Dict[str, Any]],
+        detections: list[dict[str, Any]],
         status: str,
         detector: str,
-        missing_items: List[str],
+        missing_items: list[str],
         processed_image: np.ndarray,
         anomaly_score: float | None = None,
         heatmap_path: str | None = None,
         product: str | None = None,
         area: str | None = None,
         ckpt_path: str | None = None,
-        color_result: Dict[str, Any] | None = None,
-    ) -> Dict[str, Any]:
+        color_result: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         try:
             timestamp = datetime.now()
             bundle = self.path_manager.build_paths(
@@ -153,16 +154,16 @@ class ResultHandler:
                 bundle.original_path if save_flags["original"] else ""
             )
             preprocessed_path = (
-                (
+
                     bundle.preprocessed_path
                     if save_flags["processed"]
                     else ""
-                )
+
             )
             annotated_path = (
                 bundle.annotated_path if save_flags["annotated"] else ""
             )
-            cropped_paths: List[str] = []
+            cropped_paths: list[str] = []
             heatmap_dest_path = ""
 
             if save_flags["original"]:
@@ -319,7 +320,7 @@ class ResultHandler:
             return self.config.get(key, default)
         return getattr(self._config_source, key, default)
 
-    def _resolve_save_flags(self, status: str) -> Dict[str, bool]:
+    def _resolve_save_flags(self, status: str) -> dict[str, bool]:
         only_fail = bool(self._cfg_get("save_fail_only", False))
         should_save_images = (status != "PASS") if only_fail else True
         return {

@@ -1,31 +1,31 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .excel_buffer import format_excel_row
 
 
 def build_excel_row(
-    columns: List[str],
+    columns: list[str],
     *,
     timestamp: datetime,
     status: str,
     detector: str,
-    product: Optional[str],
-    area: Optional[str],
-    detections: List[Dict[str, Any]],
-    missing_items: List[str],
+    product: str | None,
+    area: str | None,
+    detections: list[dict[str, Any]],
+    missing_items: list[str],
     anomaly_score: float | None,
     annotated_path: str,
     original_path: str,
     preprocessed_path: str,
     heatmap_path: str,
-    cropped_paths: List[str],
-    ckpt_path: Optional[str],
-    color_result: Optional[Dict[str, Any]],
+    cropped_paths: list[str],
+    ckpt_path: str | None,
+    color_result: dict[str, Any] | None,
     test_id: int,
-) -> List[Any]:
+) -> list[Any]:
     """Compose an Excel row according to the configured column order."""
     confidence_scores = (
         ";".join(f"{det['class']}:{det['confidence']:.2f}" for det in detections)

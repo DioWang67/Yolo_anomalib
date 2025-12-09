@@ -2,11 +2,10 @@ from __future__ import annotations
 
 """Stats-based color checker derived from the improved color_verifier script."""
 
+import json
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
-
-import json
 
 import cv2
 import numpy as np
@@ -42,8 +41,8 @@ class _ColorRange:
     hsv_max: np.ndarray
     lab_min: np.ndarray
     lab_max: np.ndarray
-    hsv_mean: Optional[np.ndarray] = None
-    lab_mean: Optional[np.ndarray] = None
+    hsv_mean: np.ndarray | None = None
+    lab_mean: np.ndarray | None = None
 
 
 def _margin_vector(margin: Sequence[float] | float | None) -> np.ndarray:
@@ -64,7 +63,7 @@ def _load_color_ranges(
     stats_path: Path,
     hsv_margin: Sequence[float] | float | None = None,
     lab_margin: Sequence[float] | float | None = None,
-) -> Dict[str, _ColorRange]:
+) -> dict[str, _ColorRange]:
     payload = stats_path.read_text(encoding="utf-8")
     data = json.loads(payload)
     summary = data.get("summary")
@@ -73,7 +72,7 @@ def _load_color_ranges(
 
     hsv_margin_vec = _margin_vector(hsv_margin)
     lab_margin_vec = _margin_vector(lab_margin)
-    ranges: Dict[str, _ColorRange] = {}
+    ranges: dict[str, _ColorRange] = {}
     for color, stats in summary.items():
         color_name = str(color)
         hsv_min = np.asarray(stats["hsv_min"], dtype=np.float32) - hsv_margin_vec
@@ -81,7 +80,7 @@ def _load_color_ranges(
         lab_min = np.asarray(stats["lab_min"], dtype=np.float32) - lab_margin_vec
         lab_max = np.asarray(stats["lab_max"], dtype=np.float32) + lab_margin_vec
 
-        def _opt_array(key: str) -> Optional[np.ndarray]:
+        def _opt_array(key: str) -> np.ndarray | None:
             if key not in stats:
                 return None
             return np.asarray(stats[key], dtype=np.float32)
@@ -195,7 +194,7 @@ def _improved_match_ratio(
     )
 
 
-def _is_black_image(hsv_img: np.ndarray) -> Tuple[bool, float]:
+def _is_black_image(hsv_img: np.ndarray) -> tuple[bool, float]:
     h, w = hsv_img.shape[:2]
     margin_y = int(h * 0.15)
     margin_x = int(w * 0.15)
@@ -220,7 +219,7 @@ def _is_black_image(hsv_img: np.ndarray) -> Tuple[bool, float]:
     return is_black, (black_coverage if is_black else 0.0)
 
 
-def _detect_yellow_special(hsv_img: np.ndarray) -> Tuple[bool, float]:
+def _detect_yellow_special(hsv_img: np.ndarray) -> tuple[bool, float]:
     h, w = hsv_img.shape[:2]
     margin = int(min(h, w) * 0.15)
     center = hsv_img[margin : h - margin, margin : w - margin]
@@ -250,10 +249,10 @@ class StatsColorChecker:
 
     def __init__(
         self,
-        color_ranges: Dict[str, _ColorRange],
+        color_ranges: dict[str, _ColorRange],
         *,
         default_threshold: float = DEFAULT_RATIO_THRESHOLD,
-        color_thresholds: Optional[Dict[str, float]] = None,
+        color_thresholds: dict[str, float] | None = None,
     ) -> None:
         if not color_ranges:
             raise ValueError("color_ranges must not be empty")
@@ -271,10 +270,10 @@ class StatsColorChecker:
         stats_path: str | Path,
         *,
         default_threshold: float = DEFAULT_RATIO_THRESHOLD,
-        color_thresholds: Optional[Dict[str, float]] = None,
+        color_thresholds: dict[str, float] | None = None,
         hsv_margin: Sequence[float] | float | None = None,
         lab_margin: Sequence[float] | float | None = None,
-    ) -> "StatsColorChecker":
+    ) -> StatsColorChecker:
         stats_path = Path(stats_path)
         ranges = _load_color_ranges(
             stats_path, hsv_margin=hsv_margin, lab_margin=lab_margin
@@ -289,7 +288,7 @@ class StatsColorChecker:
         self,
         image_bgr: np.ndarray,
         *,
-        allowed_colors: Optional[Iterable[str]] = None,
+        allowed_colors: Iterable[str] | None = None,
     ) -> ColorQCAdvancedResult:
         ranges = self._filter_ranges(allowed_colors)
         if not ranges:
@@ -300,13 +299,13 @@ class StatsColorChecker:
 
         is_black, black_conf = _is_black_image(hsv_img)
         if is_black and "black" in ranges:
-            score_map = {name: 0.0 for name in ranges}
+            score_map = dict.fromkeys(ranges, 0.0)
             score_map["black"] = black_conf
             return self._result_from_scores(score_map, debug={"shortcut": "black"})
 
         is_yellow, yellow_conf = _detect_yellow_special(hsv_img)
         if is_yellow and "yellow" in ranges:
-            score_map = {name: 0.0 for name in ranges}
+            score_map = dict.fromkeys(ranges, 0.0)
             score_map["yellow"] = yellow_conf
             return self._result_from_scores(score_map, debug={"shortcut": "yellow"})
 
@@ -316,7 +315,7 @@ class StatsColorChecker:
         valid_hsv = center_hsv[sat_mask].reshape(-1, 3)
         valid_lab = center_lab[sat_mask].reshape(-1, 3)
         if len(valid_hsv) == 0 or len(valid_lab) == 0:
-            score_map = {name: 0.0 for name in ranges}
+            score_map = dict.fromkeys(ranges, 0.0)
             score_map.setdefault("black", 0.7)
             return self._result_from_scores(score_map, debug={"no_pixels": True})
 
@@ -328,8 +327,8 @@ class StatsColorChecker:
 
     def _result_from_scores(
         self,
-        score_map: Dict[str, float],
-        debug: Dict[str, object],
+        score_map: dict[str, float],
+        debug: dict[str, object],
     ) -> ColorQCAdvancedResult:
         best_name, best_score = ("", 0.0)
         for name, score in score_map.items():
@@ -363,7 +362,7 @@ class StatsColorChecker:
             metrics=metrics,
         )
 
-    def apply_threshold_overrides(self, overrides: Optional[Dict[str, float]]) -> None:
+    def apply_threshold_overrides(self, overrides: dict[str, float] | None) -> None:
         if not overrides:
             return
         for name, value in overrides.items():
@@ -372,7 +371,7 @@ class StatsColorChecker:
             except Exception:
                 continue
 
-    def set_default_threshold(self, threshold: Optional[float]) -> None:
+    def set_default_threshold(self, threshold: float | None) -> None:
         if threshold is None:
             return
         try:
@@ -381,11 +380,11 @@ class StatsColorChecker:
             pass
 
     def _filter_ranges(
-        self, allowed_colors: Optional[Iterable[str]]
-    ) -> Dict[str, _ColorRange]:
+        self, allowed_colors: Iterable[str] | None
+    ) -> dict[str, _ColorRange]:
         if not allowed_colors:
             return self._ranges
-        selected: Dict[str, _ColorRange] = {}
+        selected: dict[str, _ColorRange] = {}
         for name in allowed_colors:
             if not name:
                 continue

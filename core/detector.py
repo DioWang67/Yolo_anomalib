@@ -1,11 +1,11 @@
 # detector.py
-# -*- coding: utf-8 -*-
-import torch
+from typing import Any
+
 import cv2
 import numpy as np
-from typing import Tuple, List, Dict, Set, Any
 from ultralytics import YOLO
 from ultralytics.utils.plotting import Annotator, colors
+
 from .utils import ImageUtils
 
 
@@ -23,7 +23,7 @@ class YOLODetector:
         return resized_img
 
     @staticmethod
-    def iou(box1: List[int], box2: List[int]) -> float:
+    def iou(box1: list[int], box2: list[int]) -> float:
         x1 = max(box1[0], box2[0])
         y1 = max(box1[1], box2[1])
         x2 = min(box1[2], box2[2])
@@ -35,8 +35,8 @@ class YOLODetector:
 
     @staticmethod
     def check_missing_items(
-        expected_items: List[str], detected_class_names: Set[str]
-    ) -> Set[str]:
+        expected_items: list[str], detected_class_names: set[str]
+    ) -> set[str]:
         return set(expected_items) - detected_class_names
 
     def process_detections(
@@ -44,14 +44,14 @@ class YOLODetector:
         predictions,
         processed_image: np.ndarray,
         original_image: np.ndarray,
-        expected_items: List[str],
-    ) -> Tuple[np.ndarray, List[Dict[str, Any]], List[str]]:
+        expected_items: list[str],
+    ) -> tuple[np.ndarray, list[dict[str, Any]], list[str]]:
         try:
             result = predictions[0]
             if not hasattr(result, "boxes"):
                 raise AttributeError("boxes attribute missing")
             boxes = result.boxes
-            detections: List[Dict[str, Any]] = []
+            detections: list[dict[str, Any]] = []
             detected_items = set()
             from collections import Counter
 
@@ -75,7 +75,7 @@ class YOLODetector:
                         ):
                             raise AttributeError(
                                 "box missing expected attributes")
-                        coords = getattr(box, "xyxy")
+                        coords = box.xyxy
                         for attr in ("detach", "cpu", "numpy"):
                             if hasattr(coords, attr):
                                 coords = getattr(coords, attr)()
@@ -86,8 +86,8 @@ class YOLODetector:
                         items.append(
                             (
                                 coords_int,
-                                float(getattr(box, "conf")),
-                                int(getattr(box, "cls")),
+                                float(box.conf),
+                                int(box.cls),
                             )
                         )
                 for coords, conf, cid in items:
@@ -119,7 +119,7 @@ class YOLODetector:
             # Enforce counts (treat expected_items as multiset)
             exp_items = [str(x).strip() for x in (expected_items or [])]
             exp_counter: Counter = Counter(exp_items)
-            missing_items: List[str] = []
+            missing_items: list[str] = []
             for name, need in exp_counter.items():
                 have = int(det_counter.get(name, 0))
                 if have < need:
@@ -129,7 +129,7 @@ class YOLODetector:
             raise RuntimeError(f"處理檢測結果失敗: {str(e)}")
 
     def draw_results(
-        self, frame: np.ndarray, status: str, detections: List[Dict]
+        self, frame: np.ndarray, status: str, detections: list[dict]
     ) -> np.ndarray:
         result_frame = frame.copy()
         for det in detections:

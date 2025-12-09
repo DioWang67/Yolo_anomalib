@@ -1,7 +1,7 @@
 import os
 import tempfile
 import time
-from typing import Any, Dict
+from typing import Any
 
 import cv2
 
@@ -24,7 +24,7 @@ class PerformanceTester:
 
     def single_inference_test(
         self, image_path: str | None = None, product: str = "PCBA1", area: str = "E"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         self.logger.logger.info("=" * 80)
         self.logger.logger.info("Starting anomalib single inference benchmark")
         self.logger.logger.info("=" * 80)
