@@ -1,101 +1,92 @@
-# Python 相關
+# ===================== Python 相關 =====================
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
-.Python
+*.pyc
 *.egg-info/
-pip_log.txt
-*.venv/
+*.dist-info/
+__pypackages__/
+
+# 虛擬環境
 venv/
-env/
 .venv/
+env/
+ENV/
+env.bak/
 
-# 建構和分發
-build/
-dist/
-*.egg
-*.whl
-
-# 測試和覆蓋率
+# Python 快取與日誌
 .pytest_cache/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
 .coverage
-.coverage.*
 htmlcov/
 .tox/
 .nox/
-coverage.xml
-*.cover
-.hypothesis/
 
-# 型別檢查和 Linting
-.mypy_cache/
-.dmypy.json
-dmypy.json
-.ruff_cache/
-
-# 使用者配置檔案 (應使用 config.example.yaml 作為範本)
+# ===================== 專案特定 =====================
+# 敏感設定檔（請改用 config.example.yaml 當範本）
 config.yaml
+*.env
+.env
+.env.local
 
-# 臨時檔案
-Result/tmp/
+# 推理輸出與暫存圖片（全部忽略，必要時再手動加回）
+Result/
+Results/
+output/
+outputs/
+runs/
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tiff
+*.webp
+debug_heatmap.jpg
 tmp_*.jpg
 *.tmp
-debug_heatmap.jpg
 
-# 輸出影像 (保留目錄結構但忽略內容)
-*.jpg
-*.png
-*.jpeg
-
-# 日誌檔案
-logs/
-*.log
-
-# 推理結果和輸出
-Result/*/annotated/
-Result/*/original/
-Result/*/preprocessed/
-Result/*/cropped/
-Result/results.xlsx
-Result/
-
-# 模型檢查點和大檔案 (通常應使用 Git LFS)
-*.ckpt
+# 模型權重（太大，建議用 Git LFS 或雲端硬碟）
 *.pt
 *.pth
+*.ckpt
+*.pkl
 *.onnx
 *.engine
 *.trt
+*.h5
+*.weights
 
-# 環境和敏感資訊
-.env
-*.env
-.env.local
+# 日誌與運行時資料
+logs/
+*.log
+Runtime/
+MvImport/*.log
 
-# IDE 和編輯器檔案
+# ===================== IDE 與系統 =====================
 .vscode/
 .idea/
+*.code-workspace
 *.swp
 *~
 .DS_Store
 Thumbs.db
-*.code-workspace
+.desktop.ini
 
-# 運行時資料
-Runtime/
-MvImport/*.log
+# Jupyter
+.ipynb_checkpoints
 
-# Windows 批次檔產生的臨時檔案
-*.exe
-*.bat.bak
-
-# Jupyter Notebook
-.ipynb_checkpoints/
-*.ipynb
-
-# pyenv
+# pyenv / pipenv
 .python-version
+Pipfile.lock
 
-# 其他
-.antigravityignore
+# 建構與套件
+build/
+dist/
+*.egg
+*.whl
+*.exe
+*.dll
+*.so

@@ -70,6 +70,9 @@ class SaveResultsStep(Step):
 
     def run(self, ctx: DetectionContext) -> None:
         """Persist results and flush workbook/images via sink."""
+        if not self.options.get("enabled", True):
+            self.logger.debug("SaveResultsStep is disabled, skipping.")
+            return
         try:
             if ctx.result.get("anomaly_score") is not None:
                 save_result = self.sink.save(
@@ -130,7 +133,8 @@ class PositionCheckStep(Step):
     def run(self, ctx: DetectionContext) -> None:
         """Validate detections against configured expected boxes and update status."""
         detections = ctx.result.get("detections", []) or []
-        if not detections:
+        missing = ctx.result.get("missing_items", [])
+        if not detections and not missing:
             return
         validator = PositionValidator(
             ctx.config or self.options.get("config"), self.product, self.area

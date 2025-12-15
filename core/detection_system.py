@@ -227,6 +227,194 @@ class DetectionSystem:
         self.current_inference_type = inference_type.lower()
         self._refresh_result_sink()
 
+    def _is_canceled(self, cancel_cb) -> bool:
+        """Helper to safely check the cancellation callback."""
+        try:
+            return bool(cancel_cb and cancel_cb())
+        except Exception:
+            return False
+
+    def _build_empty_result(
+        self, product: str, area: str, inference_type: str, status: str
+    ) -> dict:
+        """Builds a standardized dictionary for empty or error results."""
+        return {
+            "status": status,
+            "product": product,
+            "area": area,
+            "inference_type": inference_type,
+            "ckpt_path": "",
+            "anomaly_score": "",
+            "detections": [],
+            "missing_items": [],
+            "original_image_path": "",
+            "preprocessed_image_path": "",
+            "annotated_path": "",
+            "heatmap_path": "",
+            "cropped_paths": [],
+            "color_check": None,
+        }
+
+    def _prepare_resources(
+        self, product: str, area: str, inference_type: str, run_logger
+    ):
+        """Load model configs and initialize the color checker."""
+        self.load_model_configs(product, area, inference_type)
+        if self.config.enable_color_check and self.config.color_model_path:
+            try:
+                overrides, rules_over = self._load_color_override_bundle(
+                    product, area, inference_type
+                )
+                checker_type = (
+                    getattr(self.config, "color_checker_type", "color_qc") or "color_qc"
+                )
+                default_threshold = getattr(self.config, "color_score_threshold", None)
+                self.color_service.ensure_loaded(
+                    self.config.color_model_path,
+                    overrides=overrides,
+                    rules_overrides=rules_over,
+                    checker_type=checker_type,
+                    default_threshold=default_threshold,
+                )
+                run_logger.info(f"Color checker loaded ({checker_type})")
+            except Exception as e:
+                run_logger.error(f"Color checker init failed: {e}")
+
+    def _acquire_frame(self, frame: np.ndarray | None, run_logger) -> np.ndarray:
+        """Capture a frame from the camera if not provided."""
+        if frame is not None:
+            return frame
+        if self.camera:
+            frame = self.camera.capture_frame()
+            if frame is None:
+                run_logger.error("Failed to read frame from camera")
+                run_logger.warning("Using dummy image for detection")
+                return np.zeros((640, 640, 3), dtype=np.uint8)
+            return frame
+        else:
+            run_logger.warning("Camera unavailable; using dummy image for detection")
+            return np.zeros((640, 640, 3), dtype=np.uint8)
+
+    def _run_inference(
+        self,
+        frame: np.ndarray,
+        product: str,
+        area: str,
+        inference_type: str,
+        run_logger,
+    ) -> dict:
+        """Execute the inference engine and handle results."""
+        inference_type_name = inference_type.lower()
+        output_path = None
+        if inference_type_name == "anomalib":
+            output_path = self.result_sink.get_annotated_path(
+                status="TEMP", detector=inference_type, product=product, area=area
+            )
+
+        raw_result = self.inference_engine.infer(
+            frame, product, area, _InferenceTypeToken(inference_type_name), output_path
+        )
+        result = normalize_result(raw_result, inference_type_name, frame)
+
+        if result.get("status") == "ERROR":
+            run_logger.error(f"Inference failed: {result.get('error')}")
+            return result
+
+        if inference_type_name == "anomalib" and output_path:
+            self._adjust_anomalib_output_path(result, output_path, run_logger)
+
+        return result
+
+    def _execute_pipeline(self, ctx: DetectionContext, run_logger, cancel_cb=None):
+        """Build and run the post-processing pipeline."""
+        env = PipelineEnv(
+            color_service=self.color_service,
+            result_sink=self.result_sink,
+            logger=run_logger,
+            product=ctx.product,
+            area=ctx.area,
+            config=self.config,
+        )
+
+        pipe_cfg = getattr(self.config, "pipeline", None)
+        step_opts_raw = getattr(self.config, "steps", {}) or {}
+        step_opts = {str(k).lower(): v for k, v in step_opts_raw.items()}
+
+        step_names = (
+            [str(name) for name in pipe_cfg]
+            if isinstance(pipe_cfg, list) and pipe_cfg
+            else default_pipeline(env)
+        )
+
+        steps = build_pipeline(step_names, env, step_opts)
+        if not steps:
+            run_logger.warning(
+                "Pipeline produced no executable steps; enforcing save_results fallback"
+            )
+            steps = build_pipeline(["save_results"], env, step_opts)
+
+        for step in steps:
+            if self._is_canceled(cancel_cb):
+                ctx.status = "CANCELED"
+                return
+            step.run(ctx)
+
+    def _adjust_anomalib_output_path(self, result: dict, temp_path: str, run_logger):
+        """Move anomalib output from TEMP to a final PASS/FAIL directory."""
+        correct_path = self.result_sink.get_annotated_path(
+            status=result["status"],
+            detector="anomalib",
+            product=result.get("product"),
+            area=result.get("area"),
+            anomaly_score=result.get("anomaly_score"),
+        )
+        result["output_path"] = correct_path
+        if temp_path != correct_path and os.path.exists(temp_path):
+            os.makedirs(os.path.dirname(correct_path), exist_ok=True)
+            try:
+                shutil.move(temp_path, correct_path)
+                run_logger.info(f"Moved output: {temp_path} -> {correct_path}")
+            except Exception as e:
+                run_logger.error(f"Move output failed: {e}")
+            try:
+                old_dir = os.path.dirname(temp_path)
+                if os.path.isdir(old_dir) and not os.listdir(old_dir):
+                    os.rmdir(old_dir)
+            except Exception as cleanup_err:
+                run_logger.warning(f"Cleanup temp dir failed: {cleanup_err}")
+
+    def _log_summary(self, ctx: DetectionContext, run_logger):
+        """Log a summary of the detection results and failure reasons."""
+        if ctx.inference_type.lower() == "anomalib":
+            self.logger.log_anomaly(ctx.status, ctx.result.get("anomaly_score", 0.0))
+        else:
+            self.logger.log_detection(ctx.status, ctx.result.get("detections", []))
+
+        if str(ctx.status).upper() != "FAIL":
+            return
+        try:
+            reasons = []
+            if ctx.result.get("missing_items"):
+                reasons.append(f"missing items: {ctx.result['missing_items']}")
+            if color_res := ctx.color_result:
+                if not color_res.get("is_ok", True):
+                    items = color_res.get("items", []) or []
+                    fails = sum(1 for i in items if not i.get("is_ok"))
+                    reasons.append(f"color mismatch: {fails}/{len(items)} failed")
+            if ctx.result.get("unexpected_items"):
+                reasons.append(f"unexpected items: {ctx.result['unexpected_items']}")
+            pos_wrong = [
+                d.get("class")
+                for d in (ctx.result.get("detections", []) or [])
+                if d.get("position_status") == "WRONG"
+            ]
+            if pos_wrong:
+                reasons.append(f"position wrong: {pos_wrong}")
+            if reasons:
+                run_logger.info(f"Fail reasons: {'; '.join(reasons)}")
+        except Exception:
+            pass  # Avoid logging failures to interfere with main flow
+
     def detect(
         self,
         product: str,
@@ -235,131 +423,33 @@ class DetectionSystem:
         frame: np.ndarray | None = None,
         cancel_cb=None,
     ) -> dict:
-        """Run one-shot detection and return a normalized result dict.
+        """Run one-shot detection and return a normalized result dict."""
+        run_logger = context_adapter(self.logger.logger, product, area, inference_type)
+        run_logger.info("Start detection")
 
-        Args:
-            product: Product name (top-level folder under models/)
-            area: Area/station name (second-level folder)
-            inference_type: Backend key (e.g., 'yolo', 'anomalib', or custom)
-            frame: Optional BGR image np.ndarray; if None, capture from camera or use dummy
-
-        Returns:
-            Dict with normalized keys consumed by sinks and GUI (status, paths, etc.).
-        """
         try:
-
-            def _canceled() -> bool:
-                try:
-                    return bool(cancel_cb and cancel_cb())
-                except Exception:
-                    return False
-
-            def _cancel_result(status: str = "CANCELED") -> dict:
-                return {
-                    "status": status,
-                    "product": product,
-                    "area": area,
-                    "inference_type": inference_type,
-                    "ckpt_path": "",
-                    "anomaly_score": "",
-                    "detections": [],
-                    "missing_items": [],
-                    "original_image_path": "",
-                    "preprocessed_image_path": "",
-                    "annotated_path": "",
-                    "heatmap_path": "",
-                    "cropped_paths": [],
-                    "color_check": None,
-                }
-
-            self.load_model_configs(product, area, inference_type)
-            if _canceled():
-                return _cancel_result()
-            run_logger = context_adapter(
-                self.logger.logger, product, area, inference_type
-            )
-            run_logger.info("Start detection")
-            inference_type_name = inference_type.lower()
-
-            # Ensure color checker ready if enabled
-            if self.config.enable_color_check and self.config.color_model_path:
-                try:
-                    overrides, rules_over = self._load_color_override_bundle(
-                        product, area, inference_type
-                    )
-                    checker_type = (
-                        getattr(self.config, "color_checker_type", "color_qc")
-                        or "color_qc"
-                    )
-                    default_threshold = getattr(
-                        self.config, "color_score_threshold", None
-                    )
-                    self.color_service.ensure_loaded(
-                        self.config.color_model_path,
-                        overrides=overrides,
-                        rules_overrides=rules_over,
-                        checker_type=checker_type,
-                        default_threshold=default_threshold,
-                    )
-                    run_logger.info(f"Color checker loaded ({checker_type})")
-                except Exception as e:
-                    run_logger.error(f"Color checker init failed: {str(e)}")
-
-            # Capture frame if not provided
-            if frame is None:
-                if self.camera:
-                    frame = self.camera.capture_frame()
-                    if frame is None:
-                        run_logger.error("Failed to read frame from camera")
-                        frame = np.zeros((640, 640, 3), dtype=np.uint8)
-                        run_logger.warning("Using dummy image for detection")
-                else:
-                    frame = np.zeros((640, 640, 3), dtype=np.uint8)
-                    run_logger.warning(
-                        "Camera unavailable; using dummy image for detection"
-                    )
-
-            # Temporary path for anomalib output
-            output_path = None
-            if inference_type_name == "anomalib":
-                output_path = self.result_sink.get_annotated_path(
-                    status="TEMP", detector=inference_type, product=product, area=area
+            if self._is_canceled(cancel_cb):
+                return self._build_empty_result(
+                    product, area, inference_type, "CANCELED"
                 )
 
-            # Inference
-            if _canceled():
-                return _cancel_result()
-            raw_result = self.inference_engine.infer(
-                frame,
-                product,
-                area,
-                _InferenceTypeToken(inference_type_name),
-                output_path,
-            )
-            result = normalize_result(raw_result, inference_type_name, frame)
-            if "status" in result and result["status"] == "ERROR":
-                run_logger.error(f"Inference failed: {result.get('error')}")
-                return {
-                    "status": "ERROR",
-                    "error": result.get("error"),
-                    "product": product,
-                    "area": area,
-                    "inference_type": inference_type,
-                    "ckpt_path": "",
-                    "anomaly_score": "",
-                    "detections": [],
-                    "missing_items": [],
-                    "original_image_path": "",
-                    "preprocessed_image_path": "",
-                    "annotated_path": "",
-                    "heatmap_path": "",
-                    "cropped_paths": [],
-                    "color_check": None,
-                }
+            self._prepare_resources(product, area, inference_type, run_logger)
+            frame = self._acquire_frame(frame, run_logger)
 
-            status = result["status"]
+            if self._is_canceled(cancel_cb):
+                return self._build_empty_result(
+                    product, area, inference_type, "CANCELED"
+                )
 
-            # Build pipeline context
+            result = self._run_inference(frame, product, area, inference_type, run_logger)
+            if result.get("status") == "ERROR":
+                error_msg = result.get("error", "Inference failed")
+                final_res = self._build_empty_result(
+                    product, area, inference_type, "ERROR"
+                )
+                final_res["error"] = error_msg
+                return final_res
+
             ctx = DetectionContext(
                 product=product,
                 area=area,
@@ -367,108 +457,21 @@ class DetectionSystem:
                 frame=frame,
                 processed_image=result.get("processed_image", frame),
                 result=result,
-                status=status,
+                status=result["status"],
                 config=self.config,
             )
 
-            env = PipelineEnv(
-                color_service=self.color_service,
-                result_sink=self.result_sink,
-                logger=run_logger,
-                product=product,
-                area=area,
-                config=self.config,
-            )
-
-            pipe_cfg = getattr(self.config, "pipeline", None)
-            step_opts_raw = getattr(self.config, "steps", {}) or {}
-            step_opts = {str(k).lower(): v for k, v in step_opts_raw.items()}
-
-            if isinstance(pipe_cfg, list) and pipe_cfg:
-                step_names = [str(name) for name in pipe_cfg]
-            else:
-                step_names = default_pipeline(env)
-
-            steps = build_pipeline(step_names, env, step_opts)
-            if not steps:
-                run_logger.warning(
-                    "Pipeline produced no executable steps; enforcing save_results fallback"
+            self._execute_pipeline(ctx, run_logger, cancel_cb)
+            if ctx.status == "CANCELED":
+                return self._build_empty_result(
+                    product, area, inference_type, "CANCELED"
                 )
-                steps = build_pipeline(["save_results"], env, step_opts)
 
-            # Adjust anomalib output path from TEMP to PASS/FAIL
-            if inference_type_name == "anomalib" and output_path:
-                correct_output_path = self.result_sink.get_annotated_path(
-                    status=status,
-                    detector=inference_type,
-                    product=product,
-                    area=area,
-                    anomaly_score=result.get("anomaly_score"),
-                )
-                if output_path != correct_output_path and os.path.exists(output_path):
-                    os.makedirs(os.path.dirname(correct_output_path), exist_ok=True)
-                    try:
-                        shutil.move(output_path, correct_output_path)
-                        result["output_path"] = correct_output_path
-                        run_logger.info(
-                            f"Moved output: {output_path} -> {correct_output_path}"
-                        )
-                    except Exception as e:
-                        run_logger.error(f"Move output failed: {str(e)}")
-                    # Cleanup temp directory if empty
-                    try:
-                        old_dir = os.path.dirname(output_path)
-                        if os.path.isdir(old_dir) and not os.listdir(old_dir):
-                            os.rmdir(old_dir)
-                    except Exception as cleanup_err:
-                        run_logger.warning(f"Cleanup temp dir failed: {cleanup_err}")
-                else:
-                    run_logger.info(f"Output path OK: {correct_output_path}")
-                    result["output_path"] = correct_output_path
+            self._log_summary(ctx, run_logger)
 
-            # Persist results via pipeline
-            for step in steps:
-                if _canceled():
-                    return _cancel_result()
-                step.run(ctx)
-
-            # Use possibly-updated status from pipeline (e.g., color/position checks)
-            status = ctx.status
-
-            # Logging summary with final status
-            if inference_type_name == "anomalib":
-                self.logger.log_anomaly(status, result.get("anomaly_score", 0.0))
-            else:
-                self.logger.log_detection(status, result.get("detections", []))
-
-            # Extra debugging: print reasons when FAIL
-            try:
-                if str(status).upper() == "FAIL":
-                    miss = result.get("missing_items", [])
-                    if miss:
-                        run_logger.info(f"Fail reason - missing items: {miss}")
-                    c = ctx.color_result or {}
-                    if isinstance(c, dict) and (not c.get("is_ok", True)):
-                        items = c.get("items", []) or []
-                        fail_cnt = sum(1 for it in items if not it.get("is_ok", False))
-                        run_logger.info(
-                            f"Fail reason - color mismatch: {fail_cnt}/{len(items)} items failed"
-                        )
-                    unexp = result.get("unexpected_items", [])
-                    if unexp:
-                        run_logger.info(f"Fail reason - unexpected items: {unexp}")
-                    pos_wrong = [
-                        d.get("class")
-                        for d in (result.get("detections", []) or [])
-                        if d.get("position_status") == "WRONG"
-                    ]
-                    if pos_wrong:
-                        run_logger.info(f"Fail reason - position wrong: {pos_wrong}")
-            except Exception:
-                pass
-
+            save_res = ctx.save_result or {}
             return {
-                "status": status,
+                "status": ctx.status,
                 "error": result.get("error", ""),
                 "product": product,
                 "area": area,
@@ -478,32 +481,16 @@ class DetectionSystem:
                 "detections": result.get("detections", []),
                 "missing_items": result.get("missing_items", []),
                 "result_frame": result.get("result_frame"),
-                "original_image_path": (ctx.save_result or {}).get("original_path", ""),
-                "preprocessed_image_path": (ctx.save_result or {}).get(
-                    "preprocessed_path", ""
-                ),
-                "annotated_path": (ctx.save_result or {}).get("annotated_path", ""),
-                "heatmap_path": (ctx.save_result or {}).get("heatmap_path", ""),
-                "cropped_paths": (ctx.save_result or {}).get("cropped_paths", []),
+                "original_image_path": save_res.get("original_path", ""),
+                "preprocessed_image_path": save_res.get("preprocessed_path", ""),
+                "annotated_path": save_res.get("annotated_path", ""),
+                "heatmap_path": save_res.get("heatmap_path", ""),
+                "cropped_paths": save_res.get("cropped_paths", []),
                 "color_check": ctx.color_result,
             }
 
         except Exception as e:
-            self.logger.logger.error(f"Detection failed: {str(e)}")
-            return {
-                "status": "ERROR",
-                "error": str(e),
-                "product": product,
-                "area": area,
-                "inference_type": inference_type,
-                "ckpt_path": "",
-                "anomaly_score": "",
-                "detections": [],
-                "missing_items": [],
-                "original_image_path": "",
-                "preprocessed_image_path": "",
-                "annotated_path": "",
-                "heatmap_path": "",
-                "cropped_paths": [],
-                "color_check": None,
-            }
+            run_logger.error(f"Detection failed: {e}", exc_info=True)
+            final_res = self._build_empty_result(product, area, inference_type, "ERROR")
+            final_res["error"] = str(e)
+            return final_res
