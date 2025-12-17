@@ -424,6 +424,8 @@ class DetectionSystemGUI(QMainWindow):
         self.original_image.clear()
         self.processed_image.clear()
         self.result_image.clear()
+        if getattr(self, "big_status_label", None):
+            self.big_status_label.set_status("RUNNING...")
         self.log_message(
             f"Start detection - product: {product}, area: {area}, type: {inference_type}"
         )
@@ -470,6 +472,8 @@ class DetectionSystemGUI(QMainWindow):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.status_widget.set_status("idle")
+        if getattr(self, "big_status_label", None):
+            self.big_status_label.set_status("READY")
         self.update_camera_controls()
         self.log_message("檢測已取消")
 
@@ -491,6 +495,11 @@ class DetectionSystemGUI(QMainWindow):
             self.status_widget.set_status("error")
         else:
             self.status_widget.set_status("warning")
+
+        # Update the big status label
+        if getattr(self, "big_status_label", None):
+            self.big_status_label.set_status(status)
+
         # 更新結果顯示
         self.result_widget.update_result(result)
         # 顯示圖像（考慮非同步寫檔延遲）
@@ -554,6 +563,8 @@ class DetectionSystemGUI(QMainWindow):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.status_widget.set_status("error")
+        if getattr(self, "big_status_label", None):
+            self.big_status_label.set_status("ERROR")
         self.update_camera_controls()
         self.log_message(f"檢測錯誤: {error_msg}")
         QMessageBox.critical(self, "檢測錯誤", f"檢測過程中發生錯誤\n{error_msg}")

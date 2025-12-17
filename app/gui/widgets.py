@@ -7,6 +7,83 @@ from PyQt5.QtGui import QFont, QPixmap
 from PyQt5.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
 
 
+class BigStatusLabel(QLabel):
+    """Large, colorful status indicator for PASS/FAIL results."""
+
+    def __init__(self) -> None:
+        super().__init__("READY")
+        self.setAlignment(Qt.AlignCenter)
+        self.setFont(QFont("Arial Black", 24, QFont.Bold))
+        self.setStyleSheet(
+            """
+            QLabel {
+                background-color: #e9ecef;
+                color: #495057;
+                border: 2px solid #ced4da;
+                border-radius: 8px;
+                padding: 15px;
+                min-height: 60px;
+            }
+            """
+        )
+
+    def set_status(self, status: str) -> None:
+        """Update the label appearance based on status."""
+        status = status.upper()
+        if status == "PASS":
+            self.setText("PASS")
+            self.setStyleSheet(
+                """
+                QLabel {
+                    background-color: #28a745;
+                    color: white;
+                    border: 2px solid #1e7e34;
+                    border-radius: 8px;
+                    padding: 15px;
+                }
+                """
+            )
+        elif status == "FAIL":
+            self.setText("FAIL")
+            self.setStyleSheet(
+                """
+                QLabel {
+                    background-color: #dc3545;
+                    color: white;
+                    border: 2px solid #bd2130;
+                    border-radius: 8px;
+                    padding: 15px;
+                }
+                """
+            )
+        elif status == "ERROR":
+            self.setText("ERROR")
+            self.setStyleSheet(
+                """
+                QLabel {
+                    background-color: #ffc107;
+                    color: black;
+                    border: 2px solid #d39e00;
+                    border-radius: 8px;
+                    padding: 15px;
+                }
+                """
+            )
+        else:
+            self.setText(status if status else "READY")
+            self.setStyleSheet(
+                """
+                QLabel {
+                    background-color: #e9ecef;
+                    color: #495057;
+                    border: 2px solid #ced4da;
+                    border-radius: 8px;
+                    padding: 15px;
+                }
+                """
+            )
+
+
 class StatusWidget(QWidget):
     """Small status dashboard showing current system state."""
 

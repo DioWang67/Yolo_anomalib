@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from app.gui.widgets import ImageViewer, ResultDisplayWidget, StatusWidget
+from app.gui.widgets import BigStatusLabel, ImageViewer, ResultDisplayWidget, StatusWidget
 
 if TYPE_CHECKING:
     from app.gui.main_window import DetectionSystemGUI
@@ -158,6 +158,10 @@ def build_info_panel(gui: DetectionSystemGUI) -> QWidget:
 
     gui.status_widget = StatusWidget()
     layout.addWidget(gui.status_widget)
+
+    # Added BigStatusLabel for prominent feedback
+    gui.big_status_label = BigStatusLabel()
+    layout.addWidget(gui.big_status_label)
 
     gui.result_widget = ResultDisplayWidget()
     layout.addWidget(gui.result_widget)
