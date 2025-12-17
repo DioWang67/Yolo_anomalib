@@ -25,7 +25,7 @@
   * 異常偵測（Anomaly Detection）：表面刮傷、髒污、異物、異常形變。
 * **使用技術**：
 
-  * YOLOv8（Ultralytics）作為偵測後端。
+  * YOLOv11（Ultralytics）作為偵測後端。
   * anomalib（Lightning 生態）作為異常偵測後端：PatchCore / PaDiM / STFPM / DRAEM 等。
   * OpenCV / NumPy 作為前後處理。
   * YAML 設定 + Registry/Pipeline 模組化設計。
@@ -54,7 +54,7 @@
 
 ### 2.2 偵測基礎
 
-* **Anchor-free 概念（YOLOv8）**：直接回歸中心/寬高，減少 anchor 設定與計算。
+* **Anchor-free 概念（YOLOv11）**：直接回歸中心/寬高，減少 anchor 設定與計算。
 * **NMS（Non-Maximum Suppression）**：Greedy NMS 或 DIoU-NMS，移除高度重疊的框。
 * **IoU / GIoU / DIoU / CIoU**：框重疊度指標；推論時多用 IoU 做 NMS，訓練時用改良 IoU 當 loss。
 
@@ -74,7 +74,7 @@
 
 ---
 
-## 3. YOLOv8 推論深潛（從 API 到原理）
+## 3. YOLOv11 推論深潛（從 API 到原理）
 
 ### 3.1 推論資料流
 
@@ -129,7 +129,7 @@
 
 ### 4.1 典型流程（以 PatchCore 為例）
 
-1. 教師特徵抽取（正常品）→ 2) 記憶庫建立（取樣/壓縮）→ 3) 推論時取最近鄰距離作為 anomaly 分數 → 4) 出熱圖（像素分數）→ 5) 閾值化成遮罩。
+1. 特徵抽取（正常品）→ 2) 記憶庫建立（取樣/壓縮）→ 3) 推論時取最近鄰距離作為 anomaly 分數 → 4) 出熱圖（像素分數）→ 5) 閾值化成遮罩。
 
 ### 4.2 分數與閾值的學問
 
