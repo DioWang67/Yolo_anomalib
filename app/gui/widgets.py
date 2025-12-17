@@ -3,8 +3,14 @@ from __future__ import annotations
 import os
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QPixmap
+from PyQt5.QtGui import QFont, QPixmap, QImage
 from PyQt5.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
+from typing import Any, TYPE_CHECKING
+import cv2
+import numpy as np
+
+if TYPE_CHECKING:
+    from core.types import DetectionResult
 
 
 class BigStatusLabel(QLabel):
@@ -173,6 +179,22 @@ class ImageViewer(QLabel):
         else:
             self.setText(f"無法載入{self._title}")
 
+    def display_image(self, image: np.ndarray) -> None:
+        """Display a BGR numpy array directly."""
+        try:
+             # Convert BGR to RGB
+             rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+             h, w, ch = rgb_image.shape
+             bytes_per_line = ch * w
+             qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+             self.setPixmap(QPixmap.fromImage(qt_image).scaled(
+                 self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+             ))
+        except Exception:
+             # Handle invalid image
+             self.clear()
+             self.setText(f"無法顯示影像")
+
 
 class ResultDisplayWidget(QWidget):
     """Scrollable textual representation of detection outcomes."""
@@ -206,37 +228,37 @@ class ResultDisplayWidget(QWidget):
         layout.addWidget(self._result_text)
         self.setLayout(layout)
 
-    def update_result(self, result: dict) -> None:
+    def update_result(self, result: DetectionResult) -> None:
         """Render detection result details into the text panel."""
-        lines = []
-        status = result.get("status", "N/A")
-        product = result.get("product", "N/A")
-        area = result.get("area", "N/A")
-        inference_type = result.get("inference_type", "N/A")
-        ckpt_path = result.get("ckpt_path", "N/A")
-        ckpt_name = os.path.basename(ckpt_path) if ckpt_path else "N/A"
+        # Use metadata for product-specific info if available
+        meta = result.metadata
+        product = meta.get("product", "N/A")
+        area = meta.get("area", "N/A")
+        inference_type = meta.get("inference_type", "N/A")
+        ckpt_name = meta.get("ckpt_name", "N/A")
 
+        lines = []
         lines.append("=== 檢測摘要 ===")
-        lines.append(f"狀態: {status}")
+        lines.append(f"狀態: {result.status}")
         lines.append(f"產品 / 區域: {product} / {area}")
         lines.append(f"類型: {inference_type}")
         lines.append(f"模型: {ckpt_name}")
+        lines.append(f"延遲: {result.latency * 1000:.1f} ms")
 
         lines.append("\n=== 數據 ===")
-        detections = result.get("detections", []) or []
-        lines.append(f"偵測數量: {len(detections)}")
+        lines.append(f"偵測數量: {len(result.items)}")
 
-        anomaly_score = result.get("anomaly_score")
+        anomaly_score = meta.get("anomaly_score")
         if anomaly_score is not None:
             lines.append(f"異常分數: {anomaly_score}")
 
-        missing = result.get("missing_items") or []
+        missing = meta.get("missing_items") or []
         if isinstance(missing, (list, tuple)):
             lines.append(f"缺失項目: {len(missing)}")
         else:
             lines.append(f"缺失項目: {missing}")
 
-        unexpected = result.get("unexpected_items") or []
+        unexpected = meta.get("unexpected_items") or []
         if isinstance(unexpected, (list, tuple)):
             lines.append(f"未預期項目: {len(unexpected)}")
 
@@ -254,15 +276,16 @@ class ResultDisplayWidget(QWidget):
         else:
             lines.append("無")
 
-        if detections:
+        if result.items:
             lines.append("\n=== 偵測細節 (前 5 筆) ===")
-            for idx, det in enumerate(detections[:5], start=1):
-                cls = det.get("class", "N/A")
-                conf = det.get("confidence", det.get("conf", None))
-                pos_status = det.get("position_status")
+            for idx, item in enumerate(result.items[:5], start=1):
+                # Map DetectionItem fields
+                cls = item.label
+                conf = item.confidence
+                pos_status = item.metadata.get("position_status")
+                
                 parts = [f"{idx}. {cls}"]
-                if conf is not None:
-                    parts.append(f"conf={conf:.3f}" if isinstance(conf, (int, float)) else f"conf={conf}")
+                parts.append(f"conf={conf:.3f}")
                 if pos_status:
                     parts.append(f"pos={pos_status}")
                 lines.append(" | ".join(parts))

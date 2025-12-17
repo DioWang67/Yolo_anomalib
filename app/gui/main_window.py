@@ -8,6 +8,10 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from core.types import DetectionResult
 
 
 def _get_detection_class():
@@ -34,15 +38,14 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 
-from app.gui.controller import DetectionController, ModelCatalog
+from app.gui.controller import DetectionController
+from core.services.model_catalog import ModelCatalog
 from app.gui.preferences import PreferencesManager
+from app.gui.panels.control_panel import ControlPanel
+from app.gui.panels.image_panel import ImagePanel
+from app.gui.panels.info_panel import InfoPanel
 from app.gui.utils import load_image_with_retry
-from app.gui.view_builder import (
-    build_control_panel,
-    build_image_area,
-    build_info_panel,
-    build_menu_bar,
-)
+from app.gui.view_builder import build_menu_bar
 
 
 class DetectionSystemGUI(QMainWindow):
@@ -52,7 +55,7 @@ class DetectionSystemGUI(QMainWindow):
         self.worker = None
         self.available_products = []
         self.available_areas = {}
-        self.current_result = None
+        self.current_result: DetectionResult | None = None
         self.selected_image_path = None
         self.use_camera_chk = None
         self.reconnect_camera_btn = None
@@ -167,38 +170,89 @@ class DetectionSystemGUI(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
         main_splitter = QSplitter(Qt.Horizontal)
-        control_panel = build_control_panel(self)
-        image_area = build_image_area(self)
-        info_panel = build_info_panel(self)
-        main_splitter.addWidget(control_panel)
-        main_splitter.addWidget(image_area)
-        main_splitter.addWidget(info_panel)
+        
+        # Instantiate Panels
+        self.control_panel = ControlPanel()
+        self.image_panel = ImagePanel()
+        self.info_panel = InfoPanel()
+
+        # Add to Splitter
+        main_splitter.addWidget(self.control_panel)
+        main_splitter.addWidget(self.image_panel)
+        main_splitter.addWidget(self.info_panel)
+        
         main_splitter.setStretchFactor(0, 0)
         main_splitter.setStretchFactor(1, 2)
         main_splitter.setStretchFactor(2, 1)
         main_layout.addWidget(main_splitter)
+
+        # Aliases for compatibility with existing methods
+        self.product_combo = self.control_panel.product_combo
+        self.area_combo = self.control_panel.area_combo
+        self.inference_combo = self.control_panel.inference_combo
+        self.start_btn = self.control_panel.start_btn
+        self.stop_btn = self.control_panel.stop_btn
+        self.save_btn = self.control_panel.save_btn
+        self.use_camera_chk = self.control_panel.use_camera_chk
+        self.reconnect_camera_btn = self.control_panel.reconnect_camera_btn
+        self.disconnect_camera_btn = self.control_panel.disconnect_camera_btn
+        self.pick_image_btn = self.control_panel.pick_image_btn
+        self.image_path_label = self.control_panel.image_path_label
+        self.clear_image_btn = self.control_panel.clear_image_btn
+
+        self.original_image = self.image_panel.original_image
+        self.processed_image = self.image_panel.processed_image
+        self.result_image = self.image_panel.result_image
+
+        self.status_widget = self.info_panel.status_widget
+        self.big_status_label = self.info_panel.big_status_label
+        self.result_widget = self.info_panel.result_widget
+        self.log_text = self.info_panel.log_text
+
+        # Connect Signals
+        self.control_panel.product_changed.connect(self.on_product_changed)
+        self.control_panel.product_changed.connect(lambda _: self.update_start_enabled())
+        
+        self.control_panel.area_changed.connect(self.on_area_changed)
+        self.control_panel.area_changed.connect(lambda _: self.update_start_enabled())
+        
+        self.control_panel.inference_type_changed.connect(lambda _: self.update_start_enabled())
+        
+        self.control_panel.start_requested.connect(self.start_detection)
+        self.control_panel.stop_requested.connect(self.stop_detection)
+        self.control_panel.save_requested.connect(self.save_results)
+        
+        self.control_panel.use_camera_toggled.connect(self.on_use_camera_toggled)
+        self.control_panel.reconnect_camera_requested.connect(self.handle_reconnect_camera)
+        self.control_panel.disconnect_camera_requested.connect(self.handle_disconnect_camera)
+        
+        self.control_panel.pick_image_requested.connect(self.pick_image)
+        self.control_panel.clear_image_requested.connect(self.clear_selected_image)
         self.statusBar().showMessage("系統就緒")
         build_menu_bar(self)
 
     def init_system(self):
-        """初始化偵測系統"""
+        """非同步初始化偵測系統與相機"""
+        self.log_message("正在初始化檢測系統...")
+        self.camera_worker = self.controller.build_camera_initializer()
+        self.camera_worker.finished.connect(self._on_system_init_finished)
+        self.camera_worker.start()
+
+    def _on_system_init_finished(self, camera_success):
         try:
             self.detection_system = self.controller.detection_system
-            self.log_message("檢測系統初始化成功")
-            if (
-                getattr(self, "use_camera_chk", None)
-                and self.detection_system
-                and self.detection_system.is_camera_connected()
-            ):
-                self.use_camera_chk.setChecked(True)
+            self.log_message("檢測系統初始化完成")
+            
+            if camera_success:
+                self.log_message("相機連接成功")
+                if getattr(self, "use_camera_chk", None):
+                    self.use_camera_chk.setChecked(True)
+            else:
+                self.log_message("相機未連接或初始化失敗")
         except Exception as e:
-            self.log_message(f"檢測系統初始化失敗: {str(e)}")
-            QMessageBox.critical(self, "系統錯誤", f"無法初始化偵測系統\n{str(e)}")
+            self.log_message(f"系統回調錯誤: {e}")
         finally:
-            try:
-                self.update_camera_controls()
-            except Exception:
-                pass
+            self.update_camera_controls()
 
     def _update_model_combos(self):
         """Populates and sets the product, area, and inference type combo boxes."""
@@ -233,22 +287,30 @@ class DetectionSystemGUI(QMainWindow):
             self.inference_combo.setCurrentText(last_infer)
 
     def load_available_models(self):
-        """Loads available model information from the filesystem."""
+        """Async Load available model information from the filesystem."""
+        self.log_message("正在載入模型清單...")
+        
+        # Check if base path exists first to fail fast
+        base_path = Path(self._models_base)
+        if not base_path.exists():
+            self.log_message(f"Models directory not found at: {base_path}")
+            return
+
+        self.model_loader = self.controller.build_model_loader()
+        self.model_loader.models_ready.connect(self._on_models_loaded)
+        self.model_loader.error_occurred.connect(self._on_model_load_error)
+        self.model_loader.start()
+
+    def _on_models_loaded(self):
         try:
-            base_path = Path(self._models_base)
-            if not base_path.exists():
-                self.log_message(f"Models directory not found at: {base_path}")
-                return
-
-            self._catalog = ModelCatalog(base_path)
-            self.controller.catalog = self._catalog
-            self._catalog.refresh()
-
             self._update_model_combos()
-            self.log_message(f"Loaded {len(self.available_products)} model configurations.")
-        except Exception as exc:
-            self.log_message(f"Error loading model data: {exc}")
-            QMessageBox.critical(self, "Model Loading Error", f"Failed to load model data:\n{exc}")
+            self.log_message(f"模型清單載入完成: {len(self.available_products)} products found.")
+        except Exception as e:
+            self.log_message(f"Error updating model combos: {e}")
+
+    def _on_model_load_error(self, error_msg):
+        self.log_message(f"Error loading model data: {error_msg}")
+        QMessageBox.critical(self, "Model Loading Error", f"Failed to load model data:\n{error_msg}")
 
     def on_product_changed(self, product):
         """產品選擇變更時的處理"""
@@ -457,6 +519,7 @@ class DetectionSystemGUI(QMainWindow):
             frame=frame,
         )
         self.worker.result_ready.connect(self.on_detection_complete)
+        self.worker.image_ready.connect(self.on_image_ready)
         self.worker.error_occurred.connect(self.on_detection_error)
         self.worker.start()
 
@@ -464,7 +527,7 @@ class DetectionSystemGUI(QMainWindow):
         """停止檢測"""
         if self.worker and self.worker.isRunning():
             try:
-                self.worker.cancel()
+                self.worker.stop()
                 self.worker.wait(3000)
             except Exception:
                 self.worker.terminate()
@@ -477,7 +540,14 @@ class DetectionSystemGUI(QMainWindow):
         self.update_camera_controls()
         self.log_message("檢測已取消")
 
-    def on_detection_complete(self, result):
+    @pyqtSlot(object)
+    def on_image_ready(self, image: np.ndarray) -> None:
+        """Handle live image frame from worker."""
+        if self.image_panel:
+            self.image_panel.update_image(image)
+
+    @pyqtSlot(object)
+    def on_detection_complete(self, result: DetectionResult) -> None:
         """檢測完成回調"""
         self.current_result = result
         # 更新界面
@@ -485,78 +555,70 @@ class DetectionSystemGUI(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.save_btn.setEnabled(True)
         self.update_camera_controls()
+        
         # 根據結果設定狀態
-        status = result.get("status", "ERROR")
-        if status == "PASS":
-            self.status_widget.set_status("success")
-        elif status == "FAIL":
-            self.status_widget.set_status("warning")
-        elif status == "ERROR":
-            self.status_widget.set_status("error")
-        else:
-            self.status_widget.set_status("warning")
-
-        # Update the big status label
+        self.status_widget.set_status(result.status.lower() if result.status else "error")
+        # Update big status
         if getattr(self, "big_status_label", None):
-            self.big_status_label.set_status(status)
+            self.big_status_label.set_status(result.status)
 
         # 更新結果顯示
-        self.result_widget.update_result(result)
-        # 顯示圖像（考慮非同步寫檔延遲）
+        self.info_panel.update_result(result)
+        
+        # 顯示圖像
+        # Original and Preprocessed images should be paths if saved
+        original_path = result.metadata.get("original_image_path") or result.image_path
+        preprocessed_path = result.metadata.get("preprocessed_image_path")
+
         load_image_with_retry(
             self.original_image,
-            result.get("original_image_path"),
-            on_fail=lambda: self.original_image.setText("尚無原始影像（可能未保存）"),
+            original_path,
+            on_fail=lambda: self.original_image.setText("尚無原始影像"),
         )
         load_image_with_retry(
             self.processed_image,
-            result.get("preprocessed_image_path"),
+            preprocessed_path,
             on_fail=lambda: self.processed_image.setText("尚無預處理影像"),
         )
-        annotated_path = result.get("annotated_path")
-        heatmap_path = result.get("heatmap_path")
+        
+        # For result image, we favor finding annotations or heatmap paths
+        annotated_path = result.metadata.get("annotated_path")
+        heatmap_path = result.metadata.get("heatmap_path")
+        
+        # Check if result frame data is available in metadata to save temp file
+        result_frame_data = result.metadata.get("result_frame")
 
-        def show_result_frame():
-            rf = result.get("result_frame", None)
-            if isinstance(rf, np.ndarray) and getattr(rf, "size", 0) > 0:
-                try:
-                    import tempfile
-
-                    temp_dir = os.path.join(tempfile.gettempdir(), "ai_detect_preview")
-                    os.makedirs(temp_dir, exist_ok=True)
-                    fname = (
-                        f"annotated_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.jpg"
-                    )
-                    temp_path = os.path.join(temp_dir, fname)
-                    cv2.imwrite(temp_path, rf)
-                    self.result_image.set_image(temp_path)
-                except Exception:
-                    self.result_image.setText("無法載入結果影像")
+        def show_result_frame_data():
+            if isinstance(result_frame_data, np.ndarray) and result_frame_data.size > 0:
+                  self.result_image.display_image(result_frame_data)
             else:
-                self.result_image.setText("無法載入結果影像")
+                 self.result_image.setText("無法載入結果影像")
 
         def load_heatmap():
-            if heatmap_path:
-                load_image_with_retry(
-                    self.result_image,
-                    heatmap_path,
-                    attempts=3,
-                    delay_ms=200,
-                    on_fail=show_result_frame,
-                )
-            else:
-                show_result_frame()
+             if heatmap_path:
+                 load_image_with_retry(
+                     self.result_image,
+                     heatmap_path,
+                     attempts=3,
+                     delay_ms=200,
+                     on_fail=show_result_frame_data,
+                 )
+             else:
+                 show_result_frame_data()
 
-        load_image_with_retry(
-            self.result_image,
-            annotated_path,
-            attempts=5,
-            delay_ms=200,
-            on_fail=load_heatmap,
-        )
-        self.log_message(f"檢測完成 - 狀態: {status}")
-        # 狀態列
-        self.statusBar().showMessage(f"檢測完成 - {status}", 5000)
+        if annotated_path:
+             load_image_with_retry(
+                 self.result_image,
+                 annotated_path,
+                 attempts=5,
+                 delay_ms=200,
+                 on_fail=load_heatmap,
+             )
+        else:
+             load_heatmap()
+
+        self.log_message(f"檢測完成 - 狀態: {result.status}")
+        self.statusBar().showMessage(f"檢測完成 - {result.status}", 5000)
 
     def on_detection_error(self, error_msg):
         """檢測錯誤回調"""
@@ -584,7 +646,9 @@ class DetectionSystemGUI(QMainWindow):
         )
         if file_path:
             try:
-                self.controller.save_result_json(Path(file_path), self.current_result)
+                # Use to_dict for serialization
+                res_dict = self.current_result.to_dict()
+                self.controller.save_result_json(Path(file_path), res_dict)
                 self.log_message(f"Result saved to {file_path}")
                 QMessageBox.information(
                     self, "Save Successful", f"Detection result saved to:\n{file_path}"
@@ -723,7 +787,7 @@ class DetectionSystemGUI(QMainWindow):
             )
             if reply == QMessageBox.Yes:
                 try:
-                    self.worker.cancel()
+                    self.worker.stop()
                     self.worker.wait(3000)
                 except Exception:
                     self.worker.terminate()
@@ -744,21 +808,12 @@ class DetectionSystemGUI(QMainWindow):
             pass
         event.accept()
 
-
 def main():
+    """Main entry point."""
     app = QApplication(sys.argv)
-    # 設定應用程式資訊
-    app.setApplicationName("AI 檢測系統")
-    app.setApplicationVersion("1.0")
-    app.setOrganizationName("AI Detection Lab")
-    # 設定預設字體
-    font = QFont("Microsoft JhengHei", 9)
-    app.setFont(font)
-    # 建立主視窗
     window = DetectionSystemGUI()
     window.show()
     sys.exit(app.exec_())
-
 
 if __name__ == "__main__":
     main()

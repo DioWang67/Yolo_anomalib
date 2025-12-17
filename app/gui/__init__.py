@@ -1,6 +1,7 @@
 """GUI package exposing the PyQt main window entrypoints."""
 
-from .controller import DetectionController, ModelCatalog
+from .controller import DetectionController
 from .main_window import DetectionSystemGUI, main
 
-__all__ = ["DetectionController", "DetectionSystemGUI", "ModelCatalog", "main"]
+# ModelCatalog is now in core.services, not exposed here to encourage direct import
+__all__ = ["DetectionController", "DetectionSystemGUI", "main"]

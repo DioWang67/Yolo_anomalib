@@ -110,6 +110,12 @@ class DetectionSystem:
             self.result_sink = None
         self._sink_base_dir = None
 
+    def capture_image(self) -> np.ndarray | None:
+        """Capture a single frame from the active camera."""
+        if self.camera:
+            return self.camera.capture_frame()
+        return None
+
     def initialize_camera(self) -> None:
         """Initialize camera if available; log and fall back to dummy on failure."""
         self.logger.logger.info("Initializing camera...")
