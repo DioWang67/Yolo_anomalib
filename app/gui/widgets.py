@@ -99,11 +99,14 @@ class StatusWidget(QWidget):
         "success": ("#28a745", "檢測完成"),
         "error": ("#dc3545", "檢測錯誤"),
         "warning": ("#fd7e14", "警告"),
+        "pass": ("#28a745", "檢測通過"),
+        "fail": ("#dc3545", "檢測失敗"),
+        "canceled": ("#6c757d", "檢測已取消"),
     }
 
     def __init__(self) -> None:
         super().__init__()
-        self._status_indicator = QLabel("")
+        self._status_indicator = QLabel("●")
         self._status_text = QLabel("系統就緒")
         self._setup_ui()
 

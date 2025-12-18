@@ -21,9 +21,6 @@ class InfoPanel(QWidget):
     def _setup_ui(self) -> None:
         layout = QVBoxLayout()
 
-        self.status_widget = StatusWidget()
-        layout.addWidget(self.status_widget)
-
         self.big_status_label = BigStatusLabel()
         layout.addWidget(self.big_status_label)
 

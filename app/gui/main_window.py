@@ -206,7 +206,6 @@ class DetectionSystemGUI(QMainWindow):
         self.processed_image = self.image_panel.processed_image
         self.result_image = self.image_panel.result_image
 
-        self.status_widget = self.info_panel.status_widget
         self.big_status_label = self.info_panel.big_status_label
         self.result_widget = self.info_panel.result_widget
         self.log_text = self.info_panel.log_text
@@ -477,14 +476,12 @@ class DetectionSystemGUI(QMainWindow):
             if not self.controller.has_system():
                 self.start_btn.setEnabled(True)
                 self.stop_btn.setEnabled(False)
-                self.status_widget.set_status("error")
                 self.update_camera_controls()
                 return
         else:
             self.detection_system = self.controller.detection_system
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.status_widget.set_status("running")
         self.update_camera_controls()
         self.original_image.clear()
         self.processed_image.clear()
@@ -512,7 +509,6 @@ class DetectionSystemGUI(QMainWindow):
                 )
                 self.start_btn.setEnabled(True)
                 self.stop_btn.setEnabled(False)
-                self.status_widget.set_status("idle")
                 self.update_camera_controls()
                 return
         self.worker = self.controller.build_worker(
@@ -537,7 +533,6 @@ class DetectionSystemGUI(QMainWindow):
                 self.worker.wait()
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.status_widget.set_status("idle")
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("READY")
         self.update_camera_controls()
@@ -559,8 +554,6 @@ class DetectionSystemGUI(QMainWindow):
         self.save_btn.setEnabled(True)
         self.update_camera_controls()
         
-        # 根據結果設定狀態
-        self.status_widget.set_status(result.status.lower() if result.status else "error")
         # Update big status
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status(result.status)
