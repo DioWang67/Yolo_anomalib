@@ -19,6 +19,13 @@ else:  # 開發環境
     dll_path = r"D:\Git\robotlearning\yolo11_inference\Runtime\MvCameraControl.dll"
 
 # Platform-specific DLL loading
+
+class MockMvCamCtrldll:
+    def __getattr__(self, name):
+        def dummy_func(*args, **kwargs):
+            return 0
+        return dummy_func
+
 MvCamCtrldll = None
 if sys.platform == "win32":
     # 嘗試載入 DLL
@@ -28,11 +35,6 @@ if sys.platform == "win32":
     except Exception as e:
         print(f"Failed to load DLL: {e}")
         print("Falling back to Mock Camera DLL for testing/CI environment.")
-        class MockMvCamCtrldll:
-            def __getattr__(self, name):
-                def dummy_func(*args, **kwargs):
-                    return 0
-                return dummy_func
         MvCamCtrldll = MockMvCamCtrldll()
 
     if MvCamCtrldll and not isinstance(MvCamCtrldll, MockMvCamCtrldll):
@@ -54,12 +56,6 @@ else:
     # On non-Windows platforms, create a mock object to allow tests to run.
     # The actual camera functionality will not work, but the application can start
     # and the test suite can mock out the camera controller.
-    class MockMvCamCtrldll:
-        def __getattr__(self, name):
-            def dummy_func(*args, **kwargs):
-                # Return a default value, e.g., 0 for success
-                return 0
-            return dummy_func
     MvCamCtrldll = MockMvCamCtrldll()
     print("Running on non-Windows platform. Using mock camera DLL.")
 
