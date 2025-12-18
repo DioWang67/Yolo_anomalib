@@ -3,7 +3,7 @@ from __future__ import annotations
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QGroupBox, QTextEdit, QVBoxLayout, QWidget
 from typing import TYPE_CHECKING
-from app.gui.widgets import BigStatusLabel, ResultDisplayWidget, StatusWidget
+from app.gui.widgets import BigStatusLabel, ResultDisplayWidget
 
 if TYPE_CHECKING:
     from core.types import DetectionResult

@@ -402,11 +402,20 @@ class DetectionSystem:
             reasons = []
             if ctx.result.get("missing_items"):
                 reasons.append(f"missing items: {ctx.result['missing_items']}")
+            if ctx.result.get("over_items"):
+                reasons.append(f"extra items: {ctx.result['over_items']}")
             if color_res := ctx.color_result:
                 if not color_res.get("is_ok", True):
                     items = color_res.get("items", []) or []
                     fails = sum(1 for i in items if not i.get("is_ok"))
                     reasons.append(f"color mismatch: {fails}/{len(items)} failed")
+            seq_res = ctx.result.get("sequence_check")
+            if seq_res and not seq_res.get("is_ok", True):
+                expected_seq = seq_res.get("expected")
+                observed_seq = seq_res.get("observed")
+                reasons.append(
+                    f"sequence mismatch: expected={expected_seq}, observed={observed_seq}"
+                )
             if ctx.result.get("unexpected_items"):
                 reasons.append(f"unexpected items: {ctx.result['unexpected_items']}")
             pos_wrong = [

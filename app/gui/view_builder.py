@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from app.gui.widgets import BigStatusLabel, ImageViewer, ResultDisplayWidget, StatusWidget
+from app.gui.widgets import BigStatusLabel, ImageViewer, ResultDisplayWidget
 
 if TYPE_CHECKING:
     from app.gui.main_window import DetectionSystemGUI
@@ -155,9 +155,6 @@ def build_image_area(gui: DetectionSystemGUI) -> QGroupBox:
 def build_info_panel(gui: DetectionSystemGUI) -> QWidget:
     panel = QWidget()
     layout = QVBoxLayout()
-
-    gui.status_widget = StatusWidget()
-    layout.addWidget(gui.status_widget)
 
     # Added BigStatusLabel for prominent feedback
     gui.big_status_label = BigStatusLabel()

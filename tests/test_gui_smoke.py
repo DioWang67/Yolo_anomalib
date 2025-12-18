@@ -107,7 +107,7 @@ def test_gui_smoke(monkeypatch, tmp_path):
     )
     window.on_detection_complete(res)
     
-    assert window.info_panel.status_widget._status_text.text() == "檢測完成"
+    assert window.info_panel.big_status_label.text() == "PASS"
     
     window.close()
     app.processEvents()

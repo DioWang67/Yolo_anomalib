@@ -90,63 +90,6 @@ class BigStatusLabel(QLabel):
             )
 
 
-class StatusWidget(QWidget):
-    """Small status dashboard showing current system state."""
-
-    _STATUS_COLORS: dict[str, tuple[str, str]] = {
-        "idle": ("#6c757d", "系統待命"),
-        "running": ("#ffc107", "檢測進行中..."),
-        "success": ("#28a745", "檢測完成"),
-        "error": ("#dc3545", "檢測錯誤"),
-        "warning": ("#fd7e14", "警告"),
-        "pass": ("#28a745", "檢測通過"),
-        "fail": ("#dc3545", "檢測失敗"),
-        "canceled": ("#6c757d", "檢測已取消"),
-    }
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._status_indicator = QLabel("●")
-        self._status_text = QLabel("系統就緒")
-        self._setup_ui()
-
-    def _setup_ui(self) -> None:
-        layout = QVBoxLayout()
-
-        title_label = QLabel("系統狀態")
-        title_label.setFont(QFont("Microsoft JhengHei", 12, QFont.Bold))
-        title_label.setStyleSheet("color: #2c3e50; margin-bottom: 10px;")
-
-        self._status_indicator.setFont(QFont("Arial", 20))
-        self._status_indicator.setAlignment(Qt.AlignCenter)
-
-        self._status_text.setAlignment(Qt.AlignCenter)
-        self._status_text.setFont(QFont("Microsoft JhengHei", 10))
-
-        layout.addWidget(title_label)
-        layout.addWidget(self._status_indicator)
-        layout.addWidget(self._status_text)
-        layout.addStretch()
-
-        self.setLayout(layout)
-        self.setFixedWidth(150)
-        self.setStyleSheet(
-            """
-            QWidget {
-                background-color: #f8f9fa;
-                border: 1px solid #e9ecef;
-                border-radius: 8px;
-                padding: 10px;
-            }
-        """
-        )
-
-        self.set_status("idle")
-
-    def set_status(self, status: str) -> None:
-        color, text = self._STATUS_COLORS.get(status, ("#6c757d", "狀態未知"))
-        self._status_indicator.setStyleSheet(f"color: {color};")
-        self._status_text.setText(text)
 
 
 class ImageViewer(QLabel):

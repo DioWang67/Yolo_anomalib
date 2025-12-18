@@ -194,6 +194,80 @@ def _improved_match_ratio(
     )
 
 
+def _separate_orange_red(
+    hsv_vals: np.ndarray,
+    lab_vals: np.ndarray,
+    orange_score: float,
+    red_score: float,
+) -> tuple[str, float, dict]:
+    """Ported tie-break logic from color_verifier.py."""
+    if len(hsv_vals) == 0:
+        return (
+            "red" if red_score >= orange_score else "orange",
+            max(red_score, orange_score),
+            {},
+        )
+
+    debug = {}
+    hue_vals = hsv_vals[:, 0]
+
+    # Core hue counts
+    orange_core = np.sum((hue_vals >= 8) & (hue_vals <= 16))
+    red_core = np.sum((hue_vals <= 5) | (hue_vals >= 175))
+
+    orange_hue_ratio = orange_core / len(hue_vals)
+    red_hue_ratio = red_core / len(hue_vals)
+
+    # LAB a*/b* analysis
+    mean_a = float(np.mean(lab_vals[:, 1]))
+    mean_b = float(np.mean(lab_vals[:, 2]))
+    ab_ratio = mean_b / max(mean_a, 1.0)
+
+    debug.update(
+        {
+            "orange_hue_ratio": float(orange_hue_ratio),
+            "red_hue_ratio": float(red_hue_ratio),
+            "mean_a": mean_a,
+            "mean_b": mean_b,
+            "ab_ratio": float(ab_ratio),
+        }
+    )
+
+    # Decisions
+    if ab_ratio > 1.05:
+        lab_vote = "orange"
+    elif ab_ratio < 0.90:
+        lab_vote = "red"
+    else:
+        lab_vote = "unclear"
+
+    hue_vote = (
+        "orange"
+        if orange_hue_ratio > red_hue_ratio * 1.2
+        else "red"
+        if red_hue_ratio > orange_hue_ratio * 1.2
+        else "unclear"
+    )
+
+    debug["lab_vote"] = lab_vote
+    debug["hue_vote"] = hue_vote
+
+    if hue_vote == lab_vote and hue_vote != "unclear":
+        predicted = hue_vote
+        confidence = max(orange_score, red_score) * 1.3
+    elif hue_vote != "unclear":
+        predicted = hue_vote
+        confidence = (orange_score if hue_vote == "orange" else red_score) * 1.1
+    elif lab_vote != "unclear":
+        predicted = lab_vote
+        confidence = (orange_score if lab_vote == "orange" else red_score) * 1.1
+    else:
+        predicted = "orange" if orange_score > red_score else "red"
+        confidence = max(orange_score, red_score) * 0.9
+
+    return predicted, float(confidence), debug
+
+
 def _is_black_image(hsv_img: np.ndarray) -> tuple[bool, float]:
     h, w = hsv_img.shape[:2]
     margin_y = int(h * 0.15)
@@ -290,6 +364,7 @@ class StatsColorChecker:
         *,
         allowed_colors: Iterable[str] | None = None,
     ) -> ColorQCAdvancedResult:
+        debug: dict[str, object] = {}
         ranges = self._filter_ranges(allowed_colors)
         if not ranges:
             ranges = self._ranges
@@ -323,7 +398,21 @@ class StatsColorChecker:
             name: _improved_match_ratio(valid_hsv, valid_lab, color_range, name)
             for name, color_range in ranges.items()
         }
-        return self._result_from_scores(scores, debug={})
+        # Tie-break for Orange vs Red
+        if "orange" in scores and "red" in scores:
+            o_score = scores["orange"]
+            r_score = scores["red"]
+            if abs(o_score - r_score) < ORANGE_RED_TIE_MARGIN:
+                winner, new_conf, tie_debug = _separate_orange_red(
+                    valid_hsv, valid_lab, o_score, r_score
+                )
+                scores[winner] = max(scores[winner], new_conf)
+                # Slightly suppress the loser to ensure winner is picked
+                loser = "red" if winner == "orange" else "orange"
+                scores[loser] = min(scores[loser], scores[winner] * 0.8)
+                debug["orange_red_tiebreak"] = tie_debug
+
+        return self._result_from_scores(scores, debug=debug)
 
     def _result_from_scores(
         self,

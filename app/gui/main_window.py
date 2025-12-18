@@ -620,7 +620,6 @@ class DetectionSystemGUI(QMainWindow):
         """檢測錯誤回調"""
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.status_widget.set_status("error")
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("ERROR")
         self.update_camera_controls()

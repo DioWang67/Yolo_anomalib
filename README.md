@@ -245,6 +245,40 @@ expected_items:
   - LED1
 ```
 
+### Advanced: Count + Sequence Checks (no retraining)
+
+Configure a per-model pipeline to enforce strict counts and left-to-right order:
+
+```yaml
+# models/Cable1/A/yolo/config.yaml
+expected_items:
+  Cable1:
+    A:
+      - Red
+      - Green
+      - Orange
+      - Yellow
+      - Black
+      - Black
+
+pipeline:
+  - color_check
+  - count_check
+  - sequence_check
+  - save_results
+
+steps:
+  count_check:
+    strict: true           # true: extra items also FAIL
+  sequence_check:
+    expected: [Red, Green, Orange, Yellow, Black, Black]
+    direction: left_to_right
+```
+
+Notes:
+- `count_check` validates missing/extra counts using `expected_items`.
+- `sequence_check` sorts detections by bbox center X and matches `expected`.
+
 ## 位置驗證 (Position Validation)
 
 `position_validator` 用於檢查偵測物件的中心位置是否符合預期範圍。

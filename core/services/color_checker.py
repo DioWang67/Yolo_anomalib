@@ -2,7 +2,8 @@ from __future__ import annotations
 
 """負責載入 LED 色彩模型並對偵測結果進行色彩檢查的服務。"""
 
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 
@@ -95,6 +96,7 @@ class ColorCheckerService:
         frame: np.ndarray,
         processed_image: np.ndarray,
         detections: list[dict[str, Any]],
+        candidates: Iterable[str] | None = None,
     ) -> ColorCheckResult:
         """Run color check on detections.
 
@@ -112,7 +114,10 @@ class ColorCheckerService:
                 x1, y1 = max(0, x1), max(0, y1)
                 x2, y2 = min(proc.shape[1], x2), min(proc.shape[0], y2)
                 roi = proc[y1:y2, x1:x2]
-                allowed = [det.get("class")] if det.get("class") else None
+                # Priority: explicit candidates > YOLO class
+                allowed = list(candidates) if candidates else None
+                if not allowed and det.get("class"):
+                    allowed = [det.get("class")]
                 c_res = self._checker.check(roi, allowed_colors=allowed)
                 items.append(
                     ColorCheckItemResult(

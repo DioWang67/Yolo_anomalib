@@ -4,7 +4,14 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from core.config import DetectionConfig
-from core.pipeline.steps import ColorCheckStep, PositionCheckStep, SaveResultsStep, Step
+from core.pipeline.steps import (
+    ColorCheckStep,
+    CountCheckStep,
+    PositionCheckStep,
+    SaveResultsStep,
+    SequenceCheckStep,
+    Step,
+)
 from core.services.color_checker import ColorCheckerService
 from core.services.result_sink import ExcelImageResultSink
 
@@ -129,6 +136,20 @@ def _position_step_factory(env: PipelineEnv, options: dict) -> Step | None:
     )
 
 
+def _count_step_factory(env: PipelineEnv, options: dict) -> Step | None:
+    return CountCheckStep(
+        env.logger, product=env.product, area=env.area, options=options
+    )
+
+
+def _sequence_step_factory(env: PipelineEnv, options: dict) -> Step | None:
+    return SequenceCheckStep(
+        env.logger, product=env.product, area=env.area, options=options
+    )
+
+
 register_step("color_check", _color_step_factory)
 register_step("save_results", _save_step_factory)
 register_step("position_check", _position_step_factory)
+register_step("count_check", _count_step_factory)
+register_step("sequence_check", _sequence_step_factory)
