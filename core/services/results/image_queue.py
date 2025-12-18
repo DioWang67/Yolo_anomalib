@@ -102,8 +102,8 @@ class ImageWriteQueue:
             pass
         remaining = getattr(self._queue, "unfinished_tasks", 0)
         if remaining:
-            self.logger.warning(
-                f"Image queue shutdown with {remaining} pending tasks")
+            import sys
+            print(f"WARNING: Image queue shutdown with {remaining} pending tasks", file=sys.stderr)
 
     # ------------------------------------------------------------------
     # Internals

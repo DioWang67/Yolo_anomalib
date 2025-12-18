@@ -57,6 +57,7 @@ class DetectionSystemGUI(QMainWindow):
         self.available_areas = {}
         self.current_result: DetectionResult | None = None
         self.selected_image_path = None
+        self.model_loader = None
         self.use_camera_chk = None
         self.reconnect_camera_btn = None
         self.disconnect_camera_btn = None
@@ -78,6 +79,7 @@ class DetectionSystemGUI(QMainWindow):
         self.update_camera_controls()
         if not self._skip_system_init:
             self.init_system()
+            self.load_available_models()
         else:
             # In test mode, prepare a lightweight stub system if available
             stub_cls = getattr(self.controller, "_detection_cls", None)
@@ -96,7 +98,7 @@ class DetectionSystemGUI(QMainWindow):
             except Exception:
                 self.detection_system = None
             self.log_message("Skip init_system (test mode)")
-        self.load_available_models()
+        
         # 快捷鍵
         try:
             QShortcut(QKeySequence("F5"), self).activated.connect(
@@ -229,6 +231,7 @@ class DetectionSystemGUI(QMainWindow):
         self.control_panel.pick_image_requested.connect(self.pick_image)
         self.control_panel.clear_image_requested.connect(self.clear_selected_image)
         self.statusBar().showMessage("系統就緒")
+        self.update_start_enabled()
         build_menu_bar(self)
 
     def init_system(self):

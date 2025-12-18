@@ -285,9 +285,8 @@ class ResultHandler:
 
     def close(self) -> None:
         def _warn(action: str, exc: Exception) -> None:
-            self.logger.logger.warning(
-                f"{action} during ResultHandler.close failed: {exc}",
-                exc_info=exc)
+            import sys
+            print(f"WARNING: {action} during ResultHandler.close failed: {exc}", file=sys.stderr)
 
         operations = [
             ("Excel flush", self._excel.flush),
@@ -301,15 +300,15 @@ class ResultHandler:
             except Exception as exc:
                 _warn(label, exc)
 
-        stats = self._img_queue.stats
-        if stats.overflows:
-            self.logger.logger.warning(
-                f"Image queue overflow occurred {stats.overflows} times"
-            )
-        if stats.errors:
-            self.logger.logger.warning(
-                f"Image writer encountered {stats.errors} errors"
-            )
+        try:
+            stats = self._img_queue.stats
+            import sys
+            if stats.overflows:
+                print(f"WARNING: Image queue overflow occurred {stats.overflows} times", file=sys.stderr)
+            if stats.errors:
+                print(f"WARNING: Image writer encountered {stats.errors} errors", file=sys.stderr)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Helpers

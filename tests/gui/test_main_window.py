@@ -35,8 +35,11 @@ def test_model_loading_async(gui, qtbot):
     # If this test env has no models, combos remain empty.
     
     # Trigger refresh manually
+    # We call it once to ensure the attribute is created since we skip auto-load in __init__
+    gui.load_available_models()
     with qtbot.waitSignal(gui.model_loader.models_ready, timeout=5000, raising=False) as blocker:
-        gui.load_available_models()
+        # Thread already started by the call above
+        pass
     
     # Even if timeout (no models found or error), we check that GUI didn't crash
     # and combos are objects (not None)

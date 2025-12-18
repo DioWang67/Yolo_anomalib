@@ -78,6 +78,7 @@ class ControlPanel(QGroupBox):
         button_layout = QVBoxLayout()
 
         self.start_btn = QPushButton("開始檢測")
+        self.start_btn.setEnabled(False)
         self.start_btn.setStyleSheet("QPushButton { background-color: #28a745; }")
         self.start_btn.clicked.connect(self.start_requested.emit)
         
