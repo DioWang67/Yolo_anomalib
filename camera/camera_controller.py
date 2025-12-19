@@ -7,6 +7,7 @@ import numpy as np
 
 from camera.MVS_camera_control import MVSCamera
 from core.config import DetectionConfig
+from core.exceptions import CameraConnectionError, HardwareError
 from core.logging_config import DetectionLogger
 
 
@@ -22,9 +23,9 @@ class CameraController:
             self.logger.logger.info("正在初始化相機...")
             self.camera = MVSCamera(self.config)
             if not self.camera.enum_devices():
-                raise RuntimeError("無法枚舉相機設備")
+                raise CameraConnectionError("無法枚舉相機設備：未檢測到 MVS 設備")
             if not self.camera.connect_to_camera():
-                raise RuntimeError("無法連接到相機")
+                raise CameraConnectionError("無法連接到相機：設備佔用或通訊異常")
             self.is_initialized = True
             self.logger.logger.info("相機初始化成功")
             return True
@@ -34,7 +35,7 @@ class CameraController:
 
     def capture_frame(self) -> np.ndarray | None:
         if not self.is_initialized:
-            raise RuntimeError("相機未初始化")
+            raise HardwareError("相機未初始化，請先呼叫 initialize()")
         try:
             self.logger.logger.debug("正在拍攝圖像...")
             frame = self.camera.get_frame()

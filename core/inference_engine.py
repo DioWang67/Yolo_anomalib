@@ -5,7 +5,10 @@ from core.base_model import BaseInferenceModel
 from core.exceptions import (
     BackendInitializationError,
     BackendNotAvailableError,
+    ConfigurationError,
+    HardwareError,
     ModelInitializationError,
+    ResourceExhaustionError,
 )
 from core.yolo_inference_model import YOLOInferenceModel
 
@@ -93,6 +96,12 @@ class InferenceEngine:
                 model = YOLOInferenceModel(self.config)
                 try:
                     model.initialize(product=product, area=area)
+                except (
+                    ConfigurationError,
+                    HardwareError,
+                    ResourceExhaustionError,
+                ) as exc:
+                    raise
                 except ModelInitializationError as exc:
                     self.logger.logger.error(
                         "YOLO backend init failed: %s", exc)
@@ -114,6 +123,12 @@ class InferenceEngine:
                     self.config)  # type: ignore[call-arg]
                 try:
                     model.initialize(product=product, area=area)
+                except (
+                    ConfigurationError,
+                    HardwareError,
+                    ResourceExhaustionError,
+                ) as exc:
+                    raise
                 except ModelInitializationError as exc:
                     self.logger.logger.error(
                         "Anomalib backend init failed: %s", exc)
@@ -141,7 +156,11 @@ class InferenceEngine:
                         f"Backend '{name}' missing class_path"
                     )
                 try:
-                    mod, clsname = class_path.rsplit(".", 1)
+                    if "." not in str(class_path):
+                        raise BackendInitializationError(
+                            f"Invalid class_path for backend '{name}': {class_path}"
+                        )
+                    mod, clsname = str(class_path).rsplit(".", 1)
                     cls: type[BaseInferenceModel] = getattr(
                         import_module(mod), clsname)  # type: ignore[attr-defined]
                     inst = cls(self.config)
@@ -152,6 +171,13 @@ class InferenceEngine:
                             raise BackendInitializationError(
                                 f"Backend '{name}' initialize() returned False"
                             )
+                except (
+                    ConfigurationError,
+                    HardwareError,
+                    ResourceExhaustionError,
+                ) as exc:
+                    # Propagate these critical errors as is, or wrap if preferred
+                    raise
                 except ModelInitializationError as exc:
                     self.logger.logger.error(
                         "Backend '%s' init failed: %s", name, exc)

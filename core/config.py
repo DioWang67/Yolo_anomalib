@@ -102,11 +102,23 @@ def _coerce_imgsz(
 
 @dataclass
 class DetectionConfig:
-    """Shared runtime configuration.
+    """Unified configuration registry for the detection system.
 
-    Loaded from global config.yaml and then overridden by per-model configs
-    (models/<product>/<area>/<type>/config.yaml). This instance is mutated
-    in-place by ModelManager.switch() to reflect the active model settings.
+    This dataclass holds global defaults (from config.yaml) and per-model
+    overrides. It governs model parameters (weights, conf_thres), hardware 
+    settings (device, camera exposure), and pipeline behavior (position check).
+
+    Attributes:
+        weights: Path to the default YOLO weights file.
+        device: Computation device ('cpu', 'cuda:0', etc.).
+        conf_thres: Confidence threshold for object detection.
+        iou_thres: Intersection-over-union threshold for NMS.
+        imgsz: Target image size (width, height) for inference.
+        expected_items: Nested mapping of Product -> Area -> List of expected classes.
+        enable_yolo: Whether to run YOLO detection.
+        enable_anomalib: Whether to run anomaly detection.
+        position_config: Configuration for position validation rules.
+        fail_on_unexpected: If True, detection status is FAIL if unseen classes appear.
     """
 
     weights: str
@@ -173,7 +185,18 @@ class DetectionConfig:
 
     @classmethod
     def from_yaml(cls, path: str) -> DetectionConfig:
-        """Load and validate the global configuration YAML file."""
+        """Loads and validates a global configuration YAML file.
+
+        Args:
+            path: Path to the config.yaml file.
+
+        Returns:
+            DetectionConfig: A validated configuration instance.
+
+        Raises:
+            ConfigLoadError: If the file is missing or unreadable.
+            ConfigValidationError: If the YAML content fails schema validation.
+        """
         config_path = Path(path)
         if not config_path.exists():
             raise ConfigLoadError(f"Config file not found: {config_path}")
@@ -270,20 +293,46 @@ class DetectionConfig:
     def get_items_by_area(self, product: str, area: str) -> list[str] | None:
         return self.expected_items.get(product, {}).get(area)
 
-    def get_position_config(self, product: str, area: str) -> dict[str, Any] | None:
-        return self.position_config.get(product, {}).get(area)
+    def get_position_config(self, product: str, area: str) -> dict[str, Any]:
+        """Retrieves position validation settings for a product area.
+
+        Args:
+            product: Product name.
+            area: Area name.
+
+        Returns:
+            dict: The 'position_check' dictionary from the model config.
+        """
+        return self.position_config.get(product, {}).get(area, {})
 
     def is_position_check_enabled(self, product: str, area: str) -> bool:
-        config = self.get_position_config(product, area)
-        return config is not None and bool(config.get("enabled", False))
+        """Checks if position validation is active for a product area.
+
+        Args:
+            product: Product name.
+            area: Area name.
+
+        Returns:
+            bool: True if 'enabled' is True in the position config.
+        """
+        cfg = self.get_position_config(product, area)
+        return bool(cfg.get("enabled", False))
 
     def get_tolerance_ratio(self, product: str, area: str) -> float:
-        """Return tolerance ratio for a given product/area (0.05 == 5%)."""
-        config = self.get_position_config(product, area)
-        if config is None:
-            return 0.0
+        """Retrieves the tolerance ratio for position validation.
 
-        val = config.get("tolerance", 0)
+        Args:
+            product: Product name.
+            area: Area name.
+
+        Returns:
+            float: Tolerance ratio (e.g., 0.05 for 5%). Defaults to 0.05.
+        """
+        config = self.get_position_config(product, area)
+        if not config:  # Use 'not config' to handle empty dict as well as None
+            return 0.05 # Default to 0.05 if no config or empty config
+
+        val = config.get("tolerance", 5) # Default to 5% if 'tolerance' key is missing
         if val is None or val <= 0:
             return 0.0
         if val <= 100:

@@ -15,7 +15,12 @@ from ultralytics import YOLO
 
 from core.base_model import BaseInferenceModel
 from core.detector import YOLODetector
-from core.exceptions import ModelInferenceError, ModelInitializationError
+from core.exceptions import (
+    ConfigurationError,
+    ModelInferenceError,
+    ModelInitializationError,
+    ResourceExhaustionError,
+)
 from core.position_validator import PositionValidator
 from core.utils import ImageUtils
 
@@ -127,15 +132,19 @@ class YOLOInferenceModel(BaseInferenceModel):
             self.logger.logger.error(
                 f"YOLO model weights file not found: {self.config.weights}"
             )
-            raise ModelInitializationError(
-                f"Model weights file not found: {self.config.weights}"
+            raise ConfigurationError(
+                f"模型權重檔案不存在: {self.config.weights}。請檢查路徑或配置。"
             ) from exc
         except RuntimeError as exc:
             self.logger.logger.exception(
                 "Runtime error (e.g., CUDA issue) during YOLO model initialization"
             )
+            if "out of memory" in str(exc).lower():
+                raise ResourceExhaustionError(
+                    "顯存不足 (CUDA OOM)，無法加載 YOLO 模型。"
+                ) from exc
             raise ModelInitializationError(
-                "A runtime error occurred during model loading"
+                "模型加載過程中發生運行時錯誤，詳情請見日誌。"
             ) from exc
 
     def preprocess_image(

@@ -41,11 +41,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 class DetectionSystem:
     def __init__(self, config_path: str = "config.yaml"):
-        """Create a detection system instance.
+        """Initializes the DetectionSystem with project settings.
 
         Args:
-            config_path: Path to the global config YAML (project-level defaults).
+            config_path: Relative or absolute path to the global config.yaml.
         """
+
         self.logger = DetectionLogger()
         root_dir = project_root()
         if not (root_dir / "config.yaml").exists():
@@ -438,7 +439,21 @@ class DetectionSystem:
         frame: np.ndarray | None = None,
         cancel_cb=None,
     ) -> dict:
-        """Run one-shot detection and return a normalized result dict."""
+        """Runs the complete detection pipeline for a specific product and area.
+
+        This includes image acquisition, model inference, post-processing steps
+        (position check, color check), and results saving.
+
+        Args:
+            product: Name of the product (e.g., 'LED').
+            area: Name of the station or area (e.g., 'A').
+            inference_type: Type of model to run ('yolo' or 'anomalib').
+            frame: Optional pre-acquired image frame. If None, captures from camera.
+            cancel_cb: Optional callback that returns True to abort execution.
+
+        Returns:
+            dict: Normalized results dictionary containing status, detections, and artifact paths.
+        """
         run_logger = context_adapter(self.logger.logger, product, area, inference_type)
         run_logger.info("Start detection")
 

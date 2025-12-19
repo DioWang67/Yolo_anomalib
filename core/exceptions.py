@@ -33,3 +33,19 @@ class ResultImageWriteError(ResultPersistenceError):
 
 class ResultExcelWriteError(ResultPersistenceError):
     """Raised when persisting Excel rows fails."""
+
+
+class HardwareError(ModelError):
+    """Base exception for hardware-related failures (Camera, GPU)."""
+
+
+class CameraConnectionError(HardwareError):
+    """Raised when failing to connect to the MVS hardware."""
+
+
+class ResourceExhaustionError(ModelError):
+    """Raised when a resource limit is hit (e.g., CUDA OOM)."""
+
+
+class ConfigurationError(ModelError):
+    """Raised when there is a logical or structural error in the configuration."""

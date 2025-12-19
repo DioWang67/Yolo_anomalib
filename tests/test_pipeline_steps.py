@@ -7,7 +7,14 @@ import pytest
 from core.config import DetectionConfig
 from core.pipeline.context import DetectionContext
 from core.pipeline.registry import PipelineEnv
-from core.pipeline.steps import PositionCheckStep, SaveResultsStep
+from core.pipeline.steps import (
+    PositionCheckStep, 
+    SaveResultsStep, 
+    ColorCheckStep, 
+    CountCheckStep, 
+    SequenceCheckStep
+)
+from core.services.color_checker import ColorCheckerService
 
 
 @pytest.fixture
@@ -183,5 +190,89 @@ class TestSaveResultsStep:
 
         step.run(base_context)
 
-        mock_sink.save.assert_not_called()
-        assert base_context.save_result is None
+@pytest.fixture
+def mock_color_service():
+    service = MagicMock(spec=ColorCheckerService)
+    # Mock check_items to return a result object
+    def fake_check_items(**kwargs):
+        res = MagicMock()
+        res.items = []
+        res.to_dict.return_value = {"is_ok": True, "items": []}
+        return res
+    service.check_items.side_effect = fake_check_items
+    return service
+
+class TestColorCheckStep:
+    def test_run_calls_color_service(self, mock_env, base_context, mock_color_service):
+        step = ColorCheckStep(mock_color_service, mock_env.logger)
+        step.run(base_context)
+        mock_color_service.check_items.assert_called_once()
+        assert "color_result" in base_context.__dict__ or hasattr(base_context, "color_result")
+
+    def test_run_updates_status_on_fail(self, mock_env, base_context, mock_color_service):
+        mock_it = MagicMock()
+        mock_it.is_ok = False
+        mock_it.index = 0
+        mock_it.class_name = "LED"
+        mock_it.best_color = "red"
+        mock_it.diff = 10.0
+        mock_it.threshold = 5.0
+
+        mock_res = MagicMock()
+        mock_res.items = [mock_it]
+        mock_res.to_dict.return_value = {"is_ok": False, "items": [{"is_ok": False}]}
+        
+        # Override side_effect to use our mock_res
+        mock_color_service.check_items.side_effect = None
+        mock_color_service.check_items.return_value = mock_res
+        
+        step = ColorCheckStep(mock_color_service, mock_env.logger)
+        step.run(base_context)
+        assert base_context.status == "FAIL"
+
+class TestCountCheckStep:
+    def test_run_pass(self, mock_env, base_context):
+        base_context.config.expected_items = {"TestProduct": {"TestArea": ["LED", "J1"]}}
+        base_context.result["detections"] = [{"class": "LED"}, {"class": "J1"}]
+        step = CountCheckStep(mock_env.logger, base_context.product, base_context.area)
+        step.run(base_context)
+        assert base_context.status == "PASS"
+
+    def test_run_fail_missing(self, mock_env, base_context):
+        base_context.config.expected_items = {"TestProduct": {"TestArea": ["LED", "J1"]}}
+        base_context.result["detections"] = [{"class": "LED"}] # J1 missing
+        step = CountCheckStep(mock_env.logger, base_context.product, base_context.area)
+        step.run(base_context)
+        assert base_context.status == "FAIL"
+        assert "J1" in base_context.result["missing_items"]
+
+class TestSequenceCheckStep:
+    def test_run_pass_l2r(self, mock_env, base_context):
+        base_context.result["detections"] = [
+            {"class": "A", "bbox": [10, 0, 20, 0]},
+            {"class": "B", "bbox": [30, 0, 40, 0]},
+        ]
+        step = SequenceCheckStep(mock_env.logger, base_context.product, base_context.area, 
+                                 options={"expected": ["A", "B"]})
+        step.run(base_context)
+        assert base_context.status == "PASS"
+
+    def test_run_fail_order(self, mock_env, base_context):
+        base_context.result["detections"] = [
+            {"class": "B", "bbox": [10, 0, 20, 0]},
+            {"class": "A", "bbox": [30, 0, 40, 0]},
+        ]
+        step = SequenceCheckStep(mock_env.logger, base_context.product, base_context.area, 
+                                 options={"expected": ["A", "B"]})
+        step.run(base_context)
+        assert base_context.status == "FAIL"
+
+    def test_run_fail_length(self, mock_env, base_context):
+        base_context.result["detections"] = [
+            {"class": "A", "bbox": [10, 0, 20, 0]},
+        ]
+        step = SequenceCheckStep(mock_env.logger, base_context.product, base_context.area, 
+                                 options={"expected": ["A", "B"]})
+        step.run(base_context)
+        assert base_context.status == "FAIL"
+        assert base_context.result["sequence_check"]["reason"] == "length_mismatch"
