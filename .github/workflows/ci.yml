@@ -67,7 +67,7 @@ jobs:
     
     - name: Run fast tests (skip GUI)
       run: |
-        pytest -v -m "not gui" --ignore=core/performance_test.py
+        pytest -v -m "not gui" -p no:pytestqt --ignore=core/performance_test.py
       continue-on-error: ${{ runner.os == 'Linux' }}
     
     - name: Run all tests with coverage
