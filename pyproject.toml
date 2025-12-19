@@ -93,6 +93,7 @@ addopts = [
     "--verbose",
     "--strict-markers",
     "--ignore=core/performance_test.py",
+    "-p", "no:pytestqt",
 ]
 markers = [
     "gui: GUI smoke tests that require PyQt5 (offscreen)",
