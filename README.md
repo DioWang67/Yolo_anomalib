@@ -39,6 +39,8 @@ yolo11_inference/
 ├── camera/                     # 工業相機控制
 │   ├── MVS_camera_control.py          # MVS SDK 封裝
 │   └── camera_controller.py           # 相機控制器
+├── tools/                      # 獨立工具
+│   └── color_verifier.py              # LED 顏色檢測工具
 ├── tests/                      # 測試套件 (52 個測試)
 ├── models/                     # 模型權重目錄
 │   └── <product>/
@@ -258,6 +260,7 @@ expected_items:
       - Green
       - Orange
       - Yellow
+      - Black
       - Black
       - Black
 
