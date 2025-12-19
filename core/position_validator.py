@@ -154,6 +154,7 @@ class PositionValidator:
             "correct": sum(1 for d in detections if d.get("position_status") == "CORRECT"),
             "wrong": sum(1 for d in detections if d.get("position_status") == "WRONG"),
             "unexpected": sum(1 for d in detections if d.get("position_status") == "UNEXPECTED"),
+            "disabled": sum(1 for d in detections if d.get("position_status") in {None, "DISABLED"}),
             "unknown": sum(1 for d in detections if d.get("position_status") == "UNKNOWN"),
             "tolerance_px": self.tolerance_px,
             "imgsz": self.imgsz,

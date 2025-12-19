@@ -151,7 +151,7 @@ class DetectionLogger:
                 dy = offset.get("dy") if isinstance(offset, dict) else None
                 distance = det.get("position_error")
                 expected = det.get("position_expected_center")
-                status = det.get("position_status") or "UNKNOWN"
+                status = det.get("position_status") or "DISABLED"
                 if cx is None or cy is None:
                     continue
                 try:
