@@ -39,6 +39,8 @@ jobs:
   test:
     name: Test Suite
     runs-on: ${{ matrix.os }}
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -69,11 +71,11 @@ jobs:
       run: |
         pytest -v -m "not gui" -p no:pytestqt --ignore=core/performance_test.py
       continue-on-error: ${{ runner.os == 'Linux' }}
-    
+
     - name: Run all tests with coverage
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
       run: |
-        pytest --cov=core --cov=app --cov-report=xml --cov-report=term
+        pytest -p pytest_cov -m "not gui" --cov=core --cov=app --cov-report=xml --cov-report=term
       continue-on-error: true
     
     - name: Upload coverage to Codecov
