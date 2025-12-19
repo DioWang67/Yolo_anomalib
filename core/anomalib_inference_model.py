@@ -11,6 +11,14 @@ from core.utils import ImageUtils
 
 
 class AnomalibInferenceModel(BaseInferenceModel):
+    """Deep-learning based anomaly detection model using the Anomalib framework.
+
+    Detects surface defects, scratches, or foreign objects by comparing
+    input images against a learned distribution of 'normal' samples.
+
+    Attributes:
+        image_utils (ImageUtils): Utility class for image transformations.
+    """
     def __init__(self, config):
         super().__init__(config)
         self.image_utils = ImageUtils()
@@ -19,6 +27,15 @@ class AnomalibInferenceModel(BaseInferenceModel):
             tempfile.gettempdir(), f"anomalib_infer_{os.getpid()}.jpg")
 
     def initialize(self, product: str = None, area: str = None) -> bool:
+        """Initializes the Anomalib model and Lightning inference engine.
+
+        Args:
+            product: The product identifier.
+            area: The area/station identifier.
+
+        Returns:
+            bool: True if initialization was successful.
+        """
         try:
             self.logger.logger.info(
                 f"正在初始化 Anomalib 模型 (產品: {product}, 區域: {area})..."
@@ -39,6 +56,20 @@ class AnomalibInferenceModel(BaseInferenceModel):
     def infer(
         self, image: np.ndarray, product: str, area: str, output_path: str = None
     ):
+        """Runs anomaly detection on the provided image.
+
+        Args:
+            image: Raw input image (BGR).
+            product: Target product identifier.
+            area: Target area identifier.
+            output_path: Optional path to save the resulting heatmap.
+
+        Returns:
+            dict: Standardized result with anomaly score and segmentation status.
+
+        Raises:
+            RuntimeError: If model inference or pre-processing fails.
+        """
         if not self.is_initialized:
             self.initialize(product, area)
             if not self.is_initialized:

@@ -18,10 +18,15 @@ from core.logging_config import DetectionLogger
 
 
 class InferenceEngine:
-    """Inference engine with pluggable backends.
+    """Manages model backends and provides a unified interface for inference.
 
-    Built-ins: 'yolo', 'anomalib' (if available).
-    Custom: via config.backends: { name: { class_path: 'pkg.ModClass', enabled: true } }
+    Supports built-in YOLO and Anomalib models as well as custom backends
+    defined in the configuration. Backends are initialized lazily on first use.
+
+    Attributes:
+        config (DetectionConfig): The project configuration registry.
+        logger (DetectionLogger): Logging interface for inference events.
+        models (dict): Cache of initialized inference model instances.
     """
 
     def __init__(self, config: DetectionConfig):
@@ -38,18 +43,43 @@ class InferenceEngine:
         return
 
     def initialize(self) -> bool:
-        """Lazy initialization: defer backend model creation to infer()."""
+        """Prepares the engine for operation.
+
+        Currently uses lazy initialization, so this simply logs readiness.
+
+        Returns:
+            bool: Always True in the current lazy implementation.
+        """
         self.logger.logger.info("Inference engine ready (lazy backends)")
         return True
 
     def infer(
         self,
-        image,
+        image: np.ndarray,
         product: str,
         area: str,
         inference_type: Any,
         output_path: str = None,
     ):
+        """Dispatches an inference request to the appropriate backend.
+
+        If the required backend is not yet initialized, it will be created
+        using the lazy-loading mechanism.
+
+        Args:
+            image: The input image array (BGR).
+            product: Target product category.
+            area: Specific area or station identifier.
+            inference_type: The type of inference model to use ('yolo', 'anomalib', etc.).
+            output_path: Optional path to save visual debug artifacts (e.g., heatmaps).
+
+        Returns:
+            dict: Categorized results from the backend inference model.
+
+        Raises:
+            BackendNotAvailableError: If the requested backend is disabled or missing.
+            BackendInitializationError: If the backend fails to load or initialize.
+        """
         name = (
             inference_type.value
             if hasattr(inference_type, "value")

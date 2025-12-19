@@ -21,9 +21,17 @@ from core.utils import ImageUtils
 
 
 class YOLOInferenceModel(BaseInferenceModel):
-    _warmup_registry: set[tuple[str, str]] = set()
+    """Inference wrapper for YOLO models with built-in caching and position validation.
 
-    """Inference wrapper that keeps a lightweight cache of YOLO models."""
+    This class handles model loading, device placement (CPU/GPU), and provides
+    a structured interface for image inference and pre-processing.
+
+    Attributes:
+        model_cache (OrderedDict): LRU cache storing (Product, Area) -> (YOLO, Detector) tuples.
+        max_cache_size (int): Maximum number of models to keep in memory.
+        image_utils (ImageUtils): Utility class for image transformations.
+    """
+    _warmup_registry: set[tuple[str, str]] = set()
 
     def __init__(self, config):
         super().__init__(config)
@@ -36,6 +44,18 @@ class YOLOInferenceModel(BaseInferenceModel):
         self.image_utils = ImageUtils()
 
     def initialize(self, product: str | None = None, area: str | None = None) -> bool:
+        """Initializes or retrieves the YOLO model for a specific product and area.
+
+        Args:
+            product: The product identifier. Defaults to 'default'.
+            area: The area/station identifier. Defaults to 'default'.
+
+        Returns:
+            bool: True if initialization was successful.
+
+        Raises:
+            ModelInitializationError: If weights are missing or a runtime hardware error occurs.
+        """
         key = (product or "default", area or "default")
         if self.max_cache_size > 0 and key in self.model_cache:
             self.model, self.detector = self.model_cache[key]
@@ -121,6 +141,16 @@ class YOLOInferenceModel(BaseInferenceModel):
     def preprocess_image(
         self, frame: np.ndarray, product: str, area: str
     ) -> np.ndarray:
+        """Prepares a raw image for YOLO inference using letterboxing.
+
+        Args:
+            frame: Raw input image (BGR).
+            product: Product identifier.
+            area: Area identifier.
+
+        Returns:
+            np.ndarray: Resized and padded image ready for the model.
+        """
         target_size = self.config.imgsz
         resized_img = self.image_utils.letterbox(
             frame, size=target_size, fill_color=(128, 128, 128)
@@ -133,6 +163,23 @@ class YOLOInferenceModel(BaseInferenceModel):
     def infer(
         self, image: np.ndarray, product: str, area: str, output_path: str | None = None
     ) -> dict[str, Any]:
+        """Performs inference on the provided image for a given product and area.
+
+        Includes preprocessing, model forward pass, detection processing, and
+        optional position validation.
+
+        Args:
+            image: The raw input image (BGR).
+            product: Name of the product being inspected.
+            area: Station or area ID.
+            output_path: Optional path for saving temporary inference results.
+
+        Returns:
+            dict: Structured result containing detections, missing items, and status.
+
+        Raises:
+            ModelInferenceError: If inference fails due to configuration or runtime issues.
+        """
         if not self.is_initialized:
             raise RuntimeError("YOLO model is not initialized")
 
