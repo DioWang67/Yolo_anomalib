@@ -15,6 +15,7 @@ except Exception:  # pragma: no cover
     AnomalibInferenceModel = None  # type: ignore
 from core.config import DetectionConfig
 from core.logging_config import DetectionLogger
+import numpy as np
 
 
 class InferenceEngine:
