@@ -4,7 +4,6 @@ from __future__ import annotations
 
 # 可選：用標準 logging 發出偵錯訊息
 import logging
-from typing import Optional
 
 from .color_qc_enhanced import ColorQCEnhanced  # noqa: F401
 

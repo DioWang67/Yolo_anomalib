@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 import traceback
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -53,9 +53,7 @@ class DetectionWorker(QThread):
         try:
             # Re-init system with selected config
             self._detection_system.load_model_configs(self._product, self._area, self._inference_type)
-            
             frame_id = 0
-            
             while not self._stop_event.is_set():
                 if self._frame is not None:
                     # Single shot with provided image
@@ -95,18 +93,17 @@ class DetectionWorker(QThread):
                 # Map string to Literal safely
                 status: DetectionStatus
                 if status_str == "PASS":
-                     status = "PASS"
+                    status = "PASS"
                 elif status_str == "FAIL":
-                     status = "FAIL"
+                    status = "FAIL"
                 else:
-                     status = "ERROR"
+                    status = "ERROR"
 
                 items = []
                 for d in result_dict.get("detections", []):
                     bbox = d.get("bbox", (0.0, 0.0, 0.0, 0.0))
                     if isinstance(bbox, list):
-                        bbox = tuple(bbox)
-                    
+                        bbox = tuple(bbox)                   
                     items.append(DetectionItem(
                         label=d.get("class", "unknown"),
                         confidence=float(d.get("confidence", 0.0)),
@@ -124,7 +121,7 @@ class DetectionWorker(QThread):
                     metadata={k: v for k, v in result_dict.items() 
                               if k not in ["detections", "status", "image_path"]}
                 )
-                
+               
                 # 4. Emit Result
                 self.result_ready.emit(res)
                 

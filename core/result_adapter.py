@@ -59,5 +59,3 @@ def normalize_result(
     out["ckpt_path"] = out.get("ckpt_path", "") or ""
 
     return out
-
-
