@@ -62,6 +62,10 @@ graph TD
 *   **`ResultHandler`**: 負責將推論結果 (JSON/Excel) 與影像寫入磁碟。
 *   **`PositionValidator`**: 負責多物件的幾何位置校驗邏輯。
 
+### 2.4 安全組件 (`core/security.py`)
+*   **`PathValidator`**: 負責防止路徑遍歷攻擊，驗證所有檔案 I/O 操作的路徑安全性。
+*   **Check Points**: 整合於 `Config` 載入、`DetectionSystem` 初始化及影像讀取流程中。
+
 ---
 
 ## 3. GUI Layer (介面層)
