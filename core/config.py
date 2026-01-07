@@ -197,9 +197,27 @@ class DetectionConfig:
             ConfigLoadError: If the file is missing or unreadable.
             ConfigValidationError: If the YAML content fails schema validation.
         """
-        config_path = Path(path)
-        if not config_path.exists():
-            raise ConfigLoadError(f"Config file not found: {config_path}")
+        # Import path validator for security checks
+        try:
+            from core.security import SecurityError, path_validator
+        except ImportError:
+            # Fallback if security module is not available
+            logger.warning("Security module not available, skipping path validation")
+            path_validator = None
+            SecurityError = Exception
+
+        # Validate path to prevent directory traversal attacks
+        if path_validator is not None:
+            try:
+                config_path = path_validator.validate_path(path, must_exist=True)
+            except SecurityError as exc:
+                raise ConfigLoadError(f"Security error loading config: {exc}") from exc
+            except FileNotFoundError as exc:
+                raise ConfigLoadError(f"Config file not found: {path}") from exc
+        else:
+            config_path = Path(path)
+            if not config_path.exists():
+                raise ConfigLoadError(f"Config file not found: {config_path}")
 
         try:
             with config_path.open("r", encoding="utf-8") as handle:

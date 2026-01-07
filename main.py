@@ -51,13 +51,33 @@ if __name__ == "__main__":
                     logging.getLogger(__name__).error(
                         "缺少 OpenCV，無法讀取 --image 檔案"
                     )
-                elif not os.path.exists(args.image):
-                    logging.getLogger(__name__).error(f"影像檔案不存在: {args.image}")
                 else:
-                    frame = cv2.imread(args.image)
-                    if frame is None:
-                        logging.getLogger(__name__).error(
-                            f"影像讀取失敗: {args.image}")
+                    # Validate image path for security
+                    try:
+                        from core.security import SecurityError, path_validator
+                        try:
+                            safe_image_path = path_validator.validate_path(args.image, must_exist=True)
+                            frame = cv2.imread(str(safe_image_path))
+                            if frame is None:
+                                logging.getLogger(__name__).error(
+                                    f"影像讀取失敗: {args.image}"
+                                )
+                        except SecurityError as e:
+                            logging.getLogger(__name__).error(
+                                f"影像路徑安全驗證失敗: {e}"
+                            )
+                        except FileNotFoundError:
+                            logging.getLogger(__name__).error(f"影像檔案不存在: {args.image}")
+                    except ImportError:
+                        # Fallback to basic validation if security module not available
+                        if not os.path.exists(args.image):
+                            logging.getLogger(__name__).error(f"影像檔案不存在: {args.image}")
+                        else:
+                            frame = cv2.imread(args.image)
+                            if frame is None:
+                                logging.getLogger(__name__).error(
+                                    f"影像讀取失敗: {args.image}"
+                                )
 
             result = system.detect(
                 args.product, args.area, args.infer_type, frame=frame
