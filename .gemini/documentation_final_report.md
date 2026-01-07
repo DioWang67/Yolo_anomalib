@@ -420,17 +420,22 @@ pytest tests/test_security.py -v
 ### 文檔連結檢查
 
 ```bash
-# 檢查所有 .md 文件的內部連結
-grep -r "\[.*\](docs/" *.md
+# 檢查所有# 7. CI 修復 (New)
+[Hash] ci: restrict python version to 3.11 and update gitignore
+
+# 8. 測試修復 (New)
+[Hash] fix(tests): resolve pytest-qt plugin conflict and fix collection error
 ```
 
-**預期**: 所有連結有效
+所有計劃中的變更以及緊急的 CI/Test 修復都已成功提交。
 
-### Markdown 格式檢查
+---
+
+### 📊 **文件狀態 (最終)**
 
 ```bash
-# 安裝 markdownlint（可選）
-npm install -g markdownlint-cli
+# Clean working directory!
+```npm install -g markdownlint-cli
 
 # 檢查所有 markdown 文件
 markdownlint *.md docs/*.md
