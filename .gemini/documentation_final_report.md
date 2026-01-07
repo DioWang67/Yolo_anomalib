@@ -428,6 +428,9 @@ pytest tests/test_security.py -v
 
 # 9. CI 遷移 (New)
 [Hash] ci: complete migration to Python 3.11 for all jobs (lint, build)
+
+# 10. 測試配置修復 (New)
+[Hash] fix(tests): allow access to temp directories in tests (fixes SecurityError)
 ```
 
 所有計劃中的變更以及緊急的 CI/Test 修復都已成功提交。
