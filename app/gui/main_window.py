@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.types import DetectionResult
@@ -32,20 +32,19 @@ def _get_detection_class():
     return _CoreDetectionSystem
 
 
-import cv2
 import numpy as np
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 
 from app.gui.controller import DetectionController
-from core.services.model_catalog import ModelCatalog
-from app.gui.preferences import PreferencesManager
 from app.gui.panels.control_panel import ControlPanel
 from app.gui.panels.image_panel import ImagePanel
 from app.gui.panels.info_panel import InfoPanel
+from app.gui.preferences import PreferencesManager
 from app.gui.utils import load_image_with_retry
 from app.gui.view_builder import build_menu_bar
+from core.services.model_catalog import ModelCatalog
 
 
 class DetectionSystemGUI(QMainWindow):
@@ -98,7 +97,7 @@ class DetectionSystemGUI(QMainWindow):
             except Exception:
                 self.detection_system = None
             self.log_message("Skip init_system (test mode)")
-        
+
         # 快捷鍵
         try:
             QShortcut(QKeySequence("F5"), self).activated.connect(
@@ -172,7 +171,7 @@ class DetectionSystemGUI(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
         main_splitter = QSplitter(Qt.Horizontal)
-        
+
         # Instantiate Panels
         self.control_panel = ControlPanel()
         self.image_panel = ImagePanel()
@@ -182,7 +181,7 @@ class DetectionSystemGUI(QMainWindow):
         main_splitter.addWidget(self.control_panel)
         main_splitter.addWidget(self.image_panel)
         main_splitter.addWidget(self.info_panel)
-        
+
         main_splitter.setStretchFactor(0, 0)
         main_splitter.setStretchFactor(1, 2)
         main_splitter.setStretchFactor(2, 1)
@@ -213,20 +212,20 @@ class DetectionSystemGUI(QMainWindow):
         # Connect Signals
         self.control_panel.product_changed.connect(self.on_product_changed)
         self.control_panel.product_changed.connect(lambda _: self.update_start_enabled())
-        
+
         self.control_panel.area_changed.connect(self.on_area_changed)
         self.control_panel.area_changed.connect(lambda _: self.update_start_enabled())
-        
+
         self.control_panel.inference_type_changed.connect(lambda _: self.update_start_enabled())
-        
+
         self.control_panel.start_requested.connect(self.start_detection)
         self.control_panel.stop_requested.connect(self.stop_detection)
         self.control_panel.save_requested.connect(self.save_results)
-        
+
         self.control_panel.use_camera_toggled.connect(self.on_use_camera_toggled)
         self.control_panel.reconnect_camera_requested.connect(self.handle_reconnect_camera)
         self.control_panel.disconnect_camera_requested.connect(self.handle_disconnect_camera)
-        
+
         self.control_panel.pick_image_requested.connect(self.pick_image)
         self.control_panel.clear_image_requested.connect(self.clear_selected_image)
         self.statusBar().showMessage("系統就緒")
@@ -244,7 +243,7 @@ class DetectionSystemGUI(QMainWindow):
         try:
             self.detection_system = self.controller.detection_system
             self.log_message("檢測系統初始化完成")
-            
+
             if camera_success:
                 self.log_message("相機連接成功")
                 if getattr(self, "use_camera_chk", None):
@@ -291,7 +290,7 @@ class DetectionSystemGUI(QMainWindow):
     def load_available_models(self):
         """Async Load available model information from the filesystem."""
         self.log_message("正在載入模型清單...")
-        
+
         # Check if base path exists first to fail fast
         base_path = Path(self._models_base)
         if not base_path.exists():
@@ -553,14 +552,14 @@ class DetectionSystemGUI(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.save_btn.setEnabled(True)
         self.update_camera_controls()
-        
+
         # Update big status
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status(result.status)
 
         # 更新結果顯示
         self.info_panel.update_result(result)
-        
+
         # 顯示圖像
         # Original and Preprocessed images should be paths if saved
         original_path = result.metadata.get("original_image_path") or result.image_path
@@ -576,11 +575,11 @@ class DetectionSystemGUI(QMainWindow):
             preprocessed_path,
             on_fail=lambda: self.processed_image.setText("尚無預處理影像"),
         )
-        
+
         # For result image, we favor finding annotations or heatmap paths
         annotated_path = result.metadata.get("annotated_path")
         heatmap_path = result.metadata.get("heatmap_path")
-        
+
         # Check if result frame data is available in metadata to save temp file
         result_frame_data = result.metadata.get("result_frame")
 

@@ -7,13 +7,7 @@ import pytest
 from core.config import DetectionConfig
 from core.pipeline.context import DetectionContext
 from core.pipeline.registry import PipelineEnv
-from core.pipeline.steps import (
-    PositionCheckStep, 
-    SaveResultsStep, 
-    ColorCheckStep, 
-    CountCheckStep, 
-    SequenceCheckStep
-)
+from core.pipeline.steps import ColorCheckStep, CountCheckStep, PositionCheckStep, SaveResultsStep, SequenceCheckStep
 from core.services.color_checker import ColorCheckerService
 
 
@@ -221,11 +215,11 @@ class TestColorCheckStep:
         mock_res = MagicMock()
         mock_res.items = [mock_it]
         mock_res.to_dict.return_value = {"is_ok": False, "items": [{"is_ok": False}]}
-        
+
         # Override side_effect to use our mock_res
         mock_color_service.check_items.side_effect = None
         mock_color_service.check_items.return_value = mock_res
-        
+
         step = ColorCheckStep(mock_color_service, mock_env.logger)
         step.run(base_context)
         assert base_context.status == "FAIL"
@@ -252,7 +246,7 @@ class TestSequenceCheckStep:
             {"class": "A", "bbox": [10, 0, 20, 0]},
             {"class": "B", "bbox": [30, 0, 40, 0]},
         ]
-        step = SequenceCheckStep(mock_env.logger, base_context.product, base_context.area, 
+        step = SequenceCheckStep(mock_env.logger, base_context.product, base_context.area,
                                  options={"expected": ["A", "B"]})
         step.run(base_context)
         assert base_context.status == "PASS"
@@ -262,7 +256,7 @@ class TestSequenceCheckStep:
             {"class": "B", "bbox": [10, 0, 20, 0]},
             {"class": "A", "bbox": [30, 0, 40, 0]},
         ]
-        step = SequenceCheckStep(mock_env.logger, base_context.product, base_context.area, 
+        step = SequenceCheckStep(mock_env.logger, base_context.product, base_context.area,
                                  options={"expected": ["A", "B"]})
         step.run(base_context)
         assert base_context.status == "FAIL"
@@ -271,7 +265,7 @@ class TestSequenceCheckStep:
         base_context.result["detections"] = [
             {"class": "A", "bbox": [10, 0, 20, 0]},
         ]
-        step = SequenceCheckStep(mock_env.logger, base_context.product, base_context.area, 
+        step = SequenceCheckStep(mock_env.logger, base_context.product, base_context.area,
                                  options={"expected": ["A", "B"]})
         step.run(base_context)
         assert base_context.status == "FAIL"

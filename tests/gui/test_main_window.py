@@ -7,6 +7,7 @@ pytest_plugins = ["pytestqt.plugin"]
 
 from app.gui.main_window import DetectionSystemGUI
 
+
 @pytest.fixture
 def gui(qtbot):
     """Fixture to create and show the GUI window."""
@@ -36,16 +37,16 @@ def test_model_loading_async(gui, qtbot):
     """Verify that model loading triggers signals and updates combos."""
     # Since load_available_models is async, we wait for the log message or combo update
     # But checking combos is easier.
-    # Note: real model loading depends on file system. 
+    # Note: real model loading depends on file system.
     # If this test env has no models, combos remain empty.
-    
+
     # Trigger refresh manually
     # We call it once to ensure the attribute is created since we skip auto-load in __init__
     gui.load_available_models()
     with qtbot.waitSignal(gui.model_loader.models_ready, timeout=5000, raising=False) as blocker:
         # Thread already started by the call above
         pass
-    
+
     # Even if timeout (no models found or error), we check that GUI didn't crash
     # and combos are objects (not None)
     assert gui.product_combo is not None

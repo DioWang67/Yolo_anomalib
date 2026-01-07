@@ -24,15 +24,15 @@ class ControlPanel(QGroupBox):
     product_changed = pyqtSignal(str)
     area_changed = pyqtSignal(str)
     inference_type_changed = pyqtSignal(str)
-    
+
     start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     save_requested = pyqtSignal()
-    
+
     use_camera_toggled = pyqtSignal(bool)
     reconnect_camera_requested = pyqtSignal()
     disconnect_camera_requested = pyqtSignal()
-    
+
     pick_image_requested = pyqtSignal()
     clear_image_requested = pyqtSignal()
 
@@ -81,7 +81,7 @@ class ControlPanel(QGroupBox):
         self.start_btn.setEnabled(False)
         self.start_btn.setStyleSheet("QPushButton { background-color: #28a745; }")
         self.start_btn.clicked.connect(self.start_requested.emit)
-        
+
         self.stop_btn = QPushButton("停止檢測")
         self.stop_btn.setEnabled(False)
         self.stop_btn.setStyleSheet("QPushButton { background-color: #dc3545; }")
@@ -104,7 +104,7 @@ class ControlPanel(QGroupBox):
         self.reconnect_camera_btn = QPushButton("重新連接相機")
         self.reconnect_camera_btn.clicked.connect(self.reconnect_camera_requested.emit)
         camera_btn_layout.addWidget(self.reconnect_camera_btn)
-        
+
         self.disconnect_camera_btn = QPushButton("斷開相機")
         self.disconnect_camera_btn.clicked.connect(self.disconnect_camera_requested.emit)
         camera_btn_layout.addWidget(self.disconnect_camera_btn)
@@ -114,10 +114,10 @@ class ControlPanel(QGroupBox):
         self.pick_image_btn = QPushButton("選擇影像...")
         self.pick_image_btn.setStyleSheet("QPushButton { background-color: #17a2b8; }")
         self.pick_image_btn.clicked.connect(self.pick_image_requested.emit)
-        
+
         self.image_path_label = QLabel("未選擇影像；可使用相機或載入影像")
         self.image_path_label.setStyleSheet("color: #6c757d;")
-        
+
         self.clear_image_btn = QPushButton("清除影像")
         self.clear_image_btn.setEnabled(False)
         self.clear_image_btn.clicked.connect(self.clear_image_requested.emit)

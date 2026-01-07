@@ -16,9 +16,10 @@ try:
     from core.anomalib_inference_model import AnomalibInferenceModel
 except Exception:  # pragma: no cover
     AnomalibInferenceModel = None  # type: ignore
+import numpy as np
+
 from core.config import DetectionConfig
 from core.logging_config import DetectionLogger
-import numpy as np
 
 
 class InferenceEngine:
@@ -100,7 +101,7 @@ class InferenceEngine:
                     ConfigurationError,
                     HardwareError,
                     ResourceExhaustionError,
-                ) as exc:
+                ):
                     raise
                 except ModelInitializationError as exc:
                     self.logger.logger.error(
@@ -127,7 +128,7 @@ class InferenceEngine:
                     ConfigurationError,
                     HardwareError,
                     ResourceExhaustionError,
-                ) as exc:
+                ):
                     raise
                 except ModelInitializationError as exc:
                     self.logger.logger.error(
@@ -175,7 +176,7 @@ class InferenceEngine:
                     ConfigurationError,
                     HardwareError,
                     ResourceExhaustionError,
-                ) as exc:
+                ):
                     # Propagate these critical errors as is, or wrap if preferred
                     raise
                 except ModelInitializationError as exc:

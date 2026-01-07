@@ -8,12 +8,12 @@ from typing import TYPE_CHECKING
 import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from core.types import DetectionResult, DetectionStatus, DetectionItem
+from core.types import DetectionItem, DetectionResult, DetectionStatus
 
 if TYPE_CHECKING:
+    from app.gui.controller import DetectionController
     from core.detection_system import DetectionSystem
     from core.services.model_catalog import ModelCatalog
-    from app.gui.controller import DetectionController
 
 
 class DetectionWorker(QThread):
@@ -59,7 +59,7 @@ class DetectionWorker(QThread):
                     # Single shot with provided image
                     image = self._frame
                     # For single shot provided image, we stop after one iteration
-                    self.cancel() 
+                    self.cancel()
                 else:
                     # Camera capture
                     image = self._detection_system.capture_image()
@@ -81,9 +81,9 @@ class DetectionWorker(QThread):
                 # In a full refactor, system.detect should return DetectionResult directly.
                 # For now, we adapt here.
                 result_dict = self._detection_system.detect(
-                    self._product, 
-                    self._area, 
-                    self._inference_type, 
+                    self._product,
+                    self._area,
+                    self._inference_type,
                     frame=image
                 )
                 latency = time.time() - t0
@@ -103,7 +103,7 @@ class DetectionWorker(QThread):
                 for d in result_dict.get("detections", []):
                     bbox = d.get("bbox", (0.0, 0.0, 0.0, 0.0))
                     if isinstance(bbox, list):
-                        bbox = tuple(bbox)                   
+                        bbox = tuple(bbox)
                     items.append(DetectionItem(
                         label=d.get("class", "unknown"),
                         confidence=float(d.get("confidence", 0.0)),
@@ -118,13 +118,13 @@ class DetectionWorker(QThread):
                     timestamp=time.time(),
                     frame_id=frame_id,
                     image_path=result_dict.get("image_path"),
-                    metadata={k: v for k, v in result_dict.items() 
+                    metadata={k: v for k, v in result_dict.items()
                               if k not in ["detections", "status", "image_path"]}
                 )
-               
+
                 # 4. Emit Result
                 self.result_ready.emit(res)
-                
+
                 frame_id += 1
 
                 if not self._continuous and self._frame is None:
@@ -132,7 +132,7 @@ class DetectionWorker(QThread):
 
         except Exception:
             self.error_occurred.emit(traceback.format_exc())
-            
+
         finally:
             self.finished.emit()
 
@@ -169,13 +169,13 @@ class CameraInitWorker(QThread):
             # Trigger system lazy load / init
             if not self._controller.has_system():
                 _ = self._controller.detection_system
-            
-            # Explicitly call init camera if such method exists, 
+
+            # Explicitly call init camera if such method exists,
             # or rely on system init.
             # Here we assume checking connection status might trigger reconnect if auto-connect is on,
             # or we explicitly call reconnect.
             sys = self._controller.detection_system
-            
+
             # Check if camera is already connected via system status or controller check
             if not self._controller.is_camera_connected():
                 if hasattr(sys, "reconnect_camera"):

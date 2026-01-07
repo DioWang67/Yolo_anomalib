@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QPixmap, QImage
-from PyQt5.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
-from typing import Any, TYPE_CHECKING
 import cv2
 import numpy as np
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont, QImage, QPixmap
+from PyQt5.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
 
 if TYPE_CHECKING:
     from core.types import DetectionResult
@@ -139,7 +139,7 @@ class ImageViewer(QLabel):
         except Exception:
              # Handle invalid image
              self.clear()
-             self.setText(f"無法顯示影像")
+             self.setText("無法顯示影像")
 
 
 class ResultDisplayWidget(QWidget):
@@ -229,7 +229,7 @@ class ResultDisplayWidget(QWidget):
                 cls = item.label
                 conf = item.confidence
                 pos_status = item.metadata.get("position_status")
-                
+
                 parts = [f"{idx}. {cls}"]
                 parts.append(f"conf={conf:.3f}")
                 if pos_status:

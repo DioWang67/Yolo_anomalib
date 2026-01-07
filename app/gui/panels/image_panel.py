@@ -1,5 +1,6 @@
-from PyQt5.QtWidgets import QGroupBox, QTabWidget, QVBoxLayout, QWidget
 import numpy as np
+from PyQt5.QtWidgets import QGroupBox, QTabWidget, QVBoxLayout, QWidget
+
 from app.gui.widgets import ImageViewer
 
 
@@ -15,7 +16,7 @@ class ImagePanel(QGroupBox):
     def _setup_ui(self) -> None:
         layout = QVBoxLayout()
         self.image_tabs = QTabWidget()
-        
+
         self.original_image = ImageViewer("原始影像")
         self.image_tabs.addTab(self.original_image, "原始")
 
@@ -37,9 +38,9 @@ class ImagePanel(QGroupBox):
         # Using the fact that ImageViewer inherits QLabel and we can probably setText or something if we expose it
         # But ImageViewer has set_image and no clear method in previous code, let's assume we can clear them.
         # Looking at widgets.py, ImageViewer inherits QLabel. clear() is a QLabel method.
-        # But widgets.py ImageViewer sets text in init. 
+        # But widgets.py ImageViewer sets text in init.
         # Let's verify widgets.py content in my mind.. yes it has set_image.
-        # I'll just clear the text or set to default. 
+        # I'll just clear the text or set to default.
         # Actually in main_window.py lines 424-426 calling .clear() which is QLabel's clear.
         self.original_image.clear()
         self.processed_image.clear()

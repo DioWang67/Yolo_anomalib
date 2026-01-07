@@ -1,8 +1,10 @@
 import json
-import pytest
+
 import numpy as np
-from pathlib import Path
+import pytest
+
 from core.stats_color_checker import StatsColorChecker
+
 
 @pytest.fixture
 def dummy_stats_json(tmp_path):
@@ -38,12 +40,12 @@ def test_load_stats_from_json(dummy_stats_json):
 def test_check_solid_color(dummy_stats_json):
     """測試對純色圖像進行顏色檢查"""
     checker = StatsColorChecker.from_json(str(dummy_stats_json))
-    
+
     # Create a solid green image (HSV: 60, 255, 255)
     # Green in BGR is (0, 255, 0)
     green_bgr = np.zeros((20, 20, 3), dtype=np.uint8)
-    green_bgr[:, :, 1] = 255 
-    
+    green_bgr[:, :, 1] = 255
+
     result = checker.check(green_bgr, allowed_colors=["target_green"])
     assert result.best_color == "target_green"
     assert result.is_ok == True
@@ -54,7 +56,7 @@ def test_check_unsupported_color(dummy_stats_json):
     # Use uint8 for black image
     img = np.zeros((10, 10, 3), dtype=np.uint8)
     result = checker.check(img, allowed_colors=["blue"])
-    
+
     # Fallback to all. All zeros image will match 'black'.
     assert result.best_color == "black"
     assert result.is_ok == True

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QGroupBox, QTextEdit, QVBoxLayout, QWidget
-from typing import TYPE_CHECKING
+
 from app.gui.widgets import BigStatusLabel, ResultDisplayWidget
 
 if TYPE_CHECKING:
@@ -52,7 +54,7 @@ class InfoPanel(QWidget):
     def update_result(self, result: DetectionResult) -> None:
         """Update all status indicators with the new result."""
         self.result_widget.update_result(result)
-        
+
         # Also update the big status label here for convenience/redundancy
         # although MainWindow also does it. It's good practice for the panel
         # to manage its sub-components if possible, but we'll stick to the

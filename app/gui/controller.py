@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
-import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from app.gui.workers import DetectionWorker, ModelLoaderWorker, CameraInitWorker
+from app.gui.workers import CameraInitWorker, DetectionWorker, ModelLoaderWorker
 
 if TYPE_CHECKING:  # pragma: no cover
     from core.services.model_catalog import ModelCatalog
@@ -101,10 +100,10 @@ class DetectionController:
         """Creates a detection worker with injected system."""
         system = self.detection_system
         return DetectionWorker(
-            detection_system=system, 
+            detection_system=system,
             product=product,
-            area=area, 
-            inference_type=inference_type, 
+            area=area,
+            inference_type=inference_type,
             frame=frame,
             continuous=continuous
         )
