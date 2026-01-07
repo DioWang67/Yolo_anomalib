@@ -425,6 +425,9 @@ pytest tests/test_security.py -v
 
 # 8. 測試修復 (New)
 [Hash] fix(tests): resolve pytest-qt plugin conflict and fix collection error
+
+# 9. CI 遷移 (New)
+[Hash] ci: complete migration to Python 3.11 for all jobs (lint, build)
 ```
 
 所有計劃中的變更以及緊急的 CI/Test 修復都已成功提交。
