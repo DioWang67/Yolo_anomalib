@@ -94,7 +94,7 @@ graph TD
     
 3.  **`InfoPanel`**:
     *   **用途**: 右側資訊區。
-    *   **內容**: `BigStatusLabel` (PASS/FAIL 大燈號)、`StatusWidget` (系統狀態)、`ResultDisplayWidget` (詳細數據)、日誌視窗。
+    *   **內容**: `BigStatusLabel` (PASS/FAIL 大燈號)、系統狀態顯示整合、`ResultDisplayWidget` (詳細數據)、日誌視窗。
 
 ### 3.3 `DetectionController` (Controller)
 *   **檔案**: `app/gui/controller.py`
