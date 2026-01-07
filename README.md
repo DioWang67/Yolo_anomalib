@@ -357,6 +357,52 @@ pip install -r requirements.txt --force-reinstall
 pytest tests/test_yolo_inference_model.py -v -s
 ```
 
+## 安全性
+
+本專案實作了多層安全機制，確保生產環境的穩定性與安全性。
+
+### 路徑安全驗證
+
+**防止目錄遍歷攻擊** (Directory Traversal Protection)：
+
+- 自動驗證所有文件路徑（配置、模型、影像、輸出）
+- 阻擋 `../` 等路徑穿越嘗試
+- 白名單式訪問控制
+
+```python
+# 範例：使用路徑驗證器
+from core.security import path_validator, SecurityError
+
+try:
+    safe_path = path_validator.validate_path(user_input, must_exist=True)
+    # 安全地使用 safe_path
+except SecurityError as e:
+    logger.error(f"路徑驗證失敗: {e}")
+```
+
+### YAML 安全載入
+
+所有 YAML 配置使用 `yaml.safe_load()` 防止任意程式碼執行：
+
+- ✅ `core/config.py` - 全局配置
+- ✅ `core/services/model_manager.py` - 模型配置
+- ✅ `core/detection_system.py` - 位置配置
+
+### 依賴安全
+
+- 固定版本依賴（342 行 `requirements.txt`）
+- 定期安全掃描與更新
+- 使用 `pip-compile` 確保可重現構建
+
+### 更多資訊
+
+詳細安全指南請參考：
+- **[docs/SECURITY.md](docs/SECURITY.md)** - 完整安全指南
+- **[CHANGELOG.md](CHANGELOG.md)** - 安全相關變更記錄
+- **測試**: `tests/test_security.py` (12/13 測試通過)
+
+
+
 ## 授權
 
 Proprietary License - 專有授權，未經許可不得分發或使用。

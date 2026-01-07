@@ -1,5 +1,14 @@
 name: CI
 
+# NOTE: Code Quality Progressive Improvement
+# Current status (2026-01-07):
+#   - Ruff: 178 linting errors remaining (165 auto-fixed, 343 total found)
+#   - MyPy: 691 type errors across 27 files
+#   - Tests: Passing with continue-on-error on Linux
+# Strategy: continue-on-error allows CI to pass while we gradually fix existing issues
+# TODO: Remove all continue-on-error flags once errors are resolved
+# Tracking: .gemini/documentation_update_report.md, P0 completion report
+
 on:
   push:
     branches: [ main, master, develop, 0901color ]

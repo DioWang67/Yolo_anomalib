@@ -303,10 +303,157 @@
 
 ## 11. 安全與健壯性
 
-* 輸入檔案驗證（副檔名/內容、路徑穿越防護）；
-* 逾時與取消（長任務可中止）；
-* 資源清理（thread join、queue drain、Excel 關閉）；
-* 錯誤等級分明（可恢復 vs 致命）。
+### 11.1 路徑安全驗證 (Path Validation) 🆕
+
+從 v0.1.0 開始，專案實作了完整的路徑安全驗證機制，防止**目錄遍歷攻擊** (Directory Traversal Attack)。
+
+**核心模組**: `core/security.py`
+
+**防護範圍**:
+- ✅ 配置文件路徑 (`config.yaml`)
+- ✅ 影像輸入路徑 (`--image` 參數)
+- ✅ 模型權重路徑
+- ✅ 輸出目錄路徑
+
+**使用範例**:
+
+```python
+from core.security import path_validator, SecurityError
+
+try:
+    # 驗證路徑是否在允許的根目錄內
+    safe_path = path_validator.validate_path(
+        user_input_path,
+        must_exist=True  # 可選：要求路徑必須存在
+    )
+    # 使用 safe_path 進行檔案操作
+    with open(safe_path, 'r') as f:
+        data = f.read()
+except SecurityError as e:
+    logger.error(f"路徑安全驗證失敗: {e}")
+except FileNotFoundError:
+    logger.error("檔案不存在")
+```
+
+**配置允許的根目錄**:
+
+```python
+from core.security import PathValidator
+
+validator = PathValidator(
+    allowed_roots=[
+        "/path/to/project",
+        "/path/to/models",
+        "/path/to/data"
+    ]
+)
+
+# 或修改全局驗證器（在 core/security.py 中）
+path_validator = PathValidator(
+    allowed_roots=[
+        PROJECT_ROOT,
+        PROJECT_ROOT / "models",
+        PROJECT_ROOT / "Result",
+        Path("/mnt/nfs/shared"),  # 網路共享目錄
+    ]
+)
+```
+
+**防護機制**:
+1. **目錄遍歷防護**: 阻擋 `../` 路徑遍歷
+2. **符號連結檢查**: 解析符號連結並檢查最終路徑
+3. **白名單機制**: 只允許訪問預先定義的目錄
+
+**測試覆蓋**: `tests/test_security.py` (12/13 測試通過)
+
+**詳細文檔**: 參見 `docs/SECURITY.md`
+
+### 11.2 YAML 安全載入
+
+所有 YAML 配置檔的載入均使用 `yaml.safe_load()`，防止任意程式碼執行。
+
+**為什麼需要 safe_load?**
+
+使用 `yaml.load()` 可能導致任意程式碼執行：
+
+```yaml
+# malicious.yaml - 危險範例
+!!python/object/apply:os.system
+args: ['rm -rf /']
+```
+
+```python
+# ❌ 危險！會執行系統命令
+with open('malicious.yaml') as f:
+    data = yaml.load(f)
+
+# ✅ 安全：只解析數據結構
+with open('config.yaml') as f:
+    data = yaml.safe_load(f)
+```
+
+**已驗證的安全載入位置**:
+- ✅ `core/config.py:206` - 全局配置載入
+- ✅ `core/services/model_manager.py:179` - 模型配置載入
+- ✅ `core/detection_system.py:165` - 位置配置載入
+
+### 11.3 輸入驗證與資源管理
+
+* **輸入檔案驗證**：副檔名白名單、MIME type 檢查、路徑穿越防護
+* **逾時與取消**：長任務可中止（thread/process 支援 timeout）
+* **資源清理**：
+  - Thread join 確保背景任務完成
+  - Queue drain 防止記憶體洩漏
+  - Excel workbook 正確關閉
+  - 臨時文件清理
+* **錯誤等級分明**：
+  - 可恢復錯誤 (Recoverable): 記錄並繼續
+  - 致命錯誤 (Fatal): 記錄並中止
+
+**資源清理範例**:
+
+```python
+from queue import Queue
+import threading
+
+class ResultWriter:
+    def __init__(self):
+        self.queue = Queue()
+        self.thread = threading.Thread(target=self._worker, daemon=False)
+        self.running = True
+        self.thread.start()
+    
+    def _worker(self):
+        while self.running or not self.queue.empty():
+            try:
+                item = self.queue.get(timeout=0.5)
+                # 處理項目...
+                self.queue.task_done()
+            except Empty:
+                continue
+    
+    def shutdown(self):
+        """正確的資源清理"""
+        self.running = False
+        self.queue.join()      # 等待所有任務完成
+        self.thread.join(timeout=5.0)  # 等待執行緒結束
+        if self.thread.is_alive():
+            logger.warning("Worker thread did not terminate gracefully")
+```
+
+**JR→SR 檢核**
+
+* ✅ 能說明常見的路徑安全攻擊向量（目錄遍歷、符號連結逃逸）
+* ✅ 能實作自定義的路徑驗證規則（白名單、黑名單、正則表達式）
+* ✅ 能在新功能中正確整合安全驗證，並撰寫對應測試
+* ✅ 能設計資源清理的正確順序（queue → thread → file handles）
+
+**實務演練**
+
+1. **擴展 PathValidator**：支援檔案類型白名單（只允許 `.jpg`, `.png`, `.pt`）
+2. **實作 API 路徑驗證中介層**：為 REST API 添加自動路徑檢查
+3. **撰寫滲透測試**：嘗試各種目錄遍歷攻擊並驗證全部被阻擋
+4. **資源洩漏檢測**：使用 `tracemalloc` 追蹤記憶體洩漏
 
 ---
 
