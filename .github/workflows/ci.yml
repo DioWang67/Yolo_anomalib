@@ -54,7 +54,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ['3.10', '3.11']
+        python-version: ['3.11'] # NOTE: requirements.txt is pinned for 3.11
     
     steps:
     - uses: actions/checkout@v3
