@@ -3,7 +3,6 @@ import pytest
 pytest.importorskip("PyQt5", reason="PyQt5 is required for GUI tests")
 pytest.importorskip("pytestqt", reason="pytest-qt is required for GUI tests")
 pytestmark = pytest.mark.gui
-pytest_plugins = ["pytestqt.plugin"]
 
 from app.gui.main_window import DetectionSystemGUI
 
