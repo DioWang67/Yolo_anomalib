@@ -529,9 +529,6 @@ class DetectionSystemGUI(QMainWindow):
         self.worker.image_ready.connect(self.on_image_ready)
         self.worker.error_occurred.connect(self.on_detection_error)
         self.worker.start()
-        
-        # Update version label when detection starts
-        self._update_version_label(product, area, inference_type)
 
     def stop_detection(self):
         """停止檢測"""
@@ -568,6 +565,13 @@ class DetectionSystemGUI(QMainWindow):
         # Update big status
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status(result.status)
+        
+        # Update version label after model is loaded
+        if result.metadata:
+            product = result.metadata.get("product") or self.product_combo.currentText()
+            area = result.metadata.get("area") or self.area_combo.currentText()
+            inference_type = result.metadata.get("inference_type") or self.inference_combo.currentText()
+            self._update_version_label(product, area, inference_type)
 
         # 更新結果顯示
         self.info_panel.update_result(result)
