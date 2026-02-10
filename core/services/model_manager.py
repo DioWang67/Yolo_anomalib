@@ -12,6 +12,14 @@ from core.config_validation import validate_model_cfg
 from core.inference_engine import InferenceEngine
 from core.logging_config import DetectionLogger
 from core.path_utils import project_root, resolve_path
+from core.version_utils import (
+    ModelVersionError,
+    check_compatibility,
+    find_latest_version,
+    parse_model_version,
+    parse_version_string,
+    version_to_string,
+)
 
 # Repository root (two levels up from core/services)
 # Determine repository root (can be overridden by YOLO11_ROOT env var)
@@ -208,6 +216,9 @@ class ModelManager:
         model_cfg_dir = Path(model_config_path).resolve().parent
         self._apply_model_config(base_config, cfg, context, model_cfg_dir=model_cfg_dir)
 
+        # Version validation (if model uses versioned naming)
+        self._validate_model_version(base_config, cfg, product, area, inference_type)
+
         engine = InferenceEngine(base_config)
         if not engine.initialize():
             raise RuntimeError("Inference engine init failed")
@@ -231,3 +242,59 @@ class ModelManager:
             )
 
         return engine, base_config
+
+    def _validate_model_version(
+        self,
+        config: DetectionConfig,
+        model_cfg: dict,
+        product: str,
+        area: str,
+        inference_type: str,
+    ) -> None:
+        """Validate model version compatibility.
+
+        Args:
+            config: DetectionConfig with weights path
+            model_cfg: Model-specific config dict
+            product: Product name
+            area: Area name
+            inference_type: Inference type (yolo/anomalib)
+
+        Raises:
+            ModelVersionError: If version is incompatible
+        """
+        weights_path = getattr(config, "weights", None)
+        if not weights_path:
+            return
+
+        # Parse version from filename
+        current_version = parse_model_version(weights_path)
+        if not current_version:
+            # Legacy non-versioned model, skip validation
+            return
+
+        # Check minimum supported version (if specified in config)
+        min_version_str = model_cfg.get("min_supported_version")
+        if min_version_str:
+            try:
+                min_version = parse_version_string(min_version_str)
+                if not check_compatibility(current_version, min_version):
+                    raise ModelVersionError(
+                        f"Model version {version_to_string(current_version)} "
+                        f"is below minimum supported version {min_version_str} "
+                        f"for {product}/{area}/{inference_type}"
+                    )
+                self.logger.logger.info(
+                    f"Model version validated: {version_to_string(current_version)} "
+                    f">= {min_version_str} for {product}/{area}/{inference_type}"
+                )
+            except ValueError as e:
+                self.logger.logger.warning(
+                    f"Invalid min_supported_version format: {min_version_str}: {e}"
+                )
+        else:
+            # Just log the version
+            self.logger.logger.info(
+                f"Loaded model version: {version_to_string(current_version)} "
+                f"for {product}/{area}/{inference_type}"
+            )
