@@ -313,6 +313,7 @@ LED:
 ## 文檔
 
 - 📖 [技術深度指南](docs/TECH_GUIDE.md) - 1153 行從 JR 到 SR 的完整教學
+- 🏷️ [模型版本管理指南](docs/MODEL_VERSION_GUIDE.md) - Git LFS + 語義化版本命名
 - 📝 配置範本：`config.example.yaml`
 - 🧪 測試範例：`tests/` 目錄
 
