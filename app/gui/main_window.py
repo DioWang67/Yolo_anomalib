@@ -60,6 +60,7 @@ class DetectionSystemGUI(QMainWindow):
         self.use_camera_chk = None
         self.reconnect_camera_btn = None
         self.disconnect_camera_btn = None
+        self.model_version_label = None  # Status bar version display
         # Models base path and settings
         self._project_root = Path(__file__).resolve().parents[2]
         self._config_path = self._project_root / "config.yaml"
@@ -228,6 +229,14 @@ class DetectionSystemGUI(QMainWindow):
 
         self.control_panel.pick_image_requested.connect(self.pick_image)
         self.control_panel.clear_image_requested.connect(self.clear_selected_image)
+        
+        # Add model version label to status bar (permanent widget on the right)
+        self.model_version_label = QLabel("模型版本: --")
+        self.model_version_label.setStyleSheet(
+            "padding: 2px 8px; color: #6c757d; font-size: 11px; border-left: 1px solid #dee2e6;"
+        )
+        self.statusBar().addPermanentWidget(self.model_version_label)
+        
         self.statusBar().showMessage("系統就緒")
         self.update_start_enabled()
         build_menu_bar(self)
@@ -520,6 +529,9 @@ class DetectionSystemGUI(QMainWindow):
         self.worker.image_ready.connect(self.on_image_ready)
         self.worker.error_occurred.connect(self.on_detection_error)
         self.worker.start()
+        
+        # Update version label when detection starts
+        self._update_version_label(product, area, inference_type)
 
     def stop_detection(self):
         """停止檢測"""
@@ -801,6 +813,42 @@ class DetectionSystemGUI(QMainWindow):
         except Exception:
             pass
         event.accept()
+    
+    def _update_version_label(self, product: str, area: str, inference_type: str) -> None:
+        """Update the model version display in status bar."""
+        if not self.model_version_label:
+            return
+        
+        try:
+            # Try to get version from detection system's loaded model
+            if self.detection_system and hasattr(self.detection_system, "model_manager"):
+                manager = self.detection_system.model_manager
+                cache_key = (product, area)
+                
+                # Check if model is cached
+                if hasattr(manager, "_cache") and cache_key in manager._cache:
+                    cached = manager._cache[cache_key].get(inference_type)
+                    if cached:
+                        _, config = cached
+                        weights = getattr(config, "weights", "")
+                        if weights:
+                            # Extract version from filename using version_utils
+                            from core.version_utils import parse_model_version, version_to_string
+                            version = parse_model_version(weights)
+                            if version:
+                                version_str = version_to_string(version)
+                                self.model_version_label.setText(f"模型版本: v{version_str}")
+                                self.model_version_label.setToolTip(
+                                    f"當前載入模型:\n{product}/{area}/{inference_type}\n版本: v{version_str}"
+                                )
+                                return
+            
+            # Fallback: show model info without version
+            self.model_version_label.setText(f"{product}/{area}")
+            self.model_version_label.setToolTip(f"{product}/{area}/{inference_type}")
+        except Exception as e:
+            self._logger.debug(f"Failed to update version label: {e}")
+            self.model_version_label.setText("模型版本: --")
 
 def main():
     """Main entry point."""
