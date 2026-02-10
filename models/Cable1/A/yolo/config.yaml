@@ -70,3 +70,6 @@ position_config:
 enable_color_check: true
 color_checker_type: stats
 color_model_path: "D:/Git/robotlearning/yolo11_inference/models/Cable1/A/yolo/color_stats.json"  # color_verifier summary JSON
+
+# Model version (added by migration)
+model_version: "1.0.0"

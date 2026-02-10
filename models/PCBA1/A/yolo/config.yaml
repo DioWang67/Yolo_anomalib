@@ -47,3 +47,5 @@ position_config:
         J6:   { x1: 200, y1: 250, x2: 320, y2: 380 }
         J7:   { x1: 430, y1: 270, x2: 580, y2: 400 }
 
+# Model version (added by migration)
+model_version: "1.0.0"

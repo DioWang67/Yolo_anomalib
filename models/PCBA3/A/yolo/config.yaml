@@ -51,3 +51,6 @@ position_config:
           x2: 531
           y2: 393
       imgsz: 640
+
+# Model version (added by migration)
+model_version: "1.0.0"
