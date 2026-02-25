@@ -23,12 +23,14 @@ REM === 執行 PyInstaller 打包（一定要用指定 env 的 python） ===
   --onefile ^
   --console ^
   --add-data "%SOURCE_PATH%\config.yaml;." ^
+  --add-data "%SOURCE_PATH%\config.example.yaml;." ^
   --add-data "%SOURCE_PATH%\Runtime;Runtime/" ^
   --add-data "%SOURCE_PATH%\MvImport;MvImport/" ^
   --add-data "%SOURCE_PATH%\models;models/" ^
   --add-data "%SOURCE_PATH%\core;core/" ^
   --add-data "%SOURCE_PATH%\camera;camera/" ^
   --add-data "%SOURCE_PATH%\app;app/" ^
+  --add-data "%SOURCE_PATH%\tools;tools/" ^
   --add-data "%SOURCE_PATH%\GUI.py;." ^
   --add-data "%SOURCE_PATH%\README.md;." ^
   --hidden-import torch ^
@@ -40,7 +42,25 @@ REM === 執行 PyInstaller 打包（一定要用指定 env 的 python） ===
   --hidden-import kornia ^
   --hidden-import anomalib ^
   --hidden-import lightning ^
+  --hidden-import PyQt5 ^
+  --hidden-import PyQt5.QtCore ^
+  --hidden-import PyQt5.QtGui ^
+  --hidden-import PyQt5.QtWidgets ^
+  --hidden-import ultralytics ^
+  --hidden-import pandas ^
+  --hidden-import openpyxl ^
+  --hidden-import yaml ^
+  --hidden-import pydantic ^
+  --hidden-import tqdm ^
+  --hidden-import timm ^
+  --hidden-import einops ^
+  --hidden-import FrEIA ^
+  --hidden-import PIL ^
+  --hidden-import imgaug ^
   --collect-submodules anomalib.models ^
+  --collect-submodules ultralytics ^
+  --collect-submodules PyQt5 ^
+  --collect-submodules lightning ^
   --collect-all kornia ^
   --collect-data anomalib ^
   --collect-data open_clip ^
