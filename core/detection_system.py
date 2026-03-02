@@ -522,6 +522,7 @@ class DetectionSystem:
                 ckpt_path=result.get("ckpt_path", ""),
                 anomaly_score=result.get("anomaly_score"),
                 missing_items=result.get("missing_items", []),
+                unexpected_items=result.get("unexpected_items", []),
                 original_image_path=save_res.get("original_path", ""),
                 preprocessed_image_path=save_res.get("preprocessed_path", ""),
                 annotated_path=save_res.get("annotated_path", ""),

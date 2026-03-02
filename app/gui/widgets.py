@@ -176,14 +176,14 @@ class ResultDisplayWidget(QWidget):
 
     def update_result(self, result: DetectionResult) -> None:
         """Render detection result details into the text panel."""
-        # Use metadata for product-specific info if available
-        meta = result.metadata
-        product = meta.get("product", "N/A")
-        area = meta.get("area", "N/A")
-        inference_type = meta.get("inference_type", "N/A")
-        ckpt_name = meta.get("ckpt_name", "N/A")
+        import os
 
-        lines = []
+        product = result.product or "N/A"
+        area = result.area or "N/A"
+        inference_type = result.inference_type or "N/A"
+        ckpt_name = os.path.basename(result.ckpt_path) if result.ckpt_path else "N/A"
+
+        lines: list[str] = []
         lines.append("=== 檢測摘要 ===")
         lines.append(f"狀態: {result.status}")
         lines.append(f"產品 / 區域: {product} / {area}")
@@ -194,21 +194,18 @@ class ResultDisplayWidget(QWidget):
         lines.append("\n=== 數據 ===")
         lines.append(f"偵測數量: {len(result.items)}")
 
-        anomaly_score = meta.get("anomaly_score")
-        if anomaly_score is not None:
-            lines.append(f"異常分數: {anomaly_score}")
+        if result.anomaly_score is not None:
+            lines.append(f"異常分數: {result.anomaly_score}")
 
-        missing = meta.get("missing_items") or []
-        if isinstance(missing, (list, tuple)):
-            lines.append(f"缺失項目: {len(missing)}")
-        else:
-            lines.append(f"缺失項目: {missing}")
+        missing = result.missing_items or []
+        lines.append(f"缺失項目: {len(missing)}")
 
-        unexpected = meta.get("unexpected_items") or []
+        unexpected = result.unexpected_items or []
         if isinstance(unexpected, (list, tuple)):
             lines.append(f"未預期項目: {len(unexpected)}")
 
-        seq_check = meta.get("sequence_check")
+        # --- 排列檢查 ---
+        seq_check = result.sequence_check
         if seq_check:
             is_ok = seq_check.get("is_ok", True)
             status_str = "PASS" if is_ok else "FAIL"
@@ -222,6 +219,29 @@ class ResultDisplayWidget(QWidget):
                 lines.append(f"  ↳ 預期順序: {seq_check.get('expected')}")
                 lines.append(f"  ↳ 實際順序: {seq_check.get('observed')}")
 
+        # --- 顏色檢測 ---
+        color_info = result.color_check
+        if color_info:
+            color_ok = color_info.get("is_ok", True)
+            color_status = "PASS" if color_ok else "FAIL"
+            lines.append(f"\n=== 顏色檢測: {color_status} ===")
+            color_items = color_info.get("items") or []
+            for ci in color_items:
+                ci_ok = "✔" if ci.get("is_ok", True) else "✘"
+                ci_class = ci.get("class_name", "?")
+                ci_pred = ci.get("best_color", "?")
+                ci_diff = ci.get("diff", 0)
+                ci_thr = ci.get("threshold", 0)
+                lines.append(
+                    f"  {ci_ok} {ci_class} → {ci_pred}"
+                    f" (diff={ci_diff:.2f}, thr={ci_thr:.2f})"
+                )
+            if not color_items:
+                lines.append("  (無細節)")
+        else:
+            lines.append("\n=== 顏色檢測: 未執行 ===")
+
+        # --- 缺失列表 ---
         lines.append("\n=== 缺失列表 ===")
         if missing:
             for item in missing:
@@ -229,6 +249,7 @@ class ResultDisplayWidget(QWidget):
         else:
             lines.append("無")
 
+        # --- 未預期項目 ---
         lines.append("\n=== 未預期項目 ===")
         if unexpected:
             for item in unexpected:
@@ -236,10 +257,10 @@ class ResultDisplayWidget(QWidget):
         else:
             lines.append("無")
 
+        # --- 偵測細節 ---
         if result.items:
             lines.append("\n=== 偵測細節 (前 5 筆) ===")
             for idx, item in enumerate(result.items[:5], start=1):
-                # Map DetectionItem fields
                 cls = item.label
                 conf = item.confidence
                 pos_status = item.metadata.get("position_status")

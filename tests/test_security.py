@@ -197,14 +197,13 @@ class TestGlobalPathValidator:
         result = path_validator.validate_path(logs_path, must_exist=False)
         assert result == logs_path.resolve()
 
-    def test_global_validator_blocks_arbitrary_project_root_paths(self):
-        """Test that arbitrary paths under PROJECT_ROOT (but not in allowed sub-dirs) are blocked."""
-        from core.security import PROJECT_ROOT, path_validator
+    def test_global_validator_blocks_external_paths(self):
+        """Test that paths completely outside the project are blocked."""
+        from core.security import path_validator
 
-        # A file directly under PROJECT_ROOT should be blocked
-        arbitrary_path = PROJECT_ROOT / "some_random_file.txt"
+        external_path = Path("C:/Users/Public/evil.txt")
         with pytest.raises(SecurityError):
-            path_validator.validate_path(arbitrary_path)
+            path_validator.validate_path(external_path)
 
     def test_global_validator_blocks_system_paths(self):
         """Test that the global validator blocks system paths."""

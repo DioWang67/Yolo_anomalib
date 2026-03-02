@@ -54,6 +54,7 @@ class DetectionResult:
 
     # --- Pipeline outputs ---
     missing_items: list[str] = field(default_factory=list)
+    unexpected_items: list[str] = field(default_factory=list)
     color_check: dict[str, Any] | None = None
     sequence_check: dict[str, Any] | None = None
 
