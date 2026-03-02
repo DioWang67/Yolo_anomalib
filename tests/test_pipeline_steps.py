@@ -145,6 +145,7 @@ class TestSaveResultsStep:
             area=base_context.area,
             ckpt_path=None,
             color_result=base_context.color_result,
+            sequence_check=None,
         )
 
     def test_run_handles_anomalib_parameters_correctly(self, mock_env, base_context):
@@ -174,6 +175,7 @@ class TestSaveResultsStep:
             product=base_context.product,
             area=base_context.area,
             color_result=None,
+            sequence_check=None,
         )
 
     def test_run_with_save_disabled_does_not_call_sink(self, mock_env, base_context):

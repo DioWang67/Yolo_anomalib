@@ -108,6 +108,7 @@ PROJECT_ROOT = project_root()
 
 path_validator = PathValidator(
     allowed_roots=[
+        PROJECT_ROOT,              # Config files at project root (config.yaml)
         PROJECT_ROOT / "models",   # Model weights directory
         PROJECT_ROOT / "Result",   # Output directory
         PROJECT_ROOT / "Runtime",  # Runtime directory
