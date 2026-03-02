@@ -173,9 +173,9 @@ def _mk_system(monkeypatch, tmp_result_dir):
 def test_detect_calls_flush_yolo(monkeypatch, tmp_result_dir):
     sys, sink = _mk_system(monkeypatch, tmp_result_dir)
     out = sys.detect("P", "A", "yolo")
-    assert out["status"] in ("PASS", "FAIL", "ERROR")
+    assert out.status in ("PASS", "FAIL", "ERROR")
     assert sink.flushed == 1
-    assert "error" in out
+    assert out.error is None or isinstance(out.error, str)
     assert len(sink.saved) == 1
 
 
@@ -184,9 +184,9 @@ def test_detect_calls_flush_anomalib(monkeypatch, tmp_result_dir):
     monkeypatch.setattr(os.path, "exists", lambda p: False, raising=True)
     sys, sink = _mk_system(monkeypatch, tmp_result_dir)
     out = sys.detect("P", "A", "anomalib")
-    assert out["status"] in ("PASS", "FAIL", "ERROR")
+    assert out.status in ("PASS", "FAIL", "ERROR")
     assert sink.flushed == 1
-    assert "error" in out
+    assert out.error is None or isinstance(out.error, str)
     assert len(sink.saved) == 1
 
 
@@ -194,6 +194,7 @@ def test_detect_flush_on_failure(monkeypatch, tmp_result_dir):
     sys, sink = _mk_system(monkeypatch, tmp_result_dir)
     sys.model_manager.engine.force_fail = True
     out = sys.detect("P", "A", "yolo")
-    assert out["status"] == "FAIL"
+    assert out.status == "FAIL"
     assert sink.flushed == 1
     assert len(sink.saved) == 1
+

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from core.types import DetectionItem, DetectionResult, DetectionStatus
+from core.types import DetectionResult
 
 if TYPE_CHECKING:
     from app.gui.controller import DetectionController
@@ -72,58 +72,17 @@ class DetectionWorker(QThread):
                 # 1. Emit Image immediately for UI Preview
                 self.image_ready.emit(image)
 
-                # 2. Run Detection
-                t0 = time.time()
-                # Assuming system.detect still returns dict for now, we wrap it.
-                # In a full refactor, system.detect should return DetectionResult directly.
-                # For now, we adapt here.
-                # Assuming system.detect still returns dict for now, we wrap it.
-                # In a full refactor, system.detect should return DetectionResult directly.
-                # For now, we adapt here.
-                result_dict = self._detection_system.detect(
+                # 2. Run Detection — returns DetectionResult directly
+                result = self._detection_system.detect(
                     self._product,
                     self._area,
                     self._inference_type,
                     frame=image
                 )
-                latency = time.time() - t0
+                result.frame_id = frame_id
 
-                # 3. Adapt to Strong Types
-                status_str = result_dict.get("status", "ERROR")
-                # Map string to Literal safely
-                status: DetectionStatus
-                if status_str == "PASS":
-                    status = "PASS"
-                elif status_str == "FAIL":
-                    status = "FAIL"
-                else:
-                    status = "ERROR"
-
-                items = []
-                for d in result_dict.get("detections", []):
-                    bbox = d.get("bbox", (0.0, 0.0, 0.0, 0.0))
-                    if isinstance(bbox, list):
-                        bbox = tuple(bbox)
-                    items.append(DetectionItem(
-                        label=d.get("class", "unknown"),
-                        confidence=float(d.get("confidence", 0.0)),
-                        bbox_xyxy=bbox,
-                        metadata=d # Keep raw dict in metadata if needed
-                    ))
-
-                res = DetectionResult(
-                    status=status,
-                    items=items,
-                    latency=latency,
-                    timestamp=time.time(),
-                    frame_id=frame_id,
-                    image_path=result_dict.get("image_path"),
-                    metadata={k: v for k, v in result_dict.items()
-                              if k not in ["detections", "status", "image_path"]}
-                )
-
-                # 4. Emit Result
-                self.result_ready.emit(res)
+                # 3. Emit Result
+                self.result_ready.emit(result)
 
                 frame_id += 1
 

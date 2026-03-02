@@ -572,19 +572,17 @@ class DetectionSystemGUI(QMainWindow):
             self.big_status_label.set_status(result.status)
         
         # Update version label after model is loaded
-        if result.metadata:
-            product = result.metadata.get("product") or self.product_combo.currentText()
-            area = result.metadata.get("area") or self.area_combo.currentText()
-            inference_type = result.metadata.get("inference_type") or self.inference_combo.currentText()
-            self._update_version_label(product, area, inference_type)
+        product = result.product or self.product_combo.currentText()
+        area = result.area or self.area_combo.currentText()
+        inference_type = result.inference_type or self.inference_combo.currentText()
+        self._update_version_label(product, area, inference_type)
 
         # 更新結果顯示
         self.info_panel.update_result(result)
 
-        # 顯示圖像
-        # Original and Preprocessed images should be paths if saved
-        original_path = result.metadata.get("original_image_path") or result.image_path
-        preprocessed_path = result.metadata.get("preprocessed_image_path")
+        # 顯示圖像 — use explicit attributes instead of metadata.get()
+        original_path = result.original_image_path or result.image_path
+        preprocessed_path = result.preprocessed_image_path
 
         load_image_with_retry(
             self.original_image,
@@ -598,11 +596,11 @@ class DetectionSystemGUI(QMainWindow):
         )
 
         # For result image, we favor finding annotations or heatmap paths
-        annotated_path = result.metadata.get("annotated_path")
-        heatmap_path = result.metadata.get("heatmap_path")
+        annotated_path = result.annotated_path
+        heatmap_path = result.heatmap_path
 
-        # Check if result frame data is available in metadata to save temp file
-        result_frame_data = result.metadata.get("result_frame")
+        # Check if result frame data is available
+        result_frame_data = result.result_frame
 
         def show_result_frame_data():
             if isinstance(result_frame_data, np.ndarray) and result_frame_data.size > 0:

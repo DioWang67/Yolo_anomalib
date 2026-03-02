@@ -77,7 +77,7 @@ def run_cli(system) -> None:
             result = system.detect(product, area, inference_type)
             from core.format_result import format_detection_result
             print(format_detection_result(result))
-            if result.get("status") == "ERROR":
+            if result.status == "ERROR":
                 continue
 
         except KeyboardInterrupt:

@@ -162,16 +162,16 @@ def test_yolo_and_anomalib_end_to_end(monkeypatch, tmp_path):
 
     frame = np.zeros((8, 8, 3), dtype=np.uint8)
     yolo_result = system.detect("Widget", "A", "yolo", frame=frame.copy())
-    assert yolo_result["status"] == "PASS"
-    assert yolo_result["product"] == "Widget"
-    assert yolo_result["area"] == "A"
-    assert yolo_result["detections"][0]["class"] == "Widget"
+    assert yolo_result.status == "PASS"
+    assert yolo_result.product == "Widget"
+    assert yolo_result.area == "A"
+    assert yolo_result.detections[0]["class"] == "Widget"
 
     anomalib_result = system.detect(
         "Widget", "A", "anomalib", frame=frame.copy())
-    assert anomalib_result["status"] == "PASS"
-    assert pytest.approx(anomalib_result["anomaly_score"], rel=1e-6) == 0.2
-    assert anomalib_result["heatmap_path"] == "anomalib_annotated.png"
+    assert anomalib_result.status == "PASS"
+    assert pytest.approx(anomalib_result.anomaly_score, rel=1e-6) == 0.2
+    assert anomalib_result.heatmap_path == "anomalib_annotated.png"
 
     assert stub_engine.calls == [
         ("Widget", "A", "yolo", False),
@@ -182,3 +182,4 @@ def test_yolo_and_anomalib_end_to_end(monkeypatch, tmp_path):
 
     system.shutdown()
     assert stub_engine.shutdown_calls == 1
+

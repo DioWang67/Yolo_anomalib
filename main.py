@@ -84,6 +84,8 @@ if __name__ == "__main__":
             )
             from core.format_result import format_detection_result
             print(format_detection_result(result))
+            if result.status == "ERROR":
+                sys.exit(1)
         else:
             # 進入互動模式
             run_cli(system)

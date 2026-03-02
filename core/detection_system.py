@@ -28,6 +28,7 @@ from core.result_adapter import normalize_result
 from core.services.color_checker import ColorCheckerService
 from core.services.model_manager import ModelManager
 from core.services.result_sink import ExcelImageResultSink
+from core.types import DetectionItem, DetectionResult
 
 
 class _InferenceTypeToken(str):
@@ -242,26 +243,18 @@ class DetectionSystem:
         except Exception:
             return False
 
-    def _build_empty_result(
-        self, product: str, area: str, inference_type: str, status: str
-    ) -> dict:
-        """Builds a standardized dictionary for empty or error results."""
-        return {
-            "status": status,
-            "product": product,
-            "area": area,
-            "inference_type": inference_type,
-            "ckpt_path": "",
-            "anomaly_score": "",
-            "detections": [],
-            "missing_items": [],
-            "original_image_path": "",
-            "preprocessed_image_path": "",
-            "annotated_path": "",
-            "heatmap_path": "",
-            "cropped_paths": [],
-            "color_check": None,
-        }
+    def _build_result(
+        self, product: str, area: str, inference_type: str, status: str,
+        *, error: str | None = None,
+    ) -> DetectionResult:
+        """Builds a standardized DetectionResult for empty, error, or canceled cases."""
+        return DetectionResult(
+            status=status,  # type: ignore[arg-type]
+            product=product,
+            area=area,
+            inference_type=inference_type,
+            error=error,
+        )
 
     def _prepare_resources(
         self, product: str, area: str, inference_type: str, run_logger
@@ -439,7 +432,7 @@ class DetectionSystem:
         inference_type: str,
         frame: np.ndarray | None = None,
         cancel_cb=None,
-    ) -> dict:
+    ) -> DetectionResult:
         """Runs the complete detection pipeline for a specific product and area.
 
         This includes image acquisition, model inference, post-processing steps
@@ -453,14 +446,17 @@ class DetectionSystem:
             cancel_cb: Optional callback that returns True to abort execution.
 
         Returns:
-            dict: Normalized results dictionary containing status, detections, and artifact paths.
+            DetectionResult: Strongly-typed result containing status, detections,
+            and artifact paths.
         """
+        import time as _time
+        t0 = _time.time()
         run_logger = context_adapter(self.logger.logger, product, area, inference_type)
         run_logger.info("Start detection")
 
         try:
             if self._is_canceled(cancel_cb):
-                return self._build_empty_result(
+                return self._build_result(
                     product, area, inference_type, "CANCELED"
                 )
 
@@ -468,18 +464,16 @@ class DetectionSystem:
             frame = self._acquire_frame(frame, run_logger)
 
             if self._is_canceled(cancel_cb):
-                return self._build_empty_result(
+                return self._build_result(
                     product, area, inference_type, "CANCELED"
                 )
 
             result = self._run_inference(frame, product, area, inference_type, run_logger)
             if result.get("status") == "ERROR":
                 error_msg = result.get("error", "Inference failed")
-                final_res = self._build_empty_result(
-                    product, area, inference_type, "ERROR"
+                return self._build_result(
+                    product, area, inference_type, "ERROR", error=error_msg
                 )
-                final_res["error"] = error_msg
-                return final_res
 
             ctx = DetectionContext(
                 product=product,
@@ -494,35 +488,53 @@ class DetectionSystem:
 
             self._execute_pipeline(ctx, run_logger, cancel_cb)
             if ctx.status == "CANCELED":
-                return self._build_empty_result(
+                return self._build_result(
                     product, area, inference_type, "CANCELED"
                 )
 
             self._log_summary(ctx, run_logger)
 
+            # --- Build typed DetectionResult ---
             save_res = ctx.save_result or {}
-            return {
-                "status": ctx.status,
-                "error": result.get("error", ""),
-                "product": product,
-                "area": area,
-                "inference_type": inference_type,
-                "ckpt_path": result.get("ckpt_path", ""),
-                "anomaly_score": result.get("anomaly_score", ""),
-                "detections": result.get("detections", []),
-                "missing_items": result.get("missing_items", []),
-                "result_frame": result.get("result_frame"),
-                "original_image_path": save_res.get("original_path", ""),
-                "preprocessed_image_path": save_res.get("preprocessed_path", ""),
-                "annotated_path": save_res.get("annotated_path", ""),
-                "heatmap_path": save_res.get("heatmap_path", ""),
-                "cropped_paths": save_res.get("cropped_paths", []),
-                "color_check": ctx.color_result,
-                "sequence_check": ctx.result.get("sequence_check"),
-            }
+            raw_dets = result.get("detections", [])
+            items: list[DetectionItem] = []
+            for d in raw_dets:
+                bbox = d.get("bbox", (0.0, 0.0, 0.0, 0.0))
+                if isinstance(bbox, list):
+                    bbox = tuple(bbox)
+                items.append(DetectionItem(
+                    label=d.get("class", "unknown"),
+                    confidence=float(d.get("confidence", 0.0)),
+                    bbox_xyxy=bbox,
+                    metadata={k: v for k, v in d.items()
+                              if k not in ("class", "confidence", "bbox")},
+                ))
+
+            latency = _time.time() - t0
+            return DetectionResult(
+                status=ctx.status,  # type: ignore[arg-type]
+                items=items,
+                latency=latency,
+                product=product,
+                area=area,
+                inference_type=inference_type,
+                error=result.get("error", "") or None,
+                ckpt_path=result.get("ckpt_path", ""),
+                anomaly_score=result.get("anomaly_score"),
+                missing_items=result.get("missing_items", []),
+                original_image_path=save_res.get("original_path", ""),
+                preprocessed_image_path=save_res.get("preprocessed_path", ""),
+                annotated_path=save_res.get("annotated_path", ""),
+                heatmap_path=save_res.get("heatmap_path", ""),
+                cropped_paths=save_res.get("cropped_paths", []),
+                color_check=ctx.color_result,
+                sequence_check=ctx.result.get("sequence_check"),
+                result_frame=result.get("result_frame"),
+            )
 
         except Exception as e:
             run_logger.error(f"Detection failed: {e}", exc_info=True)
-            final_res = self._build_empty_result(product, area, inference_type, "ERROR")
-            final_res["error"] = str(e)
-            return final_res
+            return self._build_result(
+                product, area, inference_type, "ERROR", error=str(e)
+            )
+
