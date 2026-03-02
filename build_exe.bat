@@ -20,7 +20,7 @@ mkdir "%OUTPUT_PATH%"
 REM === 執行 PyInstaller 打包（一定要用指定 env 的 python） ===
 "%ENV_PYTHON%" -m PyInstaller ^
   --noconfirm ^
-  --onefile ^
+  --onedir ^
   --console ^
   --add-data "%SOURCE_PATH%\config.yaml;." ^
   --add-data "%SOURCE_PATH%\config.example.yaml;." ^

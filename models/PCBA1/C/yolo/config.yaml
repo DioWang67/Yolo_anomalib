@@ -49,4 +49,4 @@ position_config:
       mode: bbox
       tolerance: 2
 timeout: 1
-weights: D:/Git/robotlearning/yolo11_inference/models/PCBA1/C/yolo/weights/PCBA1_C_v1.0.0_20260210.pt
+weights: models/PCBA1/C/yolo/weights/PCBA1_C_v1.0.0_20260210.pt

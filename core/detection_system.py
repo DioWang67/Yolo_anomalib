@@ -35,8 +35,7 @@ class _InferenceTypeToken(str):
     def value(self) -> str:
         return str(self)
 
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = project_root()
 
 
 class DetectionSystem:
@@ -49,10 +48,12 @@ class DetectionSystem:
 
         self.logger = DetectionLogger()
         root_dir = project_root()
-        if not (root_dir / "config.yaml").exists():
-            root_dir = Path(__file__).resolve().parent.parent
-        resolved_config = Path(config_path) if config_path else root_dir / "config.yaml"
-        resolved_config = resolved_config.resolve()
+        if config_path:
+            resolved_config = Path(config_path).resolve()
+        else:
+            # resolve_path checks sys.executable parent, sys._MEIPASS, then fallback
+            resolved = resolve_path("config.yaml")
+            resolved_config = resolved if resolved and resolved.exists() else root_dir / "config.yaml"
         self.config_path = resolved_config
         self.config = self.load_config(resolved_config)
 
@@ -517,6 +518,7 @@ class DetectionSystem:
                 "heatmap_path": save_res.get("heatmap_path", ""),
                 "cropped_paths": save_res.get("cropped_paths", []),
                 "color_check": ctx.color_result,
+                "sequence_check": ctx.result.get("sequence_check"),
             }
 
         except Exception as e:

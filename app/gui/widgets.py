@@ -208,6 +208,20 @@ class ResultDisplayWidget(QWidget):
         if isinstance(unexpected, (list, tuple)):
             lines.append(f"未預期項目: {len(unexpected)}")
 
+        seq_check = meta.get("sequence_check")
+        if seq_check:
+            is_ok = seq_check.get("is_ok", True)
+            status_str = "PASS" if is_ok else "FAIL"
+            lines.append(f"排列檢查: {status_str}")
+            if not is_ok:
+                reason = seq_check.get("reason", "不明錯誤")
+                if reason == "length_mismatch":
+                    lines.append("  ↳ 錯誤原因: 排列長度不符")
+                elif reason == "order_mismatch":
+                    lines.append("  ↳ 錯誤原因: 排列順序錯誤")
+                lines.append(f"  ↳ 預期順序: {seq_check.get('expected')}")
+                lines.append(f"  ↳ 實際順序: {seq_check.get('observed')}")
+
         lines.append("\n=== 缺失列表 ===")
         if missing:
             for item in missing:

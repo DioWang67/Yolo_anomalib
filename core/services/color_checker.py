@@ -43,24 +43,35 @@ class ColorCheckerService:
             or self._checker_type != checker_type
         )
         if need_reload and checker_type == "stats":
-            self._checker = StatsColorChecker.from_json(
-                model_path,
-                default_threshold=default_threshold or None,
-                color_thresholds=overrides,
-            )
-            if default_threshold is not None:
-                try:
-                    self._checker.set_default_threshold(default_threshold)
-                except Exception:
-                    pass
-            self._checker_type = checker_type
-            self._model_path = model_path
+            try:
+                self._checker = StatsColorChecker.from_json(
+                    model_path,
+                    default_threshold=default_threshold or None,
+                    color_thresholds=overrides,
+                )
+                if default_threshold is not None:
+                    try:
+                        self._checker.set_default_threshold(default_threshold)
+                    except Exception:
+                        pass
+                self._checker_type = checker_type
+                self._model_path = model_path
+            except Exception as e:
+                # E.g. FileNotFoundError if color_stats.json is missing
+                self._checker = None
+                self._model_path = None
+                return
             overrides = None  # already applied during creation
             rules_overrides = None
         elif need_reload:
-            self._checker = ColorQCEnhanced.from_json(model_path)
-            self._model_path = model_path
-            self._checker_type = checker_type
+            try:
+                self._checker = ColorQCEnhanced.from_json(model_path)
+                self._model_path = model_path
+                self._checker_type = checker_type
+            except Exception as e:
+                self._checker = None
+                self._model_path = None
+                return
 
         if checker_type == "stats":
             if default_threshold is not None:

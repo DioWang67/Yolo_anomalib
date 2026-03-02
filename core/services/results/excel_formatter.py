@@ -24,6 +24,7 @@ def build_excel_row(
     cropped_paths: list[str],
     ckpt_path: str | None,
     color_result: dict[str, Any] | None,
+    sequence_check: dict[str, Any] | None = None,
     test_id: int,
 ) -> list[Any]:
     """Compose an Excel row according to the configured column order."""
@@ -33,13 +34,25 @@ def build_excel_row(
         else ""
     )
 
+    error_parts = []
+    if missing_items:
+        error_parts.append(f"缺失項目: {', '.join(missing_items)}")
+    
+    if sequence_check and not sequence_check.get("is_ok", True):
+        reason = sequence_check.get("reason", "")
+        if reason == "length_mismatch":
+            error_parts.append("排列長度不符")
+        elif reason == "order_mismatch":
+            error_parts.append(f"排列順序錯誤: expected={sequence_check.get('expected')}, observed={sequence_check.get('observed')}")
+        else:
+            error_parts.append("排列檢查失敗")
+
     error_message = ""
     if status != "PASS":
-        error_message = (
-            f"缺失項目: {', '.join(missing_items)}"
-            if missing_items
-            else "異常分數超出門檻"
-        )
+        if error_parts:
+            error_message = " | ".join(error_parts)
+        else:
+            error_message = "異常分數超出門檻"
 
     color_status = ""
     diff_value = ""

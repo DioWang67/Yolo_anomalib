@@ -1,5 +1,5 @@
 color_checker_type: stats
-color_model_path: D:/Git/robotlearning/yolo11_inference/models/Cable1/A/yolo/color_stats.json
+color_model_path: models/Cable1/A/yolo/color_stats.json
 conf_thres: 0.2
 current_product: Cable1
 device: cpu
@@ -19,7 +19,7 @@ imgsz:
 - 640
 iou_thres: 0.45
 model_version: 1.0.0
-output_dir: D:/Git/robotlearning/build_exe/Result
+output_dir: ./Result
 pipeline:
 - color_check
 - count_check
@@ -71,4 +71,4 @@ steps:
     - Black
     - Black
 timeout: 1
-weights: D:/Git/robotlearning/yolo11_inference/models/Cable1/A/yolo/weights/Cable1_best_v1.0.0_20260210.pt
+weights: models/Cable1/A/yolo/weights/Cable1_best_v1.0.0_20260210.pt

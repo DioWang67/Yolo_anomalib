@@ -1,4 +1,4 @@
-weights: "D:/Git/robotlearning/yolo11_inference/models/PCBA3/A/yolo/best.pt"
+weights: "models/PCBA3/A/yolo/best.pt"
 device: "cpu"
 conf_thres: 0.4
 iou_thres: 0.45

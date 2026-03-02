@@ -27,6 +27,11 @@ class ColorCheckStep(Step):
 
     def run(self, ctx: DetectionContext) -> None:
         """Run color check on detections and attach ctx.color_result."""
+        if not self.color_service.is_ready():
+            self.logger.warning("ColorChecker not ready (possibly missing JSON file); skipping color check")
+            ctx.color_result = {"is_ok": True, "items": [], "error": "Not loaded"}
+            return
+
         detections: list[dict[str, Any]] = ctx.result.get("detections", [])
 
         # Extract candidates from config to restrict search space
@@ -250,6 +255,7 @@ class SaveResultsStep(Step):
                     area=ctx.area,
                     ckpt_path=ctx.result.get("ckpt_path"),
                     color_result=ctx.color_result,
+                    sequence_check=ctx.result.get("sequence_check"),
                 )
             else:
                 save_result = self.sink.save(
@@ -265,6 +271,7 @@ class SaveResultsStep(Step):
                     area=ctx.area,
                     ckpt_path=ctx.result.get("ckpt_path"),
                     color_result=ctx.color_result,
+                    sequence_check=ctx.result.get("sequence_check"),
                 )
             ctx.save_result = save_result
         except ResultPersistenceError as exc:

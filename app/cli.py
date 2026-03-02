@@ -3,7 +3,8 @@
 import os
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+from core.path_utils import project_root
+PROJECT_ROOT = project_root()
 
 
 def run_cli(system) -> None:

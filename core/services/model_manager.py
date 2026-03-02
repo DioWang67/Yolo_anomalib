@@ -87,7 +87,7 @@ class ModelManager:
                 if path_str:
                     resolved = Path(path_str)
                     if not resolved.is_absolute():
-                        base = model_cfg_dir or PROJECT_ROOT
+                        base = PROJECT_ROOT
                         resolved = (base / resolved).resolve()
                     base_config.output_dir = str(resolved)
                 else:
@@ -111,11 +111,20 @@ class ModelManager:
         color_model_path = cfg.get("color_model_path", None)
         if color_model_path:
             color_path_obj = Path(color_model_path)
-            resolved_color = None
-            if not color_path_obj.is_absolute() and model_cfg_dir:
-                resolved_color = (model_cfg_dir / color_path_obj).resolve()
+            if color_path_obj.is_absolute():
+                resolved_color = color_path_obj
             else:
+                # Try project-root resolution first (checks existence)
                 resolved_color = resolve_path(color_model_path)
+                # Fall back to config-dir relative if project-root result doesn't exist
+                if (
+                    model_cfg_dir
+                    and resolved_color is not None
+                    and not resolved_color.exists()
+                ):
+                    config_relative = (model_cfg_dir / color_path_obj).resolve()
+                    if config_relative.exists():
+                        resolved_color = config_relative
             base_config.color_model_path = (
                 str(resolved_color) if resolved_color else base_config.color_model_path
             )

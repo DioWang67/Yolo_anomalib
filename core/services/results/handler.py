@@ -126,6 +126,7 @@ class ResultHandler:
         area: str | None = None,
         ckpt_path: str | None = None,
         color_result: dict[str, Any] | None = None,
+        sequence_check: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         try:
             timestamp = datetime.now()
@@ -253,6 +254,7 @@ class ResultHandler:
                 cropped_paths=cropped_paths,
                 ckpt_path=ckpt_path,
                 color_result=color_result,
+                sequence_check=sequence_check,
                 test_id=test_id,
             )
             try:

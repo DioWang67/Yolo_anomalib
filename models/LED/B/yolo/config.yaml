@@ -89,4 +89,4 @@ save_fail_only: true
 save_original: true
 save_processed: false
 timeout: 1
-weights: D:/Git/robotlearning/yolo11_inference/models/LED/B/yolo/weights/LED_color_mixing_v1.0.0_20260210.pt
+weights: models/LED/B/yolo/weights/LED_color_mixing_v1.0.0_20260210.pt

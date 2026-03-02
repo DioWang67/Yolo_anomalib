@@ -103,7 +103,8 @@ class PathValidator:
 
 # Global path validator instance
 # This can be imported and used throughout the application
-PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+from core.path_utils import project_root
+PROJECT_ROOT = project_root()
 
 path_validator = PathValidator(
     allowed_roots=[

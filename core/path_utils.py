@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 
@@ -9,8 +10,13 @@ def project_root() -> Path:
     if env:
         p = Path(env).expanduser().resolve()
         return p
-    # core/path_utils.py -> core -> repo root
-    return Path(__file__).resolve().parents[2]
+        
+    if getattr(sys, "frozen", False):
+        # PyInstaller packaged mode: use the executable's directory
+        return Path(sys.executable).parent.resolve()
+        
+    # core/path_utils.py -> repo root
+    return Path(__file__).resolve().parents[1]
 
 
 def resolve_path(p: str | None) -> Path | None:
@@ -24,8 +30,16 @@ def resolve_path(p: str | None) -> Path | None:
     env = os.getenv("YOLO11_ROOT")
     if env:
         bases.append(Path(env).expanduser())
-    # Repo root derived from this file
-    bases.append(Path(__file__).resolve().parents[2])
+        
+    if getattr(sys, "frozen", False):
+        # PyInstaller packaged mode
+        bases.append(Path(sys.executable).parent.resolve())
+        if hasattr(sys, "_MEIPASS"):
+            bases.append(Path(sys._MEIPASS).resolve())
+    else:
+        # Repo root derived from this file
+        bases.append(Path(__file__).resolve().parents[1])
+        
     # Current working directory (IDE/run-time)
     try:
         bases.append(Path.cwd())
@@ -39,8 +53,11 @@ def resolve_path(p: str | None) -> Path | None:
                 return cand
         except Exception:
             continue
+            
     # Fallback to repo-root join even if not exists
-    return (Path(__file__).resolve().parents[2] / path).resolve()
+    if getattr(sys, "frozen", False):
+        return (Path(sys.executable).parent.resolve() / path).resolve()
+    return (Path(__file__).resolve().parents[1] / path).resolve()
 
 
 """Path utilities for robust project-root resolution and relative path handling."""

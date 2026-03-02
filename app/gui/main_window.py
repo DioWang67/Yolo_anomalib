@@ -62,9 +62,14 @@ class DetectionSystemGUI(QMainWindow):
         self.disconnect_camera_btn = None
         self.model_version_label = None  # Status bar version display
         # Models base path and settings
-        self._project_root = Path(__file__).resolve().parents[2]
-        self._config_path = self._project_root / "config.yaml"
-        self._models_base = self._project_root / "models"
+        from core.path_utils import project_root, resolve_path
+        self._project_root = project_root()
+        
+        cfg_cand = resolve_path("config.yaml")
+        self._config_path = cfg_cand if cfg_cand and cfg_cand.exists() else self._project_root / "config.yaml"
+        
+        mdl_cand = resolve_path("models")
+        self._models_base = mdl_cand if mdl_cand and mdl_cand.is_dir() else self._project_root / "models"
         self.preferences = PreferencesManager(QSettings())
         self._logger = logging.getLogger(__name__)
         self._catalog = ModelCatalog(self._models_base)
