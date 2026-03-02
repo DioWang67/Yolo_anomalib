@@ -524,6 +524,20 @@ class DetectionSystemGUI(QMainWindow):
                 self.stop_btn.setEnabled(False)
                 self.update_camera_controls()
                 return
+        # --- Clean up previous worker to prevent zombie threads / signal leaks ---
+        if self.worker is not None:
+            try:
+                self.worker.cancel()
+                self.worker.wait(2000)
+            except Exception:
+                pass
+            try:
+                self.worker.disconnect()
+            except TypeError:
+                pass
+            self.worker.deleteLater()
+            self.worker = None
+
         self.worker = self.controller.build_worker(
             product,
             area,
@@ -533,23 +547,27 @@ class DetectionSystemGUI(QMainWindow):
         self.worker.result_ready.connect(self.on_detection_complete)
         self.worker.image_ready.connect(self.on_image_ready)
         self.worker.error_occurred.connect(self.on_detection_error)
+        self.worker.finished.connect(self._on_worker_finished)
         self.worker.start()
 
     def stop_detection(self):
         """停止檢測"""
         if self.worker and self.worker.isRunning():
-            try:
-                self.worker.stop()
-                self.worker.wait(3000)
-            except Exception:
-                self.worker.terminate()
-                self.worker.wait()
+            self.worker.cancel()
+            if not self.worker.wait(3000):
+                self.log_message("警告: Worker 未能在 3 秒內停止")
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("READY")
         self.update_camera_controls()
         self.log_message("檢測已取消")
+
+    def _on_worker_finished(self) -> None:
+        """Restore UI when worker finishes for any reason."""
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.update_camera_controls()
 
     @pyqtSlot(object)
     def on_image_ready(self, image: np.ndarray) -> None:
@@ -621,11 +639,11 @@ class DetectionSystemGUI(QMainWindow):
                  show_result_frame_data()
 
         if annotated_path:
-             load_image_with_retry(
-                 self.result_image,
-                 annotated_path,
-                 attempts=5,
-                 delay_ms=200,
+              load_image_with_retry(
+                  self.result_image,
+                  annotated_path,
+                  attempts=2,
+                  delay_ms=150,
                  on_fail=load_heatmap,
              )
         else:

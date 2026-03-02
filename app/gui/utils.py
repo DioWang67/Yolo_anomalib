@@ -9,8 +9,8 @@ def load_image_with_retry(
     viewer,
     path: str | None,
     *,
-    attempts: int = 5,
-    delay_ms: int = 200,
+    attempts: int = 2,
+    delay_ms: int = 150,
     on_fail: Callable[[], None] | None = None,
 ) -> None:
     """Attempt to display an image with retries to handle async file writes."""

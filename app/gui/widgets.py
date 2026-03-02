@@ -116,30 +116,45 @@ class ImageViewer(QLabel):
         self.setScaledContents(True)
 
     def set_image(self, image_path: str) -> None:
+        # Skip redundant disk reads for the same path (retry scenario)
+        if getattr(self, "_last_image_path", None) == image_path:
+            return
         if os.path.exists(image_path):
             pixmap = QPixmap(image_path)
             scaled_pixmap = pixmap.scaled(
                 self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
             self.setPixmap(scaled_pixmap)
+            self._last_image_path = image_path
         else:
             self.setText(f"無法載入{self._title}")
 
-    def display_image(self, image: np.ndarray) -> None:
-        """Display a BGR numpy array directly."""
+    def display_image(self, image) -> None:
+        """Display an image directly.
+
+        Accepts either a QImage (fast path from worker) or a BGR ndarray (legacy).
+        """
         try:
-             # Convert BGR to RGB
-             rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-             h, w, ch = rgb_image.shape
-             bytes_per_line = ch * w
-             qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-             self.setPixmap(QPixmap.fromImage(qt_image).scaled(
-                 self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-             ))
+            if isinstance(image, QImage):
+                # Fast path: already converted in worker thread
+                self.setPixmap(QPixmap.fromImage(image).scaled(
+                    self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                ))
+            elif isinstance(image, np.ndarray) and image.size > 0:
+                # Legacy path: convert BGR→RGB on main thread
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb_image.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+                self.setPixmap(QPixmap.fromImage(qt_image).scaled(
+                    self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                ))
+            else:
+                self.clear()
+                self.setText("無法顯示影像")
         except Exception:
-             # Handle invalid image
-             self.clear()
-             self.setText("無法顯示影像")
+            self.clear()
+            self.setText("無法顯示影像")
 
 
 class ResultDisplayWidget(QWidget):

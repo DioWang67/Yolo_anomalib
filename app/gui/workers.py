@@ -49,6 +49,16 @@ class DetectionWorker(QThread):
         """Atomic stop request."""
         self._stop_event.set()
 
+    @staticmethod
+    def _to_qimage(image: np.ndarray):
+        """Convert a BGR ndarray to QImage on the worker thread."""
+        import cv2
+        from PyQt5.QtGui import QImage
+
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        return QImage(rgb.data.tobytes(), w, h, ch * w, QImage.Format_RGB888)
+
     def run(self) -> None:
         try:
             # Re-init system with selected config
@@ -69,8 +79,8 @@ class DetectionWorker(QThread):
                         time.sleep(0.1)
                         continue
 
-                # 1. Emit Image immediately for UI Preview
-                self.image_ready.emit(image)
+                # 1. Convert image to QImage on worker thread (offload from main thread)
+                self.image_ready.emit(self._to_qimage(image))
 
                 # 2. Run Detection — returns DetectionResult directly
                 result = self._detection_system.detect(
