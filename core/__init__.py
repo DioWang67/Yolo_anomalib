@@ -32,8 +32,9 @@ except Exception:
 
 # -- Always available utilities --
 
-__all__ = ["ColorQCEnhanced"]
+__all__: list[str] = ["ColorQCEnhanced"]
 if AnomalibInferenceModel is not None:
     __all__.append("AnomalibInferenceModel")
 
 __version__ = "0.1.0"
+

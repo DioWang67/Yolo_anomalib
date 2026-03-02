@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """負責載入 LED 色彩模型並對偵測結果進行色彩檢查的服務。"""
 
+import logging
 from collections.abc import Iterable
 from typing import Any
 
@@ -10,6 +11,8 @@ import numpy as np
 from core.color_qc_enhanced import ColorQCEnhanced
 from core.models import ColorCheckItemResult, ColorCheckResult
 from core.stats_color_checker import StatsColorChecker
+
+logger = logging.getLogger(__name__)
 
 
 class ColorCheckerService:
@@ -57,7 +60,7 @@ class ColorCheckerService:
                 self._checker_type = checker_type
                 self._model_path = model_path
             except Exception as e:
-                # E.g. FileNotFoundError if color_stats.json is missing
+                logger.warning("Failed to load StatsColorChecker from %s: %s", model_path, e)
                 self._checker = None
                 self._model_path = None
                 return
@@ -69,6 +72,7 @@ class ColorCheckerService:
                 self._model_path = model_path
                 self._checker_type = checker_type
             except Exception as e:
+                logger.warning("Failed to load ColorQCEnhanced from %s: %s", model_path, e)
                 self._checker = None
                 self._model_path = None
                 return

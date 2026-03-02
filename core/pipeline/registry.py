@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
@@ -20,7 +21,7 @@ from core.services.result_sink import ExcelImageResultSink
 class PipelineEnv:
     color_service: ColorCheckerService
     result_sink: ExcelImageResultSink
-    logger: any
+    logger: logging.Logger | logging.LoggerAdapter
     product: str
     area: str
     config: DetectionConfig

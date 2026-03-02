@@ -108,10 +108,10 @@ PROJECT_ROOT = project_root()
 
 path_validator = PathValidator(
     allowed_roots=[
-        PROJECT_ROOT,  # Entire project root
-        PROJECT_ROOT / "models",  # Model weights directory
-        PROJECT_ROOT / "Result",  # Output directory
+        PROJECT_ROOT / "models",   # Model weights directory
+        PROJECT_ROOT / "Result",   # Output directory
         PROJECT_ROOT / "Runtime",  # Runtime directory
-        PROJECT_ROOT / "MvImport",  # Camera imports
+        PROJECT_ROOT / "MvImport", # Camera imports
+        PROJECT_ROOT / "logs",     # Log files
     ]
 )

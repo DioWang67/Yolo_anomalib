@@ -173,15 +173,6 @@ class TestPathValidator:
 class TestGlobalPathValidator:
     """Test the global path_validator instance."""
 
-    def test_global_validator_allows_project_paths(self):
-        """Test that the global validator allows project paths."""
-        from core.security import PROJECT_ROOT, path_validator
-
-        # Should allow paths in project root
-        test_path = PROJECT_ROOT / "test_file.txt"
-        result = path_validator.validate_path(test_path, must_exist=False)
-        assert result == test_path.resolve()
-
     def test_global_validator_allows_models_directory(self):
         """Test that the global validator allows models directory."""
         from core.security import PROJECT_ROOT, path_validator
@@ -198,6 +189,23 @@ class TestGlobalPathValidator:
         result = path_validator.validate_path(result_path, must_exist=False)
         assert result == result_path.resolve()
 
+    def test_global_validator_allows_logs_directory(self):
+        """Test that the global validator allows logs directory."""
+        from core.security import PROJECT_ROOT, path_validator
+
+        logs_path = PROJECT_ROOT / "logs" / "app.log"
+        result = path_validator.validate_path(logs_path, must_exist=False)
+        assert result == logs_path.resolve()
+
+    def test_global_validator_blocks_arbitrary_project_root_paths(self):
+        """Test that arbitrary paths under PROJECT_ROOT (but not in allowed sub-dirs) are blocked."""
+        from core.security import PROJECT_ROOT, path_validator
+
+        # A file directly under PROJECT_ROOT should be blocked
+        arbitrary_path = PROJECT_ROOT / "some_random_file.txt"
+        with pytest.raises(SecurityError):
+            path_validator.validate_path(arbitrary_path)
+
     def test_global_validator_blocks_system_paths(self):
         """Test that the global validator blocks system paths."""
         import platform
@@ -212,3 +220,4 @@ class TestGlobalPathValidator:
 
         with pytest.raises(SecurityError):
             path_validator.validate_path(system_path)
+
