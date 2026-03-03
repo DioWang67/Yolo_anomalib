@@ -107,7 +107,7 @@ class AnomalibInferenceModel(BaseInferenceModel):
                 raise RuntimeError(error_msg)
 
             anomaly_score = result.get("anomaly_score", 0.0)
-            threshold = self.config.anomalib_config.get("threshold", 0.5)
+            threshold = getattr(self.config, "anomalib_config", {}).get("threshold", 0.5) if getattr(self.config, "anomalib_config", None) else 0.5
             is_anomaly = anomaly_score > threshold
             status = "FAIL" if is_anomaly else "PASS"
 
@@ -117,15 +117,23 @@ class AnomalibInferenceModel(BaseInferenceModel):
                 f"Anomalib 推理時間: {inference_time:.3f}s, 異常分數: {anomaly_score:.4f}, 圖像尺寸: {processed_image.shape}"
             )
 
+            # Convert RGB back to BGR for the GUI which expects BGR in its display_image routine.
+            out_processed = cv2.cvtColor(processed_image, cv2.COLOR_RGB2BGR)
+
+            # Prefer the heatmap overlay (BGR) from lightning_inference if
+            # available; fall back to the preprocessed input image.
+            overlay = result.get("overlay_image")
+            result_frame = overlay if isinstance(overlay, np.ndarray) else out_processed
+
             return {
                 "inference_type": "anomalib",
                 "status": status,
                 "anomaly_score": anomaly_score,
                 "is_anomaly": is_anomaly,
                 "inference_time": inference_time,
-                "processed_image": processed_image,
-                "result_frame": processed_image,
-                "output_path": result.get("heatmap_path", ""),
+                "processed_image": out_processed,
+                "result_frame": result_frame,
+                "annotated_path": result.get("heatmap_path", ""),
                 "expected_items": [],
                 "product": product,
                 "area": area,

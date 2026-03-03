@@ -48,11 +48,19 @@ class ModelCatalog:
             self._cache[key] = {}
         if "__types__" not in self._cache[key]:
             area_dir = self.root / product / area
-            self._cache[key]["__types__"] = _list_subdirectories(area_dir)
+            types = _list_subdirectories(area_dir)
+            if "yolo" in types and "anomalib" in types:
+                types.append("fusion")
+            self._cache[key]["__types__"] = types
         return self._cache[key]["__types__"]
 
     def config_path(self, product: str, area: str, inference_type: str) -> Path:
+        if inference_type.lower() == "fusion":
+            # For logging/UI display purposes, return yolo config path
+            return self.root / product / area / "yolo" / "config.yaml"
         return self.root / product / area / inference_type / "config.yaml"
 
     def config_exists(self, product: str, area: str, inference_type: str) -> bool:
+        if inference_type.lower() == "fusion":
+            return self.config_exists(product, area, "yolo") and self.config_exists(product, area, "anomalib")
         return self.config_path(product, area, inference_type).exists()

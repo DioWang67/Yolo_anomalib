@@ -83,7 +83,7 @@ def _assert_output_schema(out, product, area):
         "inference_time",
         "processed_image",
         "result_frame",
-        "output_path",
+        "annotated_path",
         "expected_items",
         "product",
         "area",

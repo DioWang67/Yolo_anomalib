@@ -11,6 +11,15 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+
+def _default_device() -> str:
+    """Return 'cuda:0' when a CUDA GPU is available, else 'cpu'."""
+    try:
+        import torch
+        return "cuda:0" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
 try:  # pragma: no cover - runtime optional depending on pydantic version
     from pydantic import ValidationError as _ValidationError  # type: ignore
 except Exception:  # pragma: no cover
@@ -122,7 +131,7 @@ class DetectionConfig:
     """
 
     weights: str
-    device: str = "cpu"
+    device: str = field(default_factory=_default_device)
     conf_thres: float = 0.25
     iou_thres: float = 0.45
     imgsz: tuple[int, int] = (640, 640)
@@ -253,7 +262,7 @@ class DetectionConfig:
 
         kwargs: dict[str, Any] = {
             "weights": str(weights),
-            "device": normalized.get("device", "cpu"),
+            "device": normalized.get("device") or _default_device(),
             "conf_thres": float(normalized.get("conf_thres", 0.25)),
             "iou_thres": float(normalized.get("iou_thres", 0.45)),
             "imgsz": _coerce_imgsz(normalized.get("imgsz"), default=(640, 640))

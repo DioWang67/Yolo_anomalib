@@ -229,11 +229,28 @@ class DetectionSystem:
 
         Uses ModelManager to keep an LRU cache of engines and snapshots of configs.
         """
-        engine, _ = self.model_manager.switch(
-            self.config, product, area, inference_type
-        )
-        self.inference_engine = engine
-        self.current_inference_type = inference_type.lower()
+        if inference_type.lower() == "fusion":
+            # Load Anomalib first
+            self.model_manager.switch(self.config, product, area, "anomalib")
+            # Save anomalib_config before it gets overwritten by YOLO's configuration
+            import copy
+            ano_cfg = copy.deepcopy(getattr(self.config, "anomalib_config", None))
+            
+            # Load YOLO second, so self.config holds YOLO's configuration for pipeline steps
+            self.model_manager.switch(self.config, product, area, "yolo")
+            
+            # Restore anomalib_config to the merged config
+            if ano_cfg is not None:
+                self.config.anomalib_config = ano_cfg
+                
+            self.inference_engine = None
+            self.current_inference_type = "fusion"
+        else:
+            engine, _ = self.model_manager.switch(
+                self.config, product, area, inference_type
+            )
+            self.inference_engine = engine
+            self.current_inference_type = inference_type.lower()
         self._refresh_result_sink()
 
     def _is_canceled(self, cancel_cb) -> bool:
@@ -303,8 +320,14 @@ class DetectionSystem:
         area: str,
         inference_type: str,
         run_logger,
-    ) -> dict:
-        """Execute the inference engine and handle results."""
+    ) -> dict[str, Any]:
+        """Perform model inference and post-processing on the frame."""
+        if inference_type.lower() == "fusion":
+            return self._run_fusion_inference(frame, product, area, run_logger)
+
+        if not self.inference_engine:
+            return {"status": "ERROR", "error": "Model not loaded"}
+        
         inference_type_name = inference_type.lower()
         output_path = None
         if inference_type_name == "anomalib":
@@ -325,6 +348,105 @@ class DetectionSystem:
             self._adjust_anomalib_output_path(result, output_path, run_logger)
 
         return result
+
+    def _run_fusion_inference(
+        self,
+        frame: np.ndarray,
+        product: str,
+        area: str,
+        run_logger,
+    ) -> dict[str, Any]:
+        from concurrent.futures import ThreadPoolExecutor
+        from typing import Any
+
+        # --- Validate engines before parallel dispatch ---
+        yolo_engine = self.model_manager._cache.get((product, area), {}).get("yolo", (None, None))[0]
+        if not yolo_engine:
+            return {"status": "ERROR", "error": "YOLO model not loaded for fusion"}
+
+        ano_engine = self.model_manager._cache.get((product, area), {}).get("anomalib", (None, None))[0]
+        if not ano_engine:
+            run_logger.warning("Anomalib model not loaded for fusion, falling back to YOLO-only")
+            raw_yolo = yolo_engine.infer(frame, product, area, _InferenceTypeToken("yolo"), force=True)
+            return normalize_result(raw_yolo, "yolo", frame)
+
+        ano_output_path = self.result_sink.get_annotated_path(
+            status="TEMP", detector="anomalib", product=product, area=area
+        )
+
+        # --- Run YOLO and Anomalib concurrently ---
+        # Both engines use C extensions (PyTorch/OpenCV) that release the GIL,
+        # so threading gives real overlap (~120ms saved).
+        def _yolo_task():
+            raw = yolo_engine.infer(frame, product, area, _InferenceTypeToken("yolo"), force=True)
+            return normalize_result(raw, "yolo", frame)
+
+        def _ano_task():
+            raw = ano_engine.infer(
+                frame, product, area, _InferenceTypeToken("anomalib"), ano_output_path, force=True
+            )
+            return normalize_result(raw, "anomalib", frame)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            yolo_future = pool.submit(_yolo_task)
+            ano_future = pool.submit(_ano_task)
+            yolo_res = yolo_future.result()
+            ano_res = ano_future.result()
+
+        if ano_output_path:
+            self._adjust_anomalib_output_path(ano_res, ano_output_path, run_logger)
+
+        # 3. Merge Status
+        status = "PASS"
+        if yolo_res.get("status") == "FAIL" or ano_res.get("status") == "FAIL":
+            status = "FAIL"
+        elif yolo_res.get("status") == "ERROR" or ano_res.get("status") == "ERROR":
+            status = "ERROR"
+        
+        # 4. Merge Data
+        merged: dict[str, Any] = {
+            "status": status,
+            "detections": yolo_res.get("detections", []) + ano_res.get("detections", []),
+            "missing_items": yolo_res.get("missing_items", []) + ano_res.get("missing_items", []),
+            "unexpected_items": yolo_res.get("unexpected_items", []) + ano_res.get("unexpected_items", []),
+            "error": " | ".join(filter(None, [yolo_res.get("error"), ano_res.get("error")])) or None,
+            "inference_time": yolo_res.get("inference_time", 0.0) + ano_res.get("inference_time", 0.0),
+            "anomaly_score": ano_res.get("anomaly_score"),
+            "original_image": yolo_res.get("original_image", frame), # base frame
+            "annotated_path": ano_res.get("annotated_path") or yolo_res.get("annotated_path", ""),
+            "heatmap_path": ano_res.get("heatmap_path", ""),
+        }
+
+        # 5. Blend Images
+        # Use in-memory result_frame directly instead of re-reading from disk.
+        # The anomalib_inference_model already returns the processed image as
+        # BGR ndarray in result_frame — no need for expensive disk round-trip.
+        import cv2
+        ano_frame = ano_res.get("result_frame")
+        yolo_frame = yolo_res.get("result_frame")
+
+        # ano_frame from anomalib_inference_model is already BGR (it does
+        # cvtColor(RGB→BGR) before returning).  Use it directly as base.
+        base_frame_to_draw = ano_frame.copy() if isinstance(ano_frame, np.ndarray) and ano_frame.size > 0 else None
+
+        if base_frame_to_draw is not None and "detections" in yolo_res:
+            try:
+                for det in yolo_res.get("detections", []):
+                    bbox = det.get("bbox")
+                    if bbox:
+                        x1, y1, x2, y2 = bbox
+                        label = det.get("class", "")
+                        conf = det.get("confidence", 0.0)
+                        cv2.rectangle(base_frame_to_draw, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                        cv2.putText(base_frame_to_draw, f"{label} {conf:.2f}", (int(x1), int(y1)-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                merged["result_frame"] = base_frame_to_draw
+            except Exception as e:
+                run_logger.warning(f"Image fusion failed: {e}")
+                merged["result_frame"] = yolo_frame if yolo_frame is not None else ano_frame
+        else:
+            merged["result_frame"] = yolo_frame if yolo_frame is not None else ano_frame
+
+        return merged
 
     def _execute_pipeline(self, ctx: DetectionContext, run_logger, cancel_cb=None):
         """Build and run the post-processing pipeline."""

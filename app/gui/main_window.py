@@ -6,6 +6,7 @@ import importlib
 import logging
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -216,11 +217,14 @@ class DetectionSystemGUI(QMainWindow):
         self.log_text = self.info_panel.log_text
 
         # Connect Signals
+        # NOTE: update_start_enabled() is already called at the end of
+        # reload_inference_types(), which is the terminal handler in the
+        # cascade: product_changed -> on_area_changed -> reload_inference_types.
+        # Only inference_type_changed needs its own connection because the
+        # user can change it directly without going through the cascade.
         self.control_panel.product_changed.connect(self.on_product_changed)
-        self.control_panel.product_changed.connect(lambda _: self.update_start_enabled())
 
         self.control_panel.area_changed.connect(self.on_area_changed)
-        self.control_panel.area_changed.connect(lambda _: self.update_start_enabled())
 
         self.control_panel.inference_type_changed.connect(lambda _: self.update_start_enabled())
 
@@ -272,6 +276,11 @@ class DetectionSystemGUI(QMainWindow):
     def _update_model_combos(self):
         """Populates and sets the product, area, and inference type combo boxes."""
         self.available_products = self._catalog.products()
+        
+        self.product_combo.blockSignals(True)
+        self.area_combo.blockSignals(True)
+        self.inference_combo.blockSignals(True)
+        
         self.product_combo.clear()
         self.area_combo.clear()
         self.inference_combo.clear()
@@ -281,6 +290,9 @@ class DetectionSystemGUI(QMainWindow):
         }
 
         if not self.available_products:
+            self.product_combo.blockSignals(False)
+            self.area_combo.blockSignals(False)
+            self.inference_combo.blockSignals(False)
             self.log_message("No models found in the models directory.")
             return
 
@@ -290,16 +302,20 @@ class DetectionSystemGUI(QMainWindow):
         if last_prod and last_prod in self.available_products:
             self.product_combo.setCurrentText(last_prod)
 
+        self.product_combo.blockSignals(False)
         self.on_product_changed(self.product_combo.currentText())
 
         if last_area and last_area in self.available_areas.get(self.product_combo.currentText(), []):
             self.area_combo.setCurrentText(last_area)
 
+        self.area_combo.blockSignals(False)
         self.on_area_changed(self.area_combo.currentText())
 
         available_types = [self.inference_combo.itemText(i) for i in range(self.inference_combo.count())]
         if last_infer and last_infer in available_types:
             self.inference_combo.setCurrentText(last_infer)
+            
+        self.inference_combo.blockSignals(False)
 
     def load_available_models(self):
         """Async Load available model information from the filesystem."""
@@ -329,9 +345,14 @@ class DetectionSystemGUI(QMainWindow):
 
     def on_product_changed(self, product):
         """產品選擇變更時的處理"""
+        self.area_combo.blockSignals(True)
         self.area_combo.clear()
         if product in self.available_areas:
             self.area_combo.addItems(self.available_areas[product])
+        # Call on_area_changed BEFORE unblocking signals to prevent the
+        # area_combo.currentTextChanged signal from triggering a duplicate call.
+        self.on_area_changed(self.area_combo.currentText())
+        self.area_combo.blockSignals(False)
 
     def on_area_changed(self, area):
         try:
@@ -342,24 +363,39 @@ class DetectionSystemGUI(QMainWindow):
     def reload_inference_types(self):
         product = self.product_combo.currentText().strip()
         area = self.area_combo.currentText().strip()
+        
+        self.inference_combo.blockSignals(True)
         self.inference_combo.clear()
-        if not product or not area:
-            return
-        types = self._catalog.inference_types(product, area)
-        if types:
-            self.inference_combo.addItems(types)
+        
+        if product and area:
+            types = self._catalog.inference_types(product, area)
+            if types:
+                self.inference_combo.addItems(types)
+                
+        self.inference_combo.blockSignals(False)
+        self.update_start_enabled()
 
     def is_detection_running(self) -> bool:
         """Return True if a detection worker is running."""
         return bool(self.worker and self.worker.isRunning())
 
     def update_camera_controls(self):
-        """Sync camera-related widgets with the current state."""
+        """Sync camera-related widgets with the current state.
+
+        Uses a 2-second cache for camera status to avoid blocking the
+        main thread with repeated SDK calls during rapid UI updates.
+        """
         try:
             running = self.is_detection_running()
             camera_connected = False
             if self.controller.has_system():
-                camera_connected = self.controller.is_camera_connected()
+                now = time.monotonic()
+                # Cache camera status for 2 seconds to avoid repeated
+                # blocking SDK calls during signal cascading.
+                if now - getattr(self, "_camera_check_ts", 0) > 2.0:
+                    self._camera_connected_cache = self.controller.is_camera_connected()
+                    self._camera_check_ts = now
+                camera_connected = getattr(self, "_camera_connected_cache", False)
             if getattr(self, "reconnect_camera_btn", None):
                 self.reconnect_camera_btn.setEnabled(not running)
             if getattr(self, "disconnect_camera_btn", None):
@@ -416,6 +452,8 @@ class DetectionSystemGUI(QMainWindow):
                     "Camera Error",
                     "Reconnect failed. Please check hardware or settings.",
                 )
+        # Invalidate camera status cache so the next check is live
+        self._camera_check_ts = 0
         self.update_camera_controls()
 
     def handle_disconnect_camera(self):
@@ -445,6 +483,8 @@ class DetectionSystemGUI(QMainWindow):
             self.use_camera_chk.setChecked(False)
             self.use_camera_chk.blockSignals(False)
             self.on_use_camera_toggled(False)
+        # Invalidate camera status cache so the next check is live
+        self._camera_check_ts = 0
         self.update_camera_controls()
 
     def update_start_enabled(self):
@@ -692,8 +732,11 @@ class DetectionSystemGUI(QMainWindow):
 
     def pick_image(self):
         """選擇影像"""
+        options = QFileDialog.Options()
+        # Bypass Windows Native dialog, which freezes the app when network drives or Quick Access paths are unresponsive
+        options |= QFileDialog.DontUseNativeDialog
         fname, _ = QFileDialog.getOpenFileName(
-            self, "選擇影像", "", "Images (*.png *.jpg *.jpeg *.bmp)"
+            self, "選擇影像", "", "Images (*.png *.jpg *.jpeg *.bmp)", options=options
         )
         if not fname:
             return

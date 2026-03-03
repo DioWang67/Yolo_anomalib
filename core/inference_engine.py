@@ -65,6 +65,7 @@ class InferenceEngine:
         area: str,
         inference_type: Any,
         output_path: str = None,
+        **kwargs
     ):
         """Dispatches an inference request to the appropriate backend.
 
@@ -77,6 +78,7 @@ class InferenceEngine:
             area: Specific area or station identifier.
             inference_type: The type of inference model to use ('yolo', 'anomalib', etc.).
             output_path: Optional path to save visual debug artifacts (e.g., heatmaps).
+            **kwargs: Additional arguments, e.g. force=True to bypass enabled flags.
 
         Returns:
             dict: Categorized results from the backend inference model.
@@ -91,9 +93,10 @@ class InferenceEngine:
             else str(inference_type)
         )
         name = name.lower()
+        force = kwargs.get("force", False)
 
         if name not in self.models:
-            if name == "yolo" and getattr(self.config, "enable_yolo", False):
+            if name == "yolo" and (force or getattr(self.config, "enable_yolo", False)):
                 model = YOLOInferenceModel(self.config)
                 try:
                     model.initialize(product=product, area=area)
@@ -117,7 +120,7 @@ class InferenceEngine:
                     ) from exc
                 self.models["yolo"] = model
                 self.logger.logger.info("YOLO backend ready (lazy)")
-            elif name == "anomalib" and getattr(self.config, "enable_anomalib", False):
+            elif name == "anomalib" and (force or getattr(self.config, "enable_anomalib", False)):
                 if AnomalibInferenceModel is None:
                     raise BackendNotAvailableError("Anomalib not available")
                 model = AnomalibInferenceModel(

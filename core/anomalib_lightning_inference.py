@@ -106,6 +106,10 @@ if hasattr(sys.stdout, "reconfigure"):
 
 ModelKey = tuple[str, str]
 
+import torch
+# Limit PyTorch CPU threads to prevent UI starvation (e.g. combo box stutters) when running locally
+torch.set_num_threads(int(max(1, os.cpu_count() // 2)))
+
 _engine: Engine | None = None
 _models: dict[ModelKey, dict[str, Any]] = {}
 _output_dir: str | None = None
@@ -321,10 +325,13 @@ def lightning_inference(
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 model_info = _models[model_key]
+                # NOTE: Do NOT pass ckpt_path here. The model was already
+                # loaded with weights in initialize() via load_from_checkpoint().
+                # Passing ckpt_path forces Lightning to re-restore checkpoint
+                # weights on every predict() call (~470ms wasted).
                 outputs = _engine.predict(
                     model=model_info["model"],
                     dataloaders=[dataloader],
-                    ckpt_path=model_info["ckpt_path"],
                 )
                 return list(outputs or []), str(model_info["ckpt_path"])
 
@@ -513,6 +520,7 @@ def _process_prediction(
             "total_pixels": total_pixels,
             "anomaly_pixel_ratio": anomaly_ratio,
             "heatmap_path": heatmap_path,
+            "overlay_image": overlay_image_bgr,  # BGR ndarray, avoids disk re-read
             "product": product,
             "area": area,
             "ckpt_path": _models.get(model_key, {}).get("ckpt_path", ""),

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QImage, QPixmap
 from PyQt5.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
 
@@ -120,12 +120,22 @@ class ImageViewer(QLabel):
         if getattr(self, "_last_image_path", None) == image_path:
             return
         if os.path.exists(image_path):
-            pixmap = QPixmap(image_path)
-            scaled_pixmap = pixmap.scaled(
+            self._last_image_path = image_path
+            self.setText("載入中...")
+            # Defer the heavy disk-read + scale to the next event-loop tick
+            # so the UI stays responsive (e.g. during pick_image flow).
+            QTimer.singleShot(0, lambda p=image_path: self._load_and_display(p))
+        else:
+            self.setText(f"無法載入{self._title}")
+
+    def _load_and_display(self, image_path: str) -> None:
+        """Heavy lifting: read file from disk and scale for display."""
+        pixmap = QPixmap(image_path)
+        if not pixmap.isNull():
+            scaled = pixmap.scaled(
                 self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
-            self.setPixmap(scaled_pixmap)
-            self._last_image_path = image_path
+            self.setPixmap(scaled)
         else:
             self.setText(f"無法載入{self._title}")
 
