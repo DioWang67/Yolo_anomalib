@@ -9,6 +9,7 @@
 
 - 🎯 **YOLO11 物件偵測**: 零件定位、缺件檢查、位置校驗
 - 🔍 **Anomalib 異常檢測**: 表面刮傷、髒污、異物檢測
+- ⚡ **Fusion 融合檢測**: YOLO 與 Anomalib 聯合推理，支援特徵熱圖與結果雙重疊加 (GUI 限定功能)
 - 📷 **工業相機整合**: 支援海康威視 MVS SDK
 - 🎨 **LED 顏色檢測**: 統計式顏色驗證
 - 🖥️ **雙介面支援**: CLI 命令列 + PyQt5 GUI
@@ -159,6 +160,8 @@ python main.py --product LED --area A --type yolo --image path/to/image.jpg
 python GUI.py
 ```
 
+> **提示:** Fusion 融合推理模式（YOLO + Anomalib 聯合檢測）目前為 GUI 專屬功能。請於圖形介面中選取「Fusion 分析」選項以啟用雙模型疊加檢測。
+
 ### 4. 查看結果
 
 結果將保存到 `Result/` 目錄（或 `config.yaml` 中指定的 `output_dir`）：
@@ -197,15 +200,18 @@ mypy core app
 ruff format .
 ```
 
-### 建構與發布
+### 建構與發佈
+
+我們提供一鍵打包腳本，將專案封裝為獨立的可執行檔 (EXE)，方便在未安裝 Python 環境的機台上部署：
 
 ```bash
-# 建構套件
-python -m build
-
-# 上傳到 PyPI (若開源)
-twine upload dist/*
+# 執行包裹腳本
+build_exe.bat
 ```
+封裝完成後，可執行檔會放置在 `D:\Git\robotlearning\build_exe\dist\GUI` 目錄下（根據腳本配置可能有所不同）。
+您只需將該目錄複製到目標機台，執行裡面的 `GUI.exe` 即可啟動檢測系統。請確保：
+- 目標機器環境已安裝相應的工業相機驅動 (MVS)。
+- 模型路徑與設定檔維持與打包時的相對路徑關係。
 
 ## 配置說明
 
@@ -216,8 +222,9 @@ twine upload dist/*
 | 配置項 | 說明 | 範例值 |
 |-------|------|--------|
 | `weights` | YOLO 模型權重路徑 | `models/LED/A/yolo/best.pt` |
-| `enable_yolo` | 啟用 YOLO 推理 | `true` |
-| `enable_anomalib` | 啟用 Anomalib 推理 | `false` |
+| `enable_yolo` | 啟用 YOLO 推理 (CLI) | `true` |
+| `enable_anomalib` | 啟用 Anomalib 推理 (CLI) | `false` |
+| `enable_fusion` | 啟用 Fusion 聯合推理 (GUI) | `true` |
 | `max_cache_size` | 模型快取大小 (LRU) | `3` |
 | `output_dir` | 結果輸出目錄 | `./Result` |
 | `exposure_time` | 相機曝光時間 (μs) | `51170` |
