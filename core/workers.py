@@ -35,7 +35,7 @@ import queue
 import threading
 import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from core.queues import OverwriteQueue
 from core.types import DetectionTask
@@ -216,6 +216,7 @@ class AcquisitionWorker(threading.Thread):
         inference_type: str = "yolo",
         capture_interval: float = 0.0,
         name: str = "AcquisitionWorker",
+        on_task_captured: Optional[Callable[[DetectionTask], None]] = None,
     ) -> None:
         super().__init__(name=name, daemon=True)
         self.camera = camera
@@ -224,6 +225,7 @@ class AcquisitionWorker(threading.Thread):
         self.area = area
         self.inference_type = inference_type
         self.capture_interval = capture_interval
+        self._on_task_captured = on_task_captured
         self._stop_event = threading.Event()
         self._logger = logging.getLogger(f"{__name__}.{name}")
         self._frame_count: int = 0
@@ -274,8 +276,16 @@ class AcquisitionWorker(threading.Thread):
                     inference_type=self.inference_type,
                     frame=frame,
                 )
+                # Put into queue (OverwriteQueue won't block)
                 self.out_queue.put(task)
                 self._frame_count += 1
+
+                # Trigger GUI callback if provided
+                if self._on_task_captured:
+                    try:
+                        self._on_task_captured(task)
+                    except Exception:
+                        self._logger.error("Error in on_task_captured callback", exc_info=True)
 
                 if self.capture_interval > 0:
                     self._stop_event.wait(self.capture_interval)
@@ -394,11 +404,13 @@ class StorageWorker(BaseWorker):
         detection_system: Any,
         *,
         name: str = "StorageWorker",
+        on_task_processed: Optional[Callable[[DetectionTask], None]] = None,
     ) -> None:
         # Terminal worker — no downstream queue.
         super().__init__(in_queue, out_queue=None, name=name)
         self._system = detection_system
         self._saved_count: int = 0
+        self._on_task_processed = on_task_processed
 
     @property
     def saved_count(self) -> int:
@@ -443,6 +455,13 @@ class StorageWorker(BaseWorker):
                 "Task %s persisted (total pipeline latency: %.3fs)",
                 task.task_id, pipeline_latency,
             )
+
+            # Trigger GUI callback if provided
+            if self._on_task_processed:
+                try:
+                    self._on_task_processed(task)
+                except Exception:
+                    self._logger.error("Error in on_task_processed callback", exc_info=True)
 
         except Exception:
             self._logger.error(

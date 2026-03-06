@@ -1,29 +1,164 @@
+"""GUI workers for the detection pipeline.
+
+This module provides three worker categories:
+
+1. **PipelineBridge** — QObject Signal-Slot bridge that converts core
+   pipeline callbacks (from ``threading.Thread`` workers) into PyQt
+   signals safe for the GUI main thread.
+
+2. **ShutdownWorker** — QThread that calls the blocking
+   ``stop_pipeline()`` off the main thread so the UI stays responsive.
+
+3. **DetectionWorker** — QThread that calls the non-blocking
+   ``start_pipeline()`` with bridge callbacks injected.
+
+4. **ModelLoaderWorker / CameraInitWorker** — Unchanged utility workers.
+
+Concurrency Safety
+------------------
+``PipelineBridge`` callbacks are invoked on **core worker threads**
+(AcquisitionWorker, StorageWorker). They MUST only emit signals — no
+GUI manipulation, no blocking I/O. The signal-slot mechanism guarantees
+delivery to the main thread via Qt's event loop.
+"""
+
 from __future__ import annotations
 
-import threading
-import time
+import logging
 import traceback
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
-from core.types import DetectionResult
+from core.types import DetectionItem, DetectionResult, DetectionTask
 
 if TYPE_CHECKING:
     from app.gui.controller import DetectionController
     from core.detection_system import DetectionSystem
     from core.services.model_catalog import ModelCatalog
 
+logger = logging.getLogger(__name__)
+
+
+# ======================================================================
+# Pipeline Bridge (Core → GUI signal router)
+# ======================================================================
+
+class PipelineBridge(QObject):
+    """Converts core pipeline callbacks into thread-safe PyQt signals.
+
+    Instantiated **once** by ``DetectionController`` and injected into
+    ``start_pipeline()`` as ``on_task_captured`` / ``on_task_processed``.
+
+    Signals
+    -------
+    image_ready : np.ndarray
+        Emitted when AcquisitionWorker captures a new BGR frame.
+    result_ready : DetectionTask
+        Emitted when StorageWorker finishes persisting a result.
+        The ``DetectionTask.result`` dict is populated at this point.
+    error_occurred : str
+        Emitted on unrecoverable pipeline errors.
+    """
+
+    image_ready = pyqtSignal(object)    # np.ndarray (BGR) for ImagePanel
+    result_ready = pyqtSignal(object)   # DetectionTask with .result populated
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    # ------------------------------------------------------------------
+    # Callback hooks (called on core worker threads — emit only!)
+    # ------------------------------------------------------------------
+
+    def on_task_captured(self, task: DetectionTask) -> None:
+        """Hook injected into AcquisitionWorker.
+
+        Emits the raw BGR ndarray via ``image_ready`` for ImagePanel.
+        """
+        if task.frame is None:
+            return
+        try:
+            self.image_ready.emit(task.frame)
+        except Exception:
+            logger.error("PipelineBridge.on_task_captured failed", exc_info=True)
+
+    def on_task_processed(self, task: DetectionTask) -> None:
+        """Hook injected into StorageWorker.
+
+        Emits the entire ``DetectionTask`` so the GUI can extract
+        ``task.result`` (the raw dict) and build a ``DetectionResult``
+        for UI display.
+        """
+        if task.result is None:
+            return
+        try:
+            self.result_ready.emit(task)
+        except Exception:
+            logger.error("PipelineBridge.on_task_processed failed", exc_info=True)
+
+
+
+# ======================================================================
+# Shutdown Worker (blocking stop_pipeline → QThread)
+# ======================================================================
+
+class ShutdownWorker(QThread):
+    """Executes ``stop_pipeline()`` on a background thread.
+
+    ``stop_pipeline()`` contains ``join()`` calls that block until all
+    pipeline workers finish draining.  Running it on the main thread
+    would freeze the UI for up to ``timeout`` seconds.
+
+    Signals
+    -------
+    shutdown_complete : —
+        Emitted (from the worker thread) after ``stop_pipeline()``
+        returns, regardless of success or failure.
+    """
+
+    shutdown_complete = pyqtSignal()
+
+    def __init__(
+        self,
+        detection_system: DetectionSystem,
+        timeout: float = 10.0,
+    ) -> None:
+        super().__init__()
+        self._system = detection_system
+        self._timeout = timeout
+
+    def run(self) -> None:
+        try:
+            self._system.stop_pipeline(timeout=self._timeout)
+        except Exception:
+            logger.error("ShutdownWorker failed", exc_info=True)
+        finally:
+            self.shutdown_complete.emit()
+
+
+# ======================================================================
+# Detection Worker (pipeline start proxy)
+# ======================================================================
 
 class DetectionWorker(QThread):
-    """
-    Background detection runner that delegates to DetectionSystem.
-    Strictly emits DetectionResult for logic and np.ndarray for UI preview.
+    """Lightweight proxy that calls ``start_pipeline()`` with bridge hooks.
+
+    ``start_pipeline()`` itself is non-blocking (it spawns daemon threads
+    and returns immediately), so this QThread finishes almost instantly
+    after the call.  It exists to catch rare init-time exceptions
+    (e.g. camera not found) without crashing the main thread.
+
+    Signals
+    -------
+    finished : —
+        Emitted after ``start_pipeline()`` returns (success or failure).
+    error_occurred : str
+        Emitted if ``start_pipeline()`` raises an exception.
     """
 
-    result_ready = pyqtSignal(object)  # Emits DetectionResult
-    image_ready = pyqtSignal(object)   # Emits np.ndarray (BGR)
     finished = pyqtSignal()
     error_occurred = pyqtSignal(str)
 
@@ -33,78 +168,40 @@ class DetectionWorker(QThread):
         product: str,
         area: str,
         inference_type: str,
-        frame: np.ndarray | None = None,
-        continuous: bool = False,
+        capture_interval: float = 0.5,
+        bridge: PipelineBridge | None = None,
     ) -> None:
         super().__init__()
-        self._detection_system = detection_system
+        self._system = detection_system
         self._product = product
         self._area = area
         self._inference_type = inference_type
-        self._frame = frame
-        self._continuous = continuous
-        self._stop_event = threading.Event()
-
-    def cancel(self) -> None:
-        """Atomic stop request."""
-        self._stop_event.set()
-
-    @staticmethod
-    def _to_qimage(image: np.ndarray):
-        """Convert a BGR ndarray to QImage on the worker thread."""
-        import cv2
-        from PyQt5.QtGui import QImage
-
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        h, w, ch = rgb.shape
-        return QImage(rgb.data.tobytes(), w, h, ch * w, QImage.Format_RGB888)
+        self._interval = capture_interval
+        self._bridge = bridge
 
     def run(self) -> None:
         try:
-            # Re-init system with selected config
-            self._detection_system.load_model_configs(self._product, self._area, self._inference_type)
-            frame_id = 0
-            while not self._stop_event.is_set():
-                if self._frame is not None:
-                    # Single shot with provided image
-                    image = self._frame
-                    # For single shot provided image, we stop after one iteration
-                    self.cancel()
-                else:
-                    # Camera capture
-                    image = self._detection_system.capture_image()
-                    if image is None:
-                        if not self._continuous:
-                            self.error_occurred.emit("無法擷取影像")
-                        time.sleep(0.1)
-                        continue
-
-                # 1. Convert image to QImage on worker thread (offload from main thread)
-                self.image_ready.emit(self._to_qimage(image))
-
-                # 2. Run Detection — returns DetectionResult directly
-                result = self._detection_system.detect(
-                    self._product,
-                    self._area,
-                    self._inference_type,
-                    frame=image
-                )
-                result.frame_id = frame_id
-
-                # 3. Emit Result
-                self.result_ready.emit(result)
-
-                frame_id += 1
-
-                if not self._continuous and self._frame is None:
-                    break
-
+            self._system.start_pipeline(
+                self._product,
+                self._area,
+                self._inference_type,
+                capture_interval=self._interval,
+                on_task_captured=(
+                    self._bridge.on_task_captured if self._bridge else None
+                ),
+                on_task_processed=(
+                    self._bridge.on_task_processed if self._bridge else None
+                ),
+            )
         except Exception:
             self.error_occurred.emit(traceback.format_exc())
-
         finally:
             self.finished.emit()
 
+
+# ======================================================================
+# Utility Workers (unchanged)
+# ======================================================================
 
 class ModelLoaderWorker(QThread):
     """Background worker to load model catalog."""
@@ -135,20 +232,13 @@ class CameraInitWorker(QThread):
 
     def run(self) -> None:
         try:
-            # Trigger system lazy load / init
             if not self._controller.has_system():
                 _ = self._controller.detection_system
 
-            # Explicitly call init camera if such method exists,
-            # or rely on system init.
-            # Here we assume checking connection status might trigger reconnect if auto-connect is on,
-            # or we explicitly call reconnect.
             sys = self._controller.detection_system
-
-            # Check if camera is already connected via system status or controller check
             if not self._controller.is_camera_connected():
                 if hasattr(sys, "reconnect_camera"):
-                     sys.reconnect_camera()
+                    sys.reconnect_camera()
 
             connected = self._controller.is_camera_connected()
             self.finished.emit(connected)

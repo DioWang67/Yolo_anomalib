@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from app.gui.workers import CameraInitWorker, DetectionWorker, ModelLoaderWorker
+from app.gui.workers import CameraInitWorker, DetectionWorker, ModelLoaderWorker, PipelineBridge, ShutdownWorker
 
 if TYPE_CHECKING:  # pragma: no cover
     from core.services.model_catalog import ModelCatalog
@@ -35,13 +35,12 @@ class DetectionController:
         self._logger = logger or logging.getLogger(__name__)
         self._system: Any | None = None
         self._detection_cls = detection_cls
+        self.bridge = PipelineBridge()
 
     @property
     def detection_system(self) -> Any:
         """
         Lazy initialization of the detection system.
-        In a stricter DI setup, this should be passed in __init__, 
-        but for now we maintain lazy-load behavior but managed here.
         """
         if self._system is None:
             self._logger.info("Initializing Detection System...")
@@ -94,19 +93,22 @@ class DetectionController:
         area: str,
         inference_type: str,
         *,
-        frame: Any = None,
-        continuous: bool = False,
+        capture_interval: float = 0.5,
     ) -> DetectionWorker:
-        """Creates a detection worker with injected system."""
+        """Creates a detection worker (pipeline proxy) with injected system and bridge."""
         system = self.detection_system
         return DetectionWorker(
             detection_system=system,
             product=product,
             area=area,
             inference_type=inference_type,
-            frame=frame,
-            continuous=continuous
+            capture_interval=capture_interval,
+            bridge=self.bridge
         )
+
+    def build_shutdown_worker(self, timeout: float = 10.0) -> ShutdownWorker:
+        """Creates a worker to handle blocking stop_pipeline() calls."""
+        return ShutdownWorker(self.detection_system, timeout=timeout)
 
     def build_model_loader(self) -> ModelLoaderWorker:
         return ModelLoaderWorker(self.catalog)

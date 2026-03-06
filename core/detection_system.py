@@ -147,6 +147,8 @@ class DetectionSystem:
         inference_type: str = "yolo",
         *,
         capture_interval: float = 0.0,
+        on_task_captured=None,
+        on_task_processed=None,
     ) -> None:
         """Start the async Producer-Consumer detection pipeline.
 
@@ -160,10 +162,12 @@ class DetectionSystem:
         for single-shot usage and is **not** affected by the pipeline.
 
         Args:
-            product: Product identifier for model dispatch.
-            area: Area identifier for model dispatch.
+            product: Name of product.
+            area: Name of area.
             inference_type: 'yolo', 'anomalib', or 'fusion'.
-            capture_interval: Minimum seconds between captures.
+            capture_interval: Seconds between captures.
+            on_task_captured: Optional callback for each captured task.
+            on_task_processed: Optional callback for each stored task.
 
         Raises:
             RuntimeError: If the pipeline is already running or camera
@@ -201,6 +205,7 @@ class DetectionSystem:
                 area=area,
                 inference_type=inference_type,
                 capture_interval=capture_interval,
+                on_task_captured=on_task_captured,
             )
             self._inf_worker = InferenceWorker(
                 in_queue=self._inference_queue,
@@ -210,6 +215,7 @@ class DetectionSystem:
             self._sto_worker = StorageWorker(
                 in_queue=self._io_queue,
                 detection_system=self,
+                on_task_processed=on_task_processed,
             )
 
             # --- Start workers (order: consumer first → producer last) ---

@@ -6,6 +6,7 @@ import importlib
 import logging
 import os
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -245,6 +246,15 @@ class DetectionSystemGUI(QMainWindow):
             "padding: 2px 8px; color: #6c757d; font-size: 11px; border-left: 1px solid #dee2e6;"
         )
         self.statusBar().addPermanentWidget(self.model_version_label)
+        
+        # --- New: Pipeline Bridge & Stats ---
+        self.controller.bridge.image_ready.connect(self.on_image_ready)
+        self.controller.bridge.result_ready.connect(self.on_pipeline_result)
+        self.controller.bridge.error_occurred.connect(self.on_detection_error)
+        
+        self.stats_timer = QTimer(self)
+        self.stats_timer.setInterval(1000)
+        self.stats_timer.timeout.connect(self.update_pipeline_stats)
         
         self.statusBar().showMessage("系統就緒")
         self.update_start_enabled()
@@ -544,64 +554,145 @@ class DetectionSystemGUI(QMainWindow):
         self.log_message(
             f"Start detection - product: {product}, area: {area}, type: {inference_type}"
         )
-        frame = None
-        use_cam = True
-        try:
-            use_cam = bool(self.use_camera_chk.isChecked())
-        except Exception:
-            pass
-        if not use_cam:
+        
+        use_cam = self.use_camera_chk.isChecked()
+        if use_cam:
+            # --- ASYNC PIPELINE MODE ---
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+            self.stats_timer.start()
+            
+            # Use DetectionWorker as a start proxy (runs in separate thread to avoid UI lag)
+            self.worker = self.controller.build_worker(
+                product, area, inference_type,
+                capture_interval=0.1 # Example interval
+            )
+            self.worker.error_occurred.connect(self.on_detection_error)
+            self.worker.start()
+        else:
+            # --- SINGLE SHOT MODE (Synchronous) ---
             selected = getattr(self, "selected_image_path", None)
-            if selected:
-                image = self.controller.load_image(Path(selected))
-                if image is not None:
-                    frame = image
-            if frame is None:
-                QMessageBox.warning(
-                    self, "Input Source", "Select an image file or enable camera input."
-                )
-                self.start_btn.setEnabled(True)
-                self.stop_btn.setEnabled(False)
-                self.update_camera_controls()
+            if not selected:
+                QMessageBox.warning(self, "Input Source", "Select an image file first.")
+                self._reset_ui_state()
                 return
-        # --- Clean up previous worker to prevent zombie threads / signal leaks ---
-        if self.worker is not None:
-            try:
-                self.worker.cancel()
-                self.worker.wait(2000)
-            except Exception:
-                pass
-            try:
-                self.worker.disconnect()
-            except TypeError:
-                pass
-            self.worker.deleteLater()
-            self.worker = None
+                
+            image = self.controller.load_image(Path(selected))
+            if image is None:
+                QMessageBox.warning(self, "Load Error", "Failed to load selected image.")
+                self._reset_ui_state()
+                return
 
-        self.worker = self.controller.build_worker(
-            product,
-            area,
-            inference_type,
-            frame=frame,
-        )
-        self.worker.result_ready.connect(self.on_detection_complete)
-        self.worker.image_ready.connect(self.on_image_ready)
-        self.worker.error_occurred.connect(self.on_detection_error)
-        self.worker.finished.connect(self._on_worker_finished)
-        self.worker.start()
+            self.image_panel.update_image(image)
+            # Run one-off detection in a daemon thread to keep UI alive
+            threading.Thread(
+                target=self._run_single_shot,
+                args=(image, product, area, inference_type),
+                daemon=True,
+            ).start()
+
+    def _run_single_shot(self, frame, product, area, inference_type):
+        """Execute a single synchronous detect() call off the main thread."""
+        try:
+            result = self.controller.detection_system.detect(
+                product, area, inference_type, frame=frame
+            )
+            # Use bridge signal to safely cross back to the main thread
+            self.controller.bridge.result_ready.emit(result)
+        except Exception as e:
+            self.controller.bridge.error_occurred.emit(str(e))
 
     def stop_detection(self):
-        """停止檢測"""
-        if self.worker and self.worker.isRunning():
-            self.worker.cancel()
-            if not self.worker.wait(3000):
-                self.log_message("警告: Worker 未能在 3 秒內停止")
+        """優雅停止管線 (非阻塞)"""
+        if not self.controller.has_system():
+            return
+            
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.setText("正在停止...")
+        
+        # Use ShutdownWorker to handle blocking stop_pipeline()
+        self._shutdown_worker = self.controller.build_shutdown_worker()
+        self._shutdown_worker.shutdown_complete.connect(self._on_pipeline_stopped)
+        self._shutdown_worker.start()
+
+    def _on_pipeline_stopped(self):
+        """Pipeline stopped callback."""
+        self.stats_timer.stop()
+        self.stop_btn.setText("停止檢測")
+        self._reset_ui_state()
+        self.log_message("檢測管線已關閉 (IO 已落盤)")
+
+    def _reset_ui_state(self):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("READY")
         self.update_camera_controls()
-        self.log_message("檢測已取消")
+
+    def update_pipeline_stats(self):
+        """Update FPS/Counters on the status bar."""
+        if not self.controller.has_system():
+            return
+        sys = self.controller.detection_system
+        if not sys.pipeline_running:
+            return
+        stats = sys.pipeline_stats()
+        msg = (f"Captured: {stats['frames_captured']} | "
+               f"Dropped: {stats['frames_dropped']} | "
+               f"Saved: {stats['tasks_saved']} | "
+               f"Queue: {stats['inference_queue_size']}/{stats['io_queue_size']}")
+        self.statusBar().showMessage(msg)
+
+    @pyqtSlot(object)
+    def on_pipeline_result(self, result_or_task):
+        """Handle result from pipeline (via Bridge).
+
+        Receives either a ``DetectionResult`` (single-shot mode) or a
+        ``DetectionTask`` (pipeline mode). Converts to ``DetectionResult``
+        and delegates to ``on_detection_complete``.
+        """
+        from core.types import DetectionResult, DetectionTask, DetectionItem
+
+        if isinstance(result_or_task, DetectionResult):
+            # Single-shot mode emits DetectionResult directly
+            self.on_detection_complete(result_or_task)
+            return
+
+        # Pipeline mode: convert DetectionTask → DetectionResult
+        task = result_or_task
+        if not isinstance(task, DetectionTask) or task.result is None:
+            return
+
+        res = task.result
+        items = [
+            DetectionItem(
+                label=d.get("class", "unknown"),
+                confidence=float(d.get("confidence", 0.0)),
+                bbox_xyxy=tuple(d.get("bbox", (0, 0, 0, 0))),
+                metadata={k: v for k, v in d.items()
+                          if k not in ("class", "confidence", "bbox")},
+            )
+            for d in res.get("detections", [])
+        ]
+
+        result = DetectionResult(
+            status=res.get("status", "ERROR"),
+            items=items,
+            latency=time.time() - task.timestamp,
+            product=task.product,
+            area=task.area,
+            inference_type=task.inference_type,
+            error=res.get("error"),
+            anomaly_score=res.get("anomaly_score"),
+            missing_items=res.get("missing_items", []),
+            unexpected_items=res.get("unexpected_items", []),
+            annotated_path=res.get("annotated_path", ""),
+            heatmap_path=res.get("heatmap_path", ""),
+            original_image_path=res.get("original_image_path", ""),
+            preprocessed_image_path=res.get("preprocessed_image_path", ""),
+            result_frame=res.get("result_frame"),
+        )
+        self.on_detection_complete(result)
 
     def _on_worker_finished(self) -> None:
         """Restore UI when worker finishes for any reason."""
@@ -619,11 +710,18 @@ class DetectionSystemGUI(QMainWindow):
     def on_detection_complete(self, result: DetectionResult) -> None:
         """檢測完成回調"""
         self.current_result = result
-        # 更新界面
-        self.start_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
+
+        # Only reset buttons if pipeline is NOT running (single-shot mode)
+        is_pipeline_running = (
+            self.controller.has_system()
+            and self.controller.detection_system.pipeline_running
+        )
+        if not is_pipeline_running:
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            self.update_camera_controls()
+
         self.save_btn.setEnabled(True)
-        self.update_camera_controls()
 
         # Update big status
         if getattr(self, "big_status_label", None):
