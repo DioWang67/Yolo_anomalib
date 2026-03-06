@@ -172,7 +172,8 @@ def _mk_system(monkeypatch, tmp_result_dir):
 
 def test_detect_calls_flush_yolo(monkeypatch, tmp_result_dir):
     sys, sink = _mk_system(monkeypatch, tmp_result_dir)
-    out = sys.detect("P", "A", "yolo")
+    dummy_frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    out = sys.detect("P", "A", "yolo", frame=dummy_frame)
     assert out.status in ("PASS", "FAIL", "ERROR")
     assert sink.flushed == 1
     assert out.error is None or isinstance(out.error, str)
@@ -183,7 +184,8 @@ def test_detect_calls_flush_anomalib(monkeypatch, tmp_result_dir):
     # Avoid os.path.exists moving path to simplify test
     monkeypatch.setattr(os.path, "exists", lambda p: False, raising=True)
     sys, sink = _mk_system(monkeypatch, tmp_result_dir)
-    out = sys.detect("P", "A", "anomalib")
+    dummy_frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    out = sys.detect("P", "A", "anomalib", frame=dummy_frame)
     assert out.status in ("PASS", "FAIL", "ERROR")
     assert sink.flushed == 1
     assert out.error is None or isinstance(out.error, str)
@@ -193,8 +195,17 @@ def test_detect_calls_flush_anomalib(monkeypatch, tmp_result_dir):
 def test_detect_flush_on_failure(monkeypatch, tmp_result_dir):
     sys, sink = _mk_system(monkeypatch, tmp_result_dir)
     sys.model_manager.engine.force_fail = True
-    out = sys.detect("P", "A", "yolo")
+    dummy_frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    out = sys.detect("P", "A", "yolo", frame=dummy_frame)
     assert out.status == "FAIL"
     assert sink.flushed == 1
     assert len(sink.saved) == 1
 
+
+def test_detect_returns_error_when_no_camera_no_frame(monkeypatch, tmp_result_dir):
+    """With _acquire_frame's dummy-image fallback removed, detect() must
+    return ERROR status when no camera is available and no frame is supplied."""
+    sys, sink = _mk_system(monkeypatch, tmp_result_dir)
+    out = sys.detect("P", "A", "yolo")
+    assert out.status == "ERROR"
+    assert "No camera available" in (out.error or "")

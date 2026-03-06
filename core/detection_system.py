@@ -5,11 +5,17 @@ Responsibilities:
 - Initialize camera and inference engine backends
 - Build a per-run pipeline (position/color/save) and execute
 - Normalize outputs and persist results via sinks
+- (Async mode) Manage Producer-Consumer pipeline workers
 
-Public entrypoint: DetectionSystem.detect(product, area, inference_type, frame=None)
+Public entrypoints:
+  - DetectionSystem.detect(...)          — synchronous, single-shot
+  - DetectionSystem.start_pipeline(...)  — async continuous mode
+  - DetectionSystem.stop_pipeline()      — graceful shutdown
 """
 
+import logging
 import os
+import queue
 import shutil
 from pathlib import Path
 from typing import Any
@@ -24,11 +30,13 @@ from core.logging_utils import context_adapter
 from core.path_utils import project_root
 from core.pipeline.context import DetectionContext
 from core.pipeline.registry import PipelineEnv, build_pipeline, default_pipeline
+from core.queues import OverwriteQueue
 from core.result_adapter import normalize_result
 from core.services.color_checker import ColorCheckerService
 from core.services.model_manager import ModelManager
 from core.services.result_sink import ExcelImageResultSink
-from core.types import DetectionItem, DetectionResult
+from core.types import DetectionItem, DetectionResult, DetectionTask
+from core.workers import AcquisitionWorker, InferenceWorker, StorageWorker
 
 
 class _InferenceTypeToken(str):
@@ -70,6 +78,15 @@ class DetectionSystem:
         )
         self.color_service = ColorCheckerService()
         self._color_override_cache: dict[str, dict[str, Any]] = {}
+
+        # --- Producer-Consumer pipeline state ---
+        self._pipeline_running: bool = False
+        self._inference_queue: OverwriteQueue[DetectionTask] | None = None
+        self._io_queue: queue.Queue[DetectionTask] | None = None
+        self._acq_worker: AcquisitionWorker | None = None
+        self._inf_worker: InferenceWorker | None = None
+        self._sto_worker: StorageWorker | None = None
+
         self.initialize_camera()
 
     def _resolve_output_dir(self) -> Path:
@@ -98,7 +115,11 @@ class DetectionSystem:
         return DetectionConfig.from_yaml(str(Path(config_path)))
 
     def shutdown(self) -> None:
-        """Release resources: models, camera, sinks."""
+        """Release resources: pipeline workers, models, camera, sinks."""
+        # Stop async pipeline first (if running)
+        if self._pipeline_running:
+            self.stop_pipeline()
+
         if self.inference_engine:
             self.inference_engine.shutdown()
             self.inference_engine = None
@@ -112,6 +133,170 @@ class DetectionSystem:
                 pass
             self.result_sink = None
         self._sink_base_dir = None
+
+    # ------------------------------------------------------------------
+    # Producer-Consumer Pipeline API
+    # ------------------------------------------------------------------
+
+    def start_pipeline(
+        self,
+        product: str,
+        area: str,
+        inference_type: str = "yolo",
+        *,
+        capture_interval: float = 0.0,
+    ) -> None:
+        """Start the async Producer-Consumer detection pipeline.
+
+        This launches three background threads:
+        1. **AcquisitionWorker** — captures frames from the camera.
+        2. **InferenceWorker** — runs model inference on each frame.
+        3. **StorageWorker** — persists results to disk / Excel.
+
+        The pipeline runs continuously until :meth:`stop_pipeline` is
+        called.  The synchronous :meth:`detect` method remains available
+        for single-shot usage and is **not** affected by the pipeline.
+
+        Args:
+            product: Product identifier for model dispatch.
+            area: Area identifier for model dispatch.
+            inference_type: 'yolo', 'anomalib', or 'fusion'.
+            capture_interval: Minimum seconds between captures.
+
+        Raises:
+            RuntimeError: If the pipeline is already running or camera
+                is unavailable.
+        """
+        if self._pipeline_running:
+            raise RuntimeError("Pipeline is already running")
+        if not self.camera:
+            raise RuntimeError(
+                "Cannot start pipeline: no camera available. "
+                "Call initialize_camera() first."
+            )
+
+        _logger = logging.getLogger(__name__)
+
+        # Pre-load model configs so InferenceWorker is ready
+        self.load_model_configs(product, area, inference_type)
+
+        # --- Create queues ---
+        buffer_limit = getattr(self.config, "buffer_limit", 10)
+        self._inference_queue = OverwriteQueue(
+            maxlen=buffer_limit, name="inference_queue"
+        )
+        # IO queue uses stdlib Queue — StorageWorker must process every
+        # result, so we never drop items here.
+        self._io_queue = queue.Queue(maxsize=buffer_limit * 2)
+
+        # --- Create workers ---
+        self._acq_worker = AcquisitionWorker(
+            camera=self.camera,
+            out_queue=self._inference_queue,
+            product=product,
+            area=area,
+            inference_type=inference_type,
+            capture_interval=capture_interval,
+        )
+        self._inf_worker = InferenceWorker(
+            in_queue=self._inference_queue,
+            out_queue=self._io_queue,
+            detection_system=self,
+        )
+        self._sto_worker = StorageWorker(
+            in_queue=self._io_queue,
+            detection_system=self,
+        )
+
+        # --- Start workers (order: consumer first → producer last) ---
+        self._sto_worker.start()
+        self._inf_worker.start()
+        self._acq_worker.start()
+        self._pipeline_running = True
+
+        _logger.info(
+            "Pipeline started: %s/%s/%s (buffer=%d, interval=%.3fs)",
+            product, area, inference_type, buffer_limit, capture_interval,
+        )
+
+    def stop_pipeline(self, timeout: float = 10.0) -> None:
+        """Gracefully shut down the async pipeline.
+
+        Shutdown sequence:
+        1. Signal AcquisitionWorker to stop (via ``Event``).
+        2. AcquisitionWorker sends poison pill → InferenceWorker.
+        3. InferenceWorker propagates poison pill → StorageWorker.
+        4. StorageWorker flushes remaining I/O and exits.
+
+        Args:
+            timeout: Max seconds to wait for each worker to finish.
+        """
+        if not self._pipeline_running:
+            return
+
+        _logger = logging.getLogger(__name__)
+        _logger.info("Stopping pipeline...")
+
+        # Step 1: Signal acquisition to stop
+        if self._acq_worker and self._acq_worker.is_alive():
+            self._acq_worker.stop()
+
+        # Step 2-4: Wait for domino shutdown
+        for worker in (self._acq_worker, self._inf_worker, self._sto_worker):
+            if worker and worker.is_alive():
+                worker.join(timeout=timeout)
+                if worker.is_alive():
+                    _logger.warning(
+                        "Worker %s did not stop within %.1fs",
+                        worker.name, timeout,
+                    )
+
+        # Report stats
+        stats = self.pipeline_stats()
+        _logger.info(
+            "Pipeline stopped — captured: %d, dropped: %d, saved: %d",
+            stats.get("frames_captured", 0),
+            stats.get("frames_dropped", 0),
+            stats.get("tasks_saved", 0),
+        )
+
+        self._pipeline_running = False
+        self._acq_worker = None
+        self._inf_worker = None
+        self._sto_worker = None
+        self._inference_queue = None
+        self._io_queue = None
+
+    @property
+    def pipeline_running(self) -> bool:
+        """Whether the async pipeline is currently active."""
+        return self._pipeline_running
+
+    def pipeline_stats(self) -> dict[str, Any]:
+        """Return a snapshot of pipeline counters for monitoring."""
+        return {
+            "pipeline_running": self._pipeline_running,
+            "frames_captured": (
+                self._acq_worker.frame_count
+                if self._acq_worker else 0
+            ),
+            "frames_dropped": (
+                self._inference_queue.dropped_count
+                if self._inference_queue else 0
+            ),
+            "inference_queue_size": (
+                self._inference_queue.qsize()
+                if self._inference_queue else 0
+            ),
+            "io_queue_size": (
+                self._io_queue.qsize()
+                if self._io_queue else 0
+            ),
+            "tasks_saved": (
+                self._sto_worker.saved_count
+                if self._sto_worker else 0
+            ),
+        }
 
     def capture_image(self) -> np.ndarray | None:
         """Capture a single frame from the active camera."""
@@ -299,19 +484,31 @@ class DetectionSystem:
                 run_logger.error(f"Color checker init failed: {e}")
 
     def _acquire_frame(self, frame: np.ndarray | None, run_logger) -> np.ndarray:
-        """Capture a frame from the camera if not provided."""
+        """Capture a frame from the camera if not provided.
+
+        Raises:
+            RuntimeError: If the camera returns None or no camera/frame is
+                available.  The caller (``detect``) catches this and maps
+                it to ``DetectionResult(status='ERROR')``.
+        """
         if frame is not None:
             return frame
         if self.camera:
             frame = self.camera.capture_frame()
             if frame is None:
-                run_logger.error("Failed to read frame from camera")
-                run_logger.warning("Using dummy image for detection")
-                return np.zeros((640, 640, 3), dtype=np.uint8)
+                run_logger.critical(
+                    "Hardware IO Error: camera.capture_frame() returned None. "
+                    "Possible cable disconnect or driver failure."
+                )
+                raise RuntimeError(
+                    "Failed to read frame from camera. Hardware failure."
+                )
             return frame
-        else:
-            run_logger.warning("Camera unavailable; using dummy image for detection")
-            return np.zeros((640, 640, 3), dtype=np.uint8)
+        # No camera instance and no frame supplied
+        run_logger.critical(
+            "Hardware IO Error: no camera available and no frame provided."
+        )
+        raise RuntimeError("No camera available and no frame provided.")
 
     def _run_inference(
         self,
@@ -349,6 +546,27 @@ class DetectionSystem:
 
         return result
 
+    @staticmethod
+    def _make_error_result(error_msg: str) -> dict[str, Any]:
+        """Build a standard error dict with ALL keys required by merge logic.
+
+        This prevents ``TypeError`` when the merge step concatenates list
+        fields (``missing_items``, ``unexpected_items``, ``detections``).
+        """
+        return {
+            "status": "ERROR",
+            "error": error_msg,
+            "detections": [],
+            "missing_items": [],
+            "unexpected_items": [],
+            "inference_time": 0.0,
+            "anomaly_score": None,
+            "result_frame": None,
+            "original_image": None,
+            "annotated_path": "",
+            "heatmap_path": "",
+        }
+
     def _run_fusion_inference(
         self,
         frame: np.ndarray,
@@ -356,8 +574,7 @@ class DetectionSystem:
         area: str,
         run_logger,
     ) -> dict[str, Any]:
-        from concurrent.futures import ThreadPoolExecutor
-        from typing import Any
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
         # --- Validate engines before parallel dispatch ---
         yolo_engine = self.model_manager._cache.get((product, area), {}).get("yolo", (None, None))[0]
@@ -374,24 +591,56 @@ class DetectionSystem:
             status="TEMP", detector="anomalib", product=product, area=area
         )
 
+        # Read timeout from config (default 10 s); production lines can
+        # override via config.yaml to match their own Cycle Time.
+        inference_timeout: int | float = getattr(self.config, "timeout", 10)
+
         # --- Run YOLO and Anomalib concurrently ---
         # Both engines use C extensions (PyTorch/OpenCV) that release the GIL,
-        # so threading gives real overlap (~120ms saved).
-        def _yolo_task():
-            raw = yolo_engine.infer(frame, product, area, _InferenceTypeToken("yolo"), force=True)
-            return normalize_result(raw, "yolo", frame)
+        # so threading gives real overlap (~120 ms saved).
+        def _yolo_task() -> dict[str, Any]:
+            try:
+                raw = yolo_engine.infer(frame, product, area, _InferenceTypeToken("yolo"), force=True)
+                return normalize_result(raw, "yolo", frame)
+            except Exception as exc:
+                run_logger.error("YOLO inference failed in fusion: %s", exc, exc_info=True)
+                return DetectionSystem._make_error_result(f"YOLO engine error: {exc}")
 
-        def _ano_task():
-            raw = ano_engine.infer(
-                frame, product, area, _InferenceTypeToken("anomalib"), ano_output_path, force=True
-            )
-            return normalize_result(raw, "anomalib", frame)
+        def _ano_task() -> dict[str, Any]:
+            try:
+                raw = ano_engine.infer(
+                    frame, product, area, _InferenceTypeToken("anomalib"), ano_output_path, force=True
+                )
+                return normalize_result(raw, "anomalib", frame)
+            except Exception as exc:
+                run_logger.error("Anomalib inference failed in fusion: %s", exc, exc_info=True)
+                return DetectionSystem._make_error_result(f"Anomalib engine error: {exc}")
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             yolo_future = pool.submit(_yolo_task)
             ano_future = pool.submit(_ano_task)
-            yolo_res = yolo_future.result()
-            ano_res = ano_future.result()
+
+            try:
+                yolo_res = yolo_future.result(timeout=inference_timeout)
+            except FutureTimeoutError:
+                run_logger.error("YOLO inference timed out after %s s", inference_timeout)
+                yolo_res = self._make_error_result(
+                    f"YOLO inference timed out ({inference_timeout}s)"
+                )
+            except Exception as exc:
+                run_logger.error("YOLO future raised unexpected error: %s", exc, exc_info=True)
+                yolo_res = self._make_error_result(f"YOLO future error: {exc}")
+
+            try:
+                ano_res = ano_future.result(timeout=inference_timeout)
+            except FutureTimeoutError:
+                run_logger.error("Anomalib inference timed out after %s s", inference_timeout)
+                ano_res = self._make_error_result(
+                    f"Anomalib inference timed out ({inference_timeout}s)"
+                )
+            except Exception as exc:
+                run_logger.error("Anomalib future raised unexpected error: %s", exc, exc_info=True)
+                ano_res = self._make_error_result(f"Anomalib future error: {exc}")
 
         if ano_output_path:
             self._adjust_anomalib_output_path(ano_res, ano_output_path, run_logger)

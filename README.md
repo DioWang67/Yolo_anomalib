@@ -15,6 +15,7 @@
 - 🖥️ **雙介面支援**: CLI 命令列 + PyQt5 GUI
 - 📊 **結果管理**: Excel 報表輸出、影像標註保存
 - 🔄 **多產品支援**: 靈活的產品/區域/類型配置體系
+- 🚀 **非同步管線 (NEW)**: Producer-Consumer 三階段管線，解耦取像/推論/I/O，適用於高 FPS 產線
 
 ## 專案結構
 
@@ -23,7 +24,10 @@ yolo11_inference/
 ├── core/                       # 核心推理引擎
 │   ├── yolo_inference_model.py        # YOLO 推理後端
 │   ├── anomalib_inference_model.py    # Anomalib 推理後端
-│   ├── detection_system.py            # 主編排器
+│   ├── detection_system.py            # 主編排器 (同步 + 非同步管線)
+│   ├── types.py                       # 強型別資料結構 (DetectionResult, DetectionTask)
+│   ├── queues.py                      # OverwriteQueue (FIFO + Drop-Oldest)
+│   ├── workers.py                     # Pipeline Workers (Acquisition/Inference/Storage)
 │   ├── detector.py                    # YOLO 偵測邏輯
 │   ├── position_validator.py          # 位置校驗器
 │   ├── services/                      # 服務層
@@ -42,7 +46,7 @@ yolo11_inference/
 │   └── camera_controller.py           # 相機控制器
 ├── tools/                      # 獨立工具
 │   └── color_verifier.py              # LED 顏色檢測工具
-├── tests/                      # 測試套件 (52 個測試)
+├── tests/                      # 測試套件
 ├── models/                     # 模型權重目錄
 │   └── <product>/
 │       └── <area>/
@@ -347,10 +351,62 @@ python main.py --product <new_product> --area <area> --type yolo
 
 1. **使用 GPU**: 確保 CUDA 可用
 2. **混合精度**: `config.yaml` 中啟用 FP16
-3. **批次推理**: 對多張影像使用批次處理（進階）
+3. **非同步管線**: 使用 `start_pipeline()` 解耦取像與推論（見下方說明）
 4. **TensorRT**: 匯出模型為 TensorRT 引擎（進階）
 
 詳見 `docs/TECH_GUIDE.md` 第 8 節「效能工程手冊」。
+
+## 非同步管線 (Producer-Consumer Pipeline)
+
+適用於高產能、高 FPS 的產線環境。將同步阻塞流程拆分為三個獨立執行緒：
+
+```
+┌──────────────────┐    OverwriteQueue    ┌──────────────────┐    stdlib Queue    ┌──────────────────┐
+│ AcquisitionWorker│───────────────────▶│ InferenceWorker  │──────────────────▶│  StorageWorker   │
+│   (相機取像)      │   drop-oldest      │   (模型推論)      │   保證不丟      │   (Excel/影像)    │
+└──────────────────┘                    └──────────────────┘                    └──────────────────┘
+```
+
+### 使用方式
+
+```python
+from core.detection_system import DetectionSystem
+
+system = DetectionSystem("config.yaml")
+
+# 啟動非同步管線
+system.start_pipeline(
+    product="LED",
+    area="A",
+    inference_type="yolo",
+    capture_interval=0.0,  # 0 = 全速取像
+)
+
+# 監控管線狀態
+stats = system.pipeline_stats()
+print(f"已擷取: {stats['frames_captured']}")
+print(f"已丟棄: {stats['frames_dropped']}")
+print(f"已儲存: {stats['tasks_saved']}")
+
+# 安全停止（毒藥丸逐級傳遞 → 殘留 I/O 全清空）
+system.stop_pipeline()
+```
+
+### 邊界條件防禦
+
+| 威脅 | 機制 | 說明 |
+|------|------|------|
+| Queue 堆積 OOM | `OverwriteQueue(maxlen=N)` | 自動丟棄最舊幀 |
+| 殭屍幀 | FIFO + Drop-Oldest | 推論端永遠處理最新影像 |
+| 關機資料遺失 | Poison Pill 機制 | `StorageWorker` 確保殘留 I/O 全寫入 |
+| Worker 崩潰死鎖 | `try-finally` 保證傳遞 | 即使推論崩潰也不卡死管線 |
+
+### 相關配置項
+
+| 配置項 | 說明 | 預設值 |
+|--------|------|--------|
+| `buffer_limit` | OverwriteQueue 容量 (maxlen) | `10` |
+| `timeout` | 推論超時秒數 | `2` |
 
 ### Q: 測試失敗怎麼辦？
 

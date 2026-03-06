@@ -118,3 +118,57 @@ class DetectionResult:
             "sequence_check": self.sequence_check,
             "metadata": self.metadata,
         }
+
+
+# ---------------------------------------------------------------------------
+# Pipeline DTO — carries context through the Producer-Consumer pipeline.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DetectionTask:
+    """Unit of work flowing through the async detection pipeline.
+
+    Created by AcquisitionWorker at capture time.  Carries the raw frame
+    *together with* all context required by downstream workers so that no
+    information is lost when items sit in a queue.
+
+    Attributes:
+        task_id:        Unique identifier (UUID or hardware trigger sequence).
+        timestamp:      ``time.time()`` at the moment the frame was captured.
+                        StorageWorker uses this to record the true capture
+                        time, **not** the (later) inference-complete time.
+        product:        Product identifier for model dispatch.
+        area:           Area identifier for model dispatch.
+        inference_type: The requested inference mode ('yolo', 'anomalib',
+                        'fusion').
+        frame:          Raw BGR image from the camera.
+        is_poison_pill: If ``True`` the task is a shutdown sentinel — workers
+                        must propagate it downstream and then exit.
+        error:          Populated by InferenceWorker when inference fails so
+                        that StorageWorker can persist the error context.
+        result:         Raw inference result dict, populated by
+                        InferenceWorker for StorageWorker to persist.
+    """
+
+    task_id: str
+    timestamp: float
+    product: str
+    area: str
+    inference_type: str = "yolo"
+    frame: np.ndarray | None = field(default=None, repr=False)
+    is_poison_pill: bool = False
+    error: str | None = None
+    result: dict[str, Any] | None = field(default=None, repr=False)
+
+    # ---- Convenience factories ----
+
+    @classmethod
+    def poison_pill(cls) -> DetectionTask:
+        """Create a minimal shutdown sentinel task."""
+        return cls(
+            task_id="__POISON_PILL__",
+            timestamp=0.0,
+            product="",
+            area="",
+            is_poison_pill=True,
+        )

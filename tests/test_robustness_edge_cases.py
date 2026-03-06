@@ -76,3 +76,37 @@ def test_inference_with_empty_image(mock_yolo, mock_autocast, mock_config):
     # Test with empty array (invalid shape for letterbox)
     with pytest.raises(Exception): # letterbox might raise ValueError
         model.infer(np.array([]), "prod", "area")
+
+
+# ---- Tests for _acquire_frame RuntimeError (no more dummy images) ----
+
+class _FakeCamera:
+    """Camera stub that always returns None (simulates hardware failure)."""
+    def capture_frame(self):
+        return None
+
+
+class _FakeLogger:
+    """Minimal logger stub that accepts any log call."""
+    def __getattr__(self, name):
+        return lambda *a, **kw: None
+
+
+def test_acquire_frame_camera_returns_none():
+    """When camera.capture_frame() returns None, _acquire_frame must raise RuntimeError."""
+    from core.detection_system import DetectionSystem
+
+    ds = object.__new__(DetectionSystem)  # bypass __init__
+    ds.camera = _FakeCamera()
+    with pytest.raises(RuntimeError, match="Hardware failure"):
+        ds._acquire_frame(None, _FakeLogger())
+
+
+def test_acquire_frame_no_camera_no_frame():
+    """When there is no camera and no frame, _acquire_frame must raise RuntimeError."""
+    from core.detection_system import DetectionSystem
+
+    ds = object.__new__(DetectionSystem)  # bypass __init__
+    ds.camera = None
+    with pytest.raises(RuntimeError, match="No camera available"):
+        ds._acquire_frame(None, _FakeLogger())
