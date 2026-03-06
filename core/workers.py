@@ -139,7 +139,13 @@ class BaseWorker(threading.Thread):
                     task.error = task.error or "Worker process() raised an exception"
                     if self.out_queue is not None:
                         try:
-                            self.out_queue.put(task)
+                            # Use timeout to prevent deadlock if downstream is stuck
+                            self.out_queue.put(task, timeout=2.0)
+                        except queue.Full:
+                            self._logger.error(
+                                "out_queue full, dropping error task %s to prevent deadlock",
+                                task.task_id
+                            )
                         except Exception:
                             self._logger.error(
                                 "Failed to forward error task to out_queue",
@@ -155,9 +161,14 @@ class BaseWorker(threading.Thread):
             # ---- GUARANTEED poison pill propagation ----
             if self.out_queue is not None:
                 try:
-                    self.out_queue.put(DetectionTask.poison_pill())
+                    # Give downstream time to drain, but never block forever
+                    self.out_queue.put(DetectionTask.poison_pill(), timeout=5.0)
                     self._logger.info(
                         "Poison pill forwarded to downstream queue"
+                    )
+                except queue.Full:
+                    self._logger.critical(
+                        "CRITICAL: out_queue is permanently full, poison pill dropped!"
                     )
                 except Exception:
                     self._logger.error(
@@ -347,7 +358,14 @@ class InferenceWorker(BaseWorker):
 
         # Forward to StorageWorker
         if self.out_queue is not None:
-            self.out_queue.put(task)
+            try:
+                # Use timeout to prevent deadlock if StorageWorker is stuck
+                self.out_queue.put(task, timeout=2.0)
+            except queue.Full:
+                self._logger.error(
+                    "IO queue is full. Dropping inference result for task %s!",
+                    task.task_id
+                )
 
 
 # ======================================================================

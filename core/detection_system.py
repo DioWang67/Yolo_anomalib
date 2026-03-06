@@ -17,8 +17,9 @@ import logging
 import os
 import queue
 import shutil
+import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 
@@ -80,12 +81,13 @@ class DetectionSystem:
         self._color_override_cache: dict[str, dict[str, Any]] = {}
 
         # --- Producer-Consumer pipeline state ---
-        self._pipeline_running: bool = False
-        self._inference_queue: OverwriteQueue[DetectionTask] | None = None
-        self._io_queue: queue.Queue[DetectionTask] | None = None
-        self._acq_worker: AcquisitionWorker | None = None
-        self._inf_worker: InferenceWorker | None = None
-        self._sto_worker: StorageWorker | None = None
+        self._pipeline_lock = threading.Lock()
+        self._pipeline_active: bool = False
+        self._inference_queue: Optional[OverwriteQueue[DetectionTask]] = None
+        self._io_queue: Optional[queue.Queue[DetectionTask]] = None
+        self._acq_worker: Optional[AcquisitionWorker] = None
+        self._inf_worker: Optional[InferenceWorker] = None
+        self._sto_worker: Optional[StorageWorker] = None
 
         self.initialize_camera()
 
@@ -117,7 +119,7 @@ class DetectionSystem:
     def shutdown(self) -> None:
         """Release resources: pipeline workers, models, camera, sinks."""
         # Stop async pipeline first (if running)
-        if self._pipeline_running:
+        if self._pipeline_active:
             self.stop_pipeline()
 
         if self.inference_engine:
@@ -167,57 +169,60 @@ class DetectionSystem:
             RuntimeError: If the pipeline is already running or camera
                 is unavailable.
         """
-        if self._pipeline_running:
-            raise RuntimeError("Pipeline is already running")
-        if not self.camera:
-            raise RuntimeError(
-                "Cannot start pipeline: no camera available. "
-                "Call initialize_camera() first."
+        with self._pipeline_lock:
+            if self._pipeline_active:
+                raise RuntimeError("Pipeline is already running")
+            if not self.camera:
+                raise RuntimeError(
+                    "Cannot start pipeline: no camera available. "
+                    "Call initialize_camera() first."
+                )
+
+            _logger = logging.getLogger(__name__)
+
+            # Pre-load model configs so InferenceWorker is ready
+            self.load_model_configs(product, area, inference_type)
+            self._prepare_resources(product, area, inference_type, _logger)
+
+            # --- Create queues ---
+            buffer_limit = getattr(self.config, "buffer_limit", 10)
+            self._inference_queue = OverwriteQueue(
+                maxlen=buffer_limit, name="inference_queue"
+            )
+            # IO queue uses stdlib Queue — StorageWorker must process every
+            # result, so we never drop items here.
+            self._io_queue = queue.Queue(maxsize=50) # Industrial best practice: cap IO queue to prevent OOM
+
+            # --- Create workers ---
+            self._acq_worker = AcquisitionWorker(
+                camera=self.camera,
+                out_queue=self._inference_queue,
+                product=product,
+                area=area,
+                inference_type=inference_type,
+                capture_interval=capture_interval,
+            )
+            self._inf_worker = InferenceWorker(
+                in_queue=self._inference_queue,
+                out_queue=self._io_queue,
+                detection_system=self,
+            )
+            self._sto_worker = StorageWorker(
+                in_queue=self._io_queue,
+                detection_system=self,
             )
 
-        _logger = logging.getLogger(__name__)
+            # --- Start workers (order: consumer first → producer last) ---
+            # This ensures the pipeline is "drained" immediately as data flows in.
+            self._sto_worker.start()
+            self._inf_worker.start()
+            self._acq_worker.start()
+            self._pipeline_active = True
 
-        # Pre-load model configs so InferenceWorker is ready
-        self.load_model_configs(product, area, inference_type)
-
-        # --- Create queues ---
-        buffer_limit = getattr(self.config, "buffer_limit", 10)
-        self._inference_queue = OverwriteQueue(
-            maxlen=buffer_limit, name="inference_queue"
-        )
-        # IO queue uses stdlib Queue — StorageWorker must process every
-        # result, so we never drop items here.
-        self._io_queue = queue.Queue(maxsize=buffer_limit * 2)
-
-        # --- Create workers ---
-        self._acq_worker = AcquisitionWorker(
-            camera=self.camera,
-            out_queue=self._inference_queue,
-            product=product,
-            area=area,
-            inference_type=inference_type,
-            capture_interval=capture_interval,
-        )
-        self._inf_worker = InferenceWorker(
-            in_queue=self._inference_queue,
-            out_queue=self._io_queue,
-            detection_system=self,
-        )
-        self._sto_worker = StorageWorker(
-            in_queue=self._io_queue,
-            detection_system=self,
-        )
-
-        # --- Start workers (order: consumer first → producer last) ---
-        self._sto_worker.start()
-        self._inf_worker.start()
-        self._acq_worker.start()
-        self._pipeline_running = True
-
-        _logger.info(
-            "Pipeline started: %s/%s/%s (buffer=%d, interval=%.3fs)",
-            product, area, inference_type, buffer_limit, capture_interval,
-        )
+            _logger.info(
+                "Pipeline started: %s/%s/%s (buffer=%d, interval=%.3fs)",
+                product, area, inference_type, buffer_limit, capture_interval,
+            )
 
     def stop_pipeline(self, timeout: float = 10.0) -> None:
         """Gracefully shut down the async pipeline.
@@ -231,51 +236,54 @@ class DetectionSystem:
         Args:
             timeout: Max seconds to wait for each worker to finish.
         """
-        if not self._pipeline_running:
-            return
+        with self._pipeline_lock:
+            if not self._pipeline_active:
+                return
 
-        _logger = logging.getLogger(__name__)
-        _logger.info("Stopping pipeline...")
+            _logger = logging.getLogger(__name__)
+            _logger.info("Stopping pipeline...")
 
-        # Step 1: Signal acquisition to stop
-        if self._acq_worker and self._acq_worker.is_alive():
-            self._acq_worker.stop()
+            # Step 1: Signal acquisition to stop (sets threading.Event)
+            if self._acq_worker and self._acq_worker.is_alive():
+                self._acq_worker.stop()
 
-        # Step 2-4: Wait for domino shutdown
-        for worker in (self._acq_worker, self._inf_worker, self._sto_worker):
-            if worker and worker.is_alive():
-                worker.join(timeout=timeout)
-                if worker.is_alive():
-                    _logger.warning(
-                        "Worker %s did not stop within %.1fs",
-                        worker.name, timeout,
-                    )
+            # Step 2-4: Wait for domino shutdown (Acq -> Inf -> Sto)
+            # Timeout is applied per worker to prevent the whole app from hanging
+            # if a worker is truly stuck (though our backpressure put() mitigates this).
+            for worker in (self._acq_worker, self._inf_worker, self._sto_worker):
+                if worker and worker.is_alive():
+                    worker.join(timeout=timeout)
+                    if worker.is_alive():
+                        _logger.warning(
+                            "Worker %s did not stop within %.1fs",
+                            worker.name, timeout,
+                        )
 
-        # Report stats
-        stats = self.pipeline_stats()
-        _logger.info(
-            "Pipeline stopped — captured: %d, dropped: %d, saved: %d",
-            stats.get("frames_captured", 0),
-            stats.get("frames_dropped", 0),
-            stats.get("tasks_saved", 0),
-        )
+            # Report stats before clearing
+            stats = self.pipeline_stats()
+            _logger.info(
+                "Pipeline stopped — captured: %d, dropped: %d, saved: %d",
+                stats.get("frames_captured", 0),
+                stats.get("frames_dropped", 0),
+                stats.get("tasks_saved", 0),
+            )
 
-        self._pipeline_running = False
-        self._acq_worker = None
-        self._inf_worker = None
-        self._sto_worker = None
-        self._inference_queue = None
-        self._io_queue = None
+            self._pipeline_active = False
+            self._acq_worker = None
+            self._inf_worker = None
+            self._sto_worker = None
+            self._inference_queue = None
+            self._io_queue = None
 
     @property
     def pipeline_running(self) -> bool:
         """Whether the async pipeline is currently active."""
-        return self._pipeline_running
+        return self._pipeline_active
 
     def pipeline_stats(self) -> dict[str, Any]:
         """Return a snapshot of pipeline counters for monitoring."""
         return {
-            "pipeline_running": self._pipeline_running,
+            "pipeline_running": self._pipeline_active,
             "frames_captured": (
                 self._acq_worker.frame_count
                 if self._acq_worker else 0

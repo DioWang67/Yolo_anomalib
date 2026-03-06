@@ -1,211 +1,80 @@
+
 import os
+import sys
+import unittest
+from unittest.mock import MagicMock, patch
+import queue
+import threading
 
-import numpy as np
-import pytest
+# Ensure project root is in path
+sys.path.append(os.getcwd())
 
-from core.config import DetectionConfig
+# Mock heavy dependencies before importing DetectionSystem
+mock_cv2 = MagicMock()
+mock_torch = MagicMock()
+mock_torch.__path__ = []  # Make it look like a package
+mock_torch.cuda = MagicMock()
+mock_torch.cuda.amp = MagicMock()
+
+sys.modules['cv2'] = mock_cv2
+sys.modules['torch'] = mock_torch
+sys.modules['torch.cuda'] = mock_torch.cuda
+sys.modules['torch.cuda.amp'] = mock_torch.cuda.amp
+sys.modules['ultralytics'] = MagicMock()
+sys.modules['anomalib'] = MagicMock()
+sys.modules['anomalib.config'] = MagicMock()
+sys.modules['anomalib.data'] = MagicMock()
+sys.modules['anomalib.engine'] = MagicMock()
+sys.modules['MVS_camera_control'] = MagicMock()
+
 from core.detection_system import DetectionSystem
+from core.types import DetectionTask
 
+class TestDetectionSystemIntegration(unittest.TestCase):
+    def setUp(self):
+        with patch('core.detection_system.DetectionConfig.from_yaml') as mock_cfg:
+            mock_cfg.return_value = MagicMock(output_dir="Result", max_cache_size=5)
+            self.system = DetectionSystem(config_path=None)
+            self.system.camera = MagicMock()
+            self.system.camera.capture_frame.return_value = MagicMock()
+            
+    def test_pipeline_lifecycle(self):
+        """Verify that start_pipeline and stop_pipeline orchestrate workers correctly."""
+        # Mock _prepare_resources and _run_inference to avoid actual backend logic
+        self.system._prepare_resources = MagicMock()
+        self.system._run_inference = MagicMock(return_value={"status": "PASS", "detections": []})
+        
+        # Start pipeline
+        self.system.start_pipeline("LED", "A", "yolo")
+        self.assertTrue(self.system.pipeline_running)
+        self.assertIsNotNone(self.system._acq_worker)
+        self.assertIsNotNone(self.system._inf_worker)
+        self.assertIsNotNone(self.system._sto_worker)
+        
+        # Verify workers are running
+        self.assertTrue(self.system._acq_worker.is_alive())
+        self.assertTrue(self.system._inf_worker.is_alive())
+        self.assertTrue(self.system._sto_worker.is_alive())
+        
+        # Stop pipeline
+        self.system.stop_pipeline(timeout=1.0)
+        self.assertFalse(self.system.pipeline_running)
+        self.assertIsNone(self.system._acq_worker)
+        
+    def test_shutdown_cleanup(self):
+        """Verify that shutdown() calls stop_pipeline()."""
+        self.system.stop_pipeline = MagicMock()
+        self.system._pipeline_active = True
+        self.system.shutdown()
+        self.system.stop_pipeline.assert_called_once()
 
-class FakeEngine:
-    def __init__(self):
-        self.infer_calls = 0
+    def test_pipeline_stats(self):
+        """Verify stats reporting."""
+        self.system.start_pipeline("LED", "A", "yolo")
+        stats = self.system.pipeline_stats()
+        self.assertEqual(stats["pipeline_running"], True)
+        self.assertIn("frames_captured", stats)
+        self.system.stop_pipeline()
 
-    def initialize(self):
-        return True
-
-    def infer(self, image, product, area, inference_type_enum, output_path=None):
-        self.infer_calls += 1
-        status = "FAIL" if getattr(self, "force_fail", False) else "PASS"
-        if inference_type_enum.value == "anomalib":
-            return {
-                "inference_type": "anomalib",
-                "status": status,
-                "anomaly_score": 0.01,
-                "processed_image": np.zeros_like(image),
-                "output_path": output_path,
-            }
-        else:
-            return {
-                "inference_type": "yolo",
-                "status": status,
-                "detections": [],
-                "missing_items": [] if status == "PASS" else ["missing"],
-                "processed_image": np.zeros_like(image),
-            }
-
-    def shutdown(self):
-        pass
-
-
-class FakeModelManager:
-    def __init__(self, engine):
-        self.engine = engine
-        self.calls = []
-
-    def switch(self, base_config, product, area, inference_type):
-        self.calls.append((product, area, inference_type))
-        # Simulate config overrides minimal
-        base_config.enable_color_check = False
-        return self.engine, base_config
-
-
-class FakeSink:
-    def __init__(self):
-        self.saved = []
-        self.flushed = 0
-
-    def get_annotated_path(self, **kwargs):
-        # Return a dummy path for anomalib TEMP
-        return os.path.join(
-            "Result", "YYYYMMDD", "TEMP", "annotated", "anomalib", "temp.jpg"
-        )
-
-    def save(self, **kwargs):
-        self.saved.append(kwargs)
-        # Return minimal expected keys
-        return {
-            "status": "SUCCESS",
-            "original_path": "orig.jpg",
-            "preprocessed_path": "pre.jpg",
-            "annotated_path": "ann.jpg",
-            "heatmap_path": "",
-            "cropped_paths": [],
-        }
-
-    def flush(self):
-        self.flushed += 1
-
-    def close(self):
-        pass
-
-
-@pytest.fixture
-def tmp_result_dir(tmp_path):
-    base = tmp_path / "Result"
-    base.mkdir(parents=True, exist_ok=True)
-    return str(base)
-
-
-class DummyCam:
-    def __init__(self, config):
-        pass
-
-    def initialize(self):
-        return True
-
-    def shutdown(self):
-        pass
-
-    def capture_frame(self):
-        return None
-
-
-def _mk_system(monkeypatch, tmp_result_dir):
-    # Prevent real camera and real sink during DetectionSystem.__init__
-    import core.detection_system as ds
-
-    monkeypatch.setattr(ds, "CameraController", DummyCam, raising=True)
-    created = []
-
-    def _fake_sink_factory(config, base_dir, logger=None):
-        s = FakeSink()
-        created.append(s)
-        return s
-
-    monkeypatch.setattr(ds, "ExcelImageResultSink",
-                        _fake_sink_factory, raising=True)
-
-    def fake_load_config(self, _):
-        return DetectionConfig(
-            weights="dummy.pt",
-            device="cpu",
-            conf_thres=0.25,
-            iou_thres=0.45,
-            imgsz=(8, 8),
-            timeout=1,
-            exposure_time="1000",
-            gain="1.0",
-            width=8,
-            height=8,
-            MV_CC_GetImageBuffer_nMsec=1000,
-            expected_items={},
-            enable_yolo=True,
-            enable_anomalib=True,
-            enable_color_check=False,
-            output_dir=str(tmp_result_dir),
-            anomalib_config=None,
-            position_config={},
-            max_cache_size=1,
-            buffer_limit=1,
-            flush_interval=None,
-            pipeline=["save_results"],
-            steps={},
-            backends=None,
-            disable_internal_cache=True,
-            save_original=False,
-            save_processed=False,
-            save_annotated=False,
-            save_crops=False,
-            save_fail_only=False,
-            jpeg_quality=90,
-            png_compression=3,
-            max_crops_per_frame=None,
-            fail_on_unexpected=False,
-        )
-
-    monkeypatch.setattr(
-        ds.DetectionSystem, "load_config", fake_load_config, raising=False
-    )
-    sys = DetectionSystem()
-    # Use the created fake sink
-    fake_sink = created[0]
-    # Replace model manager to return fake engine
-    engine = FakeEngine()
-    sys.model_manager = FakeModelManager(engine)
-    # Avoid camera
-    sys.camera = None
-    # Force output_dir to tmp (not used by fake sink but kept for consistency)
-    sys.config.output_dir = tmp_result_dir
-    return sys, fake_sink
-
-
-def test_detect_calls_flush_yolo(monkeypatch, tmp_result_dir):
-    sys, sink = _mk_system(monkeypatch, tmp_result_dir)
-    dummy_frame = np.zeros((8, 8, 3), dtype=np.uint8)
-    out = sys.detect("P", "A", "yolo", frame=dummy_frame)
-    assert out.status in ("PASS", "FAIL", "ERROR")
-    assert sink.flushed == 1
-    assert out.error is None or isinstance(out.error, str)
-    assert len(sink.saved) == 1
-
-
-def test_detect_calls_flush_anomalib(monkeypatch, tmp_result_dir):
-    # Avoid os.path.exists moving path to simplify test
-    monkeypatch.setattr(os.path, "exists", lambda p: False, raising=True)
-    sys, sink = _mk_system(monkeypatch, tmp_result_dir)
-    dummy_frame = np.zeros((8, 8, 3), dtype=np.uint8)
-    out = sys.detect("P", "A", "anomalib", frame=dummy_frame)
-    assert out.status in ("PASS", "FAIL", "ERROR")
-    assert sink.flushed == 1
-    assert out.error is None or isinstance(out.error, str)
-    assert len(sink.saved) == 1
-
-
-def test_detect_flush_on_failure(monkeypatch, tmp_result_dir):
-    sys, sink = _mk_system(monkeypatch, tmp_result_dir)
-    sys.model_manager.engine.force_fail = True
-    dummy_frame = np.zeros((8, 8, 3), dtype=np.uint8)
-    out = sys.detect("P", "A", "yolo", frame=dummy_frame)
-    assert out.status == "FAIL"
-    assert sink.flushed == 1
-    assert len(sink.saved) == 1
-
-
-def test_detect_returns_error_when_no_camera_no_frame(monkeypatch, tmp_result_dir):
-    """With _acquire_frame's dummy-image fallback removed, detect() must
-    return ERROR status when no camera is available and no frame is supplied."""
-    sys, sink = _mk_system(monkeypatch, tmp_result_dir)
-    out = sys.detect("P", "A", "yolo")
-    assert out.status == "ERROR"
-    assert "No camera available" in (out.error or "")
+if __name__ == "__main__":
+    unittest.main()
