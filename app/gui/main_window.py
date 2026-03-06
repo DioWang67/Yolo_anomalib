@@ -620,7 +620,6 @@ class DetectionSystemGUI(QMainWindow):
         self.stats_timer.stop()
         self.stop_btn.setText("停止檢測")
         self._reset_ui_state()
-        self.info_panel.reset_dashboard()
         self.log_message("檢測管線已關閉 (IO 已落盤)")
 
     def _reset_ui_state(self):
@@ -643,9 +642,6 @@ class DetectionSystemGUI(QMainWindow):
                f"Saved: {stats['tasks_saved']} | "
                f"Queue: {stats['inference_queue_size']}/{stats['io_queue_size']}")
         self.statusBar().showMessage(msg)
-
-        # Feed the visual dashboard on the info panel
-        self.info_panel.update_dashboard(stats)
 
     @pyqtSlot(object)
     def on_pipeline_result(self, result_or_task):
