@@ -949,36 +949,43 @@ class DetectionSystemGUI(QMainWindow):
 
     def closeEvent(self, event):
         """關閉事件處理"""
-        if self.worker and self.worker.isRunning():
+        # 改用管線真實狀態來判斷是否正在檢測
+        is_pipeline_running = False
+        if self.controller.has_system():
+            is_pipeline_running = getattr(self.controller.detection_system, "pipeline_running", False)
+
+        if is_pipeline_running:
             reply = QMessageBox.question(
                 self,
                 "確認離開",
-                "檢測正在執行中，是否確定要離開？",
+                "檢測管線正在執行中，是否確定要強制關閉？這可能需要幾秒鐘完成存檔。",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
-            if reply == QMessageBox.Yes:
-                try:
-                    self.worker.stop()
-                    self.worker.wait(3000)
-                except Exception:
-                    self.worker.terminate()
-                    self.worker.wait()
-            else:
+            if reply == QMessageBox.No:
                 event.ignore()
                 return
-        if self.controller.has_system():
-            self.controller.shutdown()
+            
+            # 顯示等待游標，因為接下來的 shutdown 是同步阻塞的
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+
         try:
+            if self.controller.has_system():
+                # 這裡的 shutdown 在上一階段已經被我們改寫過，會優先等待 stop_pipeline() 完成
+                self.controller.shutdown()
+            
             self.preferences.save_window_state(self.saveGeometry(), self.saveState())
             self.preferences.save_last_selection(
                 self.product_combo.currentText(),
                 self.area_combo.currentText(),
                 self.inference_combo.currentText(),
             )
-        except Exception:
-            pass
-        event.accept()
+        except Exception as e:
+            self._logger.error(f"Shutdown error: {e}")
+        finally:
+            if is_pipeline_running:
+                QApplication.restoreOverrideCursor()
+            event.accept()
     
     def _update_version_label(self, product: str, area: str, inference_type: str) -> None:
         """Update the model version display in status bar."""
