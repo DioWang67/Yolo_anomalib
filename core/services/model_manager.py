@@ -104,7 +104,16 @@ class ModelManager:
                 )
         if "anomalib_config" in cfg and cfg.get("anomalib_config") is not None:
             base_config.anomalib_config = cfg.get("anomalib_config")
-        base_config.weights = cfg.get("weights", getattr(base_config, "weights", ""))
+        raw_weights = cfg.get("weights", getattr(base_config, "weights", ""))
+        if raw_weights:
+            w_path_obj = Path(raw_weights)
+            if not w_path_obj.is_absolute():
+                resolved_w = resolve_path(raw_weights)
+                if model_cfg_dir and (resolved_w is None or not resolved_w.exists()):
+                    config_relative = (model_cfg_dir / w_path_obj).resolve()
+                    if config_relative.exists():
+                        raw_weights = str(config_relative)
+        base_config.weights = raw_weights
         base_config.enable_color_check = cfg.get(
             "enable_color_check", getattr(base_config, "enable_color_check", False)
         )
@@ -212,17 +221,18 @@ class ModelManager:
                     f"Model config schema validation failed: {e}"
                 )
 
+        model_cfg_dir = Path(model_config_path).resolve().parent
+
         # Validate critical fields/paths early with helpful messages
         try:
             validate_model_cfg(
-                cfg or {}, product, area, selected_backend=inference_type
+                cfg or {}, product, area, selected_backend=inference_type, model_cfg_dir=model_cfg_dir
             )
         except Exception as e:
             self.logger.logger.error(f"Model config validation failed: {e}")
             raise
 
         context = f"{product}/{area}/{inference_type}"
-        model_cfg_dir = Path(model_config_path).resolve().parent
         self._apply_model_config(base_config, cfg, context, model_cfg_dir=model_cfg_dir)
 
         # Version validation (if model uses versioned naming)
