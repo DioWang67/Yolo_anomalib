@@ -3,6 +3,7 @@ from __future__ import annotations
 """高階 YOLO 推論封裝，提供快取、前處理與驗證工具。"""
 
 import os
+import threading
 import time
 from collections import OrderedDict
 from contextlib import nullcontext
@@ -36,10 +37,10 @@ class YOLOInferenceModel(BaseInferenceModel):
         max_cache_size (int): Maximum number of models to keep in memory.
         image_utils (ImageUtils): Utility class for image transformations.
     """
-    _warmup_registry: set[tuple[str, str]] = set()
-
     def __init__(self, config):
         super().__init__(config)
+        self._cache_lock = threading.Lock()
+        self._warmup_registry: set[tuple[str, str]] = set()
         self.model_cache: OrderedDict[tuple[str, str], tuple[YOLO, YOLODetector]] = (
             OrderedDict()
         )
@@ -62,14 +63,15 @@ class YOLOInferenceModel(BaseInferenceModel):
             ModelInitializationError: If weights are missing or a runtime hardware error occurs.
         """
         key = (product or "default", area or "default")
-        if self.max_cache_size > 0 and key in self.model_cache:
-            self.model, self.detector = self.model_cache[key]
-            self.model_cache.move_to_end(key)
-            self.is_initialized = True
-            self.logger.logger.info(
-                f"Loaded YOLO model from cache (product={product}, area={area})"
-            )
-            return True
+        with self._cache_lock:
+            if self.max_cache_size > 0 and key in self.model_cache:
+                self.model, self.detector = self.model_cache[key]
+                self.model_cache.move_to_end(key)
+                self.is_initialized = True
+                self.logger.logger.info(
+                    f"Loaded YOLO model from cache (product={product}, area={area})"
+                )
+                return True
 
         try:
             self.logger.logger.info("Initializing YOLO model...")
@@ -103,25 +105,26 @@ class YOLOInferenceModel(BaseInferenceModel):
                         "YOLO warmup failed: %s", warmup_err, exc_info=warmup_err
                     )
 
-            if self.max_cache_size > 0:
-                self.model_cache[key] = (self.model, self.detector)
-                self.model_cache.move_to_end(key)
-                if len(self.model_cache) > self.max_cache_size:
-                    old_key, (old_model, _) = self.model_cache.popitem(
-                        last=False)
-                    try:
-                        del old_model
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                    except Exception as release_err:
-                        self.logger.logger.warning(
-                            "Failed to release YOLO model resources: %s",
-                            release_err,
-                            exc_info=release_err,
+            with self._cache_lock:
+                if self.max_cache_size > 0:
+                    self.model_cache[key] = (self.model, self.detector)
+                    self.model_cache.move_to_end(key)
+                    if len(self.model_cache) > self.max_cache_size:
+                        old_key, (old_model, _) = self.model_cache.popitem(
+                            last=False)
+                        try:
+                            del old_model
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                        except Exception as release_err:
+                            self.logger.logger.warning(
+                                "Failed to release YOLO model resources: %s",
+                                release_err,
+                                exc_info=release_err,
+                            )
+                        self.logger.logger.info(
+                            f"Evicted cached YOLO model: product={old_key[0]}, area={old_key[1]}"
                         )
-                    self.logger.logger.info(
-                        f"Evicted cached YOLO model: product={old_key[0]}, area={old_key[1]}"
-                    )
 
             self.is_initialized = True
             self.logger.logger.info(

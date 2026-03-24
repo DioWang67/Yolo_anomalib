@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import os
+import threading
 from collections import OrderedDict
 from pathlib import Path
 
@@ -36,6 +37,7 @@ class ModelManager:
         """
         self.logger = logger
         self.max_cache_size = max_cache_size
+        self._cache_lock = threading.Lock()
         # cache key: (product, area) -> { type: (engine, config_snapshot) }
         self._cache: OrderedDict[
             tuple[str, str], dict[str, tuple[InferenceEngine, DetectionConfig]]
@@ -57,6 +59,21 @@ class ModelManager:
             self.logger.logger.error(f"Anomalib init failed for {product}: {str(e)}")
             raise
 
+    @staticmethod
+    def _resolve_model_path(
+        raw: str, model_cfg_dir: Path | None
+    ) -> str:
+        """Resolve a relative model path against project root, then config dir."""
+        p = Path(raw)
+        if p.is_absolute():
+            return raw
+        resolved = resolve_path(raw)
+        if model_cfg_dir and (resolved is None or not resolved.exists()):
+            config_relative = (model_cfg_dir / p).resolve()
+            if config_relative.exists():
+                return str(config_relative)
+        return str(resolved) if resolved else raw
+
     def _apply_model_config(
         self,
         base_config: DetectionConfig,
@@ -64,22 +81,31 @@ class ModelManager:
         context: str | None = None,
         model_cfg_dir: Path | None = None,
     ) -> None:
-        """
-        Apply per-model overrides into the shared DetectionConfig instance.
-        """
-        base_config.device = cfg.get("device", base_config.device)
-        base_config.conf_thres = cfg.get("conf_thres", base_config.conf_thres)
-        base_config.iou_thres = cfg.get("iou_thres", base_config.iou_thres)
+        """Apply per-model overrides into the shared DetectionConfig instance."""
+        # --- Simple scalar overrides ---
+        _SCALAR_FIELDS = [
+            "device", "conf_thres", "iou_thres", "enable_yolo", "enable_anomalib",
+            "enable_color_check",
+        ]
+        for field in _SCALAR_FIELDS:
+            if field in cfg:
+                setattr(base_config, field, cfg.get(field, getattr(base_config, field)))
+
+        # --- Fields that only apply when present and non-None ---
+        _OPTIONAL_FIELDS = [
+            "expected_items", "position_config", "anomalib_config",
+            "color_threshold_overrides", "color_rules_overrides",
+            "backends", "pipeline",
+        ]
+        for field in _OPTIONAL_FIELDS:
+            if field in cfg and cfg.get(field) is not None:
+                setattr(base_config, field, cfg[field])
+
+        # --- imgsz needs tuple conversion ---
         if "imgsz" in cfg and cfg.get("imgsz") is not None:
-            base_config.imgsz = tuple(cfg.get("imgsz"))  # type: ignore[arg-type]
-        base_config.enable_yolo = cfg.get("enable_yolo", base_config.enable_yolo)
-        base_config.enable_anomalib = cfg.get(
-            "enable_anomalib", base_config.enable_anomalib
-        )
-        if "expected_items" in cfg and cfg.get("expected_items") is not None:
-            base_config.expected_items = cfg.get("expected_items")
-        if "position_config" in cfg and cfg.get("position_config") is not None:
-            base_config.position_config = cfg.get("position_config")
+            base_config.imgsz = tuple(cfg["imgsz"])  # type: ignore[arg-type]
+
+        # --- output_dir: resolve relative paths against model config dir ---
         if "output_dir" in cfg:
             raw_output_dir = cfg.get("output_dir")
             if raw_output_dir:
@@ -87,88 +113,44 @@ class ModelManager:
                 if path_str:
                     resolved = Path(path_str)
                     if not resolved.is_absolute():
-                        base = PROJECT_ROOT
+                        base = model_cfg_dir if model_cfg_dir else PROJECT_ROOT
                         resolved = (base / resolved).resolve()
                     base_config.output_dir = str(resolved)
                 else:
                     self.logger.logger.warning(
                         "Model config %s provided whitespace output_dir; keeping %s",
-                        context or "unknown",
-                        base_config.output_dir,
+                        context or "unknown", base_config.output_dir,
                     )
             else:
                 self.logger.logger.warning(
                     "Model config %s provided empty output_dir; keeping %s",
-                    context or "unknown",
-                    base_config.output_dir,
+                    context or "unknown", base_config.output_dir,
                 )
-        if "anomalib_config" in cfg and cfg.get("anomalib_config") is not None:
-            base_config.anomalib_config = cfg.get("anomalib_config")
+
+        # --- weights / color_model_path: resolve via shared helper ---
         raw_weights = cfg.get("weights", getattr(base_config, "weights", ""))
         if raw_weights:
-            w_path_obj = Path(raw_weights)
-            if not w_path_obj.is_absolute():
-                resolved_w = resolve_path(raw_weights)
-                if model_cfg_dir and (resolved_w is None or not resolved_w.exists()):
-                    config_relative = (model_cfg_dir / w_path_obj).resolve()
-                    if config_relative.exists():
-                        raw_weights = str(config_relative)
-        base_config.weights = raw_weights
-        base_config.enable_color_check = cfg.get(
-            "enable_color_check", getattr(base_config, "enable_color_check", False)
-        )
-        color_model_path = cfg.get("color_model_path", None)
+            base_config.weights = self._resolve_model_path(raw_weights, model_cfg_dir)
+
+        color_model_path = cfg.get("color_model_path")
         if color_model_path:
-            color_path_obj = Path(color_model_path)
-            if color_path_obj.is_absolute():
-                resolved_color = color_path_obj
-            else:
-                # Try project-root resolution first (checks existence)
-                resolved_color = resolve_path(color_model_path)
-                # Fall back to config-dir relative if project-root result doesn't exist
-                if (
-                    model_cfg_dir
-                    and resolved_color is not None
-                    and not resolved_color.exists()
-                ):
-                    config_relative = (model_cfg_dir / color_path_obj).resolve()
-                    if config_relative.exists():
-                        resolved_color = config_relative
-            base_config.color_model_path = (
-                str(resolved_color) if resolved_color else base_config.color_model_path
+            base_config.color_model_path = self._resolve_model_path(
+                color_model_path, model_cfg_dir
             )
-        # optional color threshold overrides (per-color hist_thr)
-        if "color_threshold_overrides" in cfg:
-            base_config.color_threshold_overrides = cfg.get(
-                "color_threshold_overrides",
-                getattr(base_config, "color_threshold_overrides", None),
-            )
-        # optional per-color rules overrides
-        if "color_rules_overrides" in cfg:
-            base_config.color_rules_overrides = cfg.get(
-                "color_rules_overrides",
-                getattr(base_config, "color_rules_overrides", None),
-            )
+
+        # --- color checker type with fallback ---
         base_config.color_checker_type = str(
             cfg.get(
                 "color_checker_type",
                 getattr(base_config, "color_checker_type", "color_qc"),
-            )
-            or "color_qc"
+            ) or "color_qc"
         )
         base_config.color_score_threshold = cfg.get(
             "color_score_threshold",
             getattr(base_config, "color_score_threshold", None),
         )
-        # optional custom backends config (name -> {class_path, enabled, ...})
-        if "backends" in cfg and cfg.get("backends") is not None:
-            base_config.backends = cfg.get(
-                "backends", getattr(base_config, "backends", None)
-            )
-        # optional pipeline and steps overrides
-        if "pipeline" in cfg:
-            base_config.pipeline = cfg.get("pipeline")
-        # merge steps (model-level overrides take precedence)
+
+        # --- merge steps (model-level overrides take precedence) ---
         steps_cfg = cfg.get("steps", {}) or {}
         merged_steps = dict(getattr(base_config, "steps", {}) or {})
         merged_steps.update(steps_cfg)
@@ -183,17 +165,16 @@ class ModelManager:
         overrides.
         """
         key = (product, area)
-        if key in self._cache and inference_type in self._cache[key]:
-            self.logger.logger.info(
-
+        with self._cache_lock:
+            if key in self._cache and inference_type in self._cache[key]:
+                self.logger.logger.info(
                     f"Using cached model: product={product}, "
                     f"area={area}, type={inference_type}"
-
-            )
-            engine, cfg_snapshot = self._cache[key][inference_type]
-            base_config.__dict__.update(copy.deepcopy(cfg_snapshot.__dict__))
-            self._cache.move_to_end(key)
-            return engine, base_config
+                )
+                engine, cfg_snapshot = self._cache[key][inference_type]
+                base_config.__dict__.update(copy.deepcopy(cfg_snapshot.__dict__))
+                self._cache.move_to_end(key)
+                return engine, base_config
 
         model_config_path = os.path.join(
             "models", product, area, inference_type, "config.yaml"
@@ -245,20 +226,21 @@ class ModelManager:
         if inference_type == "anomalib":
             self._initialize_product_models(base_config, product)
 
-        if key not in self._cache:
-            self._cache[key] = {}
-        self._cache[key][inference_type] = (engine, copy.deepcopy(base_config))
-        self._cache.move_to_end(key)
-        if len(self._cache) > self.max_cache_size:
-            old_key, engines = self._cache.popitem(last=False)
-            for eng, _ in engines.values():
-                try:
-                    eng.shutdown()
-                except Exception:
-                    pass
-            self.logger.logger.info(
-                f"Evicted cached model: product={old_key[0]}, area={old_key[1]}"
-            )
+        with self._cache_lock:
+            if key not in self._cache:
+                self._cache[key] = {}
+            self._cache[key][inference_type] = (engine, copy.deepcopy(base_config))
+            self._cache.move_to_end(key)
+            if len(self._cache) > self.max_cache_size:
+                old_key, engines = self._cache.popitem(last=False)
+                for eng, _ in engines.values():
+                    try:
+                        eng.shutdown()
+                    except Exception:
+                        pass
+                self.logger.logger.info(
+                    f"Evicted cached model: product={old_key[0]}, area={old_key[1]}"
+                )
 
         return engine, base_config
 

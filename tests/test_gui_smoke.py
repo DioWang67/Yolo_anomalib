@@ -21,6 +21,11 @@ def test_gui_smoke(monkeypatch, tmp_path):
             self.config_path = config_path
             self.shutdown_calls = 0
             self.detect_calls = []
+            self._pipeline_active = False
+
+        @property
+        def pipeline_running(self):
+            return self._pipeline_active
 
         def load_model_configs(self, product, area, infer_type):
             pass
