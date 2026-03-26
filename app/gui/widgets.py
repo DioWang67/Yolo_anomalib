@@ -146,7 +146,7 @@ class FailReasonLabel(QLabel):
 
         pos_fails = [
             i.label for i in (result.items or [])
-            if i.metadata.get("position_status") == "FAIL"
+            if i.metadata.get("position_status") in ("FAIL", "WRONG", "UNEXPECTED", "INVALID", "ERROR")
         ]
         if pos_fails:
             reasons.append(f"位置偏移：{', '.join(pos_fails[:3])}"
@@ -455,6 +455,29 @@ class ResultDisplayWidget(QWidget):
                 lines.append(f"- {item}")
         else:
             lines.append("無")
+
+        # --- 位置檢查匯總 ---
+        _POS_FAIL_STATES = {"WRONG", "UNEXPECTED", "INVALID", "ERROR", "FAIL"}
+        pos_fail_items = [
+            i for i in (result.items or [])
+            if i.metadata.get("position_status") in _POS_FAIL_STATES
+        ]
+        pos_ok_count = sum(
+            1 for i in (result.items or [])
+            if i.metadata.get("position_status") == "CORRECT"
+        )
+        has_pos_data = any(
+            i.metadata.get("position_status") for i in (result.items or [])
+        )
+        if has_pos_data:
+            pos_summary = "PASS" if not pos_fail_items else "FAIL"
+            lines.append(f"\n=== 位置檢查：{pos_summary} ===")
+            if pos_fail_items:
+                for item in pos_fail_items:
+                    state = item.metadata.get("position_status", "?")
+                    lines.append(f"  ✘ {item.label}  [{state}]")
+            else:
+                lines.append(f"  全部 {pos_ok_count} 件位置正確")
 
         # --- 偵測細節 ---
         if result.items:
