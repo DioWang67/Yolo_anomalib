@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import cv2
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QImage, QPixmap
-from PyQt5.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 if TYPE_CHECKING:
     from core.types import DetectionResult
@@ -91,6 +99,172 @@ class BigStatusLabel(QLabel):
 
 
 
+
+class FailReasonLabel(QLabel):
+    """One-line summary of why the last result was FAIL.
+
+    Appears below BigStatusLabel.  Hidden when status is PASS or READY.
+    """
+
+    _STYLE_FAIL = (
+        "background-color: #fff3cd; color: #856404;"
+        "border: 1px solid #ffc107; border-radius: 4px; padding: 4px 8px;"
+        "font-size: 10pt;"
+    )
+    _STYLE_CLEAR = "color: transparent; border: none; padding: 4px 8px;"
+
+    def __init__(self) -> None:
+        super().__init__("")
+        self.setAlignment(Qt.AlignCenter)
+        self.setWordWrap(True)
+        self.setStyleSheet(self._STYLE_CLEAR)
+
+    def update_from_result(self, result: "DetectionResult") -> None:
+        """Extract top-level FAIL reasons and display them."""
+        if result.status != "FAIL":
+            self.setText("")
+            self.setStyleSheet(self._STYLE_CLEAR)
+            return
+
+        reasons: list[str] = []
+
+        missing = result.missing_items or []
+        if missing:
+            reasons.append(f"缺件：{', '.join(str(i) for i in missing[:3])}"
+                           + ("…" if len(missing) > 3 else ""))
+
+        color_check = result.color_check or {}
+        if color_check and not color_check.get("is_ok", True):
+            bad = [c.get("class_name", "?") for c in (color_check.get("items") or [])
+                   if not c.get("is_ok", True)]
+            reasons.append(f"顏色錯誤：{', '.join(bad[:3])}" if bad else "顏色錯誤")
+
+        seq = result.sequence_check or {}
+        if seq and not seq.get("is_ok", True):
+            reason_key = seq.get("reason", "")
+            reasons.append("排列順序錯誤" if reason_key == "order_mismatch" else "排列長度不符")
+
+        pos_fails = [
+            i.label for i in (result.items or [])
+            if i.metadata.get("position_status") == "FAIL"
+        ]
+        if pos_fails:
+            reasons.append(f"位置偏移：{', '.join(pos_fails[:3])}"
+                           + ("…" if len(pos_fails) > 3 else ""))
+
+        if reasons:
+            self.setText("⚠ " + "　|　".join(reasons))
+        else:
+            self.setText("⚠ 原因不明，請查看詳細結果")
+        self.setStyleSheet(self._STYLE_FAIL)
+
+    def clear_reason(self) -> None:
+        self.setText("")
+        self.setStyleSheet(self._STYLE_CLEAR)
+
+
+# ---------------------------------------------------------------------------
+
+class SessionStatsWidget(QGroupBox):
+    """Current-shift statistics: PASS/FAIL counts, yield rate, consecutive FAIL alert.
+
+    Call :meth:`record_result` after every detection.
+    Call :meth:`reset_session` at shift start or manually.
+    """
+
+    CONSECUTIVE_FAIL_ALERT: int = 3  # alert threshold
+
+    _STYLE_NORMAL = "color: #155724; background: #d4edda; border-radius: 3px; padding: 2px 6px;"
+    _STYLE_ALERT  = "color: #721c24; background: #f8d7da; border-radius: 3px; padding: 2px 6px;"
+
+    def __init__(self) -> None:
+        super().__init__("當班統計")
+        self._pass = 0
+        self._fail = 0
+        self._consecutive_fails = 0
+        self._build_ui()
+
+    # ------------------------------------------------------------------
+    def _build_ui(self) -> None:
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(4)
+
+        lbl_font = QFont("Microsoft JhengHei", 9)
+        num_font = QFont("Consolas", 11, QFont.Bold)
+
+        def _header(text: str) -> QLabel:
+            lbl = QLabel(text)
+            lbl.setFont(lbl_font)
+            lbl.setStyleSheet("color: #6c757d;")
+            lbl.setAlignment(Qt.AlignCenter)
+            return lbl
+
+        def _value() -> QLabel:
+            lbl = QLabel("0")
+            lbl.setFont(num_font)
+            lbl.setAlignment(Qt.AlignCenter)
+            return lbl
+
+        grid.addWidget(_header("PASS"), 0, 0)
+        grid.addWidget(_header("FAIL"), 0, 1)
+        grid.addWidget(_header("良率"), 0, 2)
+        grid.addWidget(_header("連續NG"), 0, 3)
+
+        self._pass_lbl = _value()
+        self._fail_lbl = _value()
+        self._yield_lbl = _value()
+        self._consec_lbl = _value()
+
+        self._pass_lbl.setStyleSheet("color: #28a745;")
+        self._fail_lbl.setStyleSheet("color: #dc3545;")
+
+        grid.addWidget(self._pass_lbl,   1, 0)
+        grid.addWidget(self._fail_lbl,   1, 1)
+        grid.addWidget(self._yield_lbl,  1, 2)
+        grid.addWidget(self._consec_lbl, 1, 3)
+
+        self.setLayout(grid)
+
+    # ------------------------------------------------------------------
+    def record_result(self, status: str) -> None:
+        """Update counters based on detection status ('PASS' or 'FAIL')."""
+        if status == "PASS":
+            self._pass += 1
+            self._consecutive_fails = 0
+        elif status == "FAIL":
+            self._fail += 1
+            self._consecutive_fails += 1
+        self._refresh()
+
+    def reset_session(self) -> None:
+        """Reset all counters to zero (new shift / manual reset)."""
+        self._pass = 0
+        self._fail = 0
+        self._consecutive_fails = 0
+        self._refresh()
+
+    # ------------------------------------------------------------------
+    def _refresh(self) -> None:
+        total = self._pass + self._fail
+        yield_pct = f"{self._pass / total * 100:.1f}%" if total else "—"
+
+        self._pass_lbl.setText(str(self._pass))
+        self._fail_lbl.setText(str(self._fail))
+        self._yield_lbl.setText(yield_pct)
+        self._consec_lbl.setText(str(self._consecutive_fails))
+
+        if self._consecutive_fails >= self.CONSECUTIVE_FAIL_ALERT:
+            self._consec_lbl.setStyleSheet(self._STYLE_ALERT)
+            self._consec_lbl.setToolTip(
+                f"連續 {self._consecutive_fails} 次 NG！請確認產線狀況。"
+            )
+        else:
+            self._consec_lbl.setStyleSheet(self._STYLE_NORMAL)
+            self._consec_lbl.setToolTip("")
+
+
+# ---------------------------------------------------------------------------
 
 class ImageViewer(QLabel):
     """Simple image container with dashed placeholder."""

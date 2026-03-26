@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Optional
+
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -11,19 +15,31 @@ from PyQt5.QtWidgets import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Preset definition — (product, area, inference_type)
+# Edit here to match your actual model directory structure.
+# ---------------------------------------------------------------------------
+DEFAULT_PRESETS: dict[str, tuple[str, str, str]] = {
+    "— 選擇預設 —": ("", "", ""),
+}
+
+
 class ControlPanel(QGroupBox):
     """
     Panel containing all controls for the detection system:
+    - Quick-switch preset selector
     - Model selection (Product, Area, Type)
     - Action buttons (Start, Stop, Save)
     - Camera controls
     - Image selection
+    - Output path display
     """
 
     # Signals for interactions
     product_changed = pyqtSignal(str)
     area_changed = pyqtSignal(str)
     inference_type_changed = pyqtSignal(str)
+    preset_selected = pyqtSignal(str, str, str)   # product, area, type
 
     start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
@@ -38,12 +54,24 @@ class ControlPanel(QGroupBox):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("控制面板", parent)
+        self._presets: dict[str, tuple[str, str, str]] = dict(DEFAULT_PRESETS)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout()
 
-        # Product selection
+        # ── 快速預設 ────────────────────────────────────────────────
+        preset_group = QGroupBox("產線預設")
+        preset_layout = QVBoxLayout()
+        self.preset_combo = QComboBox()
+        self.preset_combo.setToolTip("一鍵選擇常用的產品 / 區域 / 類型組合")
+        self._rebuild_preset_combo()
+        self.preset_combo.currentTextChanged.connect(self._on_preset_selected)
+        preset_layout.addWidget(self.preset_combo)
+        preset_group.setLayout(preset_layout)
+        layout.addWidget(preset_group)
+
+        # ── 產品選擇 ─────────────────────────────────────────────────
         product_group = QGroupBox("產品")
         product_layout = QVBoxLayout()
         self.product_combo = QComboBox()
@@ -53,7 +81,7 @@ class ControlPanel(QGroupBox):
         product_group.setLayout(product_layout)
         layout.addWidget(product_group)
 
-        # Area selection
+        # ── 區域選擇 ─────────────────────────────────────────────────
         area_group = QGroupBox("檢測區域")
         area_layout = QVBoxLayout()
         self.area_combo = QComboBox()
@@ -63,7 +91,7 @@ class ControlPanel(QGroupBox):
         area_group.setLayout(area_layout)
         layout.addWidget(area_group)
 
-        # Inference Type selection
+        # ── 模型類型 ─────────────────────────────────────────────────
         inference_group = QGroupBox("模型類型")
         inference_layout = QVBoxLayout()
         self.inference_combo = QComboBox()
@@ -73,7 +101,7 @@ class ControlPanel(QGroupBox):
         inference_group.setLayout(inference_layout)
         layout.addWidget(inference_group)
 
-        # Action Buttons
+        # ── 操作按鈕 ─────────────────────────────────────────────────
         button_group = QGroupBox("操作")
         button_layout = QVBoxLayout()
 
@@ -95,7 +123,7 @@ class ControlPanel(QGroupBox):
         button_layout.addWidget(self.stop_btn)
         button_layout.addWidget(self.save_btn)
 
-        # Camera Controls
+        # ── 相機控制 ─────────────────────────────────────────────────
         self.use_camera_chk = QCheckBox("使用相機")
         self.use_camera_chk.toggled.connect(self.use_camera_toggled.emit)
         button_layout.addWidget(self.use_camera_chk)
@@ -110,7 +138,7 @@ class ControlPanel(QGroupBox):
         camera_btn_layout.addWidget(self.disconnect_camera_btn)
         button_layout.addLayout(camera_btn_layout)
 
-        # Image Selection
+        # ── 影像選擇 ─────────────────────────────────────────────────
         self.pick_image_btn = QPushButton("選擇影像...")
         self.pick_image_btn.setStyleSheet("QPushButton { background-color: #17a2b8; }")
         self.pick_image_btn.clicked.connect(self.pick_image_requested.emit)
@@ -129,5 +157,44 @@ class ControlPanel(QGroupBox):
         button_group.setLayout(button_layout)
         layout.addWidget(button_group)
 
+        # ── 儲存路徑顯示 ─────────────────────────────────────────────
+        self.output_path_label = QLabel("儲存路徑：—")
+        self.output_path_label.setStyleSheet(
+            "color: #6c757d; font-size: 8pt; padding: 2px 4px;"
+        )
+        self.output_path_label.setWordWrap(True)
+        self.output_path_label.setToolTip("目前結果儲存位置")
+        layout.addWidget(self.output_path_label)
+
         layout.addStretch()
         self.setLayout(layout)
+
+    # ------------------------------------------------------------------
+    # Preset management
+    # ------------------------------------------------------------------
+
+    def set_presets(self, presets: dict[str, tuple[str, str, str]]) -> None:
+        """Replace the preset list (called by MainWindow after models load)."""
+        self._presets = {"— 選擇預設 —": ("", "", ""), **presets}
+        self._rebuild_preset_combo()
+
+    def _rebuild_preset_combo(self) -> None:
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        self.preset_combo.addItems(list(self._presets.keys()))
+        self.preset_combo.blockSignals(False)
+
+    def _on_preset_selected(self, name: str) -> None:
+        entry = self._presets.get(name)
+        if entry and entry != ("", "", ""):
+            product, area, inf_type = entry
+            self.preset_selected.emit(product, area, inf_type)
+
+    # ------------------------------------------------------------------
+    # Output path display
+    # ------------------------------------------------------------------
+
+    def set_output_path(self, path: str) -> None:
+        """Show the current result output directory."""
+        self.output_path_label.setText(f"儲存路徑：{path}")
+        self.output_path_label.setToolTip(path)

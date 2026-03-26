@@ -239,6 +239,7 @@ class DetectionSystemGUI(QMainWindow):
 
         self.control_panel.pick_image_requested.connect(self.pick_image)
         self.control_panel.clear_image_requested.connect(self.clear_selected_image)
+        self.control_panel.preset_selected.connect(self._apply_preset)
         
         # Add model version label to status bar (permanent widget on the right)
         self.model_version_label = QLabel("模型版本: --")
@@ -347,8 +348,66 @@ class DetectionSystemGUI(QMainWindow):
         try:
             self._update_model_combos()
             self.log_message(f"模型清單載入完成：共 {len(self.available_products)} 個產品")
+            self._rebuild_presets()
+            self._update_output_path_label()
         except Exception as e:
             self.log_message(f"更新模型選單時發生錯誤：{e}")
+
+    def _rebuild_presets(self) -> None:
+        """Build preset combos from the loaded model catalogue."""
+        presets: dict[str, tuple[str, str, str]] = {}
+        for product in self.available_products:
+            for area in self.available_areas.get(product, []):
+                types = self._catalog.inference_types(product, area)
+                for inf_type in types:
+                    label = f"{product} / {area} / {inf_type}"
+                    presets[label] = (product, area, inf_type)
+        self.control_panel.set_presets(presets)
+
+    def _update_output_path_label(self) -> None:
+        """Show the current output directory in the control panel."""
+        try:
+            if self.controller.has_system():
+                output_dir = self.controller.detection_system.config.output_dir
+                self.control_panel.set_output_path(str(output_dir))
+        except Exception:
+            pass
+
+    def _apply_preset(self, product: str, area: str, inf_type: str) -> None:
+        """Apply a quick-switch preset to the three selection combos."""
+        if product not in self.available_products:
+            return
+        # Temporarily block cascade to set all three atomically
+        self.product_combo.blockSignals(True)
+        self.area_combo.blockSignals(True)
+        self.inference_combo.blockSignals(True)
+
+        idx = self.product_combo.findText(product)
+        if idx >= 0:
+            self.product_combo.setCurrentIndex(idx)
+
+        # Rebuild area list to match the chosen product
+        self.area_combo.clear()
+        for a in self.available_areas.get(product, []):
+            self.area_combo.addItem(a)
+        idx = self.area_combo.findText(area)
+        if idx >= 0:
+            self.area_combo.setCurrentIndex(idx)
+
+        # Rebuild inference types to match product+area
+        self.inference_combo.clear()
+        for t in self._catalog.inference_types(product, area):
+            self.inference_combo.addItem(t)
+        idx = self.inference_combo.findText(inf_type)
+        if idx >= 0:
+            self.inference_combo.setCurrentIndex(idx)
+
+        self.product_combo.blockSignals(False)
+        self.area_combo.blockSignals(False)
+        self.inference_combo.blockSignals(False)
+
+        self.update_start_enabled()
+        self.log_message(f"套用預設：{product} / {area} / {inf_type}")
 
     def _on_model_load_error(self, error_msg):
         self.log_message(f"載入模型資料時發生錯誤：{error_msg}")
@@ -552,6 +611,8 @@ class DetectionSystemGUI(QMainWindow):
         self.result_image.clear()
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("RUNNING...")
+        # Clear FAIL reason on new run
+        self.info_panel.fail_reason_label.clear_reason()
         self.log_message(
             f"開始檢測 - 產品：{product}，區域：{area}，類型：{inference_type}"
         )
@@ -795,6 +856,15 @@ class DetectionSystemGUI(QMainWindow):
 
         self.log_message(f"檢測完成 - 狀態: {result.status}")
         self.statusBar().showMessage(f"檢測完成 - {result.status}", 5000)
+
+        # Consecutive FAIL alert
+        consec = self.info_panel.session_stats._consecutive_fails
+        threshold = self.info_panel.session_stats.CONSECUTIVE_FAIL_ALERT
+        if result.status == "FAIL" and consec == threshold:
+            self.log_message(f"⚠ 警告：已連續 {consec} 次 NG！請確認產線狀況。")
+            self.statusBar().showMessage(
+                f"⚠ 連續 {consec} 次 NG！請確認產線狀況。", 8000
+            )
 
     def on_detection_error(self, error_msg):
         """檢測錯誤回調"""

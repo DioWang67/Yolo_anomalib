@@ -210,6 +210,14 @@ def build_menu_bar(gui: DetectionSystemGUI) -> QMenuBar:
     refresh_action.triggered.connect(gui.load_available_models)
     view_menu.addAction(refresh_action)
 
+    view_menu.addSeparator()
+    reset_stats_action = QAction("重置當班統計", gui)
+    reset_stats_action.setShortcut("Ctrl+R")
+    reset_stats_action.triggered.connect(
+        lambda: gui.info_panel.session_stats.reset_session()
+    )
+    view_menu.addAction(reset_stats_action)
+
     help_menu = menubar.addMenu("說明")
     about_action = QAction("關於", gui)
     about_action.triggered.connect(gui.show_about)
