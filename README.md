@@ -56,7 +56,7 @@ yolo11_inference/
 │               └── config.yaml
 ├── Result/                     # 輸出結果
 ├── docs/                       # 文檔
-│   └── TECH_GUIDE.md                  # 技術深度指南 (1153 行)
+│   └── TECH_GUIDE.md                  # 技術深度指南 (~1300 行)
 ├── config.yaml                 # 全域配置
 ├── config.example.yaml         # 配置範本
 ├── requirements.txt            # 核心依賴
@@ -228,7 +228,6 @@ build_exe.bat
 | `weights` | YOLO 模型權重路徑 | `models/LED/A/yolo/best.pt` |
 | `enable_yolo` | 啟用 YOLO 推理 (CLI) | `true` |
 | `enable_anomalib` | 啟用 Anomalib 推理 (CLI) | `false` |
-| `enable_fusion` | 啟用 Fusion 聯合推理 (GUI) | `true` |
 | `max_cache_size` | 模型快取大小 (LRU) | `3` |
 | `output_dir` | 結果輸出目錄 | `./Result` |
 | `exposure_time` | 相機曝光時間 (μs) | `51170` |
@@ -321,10 +320,36 @@ LED:
 
 詳細說明請參考 `docs/TECH_GUIDE.md`。
 
+## 從 Yolo11_auto_train 部署模型
+
+本系統與 `Yolo11_auto_train` 配套使用。訓練完成後，執行以下步驟部署模型：
+
+```bash
+# 在 Yolo11_auto_train 目錄執行
+picture-tool-pipeline --config configs/<product>.yaml --tasks deploy
+```
+
+或手動複製：
+
+```bash
+mkdir -p models/<product>/<area>/yolo
+
+# 訓練產物路徑：runs/detect/<name>/
+cp runs/detect/<name>/weights/best.pt           models/<product>/<area>/yolo/best.pt
+cp runs/detect/<name>/detection_config.yaml     models/<product>/<area>/yolo/config.yaml
+cp runs/detect/<name>/auto_position_config.yaml models/<product>/<area>/yolo/position_config.yaml
+```
+
+完整的訓練→部署流程說明請參考 `Yolo11_auto_train/docs/INTEGRATION_GUIDE.md`。
+
+---
+
 ## 文檔
 
-- 📖 [技術深度指南](docs/TECH_GUIDE.md) - 1153 行從 JR 到 SR 的完整教學
+- 📖 [技術深度指南](docs/TECH_GUIDE.md) - ~1300 行從 JR 到 SR 的完整教學
+- 🏗️ [模組架構說明](docs/MODULE_ARCHITECTURE.md) - 軟體設計與互動流程
 - 🏷️ [模型版本管理指南](docs/MODEL_VERSION_GUIDE.md) - Git LFS + 語義化版本命名
+- 🔒 [安全指南](docs/SECURITY.md) - 路徑驗證與安全最佳實踐
 - 📝 配置範本：`config.example.yaml`
 - 🧪 測試範例：`tests/` 目錄
 

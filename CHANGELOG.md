@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **`core/config.py`**: Integrated path security validation
   - Added path validation in `DetectionConfig.from_yaml()`
-  - Prevents loading configs from外部 untrusted paths
+  - Prevents loading configs from untrusted external paths
   - Graceful fallback if security module unavailable
 
 - **`main.py`**: Enhanced CLI security
