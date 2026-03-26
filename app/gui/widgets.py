@@ -272,6 +272,7 @@ class ImageViewer(QLabel):
     def __init__(self, title: str = "影像") -> None:
         super().__init__()
         self._title = title
+        self._load_token: int = 0   # incremented on every clear/new-load to cancel stale timers
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -289,21 +290,38 @@ class ImageViewer(QLabel):
         self.setText(f"等待{self._title}")
         self.setScaledContents(True)
 
+    def clear(self) -> None:
+        """Override to cancel any in-flight deferred loads before clearing."""
+        self._load_token += 1
+        self._last_image_path = None
+        super().clear()
+        self.setText(f"等待{self._title}")
+
     def set_image(self, image_path: str) -> None:
-        # Skip redundant disk reads for the same path (retry scenario)
-        if getattr(self, "_last_image_path", None) == image_path:
-            return
+        # Cancel stale deferred loads from previous run
+        self._load_token += 1
+        token = self._load_token
+
         if os.path.exists(image_path):
             self._last_image_path = image_path
             self.setText("載入中...")
             # Defer the heavy disk-read + scale to the next event-loop tick
             # so the UI stays responsive (e.g. during pick_image flow).
-            QTimer.singleShot(0, lambda p=image_path: self._load_and_display(p))
+            QTimer.singleShot(
+                0, lambda p=image_path, t=token: self._load_and_display(p, t)
+            )
         else:
             self.setText(f"無法載入{self._title}")
 
-    def _load_and_display(self, image_path: str) -> None:
-        """Heavy lifting: read file from disk and scale for display."""
+    def _load_and_display(self, image_path: str, token: int) -> None:
+        """Heavy lifting: read file from disk and scale for display.
+
+        Guards against stale callbacks: if a newer set_image/clear has been
+        called since this timer was scheduled, ``token`` will not match
+        ``_load_token`` and the call is silently dropped.
+        """
+        if token != self._load_token:
+            return  # superseded by a newer load or clear()
         pixmap = QPixmap(image_path)
         if not pixmap.isNull():
             scaled = pixmap.scaled(
