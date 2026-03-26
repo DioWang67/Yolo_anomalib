@@ -65,6 +65,7 @@ class PipelineBridge(QObject):
     image_ready = pyqtSignal(object)    # np.ndarray (BGR) for ImagePanel
     result_ready = pyqtSignal(object)   # DetectionTask with .result populated
     error_occurred = pyqtSignal(str)
+    camera_disconnected = pyqtSignal()  # Camera lost during pipeline
 
     def __init__(self) -> None:
         super().__init__()
@@ -99,6 +100,15 @@ class PipelineBridge(QObject):
         except Exception:
             logger.error("PipelineBridge.on_task_processed failed", exc_info=True)
 
+    def on_camera_lost(self) -> None:
+        """Hook invoked by AcquisitionWorker when camera appears disconnected.
+
+        Called on the AcquisitionWorker thread — must only emit signals.
+        """
+        try:
+            self.camera_disconnected.emit()
+        except Exception:
+            logger.error("PipelineBridge.on_camera_lost failed", exc_info=True)
 
 
 # ======================================================================
@@ -191,6 +201,9 @@ class DetectionWorker(QThread):
                 ),
                 on_task_processed=(
                     self._bridge.on_task_processed if self._bridge else None
+                ),
+                on_camera_lost=(
+                    self._bridge.on_camera_lost if self._bridge else None
                 ),
             )
         except Exception:

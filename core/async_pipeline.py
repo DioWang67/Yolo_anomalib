@@ -72,6 +72,7 @@ class AsyncPipelineManager:
         capture_interval: float = 0.0,
         on_task_captured: Optional[Callable[[DetectionTask], None]] = None,
         on_task_processed: Optional[Callable[[DetectionTask], None]] = None,
+        on_camera_lost: Optional[Callable[[], None]] = None,
     ) -> None:
         """Start the three-stage async pipeline.
 
@@ -86,6 +87,8 @@ class AsyncPipelineManager:
             capture_interval: Seconds between captures (0 = max FPS).
             on_task_captured: Optional GUI callback per captured frame.
             on_task_processed: Optional GUI callback per stored result.
+            on_camera_lost: Optional callback when camera disconnects
+                (consecutive capture failures exceed threshold).
 
         Raises:
             RuntimeError: If the pipeline is already running.
@@ -107,6 +110,7 @@ class AsyncPipelineManager:
                 inference_type=inference_type,
                 capture_interval=capture_interval,
                 on_task_captured=on_task_captured,
+                on_camera_lost=on_camera_lost,
             )
             self._inf_worker = InferenceWorker(
                 in_queue=self._inference_queue,
@@ -188,5 +192,8 @@ class AsyncPipelineManager:
             ),
             "tasks_saved": (
                 self._sto_worker.saved_count if self._sto_worker else 0
+            ),
+            "tasks_dropped": (
+                self._inf_worker.dropped_count if self._inf_worker else 0
             ),
         }

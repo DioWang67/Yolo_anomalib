@@ -206,6 +206,8 @@ class AcquisitionWorker(threading.Thread):
         Minimum seconds between captures (0 = as fast as possible).
     """
 
+    _CAMERA_LOST_THRESHOLD = 5
+
     def __init__(
         self,
         camera: CameraController,
@@ -217,6 +219,7 @@ class AcquisitionWorker(threading.Thread):
         capture_interval: float = 0.0,
         name: str = "AcquisitionWorker",
         on_task_captured: Optional[Callable[[DetectionTask], None]] = None,
+        on_camera_lost: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(name=name, daemon=True)
         self.camera = camera
@@ -226,9 +229,11 @@ class AcquisitionWorker(threading.Thread):
         self.inference_type = inference_type
         self.capture_interval = capture_interval
         self._on_task_captured = on_task_captured
+        self._on_camera_lost = on_camera_lost
         self._stop_event = threading.Event()
         self._logger = logging.getLogger(f"{__name__}.{name}")
         self._frame_count: int = 0
+        self._consecutive_failures: int = 0
 
     # ------------------------------------------------------------------
     # Public control
@@ -244,6 +249,40 @@ class AcquisitionWorker(threading.Thread):
         return self._frame_count
 
     # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _handle_capture_failure(self, reason: str, backoff: float) -> bool:
+        """Record a capture failure and check if camera is lost.
+
+        Returns ``True`` if the failure threshold has been reached and
+        the worker should stop.
+        """
+        self._consecutive_failures += 1
+        self._logger.warning(
+            "%s (consecutive failures: %d/%d)",
+            reason,
+            self._consecutive_failures,
+            self._CAMERA_LOST_THRESHOLD,
+        )
+        if self._consecutive_failures >= self._CAMERA_LOST_THRESHOLD:
+            self._logger.error(
+                "Camera lost — %d consecutive failures exceeded threshold",
+                self._consecutive_failures,
+            )
+            if self._on_camera_lost:
+                try:
+                    self._on_camera_lost()
+                except Exception:
+                    self._logger.error(
+                        "on_camera_lost callback failed", exc_info=True,
+                    )
+            self.stop()
+            return True
+        self._stop_event.wait(backoff)
+        return False
+
+    # ------------------------------------------------------------------
     # Thread entry point
     # ------------------------------------------------------------------
 
@@ -255,19 +294,20 @@ class AcquisitionWorker(threading.Thread):
                     frame = self.camera.capture_frame()
                 except Exception:
                     self._logger.error("Camera capture raised exception", exc_info=True)
-                    # Brief back-off before retrying — avoids busy-spin on
-                    # persistent hardware errors.
-                    self._stop_event.wait(0.5)
+                    if self._handle_capture_failure("Capture exception", backoff=0.5):
+                        break
                     continue
 
                 if frame is None:
-                    self._logger.warning(
-                        "Camera returned None — skipping frame "
-                        "(possible cable disconnect)"
-                    )
-                    self._stop_event.wait(0.1)
+                    if self._handle_capture_failure(
+                        "Camera returned None (possible cable disconnect)",
+                        backoff=0.1,
+                    ):
+                        break
                     continue
 
+                # Successful capture — reset failure counter
+                self._consecutive_failures = 0
                 task = DetectionTask(
                     task_id=uuid.uuid4().hex[:12],
                     timestamp=time.time(),
@@ -323,6 +363,9 @@ class InferenceWorker(BaseWorker):
         ``_prepare_resources``, ``model_manager``, and ``config``.
     """
 
+    _IO_QUEUE_PUT_TIMEOUT: float = 5.0
+    _IO_QUEUE_MAX_RETRIES: int = 2
+
     def __init__(
         self,
         in_queue: OverwriteQueue[DetectionTask],
@@ -333,6 +376,12 @@ class InferenceWorker(BaseWorker):
     ) -> None:
         super().__init__(in_queue, out_queue, name=name)
         self._system = detection_system
+        self._dropped_count: int = 0
+
+    @property
+    def dropped_count(self) -> int:
+        """Tasks lost because the IO queue was persistently full."""
+        return self._dropped_count
 
     def process(self, task: DetectionTask) -> None:
         """Execute inference and attach results to the task."""
@@ -366,16 +415,27 @@ class InferenceWorker(BaseWorker):
             task.task_id, latency, result.get("status"),
         )
 
-        # Forward to StorageWorker
+        # Forward to StorageWorker with retry
         if self.out_queue is not None:
-            try:
-                # Use timeout to prevent deadlock if StorageWorker is stuck
-                self.out_queue.put(task, timeout=2.0)
-            except queue.Full:
-                self._logger.error(
-                    "IO queue is full. Dropping inference result for task %s!",
-                    task.task_id
-                )
+            for attempt in range(1, self._IO_QUEUE_MAX_RETRIES + 1):
+                try:
+                    self.out_queue.put(task, timeout=self._IO_QUEUE_PUT_TIMEOUT)
+                    break  # success
+                except queue.Full:
+                    if attempt < self._IO_QUEUE_MAX_RETRIES:
+                        self._logger.warning(
+                            "IO queue full, retrying (%d/%d) for task %s",
+                            attempt, self._IO_QUEUE_MAX_RETRIES, task.task_id,
+                        )
+                    else:
+                        self._dropped_count += 1
+                        self._logger.error(
+                            "IO queue full after %d retries — dropping task %s "
+                            "(total dropped: %d)",
+                            self._IO_QUEUE_MAX_RETRIES,
+                            task.task_id,
+                            self._dropped_count,
+                        )
 
 
 # ======================================================================

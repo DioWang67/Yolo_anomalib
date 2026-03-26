@@ -140,6 +140,7 @@ class DetectionSystem:
         capture_interval: float = 0.0,
         on_task_captured=None,
         on_task_processed=None,
+        on_camera_lost=None,
     ) -> None:
         """Start the async Producer-Consumer detection pipeline.
 
@@ -153,6 +154,7 @@ class DetectionSystem:
             capture_interval: Seconds between captures.
             on_task_captured: Optional callback for each captured task.
             on_task_processed: Optional callback for each stored task.
+            on_camera_lost: Optional callback when camera disconnects.
 
         Raises:
             RuntimeError: If the pipeline is already running or camera
@@ -180,6 +182,7 @@ class DetectionSystem:
             capture_interval=capture_interval,
             on_task_captured=on_task_captured,
             on_task_processed=on_task_processed,
+            on_camera_lost=on_camera_lost,
         )
 
     def stop_pipeline(self, timeout: float = 10.0) -> None:

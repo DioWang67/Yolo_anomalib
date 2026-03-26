@@ -251,6 +251,7 @@ class DetectionSystemGUI(QMainWindow):
         self.controller.bridge.image_ready.connect(self.on_image_ready)
         self.controller.bridge.result_ready.connect(self.on_pipeline_result)
         self.controller.bridge.error_occurred.connect(self.on_detection_error)
+        self.controller.bridge.camera_disconnected.connect(self._on_camera_disconnected)
         
         self.stats_timer = QTimer(self)
         self.stats_timer.setInterval(1000)
@@ -303,7 +304,7 @@ class DetectionSystemGUI(QMainWindow):
             self.product_combo.blockSignals(False)
             self.area_combo.blockSignals(False)
             self.inference_combo.blockSignals(False)
-            self.log_message("No models found in the models directory.")
+            self.log_message("模型目錄中未找到任何模型。")
             return
 
         self.product_combo.addItems(self.available_products)
@@ -334,7 +335,7 @@ class DetectionSystemGUI(QMainWindow):
         # Check if base path exists first to fail fast
         base_path = Path(self._models_base)
         if not base_path.exists():
-            self.log_message(f"Models directory not found at: {base_path}")
+            self.log_message(f"找不到模型目錄：{base_path}")
             return
 
         self.model_loader = self.controller.build_model_loader()
@@ -345,13 +346,13 @@ class DetectionSystemGUI(QMainWindow):
     def _on_models_loaded(self):
         try:
             self._update_model_combos()
-            self.log_message(f"模型清單載入完成: {len(self.available_products)} products found.")
+            self.log_message(f"模型清單載入完成：共 {len(self.available_products)} 個產品")
         except Exception as e:
-            self.log_message(f"Error updating model combos: {e}")
+            self.log_message(f"更新模型選單時發生錯誤：{e}")
 
     def _on_model_load_error(self, error_msg):
-        self.log_message(f"Error loading model data: {error_msg}")
-        QMessageBox.critical(self, "Model Loading Error", f"Failed to load model data:\n{error_msg}")
+        self.log_message(f"載入模型資料時發生錯誤：{error_msg}")
+        QMessageBox.critical(self, "模型載入錯誤", f"無法載入模型資料：\n{error_msg}")
 
     def on_product_changed(self, product):
         """產品選擇變更時的處理"""
@@ -431,36 +432,36 @@ class DetectionSystemGUI(QMainWindow):
         if self.is_detection_running():
             QMessageBox.warning(
                 self,
-                "Camera Operation",
-                "Detection in progress. Stop before reconnecting.",
+                "相機操作",
+                "檢測進行中，請先停止後再重新連線。",
             )
             return
         if not self.controller.has_system():
             self.init_system()
             if not self.controller.has_system():
                 return
-        self.log_message("Attempting to reconnect the camera...")
+        self.log_message("正在嘗試重新連線相機...")
         try:
             success = self.controller.reconnect_camera()
         except Exception as exc:
             success = False
-            self.log_message(f"Camera reconnect failed: {exc}")
-            QMessageBox.critical(self, "Camera Error", f"Reconnect failed:\n{exc}")
+            self.log_message(f"相機重連失敗：{exc}")
+            QMessageBox.critical(self, "相機錯誤", f"重連失敗：\n{exc}")
         else:
             if success:
-                self.log_message("Camera reconnected successfully")
-                QMessageBox.information(self, "Camera Status", "Camera reconnected.")
+                self.log_message("相機重連成功")
+                QMessageBox.information(self, "相機狀態", "相機已重新連線。")
                 if getattr(self, "use_camera_chk", None):
                     self.use_camera_chk.blockSignals(True)
                     self.use_camera_chk.setChecked(True)
                     self.use_camera_chk.blockSignals(False)
                     self.on_use_camera_toggled(True)
             else:
-                self.log_message("Camera reconnect failed")
+                self.log_message("相機重連失敗")
                 QMessageBox.critical(
                     self,
-                    "Camera Error",
-                    "Reconnect failed. Please check hardware or settings.",
+                    "相機錯誤",
+                    "重連失敗，請檢查硬體或設定。",
                 )
         # Invalidate camera status cache so the next check is live
         self._camera_check_ts = 0
@@ -471,23 +472,23 @@ class DetectionSystemGUI(QMainWindow):
         if self.is_detection_running():
             QMessageBox.warning(
                 self,
-                "Camera Operation",
-                "Detection in progress. Stop before disconnecting.",
+                "相機操作",
+                "檢測進行中，請先停止後再中斷連線。",
             )
             return
         if not self.controller.has_system():
             QMessageBox.information(
-                self, "Camera Status", "Detection system is not initialized yet."
+                self, "相機狀態", "檢測系統尚未初始化。"
             )
             return
-        self.log_message("Disconnecting camera...")
+        self.log_message("正在中斷相機連線...")
         try:
             self.controller.disconnect_camera()
-            self.log_message("Camera disconnected")
-            QMessageBox.information(self, "Camera Status", "Camera disconnected.")
+            self.log_message("相機已中斷連線")
+            QMessageBox.information(self, "相機狀態", "相機已中斷連線。")
         except Exception as exc:
-            self.log_message(f"Camera disconnect failed: {exc}")
-            QMessageBox.critical(self, "Camera Error", f"Disconnect failed:\n{exc}")
+            self.log_message(f"相機中斷失敗：{exc}")
+            QMessageBox.critical(self, "相機錯誤", f"中斷連線失敗：\n{exc}")
         if getattr(self, "use_camera_chk", None):
             self.use_camera_chk.blockSignals(True)
             self.use_camera_chk.setChecked(False)
@@ -517,23 +518,23 @@ class DetectionSystemGUI(QMainWindow):
         if not all([product, area, inference_type]):
             QMessageBox.warning(
                 self,
-                "Missing Parameters",
-                "Select product, area, and inference type before starting detection.",
+                "缺少參數",
+                "請先選擇產品、區域及推理類型再開始檢測。",
             )
             return
         if not self._catalog.config_exists(product, area, inference_type):
             config_path = self._catalog.config_path(product, area, inference_type)
             QMessageBox.critical(
                 self,
-                "Model Not Found",
-                f"Configuration file not found:\n{config_path}",
+                "找不到模型",
+                f"找不到設定檔：\n{config_path}",
             )
             return
         if not self.controller.has_system():
             QMessageBox.critical(
                 self,
-                "Detection System",
-                "Detection system not initialized. Please verify configuration and try again.",
+                "檢測系統",
+                "檢測系統尚未初始化，請確認設定後再試。",
             )
             self.init_system()
             if not self.controller.has_system():
@@ -552,7 +553,7 @@ class DetectionSystemGUI(QMainWindow):
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("RUNNING...")
         self.log_message(
-            f"Start detection - product: {product}, area: {area}, type: {inference_type}"
+            f"開始檢測 - 產品：{product}，區域：{area}，類型：{inference_type}"
         )
         
         use_cam = self.use_camera_chk.isChecked()
@@ -573,13 +574,13 @@ class DetectionSystemGUI(QMainWindow):
             # --- SINGLE SHOT MODE (Synchronous) ---
             selected = getattr(self, "selected_image_path", None)
             if not selected:
-                QMessageBox.warning(self, "Input Source", "Select an image file first.")
+                QMessageBox.warning(self, "輸入來源", "請先選擇影像檔案。")
                 self._reset_ui_state()
                 return
-                
+
             image = self.controller.load_image(Path(selected))
             if image is None:
-                QMessageBox.warning(self, "Load Error", "Failed to load selected image.")
+                QMessageBox.warning(self, "載入錯誤", "無法載入選取的影像。")
                 self._reset_ui_state()
                 return
 
@@ -637,10 +638,15 @@ class DetectionSystemGUI(QMainWindow):
         if not sys.pipeline_running:
             return
         stats = sys.pipeline_stats()
-        msg = (f"Captured: {stats['frames_captured']} | "
-               f"Dropped: {stats['frames_dropped']} | "
-               f"Saved: {stats['tasks_saved']} | "
-               f"Queue: {stats['inference_queue_size']}/{stats['io_queue_size']}")
+        dropped_info = ""
+        tasks_dropped = stats.get("tasks_dropped", 0)
+        if tasks_dropped > 0:
+            dropped_info = f" | 遺失：{tasks_dropped}"
+        msg = (f"擷取：{stats['frames_captured']} | "
+               f"丟棄：{stats['frames_dropped']} | "
+               f"已存：{stats['tasks_saved']} | "
+               f"佇列：{stats['inference_queue_size']}/{stats['io_queue_size']}"
+               f"{dropped_info}")
         self.statusBar().showMessage(msg)
 
     @pyqtSlot(object)
@@ -800,16 +806,47 @@ class DetectionSystemGUI(QMainWindow):
         self.log_message(f"檢測錯誤: {error_msg}")
         QMessageBox.critical(self, "檢測錯誤", f"檢測過程中發生錯誤\n{error_msg}")
 
+    @pyqtSlot()
+    def _on_camera_disconnected(self):
+        """相機在管線執行中斷線，提供重連選項。"""
+        self.log_message("相機連線中斷（連續擷取失敗）")
+        self.stats_timer.stop()
+        # Stop the pipeline gracefully (acquisition already stopped itself)
+        self._shutdown_worker = self.controller.build_shutdown_worker()
+        self._shutdown_worker.shutdown_complete.connect(self._on_camera_lost_pipeline_stopped)
+        self._shutdown_worker.start()
+
+    def _on_camera_lost_pipeline_stopped(self):
+        """Pipeline stopped after camera loss — show reconnect dialog."""
+        self._reset_ui_state()
+        reply = QMessageBox.question(
+            self,
+            "相機連線中斷",
+            "檢測過程中相機連線已中斷。\n是否嘗試重新連線並繼續檢測？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            self.handle_reconnect_camera()
+            # If reconnect succeeded, auto-restart detection
+            if self.controller.has_system() and self.controller.is_camera_connected():
+                self.log_message("相機重連成功，自動重啟檢測管線...")
+                self.start_detection()
+            else:
+                self.log_message("相機重連失敗，請手動檢查後再試。")
+        else:
+            self.log_message("使用者取消重連，檢測已停止。")
+
     def save_results(self):
         """Save the latest detection result to disk."""
         if not self.current_result:
             QMessageBox.warning(
-                self, "No Result", "There is no detection result to save yet."
+                self, "尚無結果", "目前沒有可儲存的檢測結果。"
             )
             return
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Save Detection Result",
+            "儲存檢測結果",
             f"detection_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
             "JSON files (*.json)",
         )
@@ -818,14 +855,14 @@ class DetectionSystemGUI(QMainWindow):
                 # Use to_dict for serialization
                 res_dict = self.current_result.to_dict()
                 self.controller.save_result_json(Path(file_path), res_dict)
-                self.log_message(f"Result saved to {file_path}")
+                self.log_message(f"結果已儲存至 {file_path}")
                 QMessageBox.information(
-                    self, "Save Successful", f"Detection result saved to:\n{file_path}"
+                    self, "儲存成功", f"檢測結果已儲存至：\n{file_path}"
                 )
             except Exception as exc:
-                self.log_message(f"Failed to save result: {exc}")
+                self.log_message(f"儲存結果失敗：{exc}")
                 QMessageBox.critical(
-                    self, "Save Error", f"Unable to save result:\n{exc}"
+                    self, "儲存錯誤", f"無法儲存結果：\n{exc}"
                 )
 
     def pick_image(self):

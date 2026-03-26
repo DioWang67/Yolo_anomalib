@@ -189,20 +189,22 @@ class TestAcquisitionWorker:
                 found_pill = True
         assert found_pill, "Queue 尾部應有毒藥丸"
 
-    def test_camera_returns_none_keeps_running(self):
-        """相機回傳 None → 不崩潰，繼續重試。"""
+    def test_camera_returns_none_triggers_camera_lost(self):
+        """相機回傳 None 超過閾值 → 觸發 on_camera_lost 並自動停止。"""
         cam = FakeCamera(fail_after=3)
         inf_q = OverwriteQueue(maxlen=10)
+        lost_events = []
         aw = AcquisitionWorker(
             cam, inf_q, product="P", area="A", capture_interval=0.01,
+            on_camera_lost=lambda: lost_events.append(True),
         )
         aw.start()
-        time.sleep(0.3)
-        aw.stop()
-        aw.join(timeout=3)
+        # Worker should auto-stop after 5 consecutive None frames
+        aw.join(timeout=5)
 
         assert not aw.is_alive()
         assert aw.frame_count == 3, f"只能捕獲 3 幀 (之後 None): got {aw.frame_count}"
+        assert len(lost_events) == 1, "on_camera_lost 應被調用一次"
 
     def test_task_has_correct_metadata(self):
         """DetectionTask 應攜帶正確的 product/area/timestamp。"""
@@ -319,3 +321,51 @@ class TestEndToEndPipeline:
         assert not sw.is_alive()
         assert inf_q.dropped_count > 0, f"應有丟幀: {inf_q.dropped_count}"
         assert sw.count > 0, f"仍有任務被處理: {sw.count}"
+
+    def test_camera_lost_pipeline_graceful_shutdown(self):
+        """相機在管線執行中斷線 → 全部 Worker 正常退出且回呼觸發。"""
+
+        class MockInf(BaseWorker):
+            def process(self, task):
+                task.result = {"status": "PASS"}
+                if self.out_queue:
+                    self.out_queue.put(task)
+
+        class MockSto(BaseWorker):
+            def __init__(self, q):
+                super().__init__(q, out_queue=None, name="MockSto")
+                self.saved: list[str] = []
+
+            def process(self, task):
+                if task.result:
+                    self.saved.append(task.task_id)
+
+        # Camera returns 3 good frames then None forever
+        cam = FakeCamera(fail_after=3)
+        inf_q = OverwriteQueue(maxlen=10)
+        io_q: queue.Queue[DetectionTask] = queue.Queue(maxsize=50)
+
+        lost_events: list[bool] = []
+        aw = AcquisitionWorker(
+            cam, inf_q, product="P", area="A", capture_interval=0.01,
+            on_camera_lost=lambda: lost_events.append(True),
+        )
+        iw = MockInf(inf_q, io_q, name="MockInf")
+        sw = MockSto(io_q)
+
+        # Start in reverse order (consumers first)
+        sw.start()
+        iw.start()
+        aw.start()
+
+        # All workers should exit on their own (camera lost → pill cascade)
+        aw.join(timeout=5)
+        iw.join(timeout=5)
+        sw.join(timeout=5)
+
+        assert not aw.is_alive(), "AcquisitionWorker 應已停止"
+        assert not iw.is_alive(), "InferenceWorker 應已停止"
+        assert not sw.is_alive(), "StorageWorker 應已停止"
+        assert len(lost_events) == 1, "on_camera_lost 應被調用一次"
+        assert aw.frame_count == 3, f"應捕獲 3 幀: got {aw.frame_count}"
+        assert len(sw.saved) == 3, f"應儲存 3 筆: got {len(sw.saved)}"
