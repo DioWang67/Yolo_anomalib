@@ -251,13 +251,18 @@ class DetectionSystem:
 
         try:
             import yaml as _yaml  # type: ignore
-        except Exception:
+        except ImportError:
             return overrides, rules_over
 
         try:
             with cfg_path.open("r", encoding="utf-8") as handle:
-                model_cfg = _yaml.safe_load(handle) or {}
-        except Exception as exc:
+                model_cfg = _yaml.safe_load(handle)
+            if not isinstance(model_cfg, dict):
+                self.logger.logger.warning(
+                    "Color override config %s is not a valid mapping, skipping", cfg_path
+                )
+                return overrides, rules_over
+        except (OSError, _yaml.YAMLError) as exc:
             self.logger.logger.warning(
                 "Failed to reload color overrides from %s: %s",
                 cfg_path,

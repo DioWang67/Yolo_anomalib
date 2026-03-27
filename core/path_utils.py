@@ -64,7 +64,7 @@ def resolve_path(p: str | None) -> Path | None:
     # Current working directory (IDE/run-time)
     try:
         bases.append(Path.cwd())
-    except Exception:
+    except OSError:
         pass
 
     for base in bases:
@@ -72,7 +72,7 @@ def resolve_path(p: str | None) -> Path | None:
             cand = (base / path).resolve()
             if cand.exists():
                 return cand
-        except Exception:
+        except (OSError, ValueError):
             continue
 
     # Fallback to repo-root join even if not exists

@@ -35,10 +35,21 @@ def _get_detection_class():
 
 
 import numpy as np
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
-from PyQt5.QtWidgets import *
+from PyQt5.QtCore import Qt, QTimer, QSettings, pyqtSlot
+from PyQt5.QtGui import QKeySequence
+from PyQt5.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QShortcut,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
 
+from app.gui.camera_handler import CameraHandlerMixin
 from app.gui.controller import DetectionController
 from app.gui.panels.control_panel import ControlPanel
 from app.gui.panels.image_panel import ImagePanel
@@ -49,7 +60,7 @@ from app.gui.view_builder import build_menu_bar
 from core.services.model_catalog import ModelCatalog
 
 
-class DetectionSystemGUI(QMainWindow):
+class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
     def __init__(self):
         super().__init__()
         self.detection_system = None
@@ -240,7 +251,11 @@ class DetectionSystemGUI(QMainWindow):
         self.control_panel.pick_image_requested.connect(self.pick_image)
         self.control_panel.clear_image_requested.connect(self.clear_selected_image)
         self.control_panel.preset_selected.connect(self._apply_preset)
-        
+
+        self.info_panel.session_stats.consecutive_fail_reached.connect(
+            self._on_consecutive_fail_alert
+        )
+
         # Add model version label to status bar (permanent widget on the right)
         self.model_version_label = QLabel("模型版本: --")
         self.model_version_label.setStyleSheet(
@@ -370,14 +385,36 @@ class DetectionSystemGUI(QMainWindow):
             if self.controller.has_system():
                 output_dir = self.controller.detection_system.config.output_dir
                 self.control_panel.set_output_path(str(output_dir))
-        except Exception:
-            pass
+        except Exception as e:
+            self.log_message(f"無法取得輸出路徑：{e}")
+
+    # ------------------------------------------------------------------
+    # Combo helpers — shared by preset application and cascade handlers
+    # ------------------------------------------------------------------
+
+    def _rebuild_area_combo(self, product: str, *, select: str | None = None) -> None:
+        """Repopulate area_combo for *product*, optionally pre-selecting *select*."""
+        self.area_combo.clear()
+        self.area_combo.addItems(self.available_areas.get(product, []))
+        if select is not None:
+            idx = self.area_combo.findText(select)
+            if idx >= 0:
+                self.area_combo.setCurrentIndex(idx)
+
+    def _rebuild_inference_combo(self, product: str, area: str, *, select: str | None = None) -> None:
+        """Repopulate inference_combo for *product*+*area*, optionally pre-selecting *select*."""
+        self.inference_combo.clear()
+        if product and area:
+            self.inference_combo.addItems(self._catalog.inference_types(product, area))
+        if select is not None:
+            idx = self.inference_combo.findText(select)
+            if idx >= 0:
+                self.inference_combo.setCurrentIndex(idx)
 
     def _apply_preset(self, product: str, area: str, inf_type: str) -> None:
-        """Apply a quick-switch preset to the three selection combos."""
+        """Apply a quick-switch preset to the three selection combos atomically."""
         if product not in self.available_products:
             return
-        # Temporarily block cascade to set all three atomically
         self.product_combo.blockSignals(True)
         self.area_combo.blockSignals(True)
         self.inference_combo.blockSignals(True)
@@ -385,22 +422,8 @@ class DetectionSystemGUI(QMainWindow):
         idx = self.product_combo.findText(product)
         if idx >= 0:
             self.product_combo.setCurrentIndex(idx)
-
-        # Rebuild area list to match the chosen product
-        self.area_combo.clear()
-        for a in self.available_areas.get(product, []):
-            self.area_combo.addItem(a)
-        idx = self.area_combo.findText(area)
-        if idx >= 0:
-            self.area_combo.setCurrentIndex(idx)
-
-        # Rebuild inference types to match product+area
-        self.inference_combo.clear()
-        for t in self._catalog.inference_types(product, area):
-            self.inference_combo.addItem(t)
-        idx = self.inference_combo.findText(inf_type)
-        if idx >= 0:
-            self.inference_combo.setCurrentIndex(idx)
+        self._rebuild_area_combo(product, select=area)
+        self._rebuild_inference_combo(product, area, select=inf_type)
 
         self.product_combo.blockSignals(False)
         self.area_combo.blockSignals(False)
@@ -416,9 +439,7 @@ class DetectionSystemGUI(QMainWindow):
     def on_product_changed(self, product):
         """產品選擇變更時的處理"""
         self.area_combo.blockSignals(True)
-        self.area_combo.clear()
-        if product in self.available_areas:
-            self.area_combo.addItems(self.available_areas[product])
+        self._rebuild_area_combo(product)
         # Call on_area_changed BEFORE unblocking signals to prevent the
         # area_combo.currentTextChanged signal from triggering a duplicate call.
         self.on_area_changed(self.area_combo.currentText())
@@ -427,21 +448,14 @@ class DetectionSystemGUI(QMainWindow):
     def on_area_changed(self, area):
         try:
             self.reload_inference_types()
-        except Exception:
-            pass
+        except Exception as e:
+            self.log_message(f"載入推論類型時發生錯誤：{e}")
 
     def reload_inference_types(self):
         product = self.product_combo.currentText().strip()
         area = self.area_combo.currentText().strip()
-        
         self.inference_combo.blockSignals(True)
-        self.inference_combo.clear()
-        
-        if product and area:
-            types = self._catalog.inference_types(product, area)
-            if types:
-                self.inference_combo.addItems(types)
-                
+        self._rebuild_inference_combo(product, area)
         self.inference_combo.blockSignals(False)
         self.update_start_enabled()
 
@@ -449,113 +463,8 @@ class DetectionSystemGUI(QMainWindow):
         """Return True if a detection worker is running."""
         return bool(self.worker and self.worker.isRunning())
 
-    def update_camera_controls(self):
-        """Sync camera-related widgets with the current state.
-
-        Uses a 2-second cache for camera status to avoid blocking the
-        main thread with repeated SDK calls during rapid UI updates.
-        """
-        try:
-            running = self.is_detection_running()
-            camera_connected = False
-            if self.controller.has_system():
-                now = time.monotonic()
-                # Cache camera status for 2 seconds to avoid repeated
-                # blocking SDK calls during signal cascading.
-                if now - getattr(self, "_camera_check_ts", 0) > 2.0:
-                    self._camera_connected_cache = self.controller.is_camera_connected()
-                    self._camera_check_ts = now
-                camera_connected = getattr(self, "_camera_connected_cache", False)
-            if getattr(self, "reconnect_camera_btn", None):
-                self.reconnect_camera_btn.setEnabled(not running)
-            if getattr(self, "disconnect_camera_btn", None):
-                self.disconnect_camera_btn.setEnabled(camera_connected and not running)
-            if getattr(self, "use_camera_chk", None):
-                if not camera_connected and self.use_camera_chk.isChecked():
-                    self.use_camera_chk.blockSignals(True)
-                    self.use_camera_chk.setChecked(False)
-                    self.use_camera_chk.blockSignals(False)
-                self.use_camera_chk.setEnabled(camera_connected and not running)
-            if not camera_connected:
-                if getattr(self, "pick_image_btn", None):
-                    self.pick_image_btn.setEnabled(True)
-                if getattr(self, "clear_image_btn", None):
-                    self.clear_image_btn.setEnabled(
-                        bool(getattr(self, "selected_image_path", None))
-                    )
-        except Exception:
-            pass
-
-    def handle_reconnect_camera(self):
-        """Manually reconnect the camera via detection system."""
-        if self.is_detection_running():
-            QMessageBox.warning(
-                self,
-                "相機操作",
-                "檢測進行中，請先停止後再重新連線。",
-            )
-            return
-        if not self.controller.has_system():
-            self.init_system()
-            if not self.controller.has_system():
-                return
-        self.log_message("正在嘗試重新連線相機...")
-        try:
-            success = self.controller.reconnect_camera()
-        except Exception as exc:
-            success = False
-            self.log_message(f"相機重連失敗：{exc}")
-            QMessageBox.critical(self, "相機錯誤", f"重連失敗：\n{exc}")
-        else:
-            if success:
-                self.log_message("相機重連成功")
-                QMessageBox.information(self, "相機狀態", "相機已重新連線。")
-                if getattr(self, "use_camera_chk", None):
-                    self.use_camera_chk.blockSignals(True)
-                    self.use_camera_chk.setChecked(True)
-                    self.use_camera_chk.blockSignals(False)
-                    self.on_use_camera_toggled(True)
-            else:
-                self.log_message("相機重連失敗")
-                QMessageBox.critical(
-                    self,
-                    "相機錯誤",
-                    "重連失敗，請檢查硬體或設定。",
-                )
-        # Invalidate camera status cache so the next check is live
-        self._camera_check_ts = 0
-        self.update_camera_controls()
-
-    def handle_disconnect_camera(self):
-        """Allow user to disconnect the camera manually."""
-        if self.is_detection_running():
-            QMessageBox.warning(
-                self,
-                "相機操作",
-                "檢測進行中，請先停止後再中斷連線。",
-            )
-            return
-        if not self.controller.has_system():
-            QMessageBox.information(
-                self, "相機狀態", "檢測系統尚未初始化。"
-            )
-            return
-        self.log_message("正在中斷相機連線...")
-        try:
-            self.controller.disconnect_camera()
-            self.log_message("相機已中斷連線")
-            QMessageBox.information(self, "相機狀態", "相機已中斷連線。")
-        except Exception as exc:
-            self.log_message(f"相機中斷失敗：{exc}")
-            QMessageBox.critical(self, "相機錯誤", f"中斷連線失敗：\n{exc}")
-        if getattr(self, "use_camera_chk", None):
-            self.use_camera_chk.blockSignals(True)
-            self.use_camera_chk.setChecked(False)
-            self.use_camera_chk.blockSignals(False)
-            self.on_use_camera_toggled(False)
-        # Invalidate camera status cache so the next check is live
-        self._camera_check_ts = 0
-        self.update_camera_controls()
+    # update_camera_controls, handle_reconnect_camera, handle_disconnect_camera
+    # → moved to CameraHandlerMixin (app/gui/camera_handler.py)
 
     def update_start_enabled(self):
         """根據選擇是否完整，自動啟用/停用開始檢測按鈕"""
@@ -810,7 +719,7 @@ class DetectionSystemGUI(QMainWindow):
         load_image_with_retry(
             self.original_image,
             original_path,
-            on_fail=lambda: self.original_image.setText("尚無原始影像"),
+            on_fail=lambda: self.original_image.setText("尚無原始影像 — 請重新選擇影像"),
         )
         load_image_with_retry(
             self.processed_image,
@@ -857,14 +766,13 @@ class DetectionSystemGUI(QMainWindow):
         self.log_message(f"檢測完成 - 狀態: {result.status}")
         self.statusBar().showMessage(f"檢測完成 - {result.status}", 5000)
 
-        # Consecutive FAIL alert
-        consec = self.info_panel.session_stats._consecutive_fails
-        threshold = self.info_panel.session_stats.CONSECUTIVE_FAIL_ALERT
-        if result.status == "FAIL" and consec == threshold:
-            self.log_message(f"⚠ 警告：已連續 {consec} 次 NG！請確認產線狀況。")
-            self.statusBar().showMessage(
-                f"⚠ 連續 {consec} 次 NG！請確認產線狀況。", 8000
-            )
+        # Consecutive FAIL alert is handled via SessionStatsWidget.consecutive_fail_reached signal.
+
+    @pyqtSlot(int)
+    def _on_consecutive_fail_alert(self, count: int) -> None:
+        """Slot for SessionStatsWidget.consecutive_fail_reached signal."""
+        self.log_message(f"⚠ 警告：已連續 {count} 次 NG！請確認產線狀況。")
+        self.statusBar().showMessage(f"⚠ 連續 {count} 次 NG！請確認產線狀況。", 8000)
 
     def on_detection_error(self, error_msg):
         """檢測錯誤回調"""
@@ -876,36 +784,9 @@ class DetectionSystemGUI(QMainWindow):
         self.log_message(f"檢測錯誤: {error_msg}")
         QMessageBox.critical(self, "檢測錯誤", f"檢測過程中發生錯誤\n{error_msg}")
 
-    @pyqtSlot()
-    def _on_camera_disconnected(self):
-        """相機在管線執行中斷線，提供重連選項。"""
-        self.log_message("相機連線中斷（連續擷取失敗）")
-        self.stats_timer.stop()
-        # Stop the pipeline gracefully (acquisition already stopped itself)
-        self._shutdown_worker = self.controller.build_shutdown_worker()
-        self._shutdown_worker.shutdown_complete.connect(self._on_camera_lost_pipeline_stopped)
-        self._shutdown_worker.start()
-
-    def _on_camera_lost_pipeline_stopped(self):
-        """Pipeline stopped after camera loss — show reconnect dialog."""
-        self._reset_ui_state()
-        reply = QMessageBox.question(
-            self,
-            "相機連線中斷",
-            "檢測過程中相機連線已中斷。\n是否嘗試重新連線並繼續檢測？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        if reply == QMessageBox.Yes:
-            self.handle_reconnect_camera()
-            # If reconnect succeeded, auto-restart detection
-            if self.controller.has_system() and self.controller.is_camera_connected():
-                self.log_message("相機重連成功，自動重啟檢測管線...")
-                self.start_detection()
-            else:
-                self.log_message("相機重連失敗，請手動檢查後再試。")
-        else:
-            self.log_message("使用者取消重連，檢測已停止。")
+    # _on_camera_disconnected, _on_camera_lost_pipeline_stopped → CameraHandlerMixin
+    # The pyqtSlot decorator is not needed on mixin methods — Qt resolves slots
+    # by name at runtime regardless of where the method is defined in the MRO.
 
     def save_results(self):
         """Save the latest detection result to disk."""
@@ -979,48 +860,7 @@ class DetectionSystemGUI(QMainWindow):
         except Exception:
             pass
 
-    def on_use_camera_toggled(self, checked):
-        """切換 使用相機 / 使用影像 模式"""
-        try:
-            if self.is_detection_running():
-                return
-            camera_ready = False
-            if self.controller.has_system():
-                camera_ready = self.controller.is_camera_connected()
-            if checked:
-                if not camera_ready:
-                    QMessageBox.warning(
-                        self, "相機不可用", "目前相機尚未連線，請先重新連線。"
-                    )
-                    if getattr(self, "use_camera_chk", None):
-                        self.use_camera_chk.blockSignals(True)
-                        self.use_camera_chk.setChecked(False)
-                        self.use_camera_chk.blockSignals(False)
-                    self.log_message("切換相機模式失敗：相機未連線")
-                    return
-                self.selected_image_path = None
-                if getattr(self, "pick_image_btn", None):
-                    self.pick_image_btn.setEnabled(False)
-                if getattr(self, "clear_image_btn", None):
-                    self.clear_image_btn.setEnabled(False)
-                if getattr(self, "image_path_label", None):
-                    self.image_path_label.setText("使用相機輸入（檢測時自動拍攝）")
-            else:
-                if getattr(self, "pick_image_btn", None):
-                    self.pick_image_btn.setEnabled(True)
-                if getattr(self, "clear_image_btn", None):
-                    self.clear_image_btn.setEnabled(bool(self.selected_image_path))
-                if not self.selected_image_path and getattr(
-                    self, "image_path_label", None
-                ):
-                    self.image_path_label.setText("請選擇影像或重新連線相機")
-        except Exception:
-            pass
-        finally:
-            try:
-                self.update_camera_controls()
-            except Exception:
-                pass
+    # on_use_camera_toggled → moved to CameraHandlerMixin
 
     def open_config(self):
         """開啟設定檔"""

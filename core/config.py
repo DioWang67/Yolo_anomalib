@@ -17,17 +17,17 @@ def _default_device() -> str:
     try:
         import torch
         return "cuda:0" if torch.cuda.is_available() else "cpu"
-    except Exception:
+    except (ImportError, RuntimeError, OSError):
         return "cpu"
 
 try:  # pragma: no cover - runtime optional depending on pydantic version
     from pydantic import ValidationError as _ValidationError  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     try:
         from pydantic.v1 import (
             ValidationError as _ValidationError,  # type: ignore
         )
-    except Exception:  # pragma: no cover
+    except ImportError:  # pragma: no cover
         _ValidationError = None  # type: ignore
 
 try:  # schema helpers (require pydantic)
@@ -36,7 +36,7 @@ try:  # schema helpers (require pydantic)
         ModelConfigSchema,
         _to_dict,  # type: ignore
     )
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     GlobalConfigSchema = None  # type: ignore
     ModelConfigSchema = None  # type: ignore
     _to_dict = None  # type: ignore
