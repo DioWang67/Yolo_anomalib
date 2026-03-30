@@ -1,6 +1,6 @@
-weights: weights/best.pt
+weights: models/Cable1/A/yolo/weights/best.pt
 device: cpu
-conf_thres: 0.2
+conf_thres: 0.4
 iou_thres: 0.45
 imgsz:
 - 640
@@ -38,38 +38,4 @@ steps:
     - Black
 enable_color_check: true
 color_checker_type: stats
-color_model_path: color_stats.json
-position_config:
-  Cable1:
-    A:
-      enabled: true
-      mode: bbox
-      tolerance: 0.0
-      expected_boxes:
-        Red:
-          x1: 97
-          y1: 315
-          x2: 334
-          y2: 431
-        Orange:
-          x1: 155
-          y1: 321
-          x2: 391
-          y2: 437
-        Black:
-          x1: 210
-          y1: 318
-          x2: 477
-          y2: 452
-        Yellow:
-          x1: 183
-          y1: 320
-          x2: 418
-          y2: 441
-        Green:
-          x1: 125
-          y1: 318
-          x2: 364
-          y2: 432
-      imgsz: 640
-      tolerance_unit: percent
+color_model_path: models/Cable1/A/yolo/color_stats.json

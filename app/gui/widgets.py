@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Optional
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QImage, QPixmap
 from PyQt5.QtWidgets import (
     QGridLayout,
@@ -144,13 +144,17 @@ class FailReasonLabel(QLabel):
             reason_key = seq.get("reason", "")
             reasons.append("排列順序錯誤" if reason_key == "order_mismatch" else "排列長度不符")
 
+        all_items = result.items or []
         pos_fails = [
-            i.label for i in (result.items or [])
+            i.label for i in all_items
             if i.metadata.get("position_status") in ("FAIL", "WRONG", "UNEXPECTED", "INVALID", "ERROR")
         ]
         if pos_fails:
             reasons.append(f"位置偏移：{', '.join(pos_fails[:3])}"
                            + ("…" if len(pos_fails) > 3 else ""))
+            # All items failed position check → likely fixture shift, not individual defects
+            if all_items and len(pos_fails) == len(all_items):
+                reasons.append("⚙ 全件位置偏移，可能是治具移位，請通知工程師校正")
 
         if reasons:
             self.setText("⚠ " + "　|　".join(reasons))
@@ -173,6 +177,10 @@ class SessionStatsWidget(QGroupBox):
     """
 
     CONSECUTIVE_FAIL_ALERT: int = 3  # alert threshold
+
+    # Emitted exactly once when consecutive_fails reaches CONSECUTIVE_FAIL_ALERT.
+    # Argument is the count that triggered the alert.
+    consecutive_fail_reached = pyqtSignal(int)
 
     _STYLE_NORMAL = "color: #155724; background: #d4edda; border-radius: 3px; padding: 2px 6px;"
     _STYLE_ALERT  = "color: #721c24; background: #f8d7da; border-radius: 3px; padding: 2px 6px;"
@@ -227,6 +235,12 @@ class SessionStatsWidget(QGroupBox):
         self.setLayout(grid)
 
     # ------------------------------------------------------------------
+    @property
+    def consecutive_fails(self) -> int:
+        """Read-only view of the current consecutive-FAIL counter."""
+        return self._consecutive_fails
+
+    # ------------------------------------------------------------------
     def record_result(self, status: str) -> None:
         """Update counters based on detection status ('PASS' or 'FAIL')."""
         if status == "PASS":
@@ -259,6 +273,9 @@ class SessionStatsWidget(QGroupBox):
             self._consec_lbl.setToolTip(
                 f"連續 {self._consecutive_fails} 次 NG！請確認產線狀況。"
             )
+            # Emit on every FAIL at or above the threshold so the banner
+            # re-appears if the operator dismissed it and NG continues.
+            self.consecutive_fail_reached.emit(self._consecutive_fails)
         else:
             self._consec_lbl.setStyleSheet(self._STYLE_NORMAL)
             self._consec_lbl.setToolTip("")

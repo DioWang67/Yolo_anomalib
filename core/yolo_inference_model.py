@@ -275,6 +275,7 @@ class YOLOInferenceModel(BaseInferenceModel):
                 "processed_image": processed_image,
                 "result_frame": result_frame,
                 "expected_items": expected_items,
+                "ckpt_path": str(self.config.weights),
             }
         except Exception as exc:
             self.logger.logger.exception("YOLO inference failed")

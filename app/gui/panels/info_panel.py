@@ -6,8 +6,10 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QCheckBox,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -43,8 +45,35 @@ class InfoPanel(QWidget):
         self.fail_reason_label = FailReasonLabel()
         layout.addWidget(self.fail_reason_label)
 
+        # ── 連續 NG 警示橫幅（平時隱藏）────────────────────────────────
+        self._alert_banner = QFrame()
+        self._alert_banner.setFrameShape(QFrame.StyledPanel)
+        self._alert_banner.setStyleSheet(
+            "QFrame { background-color: #f8d7da; border: 2px solid #f5c6cb; border-radius: 4px; padding: 4px; }"
+        )
+        banner_layout = QHBoxLayout()
+        banner_layout.setContentsMargins(8, 4, 8, 4)
+        self._alert_text = QLabel()
+        self._alert_text.setFont(QFont("Microsoft JhengHei", 10, QFont.Bold))
+        self._alert_text.setStyleSheet("color: #721c24; background: transparent; border: none;")
+        self._alert_text.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        banner_layout.addWidget(self._alert_text, stretch=1)
+        dismiss_btn = QPushButton("✕")
+        dismiss_btn.setFixedSize(24, 24)
+        dismiss_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: none; color: #721c24; font-weight: bold; }"
+            "QPushButton:hover { background: #f5c6cb; border-radius: 3px; }"
+        )
+        dismiss_btn.setToolTip("關閉警示")
+        dismiss_btn.clicked.connect(self._dismiss_alert)
+        banner_layout.addWidget(dismiss_btn)
+        self._alert_banner.setLayout(banner_layout)
+        self._alert_banner.setVisible(False)
+        layout.addWidget(self._alert_banner)
+
         # ── 當班統計 ─────────────────────────────────────────────────
         self.session_stats = SessionStatsWidget()
+        self.session_stats.consecutive_fail_reached.connect(self._show_alert)
         layout.addWidget(self.session_stats)
 
         # ── 詳細結果 ─────────────────────────────────────────────────
@@ -100,6 +129,16 @@ class InfoPanel(QWidget):
         self.result_widget.update_result(result)
         self.fail_reason_label.update_from_result(result)
         self.session_stats.record_result(result.status)
+        # Auto-hide the consecutive-FAIL banner the moment a PASS arrives.
+        if result.status == "PASS":
+            self._dismiss_alert()
+
+    def _show_alert(self, count: int) -> None:
+        self._alert_text.setText(f"⚠ 警告：已連續 {count} 次 NG！請確認產線狀況。")
+        self._alert_banner.setVisible(True)
+
+    def _dismiss_alert(self) -> None:
+        self._alert_banner.setVisible(False)
 
     def append_log(self, message: str) -> None:
         """Append a log line, respecting the active filter."""
