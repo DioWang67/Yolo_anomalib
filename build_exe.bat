@@ -1,5 +1,11 @@
-@echo off
+﻿@echo off
 setlocal enabledelayedexpansion
+
+REM --- 強制使用 UTF-8 code page，避免中文訊息顯示亂碼 ---
+chcp 65001 >nul
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+
 
 REM ==========================================================================
 REM  yolo11_inference  ─  PyInstaller 打包腳本
