@@ -60,6 +60,8 @@ REM  --console  : 保留主控台視窗（方便看 log，可改 --noconsole 隱
 REM  注意: core/, app/, camera/ 不加 --add-data，PyInstaller 會透過 import
 REM        分析自動處理；只有非 Python 資源才需要 --add-data
 REM ==========================================================================
+REM --- 執行期需要的資料檔（非 Python 程式碼）、隱藏 import、子模組收集與 metadata 保留 ---
+REM --- 注意：在 ^ 續行的指令區塊中不可插入 REM 註解，否則可能導致參數被截斷或解析失敗 ---
 "%ENV_PYTHON%" -m PyInstaller ^
   --noconfirm ^
   --onedir ^
@@ -69,14 +71,12 @@ REM ==========================================================================
   --workpath "%WORK_PATH%" ^
   --specpath "%SPEC_PATH%" ^
   ^
-  REM --- 執行期需要的資料檔（非 Python 程式碼）---
   --add-data "%SOURCE_PATH%\config.yaml;." ^
   --add-data "%SOURCE_PATH%\config.example.yaml;." ^
   --add-data "%SOURCE_PATH%\Runtime;Runtime" ^
   --add-data "%SOURCE_PATH%\MvImport;MvImport" ^
   --add-data "%SOURCE_PATH%\models;models" ^
   ^
-  REM --- 動態載入的隱藏 import（PyInstaller 靜態分析找不到的）---
   --hidden-import torch ^
   --hidden-import torch.nn.functional ^
   --hidden-import torchvision ^
@@ -109,7 +109,6 @@ REM ==========================================================================
   --hidden-import importlib.metadata ^
   --hidden-import jsonargparse ^
   ^
-  REM --- 需要完整收集子模組的套件（有動態 import 或 plugin 機制）---
   --collect-submodules anomalib ^
   --collect-submodules anomalib.models ^
   --collect-submodules ultralytics ^
@@ -122,7 +121,6 @@ REM ==========================================================================
   --collect-data open_clip ^
   --collect-data ultralytics ^
   ^
-  REM --- 保留套件 metadata（供 importlib.metadata / pkg_resources 查版本）---
   --copy-metadata torch ^
   --copy-metadata ultralytics ^
   --copy-metadata anomalib ^
