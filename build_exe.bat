@@ -1,77 +1,156 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 
-REM === 基本路徑設定 ===
-set "SOURCE_PATH=D:\Git\robotlearning\yolo11_inference"
-set "ENV_PYTHON=D:\miniconda\envs\yolo_anomalib\python.exe"
-set "OUTPUT_PATH=D:\Git\robotlearning\build_exe"
+REM ==========================================================================
+REM  yolo11_inference  ─  PyInstaller 打包腳本
+REM  用法: 直接雙擊執行，或在命令列執行 build_exe.bat
+REM  如需覆蓋 Python 路徑: set YOLO11_PYTHON=D:\...python.exe && build_exe.bat
+REM ==========================================================================
 
-REM === 顯示目前使用的 Python，確保是正確 env ===
-echo Using Python:
+REM --- 自動偵測腳本所在目錄（不依賴 cwd）---
+pushd "%~dp0"
+set "SOURCE_PATH=%CD%"
+popd
+
+REM --- Python 環境設定（可透過 YOLO11_PYTHON 環境變數覆蓋）---
+set "DEFAULT_PYTHON=D:\miniconda\envs\yolo_anomalib\python.exe"
+if not "%YOLO11_PYTHON%"=="" (
+    set "ENV_PYTHON=%YOLO11_PYTHON%"
+) else (
+    set "ENV_PYTHON=%DEFAULT_PYTHON%"
+)
+
+REM --- 驗證 Python 存在 ---
+if not exist "%ENV_PYTHON%" (
+    echo [ERROR] 找不到 Python: %ENV_PYTHON%
+    echo 請修改腳本中的 DEFAULT_PYTHON，或設定環境變數 YOLO11_PYTHON。
+    pause & exit /b 1
+)
+
+echo [INFO] 使用 Python: %ENV_PYTHON%
 "%ENV_PYTHON%" -V
-echo Python executable:
-echo %ENV_PYTHON%
+echo [INFO] 原始碼路徑: %SOURCE_PATH%
 echo.
 
-REM === 清理輸出資料夾 ===
-if exist "%OUTPUT_PATH%" rd /s /q "%OUTPUT_PATH%"
-mkdir "%OUTPUT_PATH%"
+REM --- 確認 PyInstaller 已安裝 ---
+"%ENV_PYTHON%" -c "import PyInstaller" 2>nul
+if errorlevel 1 (
+    echo [ERROR] PyInstaller 未安裝，請執行: pip install pyinstaller
+    pause & exit /b 1
+)
 
-REM === 執行 PyInstaller 打包（一定要用指定 env 的 python） ===
+REM --- 輸出設定 ---
+set "BUILD_NAME=yolo11_inference"
+set "OUTPUT_PATH=%SOURCE_PATH%\dist"
+set "WORK_PATH=%SOURCE_PATH%\build"
+set "SPEC_PATH=%SOURCE_PATH%"
+
+REM --- 清理上次輸出 ---
+echo [INFO] 清理舊輸出目錄...
+if exist "%OUTPUT_PATH%\%BUILD_NAME%" rd /s /q "%OUTPUT_PATH%\%BUILD_NAME%"
+if exist "%WORK_PATH%" rd /s /q "%WORK_PATH%"
+
+echo [INFO] 開始打包，這需要幾分鐘...
+echo.
+
+REM ==========================================================================
+REM  PyInstaller 打包指令
+REM  --onedir   : 輸出為資料夾（比 onefile 啟動快，DLL 相容性更好）
+REM  --console  : 保留主控台視窗（方便看 log，可改 --noconsole 隱藏）
+REM  注意: core/, app/, camera/ 不加 --add-data，PyInstaller 會透過 import
+REM        分析自動處理；只有非 Python 資源才需要 --add-data
+REM ==========================================================================
 "%ENV_PYTHON%" -m PyInstaller ^
   --noconfirm ^
   --onedir ^
   --console ^
+  --name "%BUILD_NAME%" ^
+  --distpath "%OUTPUT_PATH%" ^
+  --workpath "%WORK_PATH%" ^
+  --specpath "%SPEC_PATH%" ^
+  ^
+  REM --- 執行期需要的資料檔（非 Python 程式碼）---
   --add-data "%SOURCE_PATH%\config.yaml;." ^
   --add-data "%SOURCE_PATH%\config.example.yaml;." ^
-  --add-data "%SOURCE_PATH%\Runtime;Runtime/" ^
-  --add-data "%SOURCE_PATH%\MvImport;MvImport/" ^
-  --add-data "%SOURCE_PATH%\models;models/" ^
-  --add-data "%SOURCE_PATH%\core;core/" ^
-  --add-data "%SOURCE_PATH%\camera;camera/" ^
-  --add-data "%SOURCE_PATH%\app;app/" ^
-  --add-data "%SOURCE_PATH%\tools;tools/" ^
-  --add-data "%SOURCE_PATH%\GUI.py;." ^
-  --add-data "%SOURCE_PATH%\README.md;." ^
+  --add-data "%SOURCE_PATH%\Runtime;Runtime" ^
+  --add-data "%SOURCE_PATH%\MvImport;MvImport" ^
+  --add-data "%SOURCE_PATH%\models;models" ^
+  ^
+  REM --- 動態載入的隱藏 import（PyInstaller 靜態分析找不到的）---
   --hidden-import torch ^
+  --hidden-import torch.nn.functional ^
   --hidden-import torchvision ^
   --hidden-import cv2 ^
-  --hidden-import scipy ^
   --hidden-import numpy ^
-  --hidden-import torch.nn.functional ^
+  --hidden-import scipy ^
+  --hidden-import scipy.special._ufuncs ^
+  --hidden-import PIL ^
+  --hidden-import PIL._tkinter_finder ^
   --hidden-import kornia ^
   --hidden-import anomalib ^
   --hidden-import lightning ^
-  --hidden-import PyQt5 ^
-  --hidden-import PyQt5.QtCore ^
-  --hidden-import PyQt5.QtGui ^
-  --hidden-import PyQt5.QtWidgets ^
   --hidden-import ultralytics ^
   --hidden-import pandas ^
   --hidden-import openpyxl ^
+  --hidden-import openpyxl.cell._writer ^
   --hidden-import yaml ^
   --hidden-import pydantic ^
   --hidden-import tqdm ^
   --hidden-import timm ^
   --hidden-import einops ^
   --hidden-import FrEIA ^
-  --hidden-import PIL ^
   --hidden-import imgaug ^
+  --hidden-import PyQt5 ^
+  --hidden-import PyQt5.sip ^
+  --hidden-import PyQt5.QtCore ^
+  --hidden-import PyQt5.QtGui ^
+  --hidden-import PyQt5.QtWidgets ^
+  --hidden-import pkg_resources ^
+  --hidden-import importlib.metadata ^
+  --hidden-import jsonargparse ^
+  ^
+  REM --- 需要完整收集子模組的套件（有動態 import 或 plugin 機制）---
+  --collect-submodules anomalib ^
   --collect-submodules anomalib.models ^
   --collect-submodules ultralytics ^
-  --collect-submodules PyQt5 ^
   --collect-submodules lightning ^
+  --collect-submodules timm ^
+  --collect-submodules PyQt5 ^
   --collect-all kornia ^
+  --collect-all jsonargparse ^
   --collect-data anomalib ^
   --collect-data open_clip ^
-  --collect-all jsonargparse ^
-  --distpath "%OUTPUT_PATH%" ^
-  --workpath "%OUTPUT_PATH%\build" ^
-  --specpath "%OUTPUT_PATH%\specs" ^
+  --collect-data ultralytics ^
+  ^
+  REM --- 保留套件 metadata（供 importlib.metadata / pkg_resources 查版本）---
+  --copy-metadata torch ^
+  --copy-metadata ultralytics ^
+  --copy-metadata anomalib ^
+  --copy-metadata lightning ^
+  ^
   "%SOURCE_PATH%\GUI.py"
 
+if errorlevel 1 (
+    echo.
+    echo [ERROR] 打包失敗！請檢查上方錯誤訊息。
+    pause & exit /b 1
+)
 
 echo.
-echo 打包完成，輸出目錄: %OUTPUT_PATH%
+echo [INFO] 打包完成，執行後置驗證...
+echo.
+
+REM --- 執行驗證腳本 ---
+"%ENV_PYTHON%" "%SOURCE_PATH%\verify_build.py" "%OUTPUT_PATH%\%BUILD_NAME%"
+if errorlevel 1 (
+    echo [WARNING] 驗證有問題，請確認上方報告。
+) else (
+    echo [OK] 驗證通過。
+)
+
+echo.
+echo 輸出目錄: %OUTPUT_PATH%\%BUILD_NAME%
+echo 執行程式: %OUTPUT_PATH%\%BUILD_NAME%\%BUILD_NAME%.exe
+echo.
 pause
 endlocal
