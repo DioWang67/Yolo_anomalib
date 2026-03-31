@@ -212,6 +212,18 @@ class ResultHandler:
                         params=imwrite_params_png,
                         limit=limit,
                     )
+            elif detector_lower == "fusion" and save_flags["annotated"]:
+                if processed_image is not None and processed_image.size > 0:
+                    self._img_queue.write_sync(
+                        annotated_path,
+                        processed_image,
+                        (
+                            imwrite_params_jpg
+                            if annotated_path.lower().endswith(".jpg")
+                            else imwrite_params_png
+                        ),
+                    )
+                heatmap_dest_path = annotated_path
             elif (
                 save_flags["annotated"]
                 and detector_lower == "anomalib"

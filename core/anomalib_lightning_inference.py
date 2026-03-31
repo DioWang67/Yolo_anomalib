@@ -226,11 +226,10 @@ def initialize(
             _current_product = product
             _current_area = area
             _current_ckpt_path = str(args.ckpt_path)
-            message = (
-                f"Failed to read image? (??: {product}, ??: {area}, ???: {args.ckpt_path}, "
-                f"??: {_thresholds[model_key]})"
+            logging.getLogger("anomalib").info(
+                f"Model initialized (product: {product}, area: {area}, "
+                f"ckpt: {args.ckpt_path}, threshold: {_thresholds[model_key]})"
             )
-            logging.getLogger("anomalib").info(message)
             logging.getLogger("anomalib").info(f"Output directory: {_output_dir}")
 
         except Exception as exc:
@@ -488,19 +487,18 @@ def _process_prediction(
         is_anomaly = anomaly_score > threshold
         status_str = "anomaly" if is_anomaly else "normal"
 
-        if (
-            output_path
-            and os.path.dirname(output_path)
-            != "Result/YYYYMMDD/TEMP/annotated/anomalib"
-        ):
+        if output_path:
             heatmap_path = output_path
         else:
             current_date = datetime.now().strftime("%Y%m%d")
             time_stamp = datetime.now().strftime("%H%M%S")
+            status_label = "FAIL" if is_anomaly else "PASS"
             heatmap_path = os.path.join(
                 "Result",
                 current_date,
-                status_str,
+                product or "unknown",
+                area or "unknown",
+                status_label,
                 "annotated",
                 "anomalib",
                 f"anomalib_{product}_{area}_{time_stamp}_{anomaly_score:.4f}.jpg",

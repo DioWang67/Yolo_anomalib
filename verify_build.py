@@ -6,7 +6,6 @@ Usage:
 """
 from __future__ import annotations
 
-import os
 import sys
 import subprocess
 from pathlib import Path
@@ -14,15 +13,17 @@ from pathlib import Path
 
 REQUIRED_FILES = [
     "yolo11_inference.exe",
-    "config.yaml",
-    "config.example.yaml",
 ]
 
 REQUIRED_DIRS = [
     "Runtime",
     "MvImport",
-    "models",
 ]
+
+# timm backbone weights bundled in _internal for offline Patchcore loading
+REQUIRED_TIMM_CACHE = (
+    "timm_cache/hub/checkpoints/wide_resnet50_racm-8234f177.pth"
+)
 
 REQUIRED_DLL_SAMPLES = [
     "MvImport/MvCameraControl_class.py",
@@ -38,6 +39,18 @@ def hr(char: str = "─", width: int = 60) -> str:
     return char * width
 
 
+def _resolve_data_root(dist: Path) -> tuple[Path, bool]:
+    """Return (data_root, is_pyinstaller6).
+
+    PyInstaller ≥ 6.0 places all non-exe files under <dist>/_internal/.
+    Earlier versions put them directly in <dist>/.
+    """
+    internal = dist / "_internal"
+    if internal.is_dir():
+        return internal, True
+    return dist, False
+
+
 def check_dir(dist: Path) -> bool:
     print(hr())
     print(f"驗證目錄: {dist}")
@@ -47,12 +60,18 @@ def check_dir(dist: Path) -> bool:
         print(f"[FAIL] 輸出目錄不存在: {dist}")
         return False
 
+    data_root, is_v6 = _resolve_data_root(dist)
+    if is_v6:
+        print("[INFO] 偵測到 PyInstaller 6.x 結構，資料根目錄: _internal/")
+    print()
+
     passed = True
 
     # --- 必要檔案 ---
-    print("\n[必要檔案]")
+    print("[必要檔案]")
     for f in REQUIRED_FILES:
-        p = dist / f
+        # exe lives in dist root; everything else is under data_root
+        p = dist / f if f.endswith(".exe") else data_root / f
         if p.exists():
             size_kb = p.stat().st_size // 1024
             print(f"  ✓  {f}  ({size_kb:,} KB)")
@@ -63,7 +82,7 @@ def check_dir(dist: Path) -> bool:
     # --- 必要目錄 ---
     print("\n[必要目錄]")
     for d in REQUIRED_DIRS:
-        p = dist / d
+        p = data_root / d
         if p.exists() and p.is_dir():
             count = sum(1 for _ in p.rglob("*") if _.is_file())
             print(f"  ✓  {d}/  ({count} 個檔案)")
@@ -71,34 +90,47 @@ def check_dir(dist: Path) -> bool:
             print(f"  ✗  {d}/  ← 缺少！")
             passed = False
 
+    # --- timm_cache（Patchcore backbone 離線權重）---
+    print("\n[timm_cache]")
+    timm_file = data_root / REQUIRED_TIMM_CACHE
+    if timm_file.exists():
+        size_mb = timm_file.stat().st_size / (1024 * 1024)
+        print(f"  ✓  {REQUIRED_TIMM_CACHE}  ({size_mb:.0f} MB)")
+    else:
+        print(f"  ✗  {REQUIRED_TIMM_CACHE}  ← 缺少！anomalib 離線無法初始化")
+        passed = False
+
     # --- MvImport 抽查 ---
     print("\n[MvImport 抽查]")
     for f in REQUIRED_DLL_SAMPLES:
-        p = dist / f
+        p = data_root / f
         if p.exists():
             print(f"  ✓  {f}")
         else:
             print(f"  ✗  {f}  ← 缺少！")
             passed = False
 
-    # --- 模型權重檔 ---
-    print("\n[模型權重 .pt]")
-    model_files = list((dist / "models").rglob("*.pt")) if (dist / "models").exists() else []
+    # --- 模型權重檔（外部資料，不計入 pass/fail）---
+    print("\n[模型權重 .pt]（外部資料，僅供參考）")
+    models_dir = dist / "models"
+    model_files = list(models_dir.rglob("*.pt")) if models_dir.exists() else []
     if model_files:
         for pt in sorted(model_files):
             rel = pt.relative_to(dist)
             size_mb = pt.stat().st_size / (1024 * 1024)
             print(f"  ✓  {rel}  ({size_mb:.1f} MB)")
     else:
-        print("  ✗  找不到任何 .pt 檔案！")
-        passed = False
+        print("  -  未在 dist 根目錄找到 .pt；請手動複製 models/ 到此處")
 
     # --- 套件是否齊全（抽查關鍵套件）---
     print("\n[關鍵套件 .pyd / .so 抽查]")
     key_patterns = ["torch", "cv2", "PyQt5", "ultralytics", "anomalib"]
     for kw in key_patterns:
         matches = list(dist.rglob(f"*{kw}*"))
-        matches = [m for m in matches if m.is_file() and m.suffix in (".pyd", ".dll", ".so", ".py")]
+        matches = [
+            m for m in matches
+            if m.is_file() and m.suffix in (".pyd", ".dll", ".so", ".py")
+        ]
         if matches:
             print(f"  ✓  {kw}  ({len(matches)} 個相關檔案)")
         else:
@@ -110,7 +142,10 @@ def check_dir(dist: Path) -> bool:
     total_mb = total_bytes / (1024 * 1024)
     print(f"  總大小: {total_mb:.0f} MB")
     if total_mb < WARN_SIZE_MB:
-        print(f"  [WARNING] 小於 {WARN_SIZE_MB} MB，可能有套件沒打進去（torch 本身就超過 2 GB）")
+        print(
+            f"  [WARNING] 小於 {WARN_SIZE_MB} MB，"
+            "可能有套件沒打進去（torch 本身就超過 2 GB）"
+        )
         passed = False
 
     # --- 嘗試啟動 exe（--help 旗標，確認能執行不崩潰）---

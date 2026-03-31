@@ -7,7 +7,7 @@ current_product: "PCBA1"
 enable_anomalib: true
 output_dir: Result
 anomalib_config:
-  output: Result/YYYYMMDD/annotated
+  output: Runtime/anomalib_cache
   threshold: 0.7
   devices: auto
   data:

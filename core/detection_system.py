@@ -607,6 +607,8 @@ class DetectionSystem:
         else:
             merged["result_frame"] = yolo_frame if yolo_frame is not None else ano_frame
 
+        merged["processed_image"] = merged["result_frame"]
+
         return merged
 
     def _execute_pipeline(self, ctx: DetectionContext, run_logger, cancel_cb=None):
