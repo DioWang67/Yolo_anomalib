@@ -48,7 +48,7 @@ if not hasattr(np, "sctypes"):  # pragma: no cover - exercised only on NumPy>=2
         )
         if t is not None
     ]
-    np.sctypes = {  # type: ignore[attr-defined]
+    np.sctypes = {
         "int": _int_types,
         "uint": _uint_types,
         "float": _float_types,
@@ -61,6 +61,8 @@ import sys
 import threading
 import time
 from datetime import datetime
+
+from core.services.results.path_manager import ResultPathManager
 from importlib import import_module
 
 # ---- Anomalib / jsonargparse 依賴檢查與強制載入 ----
@@ -108,7 +110,7 @@ ModelKey = tuple[str, str]
 
 import torch
 # Limit PyTorch CPU threads to prevent UI starvation (e.g. combo box stutters) when running locally
-torch.set_num_threads(int(max(1, os.cpu_count() // 2)))
+torch.set_num_threads(int(max(1, (os.cpu_count() or 2) // 2)))
 
 _engine: Engine | None = None
 _models: dict[ModelKey, dict[str, Any]] = {}
@@ -172,7 +174,8 @@ def initialize(
                 )
             model_config = models_cfg[product][area]
             args.ckpt_path = model_config.get("ckpt_path")
-            threshold = float(model_config.get("threshold", 0.5))
+            default_threshold = float(config.get("threshold", 0.5))
+            threshold = float(model_config.get("threshold", default_threshold))
             _thresholds[model_key] = threshold
             logging.getLogger("anomalib").info(
                 f"Using checkpoint: {args.ckpt_path} (product: {product}, area: {area}, threshold: {threshold})"
@@ -434,75 +437,59 @@ def _process_prediction(
             heatmap_3d, (original_image.shape[1], original_image.shape[0])
         )
 
-        dynamic_threshold = threshold
-        if heatmap_3d.max() - heatmap_3d.min() == 0:
-            normalized_heatmap = np.zeros_like(heatmap_3d, dtype=np.float32)
-            threshold_mask = np.zeros_like(heatmap_3d, dtype=bool)
-            message = (
-                f"Heatmap has no variation (min={heatmap_3d.min()}, max={heatmap_3d.max()})"
-            )
-            logging.getLogger("anomalib").warning(message)
-        else:
-            normalized_heatmap = (heatmap_3d - heatmap_3d.min()) / np.ptp(heatmap_3d)
-            dynamic_threshold = 0.95 if anomaly_score < 0.1 else threshold
-            threshold_mask = normalized_heatmap > dynamic_threshold
-            message = (
-                "Score-based threshold adjustment, dynamic threshold: "
-                f"{dynamic_threshold:.4f} (base: {threshold}, "
-                f"anomaly score: {anomaly_score:.4f})"
-            )
-            logging.getLogger("anomalib").info(message)
-
-        colored_heatmap = cv2.applyColorMap(
-            (normalized_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET
-        )
-        colored_heatmap = cv2.cvtColor(colored_heatmap, cv2.COLOR_BGR2RGB)
+        is_anomaly = anomaly_score > threshold
+        total_pixels = int(heatmap_3d.size)
         overlay_image = original_image.copy()
 
-        if np.any(threshold_mask):
-            overlay_image[threshold_mask] = cv2.addWeighted(
-                colored_heatmap[threshold_mask].reshape(-1, 3),
-                0.4,
-                original_image[threshold_mask].reshape(-1, 3),
-                0.6,
-                0,
-            ).reshape(-1, 3)
-            anomaly_pixel_count = int(np.sum(threshold_mask))
-            total_pixels = int(threshold_mask.size)
-            anomaly_ratio = anomaly_pixel_count / total_pixels
-            message = (
-                "Pixel-level threshold filtering (method: score_based, threshold: "
-                f"{dynamic_threshold}), anomaly pixels: {anomaly_pixel_count}/{total_pixels} "
-                f"({anomaly_ratio:.2%})"
-            )
-            logging.getLogger("anomalib").info(message)
-        else:
-            logging.getLogger("anomalib").info(
-                "No pixel exceeds the threshold (method: score_based); displaying original image"
-            )
-            anomaly_pixel_count = 0
-            total_pixels = int(threshold_mask.size)
-            anomaly_ratio = 0.0
+        heatmap_range = heatmap_3d.max() - heatmap_3d.min()
+        logging.getLogger("anomalib").info(
+            f"anomaly_score={anomaly_score:.4f}, threshold={threshold}, "
+            f"heatmap raw min={heatmap_3d.min():.4f} max={heatmap_3d.max():.4f}"
+        )
 
-        is_anomaly = anomaly_score > threshold
-        status_str = "anomaly" if is_anomaly else "normal"
+        if not is_anomaly or heatmap_range == 0:
+            # PASS or flat heatmap: return original image without any heat overlay.
+            threshold_mask = np.zeros_like(heatmap_3d, dtype=bool)
+            anomaly_pixel_count = 0
+            anomaly_ratio = 0.0
+            if heatmap_range == 0 and is_anomaly:
+                logging.getLogger("anomalib").warning("Heatmap has no variation; skipping overlay")
+            else:
+                logging.getLogger("anomalib").info("PASS: no heat overlay applied")
+        else:
+            # FAIL: normalize per-image for colormap, mask by threshold on normalized scale.
+            normalized_heatmap = (heatmap_3d - heatmap_3d.min()) / heatmap_range
+            threshold_mask = normalized_heatmap > threshold
+            colored_heatmap = cv2.applyColorMap(
+                (normalized_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET
+            )
+            colored_heatmap = cv2.cvtColor(colored_heatmap, cv2.COLOR_BGR2RGB)
+            if np.any(threshold_mask):
+                overlay_image[threshold_mask] = cv2.addWeighted(
+                    colored_heatmap[threshold_mask].reshape(-1, 3),
+                    0.4,
+                    original_image[threshold_mask].reshape(-1, 3),
+                    0.6,
+                    0,
+                ).reshape(-1, 3)
+            anomaly_pixel_count = int(np.sum(threshold_mask))
+            anomaly_ratio = anomaly_pixel_count / total_pixels
+            logging.getLogger("anomalib").info(
+                f"Anomaly pixels: {anomaly_pixel_count}/{total_pixels} ({anomaly_ratio:.2%})"
+            )
 
         if output_path:
             heatmap_path = output_path
         else:
-            current_date = datetime.now().strftime("%Y%m%d")
-            time_stamp = datetime.now().strftime("%H%M%S")
             status_label = "FAIL" if is_anomaly else "PASS"
-            heatmap_path = os.path.join(
-                "Result",
-                current_date,
-                product or "unknown",
-                area or "unknown",
-                status_label,
-                "annotated",
-                "anomalib",
-                f"anomalib_{product}_{area}_{time_stamp}_{anomaly_score:.4f}.jpg",
+            bundle = ResultPathManager("Result").build_paths(
+                status=status_label,
+                detector="anomalib",
+                product=product,
+                area=area,
+                anomaly_score=anomaly_score,
             )
+            heatmap_path = bundle.annotated_path
 
         os.makedirs(os.path.dirname(heatmap_path), exist_ok=True)
         overlay_image_bgr = cv2.cvtColor(overlay_image, cv2.COLOR_RGB2BGR)

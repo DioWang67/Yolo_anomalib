@@ -223,7 +223,7 @@ class ResultHandler:
                             else imwrite_params_png
                         ),
                     )
-                heatmap_dest_path = annotated_path
+                    heatmap_dest_path = annotated_path
             elif (
                 save_flags["annotated"]
                 and detector_lower == "anomalib"

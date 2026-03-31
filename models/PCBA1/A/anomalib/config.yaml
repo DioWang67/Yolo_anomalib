@@ -8,7 +8,7 @@ enable_anomalib: true
 output_dir: Result
 anomalib_config:
   output: Runtime/anomalib_cache
-  threshold: 0.7
+  threshold: 0.6
   devices: auto
   data:
     path: "PCBA_image"
