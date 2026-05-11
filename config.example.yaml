@@ -45,6 +45,8 @@ output_dir: "./Result"
 # Device Selection
 # Options: "auto", "cpu", "cuda", "cuda:0", "cuda:1", etc.
 # device: "auto"
+# For exported YOLO OpenVINO directories, use "intel:cpu", "intel:gpu" or
+# "intel:npu" when targeting Intel runtime explicitly.
 
 # Mixed Precision Inference (FP16 for GPU acceleration)
 # use_amp: true

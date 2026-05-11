@@ -105,7 +105,7 @@ class ModelManager:
         if "imgsz" in cfg and cfg.get("imgsz") is not None:
             base_config.imgsz = tuple(cfg["imgsz"])  # type: ignore[arg-type]
 
-        # --- output_dir: always resolve relative paths against project root ---
+        # --- output_dir: model config relative paths should stay bundle-local ---
         if "output_dir" in cfg:
             raw_output_dir = cfg.get("output_dir")
             if raw_output_dir:
@@ -113,7 +113,8 @@ class ModelManager:
                 if path_str:
                     resolved = Path(path_str)
                     if not resolved.is_absolute():
-                        resolved = (PROJECT_ROOT / resolved).resolve()
+                        base_dir = model_cfg_dir or PROJECT_ROOT
+                        resolved = (base_dir / resolved).resolve()
                     base_config.output_dir = str(resolved)
                 else:
                     self.logger.logger.warning(

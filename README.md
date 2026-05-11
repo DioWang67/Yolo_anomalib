@@ -550,3 +550,32 @@ color_rules_overrides:
 These values override global color-check settings for that model only. If the
 file is missing, invalid, or PyYAML is unavailable, the system falls back to the
 global configuration.
+
+## Firmware / Edge Runtime Notes
+
+For firmware or constrained edge deployment, keep Python training/validation
+separate from runtime artifacts. YOLO can now load PyTorch `.pt`, ONNX files and
+OpenVINO export directories through the same inference wrapper; exported
+runtimes skip PyTorch-only setup such as `model.to()`, `fuse()` and FP16 module
+conversion.
+
+Use the deployment tools to export and measure before changing production
+configs:
+
+```powershell
+python tools\yolo_export.py `
+  --weights models\Cable1\A\yolo\weights\best.pt `
+  --format openvino `
+  --imgsz 640
+
+python tools\runtime_benchmark.py `
+  --backend yolo `
+  --model models\Cable1\A\yolo\weights\best.pt `
+  --images path\to\images `
+  --device cpu `
+  --runs 50
+```
+
+See `docs/FIRMWARE_RUNTIME_PLAN.md` for the benchmark matrix and acceptance
+criteria. Anomalib should remain a training/validation framework until an
+exported runtime is proven equivalent to the current Lightning baseline.
