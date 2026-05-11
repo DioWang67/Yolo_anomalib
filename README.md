@@ -503,3 +503,50 @@ Proprietary License - 專有授權，未經許可不得分發或使用。
 - [Anomalib](https://github.com/openvinotoolkit/anomalib)
 - [PyTorch](https://pytorch.org/)
 - [PyTorch Lightning](https://lightning.ai/)
+
+## Local Environment and Fusion Notes
+
+The Windows startup scripts in this repository activate the `yolo_anomalib`
+conda environment. Use that environment for YOLO/Anomalib development and
+verification on this machine:
+
+```powershell
+conda activate yolo_anomalib
+python -c "import torch, jsonargparse; print(torch.__version__)"
+
+# Or call the environment Python directly.
+D:\miniconda\envs\yolo_anomalib\python.exe -m pytest tests\test_fusion_inference.py
+```
+
+If tests fail with `torch` DLL or missing `jsonargparse` errors, confirm that
+the active Python is not the conda `base` environment.
+
+Use the GUI Fusion mode or call `DetectionSystem.detect(..., "fusion", ...)`
+when a product/area has both YOLO and Anomalib models available:
+
+```text
+models/<product>/<area>/yolo/
+models/<product>/<area>/anomalib/
+```
+
+Fusion runs YOLO and Anomalib concurrently, merges their detections/status, and
+draws YOLO boxes over the Anomalib result frame when possible. If the Anomalib
+engine is not loaded, fusion falls back to YOLO-only inference. The current
+`main.py --type` CLI accepts only `yolo` and `anomalib`; use GUI/API for fusion.
+
+Model-level color checker overrides can be placed in
+`models/<product>/<area>/<inference_type>/config.yaml`:
+
+```yaml
+color_threshold_overrides:
+  red: 0.91
+  blue: 0.88
+
+color_rules_overrides:
+  red:
+    min_area: 3
+```
+
+These values override global color-check settings for that model only. If the
+file is missing, invalid, or PyYAML is unavailable, the system falls back to the
+global configuration.

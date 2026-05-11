@@ -96,3 +96,12 @@ reports/
 
 # 模型備份
 models_backup/
+
+# Local assistant/tool settings and generated desktop shortcuts.
+.claude/
+*.lnk
+
+# Local model bundles/backups and generated PyInstaller specs.
+*.zip
+*.spec
+models/*_backup/

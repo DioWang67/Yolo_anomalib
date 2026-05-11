@@ -52,3 +52,14 @@ output_dir: "./Result"
 # Logging Level
 # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 # log_level: "INFO"
+
+# Optional per-model color checker overrides.
+# Prefer placing these in models/<product>/<area>/<type>/config.yaml when a
+# threshold/rule applies only to one model bundle.
+# color_threshold_overrides:
+#   red: 0.91
+#   blue: 0.88
+#
+# color_rules_overrides:
+#   red:
+#     min_area: 3

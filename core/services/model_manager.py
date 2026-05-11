@@ -243,6 +243,24 @@ class ModelManager:
 
         return engine, base_config
 
+    def get_cached_engine(
+        self, product: str, area: str, inference_type: str
+    ) -> InferenceEngine | None:
+        """Return a cached engine without exposing the internal cache layout.
+
+        Args:
+            product: Product name.
+            area: Area/station name.
+            inference_type: Backend type, for example ``yolo`` or ``anomalib``.
+
+        Returns:
+            The cached inference engine, or ``None`` when it has not been loaded.
+        """
+        with self._cache_lock:
+            engines = self._cache.get((product, area), {})
+            cached = engines.get(inference_type)
+            return cached[0] if cached else None
+
     def _validate_model_version(
         self,
         config: DetectionConfig,

@@ -146,6 +146,65 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         self.assertIn("frames_captured", stats)
         self.system.stop_pipeline()
 
+    def test_run_inference_delegates_fusion_runner(self):
+        """Verify fusion inference is delegated to the extracted runner."""
+        expected_result = {"status": "PASS", "detections": []}
+        runner_instance = MagicMock()
+        runner_instance.run.return_value = expected_result
+
+        with patch("core.detection_system.FusionInferenceRunner") as runner_cls:
+            runner_cls.return_value = runner_instance
+
+            result = self.system._run_inference(
+                MagicMock(), "LED", "A", "fusion", MagicMock()
+            )
+
+        self.assertEqual(result, expected_result)
+        runner_cls.assert_called_once_with(
+            self.system.model_manager, self.system.config, self.system.result_sink
+        )
+        runner_instance.run.assert_called_once()
+        adjust_callback = runner_instance.run.call_args.kwargs[
+            "adjust_anomalib_output_path"
+        ]
+        self.assertIs(adjust_callback.__self__, self.system)
+        self.assertIs(
+            adjust_callback.__func__,
+            self.system._adjust_anomalib_output_path.__func__,
+        )
+
+    def test_prepare_resources_loads_color_overrides_before_color_checker(self):
+        """Verify DetectionSystem wires model-level color overrides into color checker."""
+        self.system.load_model_configs = MagicMock()
+        self.system.config.enable_color_check = True
+        self.system.config.color_model_path = "models/color.pkl"
+        self.system.config.color_checker_type = "color_qc"
+        self.system.config.color_score_threshold = 0.7
+        self.system.color_override_loader = MagicMock()
+        self.system.color_override_loader.load.return_value = (
+            {"red": 0.91},
+            {"red": {"min_area": 3}},
+        )
+        self.system.color_service = MagicMock()
+        run_logger = MagicMock()
+
+        self.system._prepare_resources("LED", "A", "yolo", run_logger)
+
+        self.system.color_override_loader.load.assert_called_once_with(
+            self.system.config,
+            "LED",
+            "A",
+            "yolo",
+            self.system.logger.logger,
+        )
+        self.system.color_service.ensure_loaded.assert_called_once_with(
+            "models/color.pkl",
+            overrides={"red": 0.91},
+            rules_overrides={"red": {"min_area": 3}},
+            checker_type="color_qc",
+            default_threshold=0.7,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

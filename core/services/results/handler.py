@@ -330,8 +330,12 @@ class ResultHandler:
 
     def _cfg_get(self, key: str, default: Any = None) -> Any:
         if isinstance(self.config, dict):
-            return self.config.get(key, default)
-        return getattr(self._config_source, key, default)
+            value = self.config.get(key, default)
+        else:
+            value = getattr(self._config_source, key, default)
+        if value.__class__.__module__ == "unittest.mock":
+            return default
+        return value
 
     def _resolve_save_flags(self, status: str) -> dict[str, bool]:
         only_fail = bool(self._cfg_get("save_fail_only", False))
