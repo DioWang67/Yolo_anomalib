@@ -199,6 +199,10 @@ class FusionInferenceRunner:
         elif yolo_status == "ERROR" or ano_status == "ERROR":
             status = "INFERENCE_ERROR"
 
+        error_message = FusionInferenceRunner._build_failure_message(
+            status, yolo_res, ano_res
+        )
+
         merged: dict[str, Any] = {
             "status": status,
             "detections": yolo_res.get("detections", [])
@@ -207,10 +211,7 @@ class FusionInferenceRunner:
             + ano_res.get("missing_items", []),
             "unexpected_items": yolo_res.get("unexpected_items", [])
             + ano_res.get("unexpected_items", []),
-            "error": " | ".join(
-                filter(None, [yolo_res.get("error"), ano_res.get("error")])
-            )
-            or None,
+            "error": error_message,
             "inference_time": yolo_res.get("inference_time", 0.0)
             + ano_res.get("inference_time", 0.0),
             "anomaly_score": ano_res.get("anomaly_score"),
@@ -231,6 +232,39 @@ class FusionInferenceRunner:
             merged["result_frame"] if merged["result_frame"] is not None else frame
         )
         return merged
+
+    @staticmethod
+    def _build_failure_message(
+        status: str, yolo_res: dict[str, Any], ano_res: dict[str, Any]
+    ) -> str | None:
+        """Build a user-visible reason for fusion failures."""
+        reasons: list[str] = []
+        for label, result in (("YOLO", yolo_res), ("Anomalib", ano_res)):
+            error = result.get("error")
+            if error:
+                reasons.append(f"{label}: {error}")
+
+            missing = result.get("missing_items") or []
+            if missing:
+                reasons.append(f"{label} missing items: {missing}")
+
+            unexpected = result.get("unexpected_items") or []
+            if unexpected:
+                reasons.append(f"{label} unexpected items: {unexpected}")
+
+            result_status = result.get("status")
+            if result_status in {"FAIL", "DETECTION_FAIL"} and label == "Anomalib":
+                score = result.get("anomaly_score")
+                if score is not None:
+                    reasons.append(f"Anomalib anomaly score failed: {score}")
+                elif not error:
+                    reasons.append("Anomalib inspection failed")
+
+        if status == "DETECTION_FAIL" and not reasons:
+            reasons.append("Fusion rule check failed")
+        if status == "INFERENCE_ERROR" and not reasons:
+            reasons.append("Fusion backend inference failed")
+        return " | ".join(reasons) if reasons else None
 
     @staticmethod
     def _overlay_yolo_on_anomalib_frame(

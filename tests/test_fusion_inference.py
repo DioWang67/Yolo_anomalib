@@ -47,7 +47,7 @@ def test_fusion_returns_error_when_yolo_engine_is_missing():
 
     result = runner.run(frame, "LED", "A", MagicMock())
 
-    assert result["status"] == "ERROR"
+    assert result["status"] == "INFERENCE_ERROR"
     assert "YOLO model not loaded" in result["error"]
 
 
@@ -105,12 +105,14 @@ def test_fusion_merges_failure_status_and_calls_anomalib_path_adjuster():
         adjust_anomalib_output_path=adjuster,
     )
 
-    assert result["status"] == "FAIL"
+    assert result["status"] == "DETECTION_FAIL"
     assert result["detections"] == [
         {"class": "led", "confidence": 0.9, "bbox": [1, 1, 2, 2]},
         {"class": "scratch"},
     ]
     assert result["missing_items"] == ["cover"]
+    assert "Anomalib anomaly score failed" in result["error"]
+    assert "Anomalib missing items" in result["error"]
     assert result["inference_time"] == 0.5
     assert result["anomaly_score"] == 0.75
     adjuster.assert_called_once()

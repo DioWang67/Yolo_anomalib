@@ -72,6 +72,13 @@ class PipelineSystem:
 
     def _execute_pipeline(self, ctx, *_args, **_kwargs):
         ctx.result["status"] = ctx.status
+        ctx.save_result = {
+            "original_path": "Result/original.jpg",
+            "preprocessed_path": "Result/processed.png",
+            "annotated_path": "Result/annotated.jpg",
+            "heatmap_path": "",
+            "cropped_paths": [],
+        }
 
     def _log_summary(self, ctx, *_args, **_kwargs):
         self.saved_statuses.append(ctx.status)
@@ -346,6 +353,11 @@ class TestAsyncPipelineManager:
         assert stats["tasks_saved"] == 1
         assert len(processed) == 1
         assert processed[0].result["status"] == "PASS"
+        assert processed[0].result["original_image_path"] == "Result/original.jpg"
+        assert (
+            processed[0].result["preprocessed_image_path"]
+            == "Result/processed.png"
+        )
 
     def test_single_shot_pipeline_stops_after_first_detection_fail(self):
         manager = AsyncPipelineManager()

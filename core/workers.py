@@ -624,6 +624,7 @@ class StorageWorker(BaseWorker):
 
             self._system._execute_pipeline(ctx, self._logger)
             self._system._log_summary(ctx, self._logger)
+            self._attach_pipeline_outputs(task, ctx)
             self._saved_count += 1
 
             pipeline_latency = time.time() - task.timestamp
@@ -662,6 +663,32 @@ class StorageWorker(BaseWorker):
     def _is_terminal_result(status: str) -> bool:
         """Return whether a status completes a single-shot detection."""
         return str(status).upper() in TERMINAL_RESULT_STATUSES
+
+    @staticmethod
+    def _attach_pipeline_outputs(task: DetectionTask, ctx: Any) -> None:
+        """Copy post-processing and save outputs back to the task result.
+
+        Storage is the only stage that knows the final saved image paths.
+        GUI callbacks consume ``task.result``, so these paths must be copied
+        out of ``ctx.save_result`` before emitting ``on_task_processed``.
+        """
+        if task.result is None:
+            return
+
+        save_result = ctx.save_result or {}
+        task.result["status"] = ctx.status
+        task.result["color_check"] = ctx.color_result
+        if ctx.result.get("sequence_check") is not None:
+            task.result["sequence_check"] = ctx.result.get("sequence_check")
+        if save_result:
+            task.result["save_result"] = save_result
+            task.result["original_image_path"] = save_result.get("original_path", "")
+            task.result["preprocessed_image_path"] = save_result.get(
+                "preprocessed_path", ""
+            )
+            task.result["annotated_path"] = save_result.get("annotated_path", "")
+            task.result["heatmap_path"] = save_result.get("heatmap_path", "")
+            task.result["cropped_paths"] = save_result.get("cropped_paths", [])
 
     def _clear_drop_queue(self) -> int:
         """Drop queued inference tasks once single-shot has completed."""

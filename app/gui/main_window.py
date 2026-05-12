@@ -779,6 +779,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             heatmap_path=res.get("heatmap_path", ""),
             original_image_path=res.get("original_image_path", ""),
             preprocessed_image_path=res.get("preprocessed_image_path", ""),
+            cropped_paths=res.get("cropped_paths", []),
+            color_check=res.get("color_check"),
+            sequence_check=res.get("sequence_check"),
             result_frame=res.get("result_frame"),
         )
         self.on_detection_complete(result)

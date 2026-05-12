@@ -133,6 +133,9 @@ class FailReasonLabel(QLabel):
 
         reasons: list[str] = []
 
+        if result.error:
+            reasons.append(str(result.error))
+
         missing = result.missing_items or []
         if missing:
             reasons.append(f"缺件：{', '.join(str(i) for i in missing[:3])}"
