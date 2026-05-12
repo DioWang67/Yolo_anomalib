@@ -17,11 +17,13 @@ from ultralytics import YOLO
 from core.base_model import BaseInferenceModel
 from core.detector import YOLODetector
 from core.exceptions import (
+    BackendInitializationError,
     ConfigurationError,
     ModelInferenceError,
     ModelInitializationError,
     ResourceExhaustionError,
 )
+from core.runtime_preflight import validate_runtime_for_model
 from core.position_validator import PositionValidator
 from core.utils import ImageUtils
 from core.yolo_runtime import YoloRuntimeInfo, detect_yolo_runtime
@@ -82,6 +84,7 @@ class YOLOInferenceModel(BaseInferenceModel):
                 getattr(self.config, "device", None),
                 cuda_available=torch.cuda.is_available(),
             )
+            validate_runtime_for_model(self.config.weights)
             weights_key = (
                 os.path.abspath(str(self.config.weights)),
                 str(self.runtime_info.setup_device or ""),
@@ -114,6 +117,11 @@ class YOLOInferenceModel(BaseInferenceModel):
                         _ = self._predict_yolo(dummy)
                     self._warmup_registry.add(weights_key)
                 except Exception as warmup_err:
+                    if self.runtime_info.runtime == "onnx":
+                        raise ModelInitializationError(
+                            "YOLO ONNX warmup failed after runtime preflight: "
+                            f"{warmup_err}"
+                        ) from warmup_err
                     self.logger.logger.warning(
                         "YOLO warmup failed: %s", warmup_err, exc_info=warmup_err
                     )
@@ -153,6 +161,8 @@ class YOLOInferenceModel(BaseInferenceModel):
             raise ConfigurationError(
                 f"模型權重檔案不存在: {self.config.weights}。請檢查路徑或配置。"
             ) from exc
+        except (BackendInitializationError, ModelInitializationError):
+            raise
         except RuntimeError as exc:
             self.logger.logger.exception(
                 "Runtime error (e.g., CUDA issue) during YOLO model initialization"

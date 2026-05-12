@@ -94,6 +94,7 @@ class DetectionController:
         inference_type: str,
         *,
         capture_interval: float = 0.5,
+        mode: str = "single",
         run_id: int | None = None,
     ) -> DetectionWorker:
         """Creates a detection worker (pipeline proxy) with injected system and bridge."""
@@ -104,6 +105,7 @@ class DetectionController:
             area=area,
             inference_type=inference_type,
             capture_interval=capture_interval,
+            mode=mode,
             bridge=self.bridge,
             run_id=run_id,
         )

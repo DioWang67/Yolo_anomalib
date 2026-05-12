@@ -127,6 +127,7 @@ class ResultHandler:
         ckpt_path: str | None = None,
         color_result: dict[str, Any] | None = None,
         sequence_check: dict[str, Any] | None = None,
+        error_message: str | None = None,
     ) -> dict[str, Any]:
         try:
             timestamp = datetime.now()
@@ -267,6 +268,7 @@ class ResultHandler:
                 ckpt_path=ckpt_path,
                 color_result=color_result,
                 sequence_check=sequence_check,
+                error_message=error_message,
                 test_id=test_id,
             )
             try:

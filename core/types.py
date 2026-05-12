@@ -8,7 +8,14 @@ from typing import Any, Literal
 
 import numpy as np
 
-DetectionStatus = Literal["PASS", "FAIL", "ERROR", "CANCELED"]
+DetectionStatus = Literal[
+    "PASS",
+    "DETECTION_FAIL",
+    "INFERENCE_ERROR",
+    "FAIL",
+    "ERROR",
+    "CANCELED",
+]
 
 
 @dataclass

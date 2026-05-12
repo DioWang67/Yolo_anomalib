@@ -49,7 +49,10 @@ class FusionInferenceRunner:
         """
         yolo_engine = self.model_manager.get_cached_engine(product, area, "yolo")
         if not yolo_engine:
-            return {"status": "ERROR", "error": "YOLO model not loaded for fusion"}
+            return {
+                "status": "INFERENCE_ERROR",
+                "error": "YOLO model not loaded for fusion",
+            }
 
         ano_engine = self.model_manager.get_cached_engine(product, area, "anomalib")
         if not ano_engine:
@@ -184,10 +187,17 @@ class FusionInferenceRunner:
         run_logger: Any,
     ) -> dict[str, Any]:
         status = "PASS"
-        if yolo_res.get("status") == "FAIL" or ano_res.get("status") == "FAIL":
-            status = "FAIL"
-        elif yolo_res.get("status") == "ERROR" or ano_res.get("status") == "ERROR":
-            status = "ERROR"
+        yolo_status = yolo_res.get("status")
+        ano_status = ano_res.get("status")
+        if yolo_status == "INFERENCE_ERROR" or ano_status == "INFERENCE_ERROR":
+            status = "INFERENCE_ERROR"
+        elif yolo_status in {"FAIL", "DETECTION_FAIL"} or ano_status in {
+            "FAIL",
+            "DETECTION_FAIL",
+        }:
+            status = "DETECTION_FAIL"
+        elif yolo_status == "ERROR" or ano_status == "ERROR":
+            status = "INFERENCE_ERROR"
 
         merged: dict[str, Any] = {
             "status": status,
@@ -268,7 +278,7 @@ class FusionInferenceRunner:
     def make_error_result(error_msg: str) -> dict[str, Any]:
         """Build a standard error dict with merge-compatible list fields."""
         return {
-            "status": "ERROR",
+            "status": "INFERENCE_ERROR",
             "error": error_msg,
             "detections": [],
             "missing_items": [],

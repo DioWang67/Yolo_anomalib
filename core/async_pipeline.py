@@ -51,6 +51,7 @@ class AsyncPipelineManager:
         self._acq_worker: Optional[AcquisitionWorker] = None
         self._inf_worker: Optional[InferenceWorker] = None
         self._sto_worker: Optional[StorageWorker] = None
+        self._stop_event = threading.Event()
 
     # ------------------------------------------------------------------
     # Public API
@@ -59,7 +60,7 @@ class AsyncPipelineManager:
     @property
     def running(self) -> bool:
         """Whether the pipeline is currently active."""
-        return self._active
+        return self._active and not self._stop_event.is_set()
 
     def start(
         self,
@@ -71,6 +72,7 @@ class AsyncPipelineManager:
         inference_type: str = "yolo",
         buffer_limit: int = 10,
         capture_interval: float = 0.0,
+        mode: str = "continuous",
         on_task_captured: Optional[Callable[[DetectionTask], None]] = None,
         on_task_processed: Optional[Callable[[DetectionTask], None]] = None,
         on_camera_lost: Optional[Callable[[], None]] = None,
@@ -86,6 +88,8 @@ class AsyncPipelineManager:
             inference_type: 'yolo', 'anomalib', or 'fusion'.
             buffer_limit: Max items in the inference queue.
             capture_interval: Seconds between captures (0 = max FPS).
+            mode: ``single`` captures and stores one terminal result, while
+                ``continuous`` runs until stopped manually.
             on_task_captured: Optional GUI callback per captured frame.
             on_task_processed: Optional GUI callback per stored result.
             on_camera_lost: Optional callback when camera disconnects
@@ -95,9 +99,21 @@ class AsyncPipelineManager:
             RuntimeError: If the pipeline is already running.
         """
         with self._lock:
+            if (
+                self._active
+                and self._stop_event.is_set()
+                and not self._any_worker_alive()
+            ):
+                self._clear_worker_refs_locked()
+
             if self._active:
                 raise RuntimeError("Pipeline is already running")
 
+            run_mode = str(mode or "continuous").lower()
+            if run_mode not in {"single", "continuous"}:
+                raise ValueError(f"Unsupported pipeline mode: {mode}")
+
+            self._stop_event.clear()
             self._inference_queue = OverwriteQueue(
                 maxlen=buffer_limit, name="inference_queue"
             )
@@ -112,16 +128,22 @@ class AsyncPipelineManager:
                 capture_interval=capture_interval,
                 on_task_captured=on_task_captured,
                 on_camera_lost=on_camera_lost,
+                stop_event=self._stop_event,
+                mode=run_mode,
             )
             self._inf_worker = InferenceWorker(
                 in_queue=self._inference_queue,
                 out_queue=self._io_queue,
                 detection_system=detection_system,
+                stop_event=self._stop_event,
             )
             self._sto_worker = StorageWorker(
                 in_queue=self._io_queue,
                 detection_system=detection_system,
                 on_task_processed=on_task_processed,
+                stop_event=self._stop_event,
+                mode=run_mode,
+                drop_queue=self._inference_queue,
             )
 
             # Start consumer-first to drain immediately
@@ -131,8 +153,8 @@ class AsyncPipelineManager:
             self._active = True
 
             logger.info(
-                "Pipeline started: %s/%s/%s (buffer=%d, interval=%.3fs)",
-                product, area, inference_type, buffer_limit, capture_interval,
+                "Pipeline started: %s/%s/%s (mode=%s, buffer=%d, interval=%.3fs)",
+                product, area, inference_type, run_mode, buffer_limit, capture_interval,
             )
 
     def stop(self, timeout: float = 10.0) -> None:
@@ -146,6 +168,7 @@ class AsyncPipelineManager:
                 return
 
             logger.info("Stopping pipeline...")
+            self._stop_event.set()
 
             if self._acq_worker and self._acq_worker.is_alive():
                 self._acq_worker.stop()
@@ -177,11 +200,23 @@ class AsyncPipelineManager:
             )
 
             self._active = False
-            self._acq_worker = None
-            self._inf_worker = None
-            self._sto_worker = None
-            self._inference_queue = None
-            self._io_queue = None
+            self._clear_worker_refs_locked()
+
+    def _any_worker_alive(self) -> bool:
+        """Return whether any managed worker thread is still alive."""
+        return any(
+            worker is not None and worker.is_alive()
+            for worker in (self._acq_worker, self._inf_worker, self._sto_worker)
+        )
+
+    def _clear_worker_refs_locked(self) -> None:
+        """Clear worker and queue references while the manager lock is held."""
+        self._active = False
+        self._acq_worker = None
+        self._inf_worker = None
+        self._sto_worker = None
+        self._inference_queue = None
+        self._io_queue = None
 
     def _wake_workers_for_shutdown(self) -> None:
         """Best-effort wake-up for workers blocked on queues during shutdown."""

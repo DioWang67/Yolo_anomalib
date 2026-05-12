@@ -16,9 +16,10 @@ import numpy as np
 import pytest
 
 from core.queues import OverwriteQueue
+from core.exceptions import ModelInferenceError
 from core.types import DetectionTask
 from core.async_pipeline import AsyncPipelineManager
-from core.workers import AcquisitionWorker, BaseWorker
+from core.workers import AcquisitionWorker, BaseWorker, InferenceWorker, StorageWorker
 
 
 # =====================================================================
@@ -37,6 +38,43 @@ class FakeCamera:
         if self._fail_after and self._count > self._fail_after:
             return None
         return np.zeros((4, 4, 3), dtype=np.uint8)
+
+
+class FakeResultSink:
+    def __init__(self):
+        self.flush_calls = 0
+
+    def flush(self):
+        self.flush_calls += 1
+
+
+class PipelineSystem:
+    def __init__(self, status: str = "PASS", *, delay: float = 0.0):
+        self.config = object()
+        self.result_sink = FakeResultSink()
+        self.status = status
+        self.delay = delay
+        self.inference_calls = 0
+        self.saved_statuses: list[str] = []
+
+    def _run_inference(self, *args, **kwargs):
+        self.inference_calls += 1
+        if self.delay:
+            time.sleep(self.delay)
+        if self.status == "RAISE_INFERENCE_ERROR":
+            raise ModelInferenceError("backend failed")
+        return {
+            "status": self.status,
+            "detections": [],
+            "missing_items": [],
+            "processed_image": np.zeros((4, 4, 3), dtype=np.uint8),
+        }
+
+    def _execute_pipeline(self, ctx, *_args, **_kwargs):
+        ctx.result["status"] = ctx.status
+
+    def _log_summary(self, ctx, *_args, **_kwargs):
+        self.saved_statuses.append(ctx.status)
 
 
 class EchoWorker(BaseWorker):
@@ -278,6 +316,224 @@ class TestAsyncPipelineManager:
         assert elapsed < 1.0
         assert manager.running is False
         assert system.calls == 1
+
+    def test_single_shot_pipeline_stops_after_first_pass(self):
+        manager = AsyncPipelineManager()
+        system = PipelineSystem(status="PASS")
+        processed: list[DetectionTask] = []
+
+        manager.start(
+            camera=FakeCamera(),
+            detection_system=system,
+            product="P",
+            area="A",
+            inference_type="yolo",
+            capture_interval=0.01,
+            mode="single",
+            on_task_processed=processed.append,
+        )
+
+        deadline = time.time() + 3.0
+        while time.time() < deadline and manager.running:
+            time.sleep(0.01)
+
+        stats = manager.stats()
+        manager.stop(timeout=1.0)
+
+        assert manager.running is False
+        assert stats["frames_captured"] == 1
+        assert system.inference_calls == 1
+        assert stats["tasks_saved"] == 1
+        assert len(processed) == 1
+        assert processed[0].result["status"] == "PASS"
+
+    def test_single_shot_pipeline_stops_after_first_detection_fail(self):
+        manager = AsyncPipelineManager()
+        system = PipelineSystem(status="DETECTION_FAIL")
+        processed: list[DetectionTask] = []
+
+        manager.start(
+            camera=FakeCamera(),
+            detection_system=system,
+            product="P",
+            area="A",
+            inference_type="yolo",
+            capture_interval=0.01,
+            mode="single",
+            on_task_processed=processed.append,
+        )
+
+        deadline = time.time() + 3.0
+        while time.time() < deadline and manager.running:
+            time.sleep(0.01)
+
+        stats = manager.stats()
+        manager.stop(timeout=1.0)
+
+        assert manager.running is False
+        assert stats["frames_captured"] == 1
+        assert system.inference_calls == 1
+        assert stats["tasks_saved"] == 1
+        assert processed[0].result["status"] == "DETECTION_FAIL"
+
+    def test_single_shot_pipeline_stops_after_inference_error(self):
+        manager = AsyncPipelineManager()
+        system = PipelineSystem(status="RAISE_INFERENCE_ERROR")
+        processed: list[DetectionTask] = []
+
+        manager.start(
+            camera=FakeCamera(),
+            detection_system=system,
+            product="P",
+            area="A",
+            inference_type="yolo",
+            capture_interval=0.01,
+            mode="single",
+            on_task_processed=processed.append,
+        )
+
+        deadline = time.time() + 3.0
+        while time.time() < deadline and manager.running:
+            time.sleep(0.01)
+
+        stats = manager.stats()
+        manager.stop(timeout=1.0)
+
+        assert manager.running is False
+        assert stats["frames_captured"] == 1
+        assert system.inference_calls == 1
+        assert stats["tasks_saved"] == 1
+        assert processed[0].result["status"] == "INFERENCE_ERROR"
+
+    def test_continuous_pipeline_keeps_running_until_manual_stop(self):
+        manager = AsyncPipelineManager()
+        system = PipelineSystem(status="PASS", delay=0.005)
+
+        manager.start(
+            camera=FakeCamera(),
+            detection_system=system,
+            product="P",
+            area="A",
+            inference_type="yolo",
+            capture_interval=0.01,
+            mode="continuous",
+        )
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline and system.inference_calls < 2:
+            time.sleep(0.01)
+
+        assert manager.running is True
+        assert system.inference_calls >= 2
+
+        manager.stop(timeout=2.0)
+        assert manager.running is False
+
+
+class TestInferenceWorker:
+    def test_model_inference_error_stops_pipeline_and_forwards_error(self):
+        """Fatal inference errors stop the worker and emit INFERENCE_ERROR once."""
+
+        class FailingSystem:
+            def __init__(self):
+                self.calls = 0
+
+            def _run_inference(self, *args, **kwargs):
+                self.calls += 1
+                raise ModelInferenceError("onnxruntime DLL load failed")
+
+        stop_event = threading.Event()
+        inf_q = OverwriteQueue(maxlen=10)
+        io_q: queue.Queue[DetectionTask] = queue.Queue()
+        system = FailingSystem()
+        worker = InferenceWorker(
+            inf_q,
+            io_q,
+            system,
+            stop_event=stop_event,
+        )
+
+        inf_q.put(_make_task("fatal0"))
+        inf_q.put(_make_task("should_drop"))
+        worker.start()
+        worker.join(timeout=3)
+
+        assert not worker.is_alive()
+        assert stop_event.is_set()
+        assert system.calls == 1
+
+        outputs = _drain(io_q)
+        regular = [task for task in outputs if not task.is_poison_pill]
+        pills = [task for task in outputs if task.is_poison_pill]
+        assert len(regular) == 1
+        assert regular[0].result["status"] == "INFERENCE_ERROR"
+        assert "onnxruntime DLL load failed" in regular[0].result["error"]
+        assert pills, "Fatal stop should forward a poison pill downstream"
+
+    def test_inference_error_result_stops_pipeline(self):
+        """A backend error returned as a result is also fatal for async mode."""
+
+        class ErrorResultSystem:
+            def _run_inference(self, *args, **kwargs):
+                return {
+                    "status": "ERROR",
+                    "error": "Model not loaded",
+                    "detections": [],
+                }
+
+        stop_event = threading.Event()
+        inf_q = OverwriteQueue(maxlen=10)
+        io_q: queue.Queue[DetectionTask] = queue.Queue()
+        worker = InferenceWorker(
+            inf_q,
+            io_q,
+            ErrorResultSystem(),
+            stop_event=stop_event,
+        )
+
+        inf_q.put(_make_task("error-result"))
+        worker.start()
+        worker.join(timeout=3)
+
+        outputs = _drain(io_q)
+        regular = [task for task in outputs if not task.is_poison_pill]
+        assert stop_event.is_set()
+        assert regular[0].result["status"] == "INFERENCE_ERROR"
+        assert regular[0].result["error"] == "Model not loaded"
+
+
+class TestStorageWorker:
+    def test_single_shot_drops_queued_frames_after_terminal_result(self):
+        system = PipelineSystem(status="PASS")
+        stop_event = threading.Event()
+        inf_q = OverwriteQueue(maxlen=10)
+        io_q: queue.Queue[DetectionTask] = queue.Queue()
+
+        inf_q.put(_make_task("queued-inf-1"))
+        inf_q.put(_make_task("queued-inf-2"))
+
+        first = _make_task("first")
+        first.result = {"status": "PASS", "detections": [], "missing_items": []}
+        second = _make_task("queued-storage")
+        second.result = {"status": "PASS", "detections": [], "missing_items": []}
+        io_q.put(first)
+        io_q.put(second)
+
+        worker = StorageWorker(
+            io_q,
+            system,
+            stop_event=stop_event,
+            mode="single",
+            drop_queue=inf_q,
+        )
+        worker.start()
+        worker.join(timeout=3)
+
+        assert not worker.is_alive()
+        assert stop_event.is_set()
+        assert worker.saved_count == 1
+        assert inf_q.qsize() == 0
+        assert io_q.empty()
 
 
 # =====================================================================

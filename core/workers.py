@@ -37,6 +37,11 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
+from core.exceptions import (
+    BackendInitializationError,
+    BackendNotAvailableError,
+    ModelInferenceError,
+)
 from core.queues import OverwriteQueue
 from core.types import DetectionTask
 
@@ -44,6 +49,9 @@ if TYPE_CHECKING:
     from camera.camera_controller import CameraController
 
 logger = logging.getLogger(__name__)
+
+PipelineMode = str
+TERMINAL_RESULT_STATUSES = {"PASS", "DETECTION_FAIL", "INFERENCE_ERROR", "FAIL"}
 
 
 # ======================================================================
@@ -74,17 +82,19 @@ class BaseWorker(threading.Thread):
         out_queue: queue.Queue[DetectionTask] | OverwriteQueue[DetectionTask] | None = None,
         *,
         name: str = "BaseWorker",
+        stop_event: threading.Event | None = None,
     ) -> None:
         super().__init__(name=name, daemon=True)
         self.in_queue = in_queue
         self.out_queue = out_queue
+        self._stop_event = stop_event or threading.Event()
         self._logger = logging.getLogger(f"{__name__}.{name}")
 
     # ------------------------------------------------------------------
     # Subclass API
     # ------------------------------------------------------------------
 
-    def process(self, task: DetectionTask) -> None:
+    def process(self, task: DetectionTask) -> bool | None:
         """Handle a single task.  Override in subclasses.
 
         The implementation may mutate *task* in-place (e.g. attach inference
@@ -114,8 +124,13 @@ class BaseWorker(threading.Thread):
             while True:
                 # ---- Blocking get from upstream queue ----
                 try:
-                    task = self.in_queue.get(timeout=1.0)
+                    task = self.in_queue.get(
+                        timeout=0.2 if self._stop_event.is_set() else 1.0
+                    )
                 except (queue.Empty, TimeoutError):
+                    if self._stop_event.is_set():
+                        self._logger.info("Stop event observed; shutting down")
+                        break
                     # Periodic wake-up; allows the thread to be joined
                     # even if no poison pill ever arrives (defensive).
                     continue
@@ -127,7 +142,9 @@ class BaseWorker(threading.Thread):
 
                 # ---- Process one task ----
                 try:
-                    self.process(task)
+                    should_continue = self.process(task)
+                    if should_continue is False:
+                        break
                 except Exception:
                     self._logger.error(
                         "Unhandled error processing task %s",
@@ -220,6 +237,8 @@ class AcquisitionWorker(threading.Thread):
         name: str = "AcquisitionWorker",
         on_task_captured: Optional[Callable[[DetectionTask], None]] = None,
         on_camera_lost: Optional[Callable[[], None]] = None,
+        stop_event: threading.Event | None = None,
+        mode: PipelineMode = "continuous",
     ) -> None:
         super().__init__(name=name, daemon=True)
         self.camera = camera
@@ -230,7 +249,8 @@ class AcquisitionWorker(threading.Thread):
         self.capture_interval = capture_interval
         self._on_task_captured = on_task_captured
         self._on_camera_lost = on_camera_lost
-        self._stop_event = threading.Event()
+        self._stop_event = stop_event or threading.Event()
+        self._mode = str(mode).lower()
         self._logger = logging.getLogger(f"{__name__}.{name}")
         self._frame_count: int = 0
         self._consecutive_failures: int = 0
@@ -258,6 +278,8 @@ class AcquisitionWorker(threading.Thread):
         Returns ``True`` if the failure threshold has been reached and
         the worker should stop.
         """
+        if self._stop_event.is_set():
+            return True
         self._consecutive_failures += 1
         self._logger.warning(
             "%s (consecutive failures: %d/%d)",
@@ -270,7 +292,7 @@ class AcquisitionWorker(threading.Thread):
                 "Camera lost — %d consecutive failures exceeded threshold",
                 self._consecutive_failures,
             )
-            if self._on_camera_lost:
+            if self._on_camera_lost and not self._stop_event.is_set():
                 try:
                     self._on_camera_lost()
                 except Exception:
@@ -327,6 +349,12 @@ class AcquisitionWorker(threading.Thread):
                     except Exception:
                         self._logger.error("Error in on_task_captured callback", exc_info=True)
 
+                if self._mode == "single":
+                    self._logger.info(
+                        "Acquisition captured 1 frame for single-shot detection"
+                    )
+                    break
+
                 if self.capture_interval > 0:
                     self._stop_event.wait(self.capture_interval)
 
@@ -373,8 +401,9 @@ class InferenceWorker(BaseWorker):
         detection_system: Any,
         *,
         name: str = "InferenceWorker",
+        stop_event: threading.Event | None = None,
     ) -> None:
-        super().__init__(in_queue, out_queue, name=name)
+        super().__init__(in_queue, out_queue, name=name, stop_event=stop_event)
         self._system = detection_system
         self._dropped_count: int = 0
 
@@ -383,7 +412,7 @@ class InferenceWorker(BaseWorker):
         """Tasks lost because the IO queue was persistently full."""
         return self._dropped_count
 
-    def process(self, task: DetectionTask) -> None:
+    def process(self, task: DetectionTask) -> bool | None:
         """Execute inference and attach results to the task."""
         t0 = time.time()
 
@@ -395,16 +424,68 @@ class InferenceWorker(BaseWorker):
                 task.inference_type,
                 self._logger,
             )
-        except Exception as exc:
-            self._logger.error(
-                "Inference engine raised for task %s: %s",
-                task.task_id, exc, exc_info=True,
+        except (
+            ModelInferenceError,
+            BackendInitializationError,
+            BackendNotAvailableError,
+            RuntimeError,
+        ) as exc:
+            self._logger.exception(
+                "Fatal inference error, stopping pipeline (task=%s)",
+                task.task_id,
             )
-            result = {
-                "status": "ERROR",
-                "error": f"Inference exception: {exc}",
-                "detections": [],
-            }
+            self._stop_event.set()
+            task.result = self._build_inference_error_result(task, str(exc))
+            task.error = str(exc)
+            self._forward_to_storage(task)
+            dropped = self._drop_pending_inference_tasks()
+            if dropped:
+                self._logger.info(
+                    "Dropped %d queued inference tasks after fatal inference error",
+                    dropped,
+                )
+            return False
+        except Exception as exc:
+            self._logger.exception(
+                "Unexpected inference error, stopping pipeline (task=%s)",
+                task.task_id,
+            )
+            self._stop_event.set()
+            task.result = self._build_inference_error_result(
+                task, f"Inference exception: {exc}"
+            )
+            task.error = task.result["error"]
+            self._forward_to_storage(task)
+            dropped = self._drop_pending_inference_tasks()
+            if dropped:
+                self._logger.info(
+                    "Dropped %d queued inference tasks after unexpected inference error",
+                    dropped,
+                )
+            return False
+
+        if result.get("status") in {"ERROR", "INFERENCE_ERROR"}:
+            error = result.get("error") or "Inference backend returned an error"
+            self._logger.error(
+                "Fatal inference result, stopping pipeline (task=%s): %s",
+                task.task_id,
+                error,
+            )
+            self._stop_event.set()
+            result["status"] = "INFERENCE_ERROR"
+            result.setdefault("detections", [])
+            result.setdefault("missing_items", [])
+            result.setdefault("unexpected_items", [])
+            task.result = result
+            task.error = str(error)
+            self._forward_to_storage(task)
+            dropped = self._drop_pending_inference_tasks()
+            if dropped:
+                self._logger.info(
+                    "Dropped %d queued inference tasks after fatal inference result",
+                    dropped,
+                )
+            return False
 
         task.result = result
         task.error = result.get("error")
@@ -415,7 +496,24 @@ class InferenceWorker(BaseWorker):
             task.task_id, latency, result.get("status"),
         )
 
-        # Forward to StorageWorker with retry
+        self._forward_to_storage(task)
+
+    @staticmethod
+    def _build_inference_error_result(task: DetectionTask, error: str) -> dict[str, Any]:
+        """Build the result payload persisted for fatal inference failures."""
+        return {
+            "status": "INFERENCE_ERROR",
+            "error": error,
+            "detections": [],
+            "missing_items": [],
+            "unexpected_items": [],
+            "product": task.product,
+            "area": task.area,
+            "inference_type": task.inference_type,
+        }
+
+    def _forward_to_storage(self, task: DetectionTask) -> None:
+        """Forward a task to StorageWorker with bounded retry."""
         if self.out_queue is not None:
             for attempt in range(1, self._IO_QUEUE_MAX_RETRIES + 1):
                 try:
@@ -436,6 +534,19 @@ class InferenceWorker(BaseWorker):
                             task.task_id,
                             self._dropped_count,
                         )
+
+    def _drop_pending_inference_tasks(self) -> int:
+        """Drop stale queued inference tasks after a fatal backend error."""
+        clear = getattr(self.in_queue, "clear", None)
+        if callable(clear):
+            try:
+                return int(clear())
+            except Exception:
+                self._logger.warning(
+                    "Failed to clear inference queue after fatal error",
+                    exc_info=True,
+                )
+        return 0
 
 
 # ======================================================================
@@ -465,19 +576,24 @@ class StorageWorker(BaseWorker):
         *,
         name: str = "StorageWorker",
         on_task_processed: Optional[Callable[[DetectionTask], None]] = None,
+        stop_event: threading.Event | None = None,
+        mode: PipelineMode = "continuous",
+        drop_queue: OverwriteQueue[DetectionTask] | None = None,
     ) -> None:
         # Terminal worker — no downstream queue.
-        super().__init__(in_queue, out_queue=None, name=name)
+        super().__init__(in_queue, out_queue=None, name=name, stop_event=stop_event)
         self._system = detection_system
         self._saved_count: int = 0
         self._on_task_processed = on_task_processed
+        self._mode = str(mode).lower()
+        self._drop_queue = drop_queue
 
     @property
     def saved_count(self) -> int:
         """Total tasks successfully persisted to disk."""
         return self._saved_count
 
-    def process(self, task: DetectionTask) -> None:
+    def process(self, task: DetectionTask) -> bool | None:
         """Persist one detection result to disk / Excel."""
         result = task.result
         if result is None:
@@ -523,10 +639,59 @@ class StorageWorker(BaseWorker):
                 except Exception:
                     self._logger.error("Error in on_task_processed callback", exc_info=True)
 
+            if self._mode == "single" and self._is_terminal_result(ctx.status):
+                self._logger.info("Single-shot result completed; stopping pipeline")
+                self._stop_event.set()
+                dropped_inference = self._clear_drop_queue()
+                dropped_storage = self._drain_pending_storage_tasks()
+                if dropped_inference or dropped_storage:
+                    self._logger.info(
+                        "Dropped queued tasks after single-shot result "
+                        "(inference=%d, storage=%d)",
+                        dropped_inference,
+                        dropped_storage,
+                    )
+                return False
+
         except Exception:
             self._logger.error(
                 "Failed to persist task %s", task.task_id, exc_info=True,
             )
+
+    @staticmethod
+    def _is_terminal_result(status: str) -> bool:
+        """Return whether a status completes a single-shot detection."""
+        return str(status).upper() in TERMINAL_RESULT_STATUSES
+
+    def _clear_drop_queue(self) -> int:
+        """Drop queued inference tasks once single-shot has completed."""
+        if self._drop_queue is None:
+            return 0
+        try:
+            return int(self._drop_queue.clear())
+        except Exception:
+            self._logger.warning(
+                "Failed to clear inference queue after single-shot result",
+                exc_info=True,
+            )
+            return 0
+
+    def _drain_pending_storage_tasks(self) -> int:
+        """Drop queued storage tasks after the first single-shot result."""
+        dropped = 0
+        while True:
+            try:
+                self.in_queue.get_nowait()
+            except queue.Empty:
+                return dropped
+            except AttributeError:
+                return dropped
+            else:
+                dropped += 1
+                try:
+                    self.in_queue.task_done()
+                except (AttributeError, ValueError):
+                    pass
 
     def run(self) -> None:
         """Override to flush the sink after all tasks are processed."""

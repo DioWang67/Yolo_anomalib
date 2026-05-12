@@ -33,6 +33,7 @@ from core.path_utils import project_root, resolve_path
 from core.pipeline.context import DetectionContext
 from core.pipeline.registry import PipelineEnv, build_pipeline, default_pipeline
 from core.result_adapter import normalize_result
+from core.runtime_preflight import validate_runtime_for_model
 from core.services.color_checker import ColorCheckerService
 from core.services.color_override_loader import ColorOverrideLoader
 from core.services.model_manager import ModelManager
@@ -108,8 +109,7 @@ class DetectionSystem:
     def shutdown(self) -> None:
         """Release resources: pipeline workers, models, camera, sinks."""
         # Stop async pipeline first (if running)
-        if self._pipeline.running:
-            self.stop_pipeline()
+        self.stop_pipeline()
 
         if self.inference_engine:
             self.inference_engine.shutdown()
@@ -136,6 +136,7 @@ class DetectionSystem:
         inference_type: str = "yolo",
         *,
         capture_interval: float = 0.0,
+        mode: str = "continuous",
         on_task_captured=None,
         on_task_processed=None,
         on_camera_lost=None,
@@ -151,6 +152,8 @@ class DetectionSystem:
             area: Name of area.
             inference_type: 'yolo', 'anomalib', or 'fusion'.
             capture_interval: Seconds between captures.
+            mode: 'single' for one-shot camera detection, or 'continuous'
+                for manual-stop monitoring.
             on_task_captured: Optional callback for each captured task.
             on_task_processed: Optional callback for each stored task.
             on_camera_lost: Optional callback when camera disconnects.
@@ -170,13 +173,20 @@ class DetectionSystem:
 
         _logger = logging.getLogger(__name__)
 
-        # Pre-load model configs so InferenceWorker is ready
-        self.load_model_configs(product, area, inference_type)
-        if self._is_canceled(cancel_cb):
-            return
-        self._prepare_resources(product, area, inference_type, _logger)
-        if self._is_canceled(cancel_cb):
-            return
+        try:
+            # Pre-load model configs and validate runtime before acquisition starts.
+            self.load_model_configs(product, area, inference_type)
+            self._validate_runtime_for_current_model(product, area, inference_type, _logger)
+            if self._is_canceled(cancel_cb):
+                return
+            self._prepare_resources(
+                product, area, inference_type, _logger, load_model_config=False
+            )
+            if self._is_canceled(cancel_cb):
+                return
+        except Exception:
+            _logger.exception("Pipeline start aborted.")
+            raise
 
         self._pipeline.start(
             camera=self.camera,
@@ -186,6 +196,7 @@ class DetectionSystem:
             inference_type=inference_type,
             buffer_limit=getattr(self.config, "buffer_limit", 10),
             capture_interval=capture_interval,
+            mode=mode,
             on_task_captured=on_task_captured,
             on_task_processed=on_task_processed,
             on_camera_lost=on_camera_lost,
@@ -286,6 +297,22 @@ class DetectionSystem:
             self.current_inference_type = inference_type.lower()
         self._refresh_result_sink()
 
+    def _validate_runtime_for_current_model(
+        self, product: str, area: str, inference_type: str, run_logger
+    ) -> None:
+        """Validate backend runtime dependencies before acquisition starts."""
+        if inference_type.lower() not in {"yolo", "fusion"}:
+            return
+        try:
+            validate_runtime_for_model(self.config.weights)
+        except Exception as exc:
+            run_logger.error(
+                "ONNX Runtime preflight failed: model_path=%s error=%s",
+                self.config.weights,
+                exc,
+            )
+            raise
+
     def _is_canceled(self, cancel_cb) -> bool:
         """Helper to safely check the cancellation callback."""
         try:
@@ -307,10 +334,20 @@ class DetectionSystem:
         )
 
     def _prepare_resources(
-        self, product: str, area: str, inference_type: str, run_logger
+        self,
+        product: str,
+        area: str,
+        inference_type: str,
+        run_logger,
+        *,
+        load_model_config: bool = True,
     ):
         """Load model configs and initialize the color checker."""
-        self.load_model_configs(product, area, inference_type)
+        if load_model_config:
+            self.load_model_configs(product, area, inference_type)
+            self._validate_runtime_for_current_model(
+                product, area, inference_type, run_logger
+            )
         if self.config.enable_color_check and self.config.color_model_path:
             try:
                 overrides, rules_over = self.color_override_loader.load(
@@ -383,7 +420,7 @@ class DetectionSystem:
             )
 
         if not self.inference_engine:
-            return {"status": "ERROR", "error": "Model not loaded"}
+            return {"status": "INFERENCE_ERROR", "error": "Model not loaded"}
         
         inference_type_name = inference_type.lower()
         output_path = None
@@ -396,8 +433,10 @@ class DetectionSystem:
             frame, product, area, InferenceTypeToken(inference_type_name), output_path
         )
         result = normalize_result(raw_result, inference_type_name, frame)
+        if result.get("status") == "FAIL":
+            result["status"] = "DETECTION_FAIL"
 
-        if result.get("status") == "ERROR":
+        if result.get("status") in {"ERROR", "INFERENCE_ERROR"}:
             run_logger.error(f"Inference failed: {result.get('error')}")
             return result
 
@@ -471,7 +510,7 @@ class DetectionSystem:
         else:
             self.logger.log_detection(ctx.status, ctx.result.get("detections", []))
 
-        if str(ctx.status).upper() != "FAIL":
+        if str(ctx.status).upper() not in {"FAIL", "DETECTION_FAIL"}:
             return
         try:
             reasons = []
@@ -549,10 +588,10 @@ class DetectionSystem:
                 )
 
             result = self._run_inference(frame, product, area, inference_type, run_logger)
-            if result.get("status") == "ERROR":
+            if result.get("status") in {"ERROR", "INFERENCE_ERROR"}:
                 error_msg = result.get("error", "Inference failed")
                 return self._build_result(
-                    product, area, inference_type, "ERROR", error=error_msg
+                    product, area, inference_type, "INFERENCE_ERROR", error=error_msg
                 )
 
             ctx = DetectionContext(

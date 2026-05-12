@@ -550,8 +550,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
 
         use_cam = self.use_camera_chk.isChecked()
         if use_cam:
-            # --- ASYNC PIPELINE MODE ---
+            # --- CAMERA SINGLE-SHOT PIPELINE MODE ---
             self.controller.bridge.begin_run(run_generation)
+            self._single_shot_running = True
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
             self.stats_timer.start()
@@ -560,6 +561,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             self.worker = self.controller.build_worker(
                 product, area, inference_type,
                 capture_interval=0.1, # Example interval
+                mode="single",
                 run_id=run_generation,
             )
             self.worker.error_occurred.connect(
@@ -743,13 +745,14 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         task = result_or_task
         if not isinstance(task, DetectionTask) or task.result is None:
             return
+        res = task.result
         if (
             self.controller.has_system()
             and not self.controller.detection_system.pipeline_running
+            and str(res.get("status", "")).upper()
+            not in {"PASS", "DETECTION_FAIL", "INFERENCE_ERROR", "FAIL"}
         ):
             return
-
-        res = task.result
         items = [
             DetectionItem(
                 label=d.get("class", "unknown"),
@@ -807,7 +810,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             self.controller.has_system()
             and self.controller.detection_system.pipeline_running
         )
-        if not is_pipeline_running:
+        if self._single_shot_running or not is_pipeline_running:
+            self._single_shot_running = False
+            self.stats_timer.stop()
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
             self.update_camera_controls()

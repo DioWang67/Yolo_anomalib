@@ -204,6 +204,7 @@ class DetectionWorker(QThread):
         area: str,
         inference_type: str,
         capture_interval: float = 0.5,
+        mode: str = "single",
         bridge: PipelineBridge | None = None,
         run_id: int | None = None,
     ) -> None:
@@ -213,6 +214,7 @@ class DetectionWorker(QThread):
         self._area = area
         self._inference_type = inference_type
         self._interval = capture_interval
+        self._mode = mode
         self._bridge = bridge
         self._run_id = run_id
         self._cancel_event = threading.Event()
@@ -234,6 +236,7 @@ class DetectionWorker(QThread):
                 self._area,
                 self._inference_type,
                 capture_interval=self._interval,
+                mode=self._mode,
                 on_task_captured=(
                     (lambda task: self._bridge.on_task_captured(task, self._run_id))
                     if self._bridge else None

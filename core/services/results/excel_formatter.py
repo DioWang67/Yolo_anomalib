@@ -25,6 +25,7 @@ def build_excel_row(
     ckpt_path: str | None,
     color_result: dict[str, Any] | None,
     sequence_check: dict[str, Any] | None = None,
+    error_message: str | None = None,
     test_id: int,
 ) -> list[Any]:
     """Compose an Excel row according to the configured column order."""
@@ -35,6 +36,8 @@ def build_excel_row(
     )
 
     error_parts = []
+    if error_message:
+        error_parts.append(str(error_message))
     if missing_items:
         error_parts.append(f"缺失項目: {', '.join(missing_items)}")
     
