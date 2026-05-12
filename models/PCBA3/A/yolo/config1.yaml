@@ -1,4 +1,4 @@
-weights: "models/PCBA3/A/yolo/best.pt"
+weights: "models/PCBA3/A/yolo/weights/PCBA3_B_v1.0.0_20260210.onnx"
 device: "cpu"
 conf_thres: 0.4
 iou_thres: 0.45

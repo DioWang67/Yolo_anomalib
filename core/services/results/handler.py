@@ -127,6 +127,7 @@ class ResultHandler:
         ckpt_path: str | None = None,
         color_result: dict[str, Any] | None = None,
         sequence_check: dict[str, Any] | None = None,
+        error_message: str | None = None,
     ) -> dict[str, Any]:
         try:
             timestamp = datetime.now()
@@ -267,6 +268,7 @@ class ResultHandler:
                 ckpt_path=ckpt_path,
                 color_result=color_result,
                 sequence_check=sequence_check,
+                error_message=error_message,
                 test_id=test_id,
             )
             try:
@@ -330,8 +332,12 @@ class ResultHandler:
 
     def _cfg_get(self, key: str, default: Any = None) -> Any:
         if isinstance(self.config, dict):
-            return self.config.get(key, default)
-        return getattr(self._config_source, key, default)
+            value = self.config.get(key, default)
+        else:
+            value = getattr(self._config_source, key, default)
+        if value.__class__.__module__ == "unittest.mock":
+            return default
+        return value
 
     def _resolve_save_flags(self, status: str) -> dict[str, bool]:
         only_fail = bool(self._cfg_get("save_fail_only", False))

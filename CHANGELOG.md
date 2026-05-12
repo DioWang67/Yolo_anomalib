@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Documentation for the local `yolo_anomalib` conda environment, fusion
+  inference usage, and model-level color checker overrides.
+
 - **Path Security Validation Module** (`core/security.py`)
   - `PathValidator` class for preventing directory traversal attacks
   - Global `path_validator` instance for project-wide use
@@ -22,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Multiple allowed roots scenario tests
 
 ### Changed
+- Fusion inference and color override handling are documented as model-level
+  pipeline behavior, including the fallback behavior when Anomalib or PyYAML is
+  unavailable.
+
 - **`core/config.py`**: Integrated path security validation
   - Added path validation in `DetectionConfig.from_yaml()`
   - Prevents loading configs from untrusted external paths

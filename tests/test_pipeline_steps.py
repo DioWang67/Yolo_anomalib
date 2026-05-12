@@ -74,7 +74,7 @@ class TestPositionCheckStep:
         # Force the step to run even if the global config flag isn't set
         step = PositionCheckStep(mock_env.logger, base_context.product, base_context.area, options={'force': True})
         step.run(base_context)
-        assert base_context.status == "FAIL"
+        assert base_context.status == "DETECTION_FAIL"
 
     def test_run_with_missing_items_fails_context(self, mock_env, base_context):
         """Test that status becomes FAIL if there are missing items."""
@@ -85,7 +85,7 @@ class TestPositionCheckStep:
         base_context.result["missing_items"] = ["J2"]
         step = PositionCheckStep(mock_env.logger, base_context.product, base_context.area)
         step.run(base_context)
-        assert base_context.status == "FAIL"
+        assert base_context.status == "DETECTION_FAIL"
 
     def test_run_does_not_change_existing_fail_status(self, mock_env, base_context):
         """Test that an existing FAIL status is not incorrectly changed to PASS."""
@@ -146,6 +146,7 @@ class TestSaveResultsStep:
             ckpt_path=None,
             color_result=base_context.color_result,
             sequence_check=None,
+            error_message=None,
         )
 
     def test_run_handles_anomalib_parameters_correctly(self, mock_env, base_context):
@@ -176,6 +177,7 @@ class TestSaveResultsStep:
             area=base_context.area,
             color_result=None,
             sequence_check=None,
+            error_message=None,
         )
 
     def test_run_with_save_disabled_does_not_call_sink(self, mock_env, base_context):
@@ -224,7 +226,7 @@ class TestColorCheckStep:
 
         step = ColorCheckStep(mock_color_service, mock_env.logger)
         step.run(base_context)
-        assert base_context.status == "FAIL"
+        assert base_context.status == "DETECTION_FAIL"
 
 class TestCountCheckStep:
     def test_run_pass(self, mock_env, base_context):
@@ -239,8 +241,58 @@ class TestCountCheckStep:
         base_context.result["detections"] = [{"class": "LED"}] # J1 missing
         step = CountCheckStep(mock_env.logger, base_context.product, base_context.area)
         step.run(base_context)
-        assert base_context.status == "FAIL"
+        assert base_context.status == "DETECTION_FAIL"
         assert "J1" in base_context.result["missing_items"]
+
+    def test_run_skips_inference_error(self, mock_env, base_context):
+        base_context.status = "INFERENCE_ERROR"
+        base_context.result = {
+            "status": "INFERENCE_ERROR",
+            "error": "backend unavailable",
+            "detections": [],
+            "missing_items": [],
+        }
+        base_context.config.expected_items = {"TestProduct": {"TestArea": ["LED", "J1"]}}
+        step = CountCheckStep(mock_env.logger, base_context.product, base_context.area)
+        step.run(base_context)
+        assert base_context.status == "INFERENCE_ERROR"
+        assert "count_check" not in base_context.result
+        assert base_context.result["missing_items"] == []
+
+
+class TestSequenceCheckErrorHandling:
+    def test_run_skips_inference_error(self, mock_env, base_context):
+        base_context.status = "INFERENCE_ERROR"
+        base_context.result = {
+            "status": "INFERENCE_ERROR",
+            "error": "backend unavailable",
+            "detections": [],
+            "missing_items": [],
+        }
+        step = SequenceCheckStep(
+            mock_env.logger,
+            base_context.product,
+            base_context.area,
+            options={"expected": ["Red", "Green"]},
+        )
+        step.run(base_context)
+        assert base_context.status == "INFERENCE_ERROR"
+        assert "sequence_check" not in base_context.result
+
+    def test_run_marks_detection_fail_when_sequence_mismatch(self, mock_env, base_context):
+        base_context.result["detections"] = [
+            {"class": "Green", "bbox": [0, 0, 10, 10]},
+            {"class": "Red", "bbox": [20, 0, 30, 10]},
+        ]
+        step = SequenceCheckStep(
+            mock_env.logger,
+            base_context.product,
+            base_context.area,
+            options={"expected": ["Red", "Green"]},
+        )
+        step.run(base_context)
+        assert base_context.status == "DETECTION_FAIL"
+        assert base_context.result["sequence_check"]["reason"] == "order_mismatch"
 
 # ---------------------------------------------------------------------------
 # Position validation unit tests (PositionValidator directly)
@@ -758,7 +810,7 @@ class TestSequenceCheckStep:
         step = SequenceCheckStep(mock_env.logger, base_context.product, base_context.area,
                                  options={"expected": ["A", "B"]})
         step.run(base_context)
-        assert base_context.status == "FAIL"
+        assert base_context.status == "DETECTION_FAIL"
 
     def test_run_fail_length(self, mock_env, base_context):
         base_context.result["detections"] = [
@@ -767,5 +819,5 @@ class TestSequenceCheckStep:
         step = SequenceCheckStep(mock_env.logger, base_context.product, base_context.area,
                                  options={"expected": ["A", "B"]})
         step.run(base_context)
-        assert base_context.status == "FAIL"
+        assert base_context.status == "DETECTION_FAIL"
         assert base_context.result["sequence_check"]["reason"] == "length_mismatch"

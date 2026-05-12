@@ -160,6 +160,14 @@ class OverwriteQueue(Generic[T]):
         with self._lock:
             return len(self._buf) == 0
 
+    def clear(self) -> int:
+        """Drop all queued items and return the number removed."""
+        with self._not_empty:
+            removed = len(self._buf)
+            self._buf.clear()
+            self.dropped_count += removed
+            return removed
+
     @property
     def maxlen(self) -> int:
         """The capacity of this queue."""

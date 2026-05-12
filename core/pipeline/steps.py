@@ -10,6 +10,10 @@ from core.services.color_checker import ColorCheckerService
 from core.services.result_sink import ExcelImageResultSink
 
 
+INFERENCE_ERROR_STATUS = "INFERENCE_ERROR"
+DETECTION_FAIL_STATUS = "DETECTION_FAIL"
+
+
 class Step:
     """Pipeline step interface. Implement run(ctx) in subclasses."""
 
@@ -27,6 +31,8 @@ class ColorCheckStep(Step):
 
     def run(self, ctx: DetectionContext) -> None:
         """Run color check on detections and attach ctx.color_result."""
+        if str(ctx.status).upper() == INFERENCE_ERROR_STATUS:
+            return
         if not self.color_service.is_ready():
             self.logger.warning("ColorChecker not ready (possibly missing JSON file); skipping color check")
             ctx.color_result = {"is_ok": True, "items": [], "error": "Not loaded"}
@@ -80,7 +86,7 @@ class ColorCheckStep(Step):
         # Enforce FAIL when color check is enabled and any item fails
         try:
             if not bool(ctx.color_result.get("is_ok", True)):
-                ctx.status = "FAIL"
+                ctx.status = DETECTION_FAIL_STATUS
                 self.logger.info("Color check mismatch -> overall FAIL")
         except Exception:
             pass
@@ -96,6 +102,8 @@ class CountCheckStep(Step):
         self.options = options or {}
 
     def run(self, ctx: DetectionContext) -> None:
+        if str(ctx.status).upper() == INFERENCE_ERROR_STATUS:
+            return
         if not self.options.get("enabled", True):
             return
         expected_items = None
@@ -141,7 +149,7 @@ class CountCheckStep(Step):
         }
 
         if missing_items or (strict and over_items):
-            ctx.status = "FAIL"
+            ctx.status = DETECTION_FAIL_STATUS
             self.logger.info(
                 "Count check FAIL: missing=%s, over=%s",
                 missing_items,
@@ -161,6 +169,8 @@ class SequenceCheckStep(Step):
         self.options = options or {}
 
     def run(self, ctx: DetectionContext) -> None:
+        if str(ctx.status).upper() == INFERENCE_ERROR_STATUS:
+            return
         if not self.options.get("enabled", True):
             return
         expected = (
@@ -197,7 +207,7 @@ class SequenceCheckStep(Step):
         }
 
         if not is_ok:
-            ctx.status = "FAIL"
+            ctx.status = DETECTION_FAIL_STATUS
             self.logger.info(
                 "Sequence check FAIL: expected=%s, observed=%s",
                 expected_seq,
@@ -256,6 +266,7 @@ class SaveResultsStep(Step):
                     ckpt_path=ctx.result.get("ckpt_path"),
                     color_result=ctx.color_result,
                     sequence_check=ctx.result.get("sequence_check"),
+                    error_message=ctx.result.get("error"),
                 )
             else:
                 save_result = self.sink.save(
@@ -272,6 +283,7 @@ class SaveResultsStep(Step):
                     ckpt_path=ctx.result.get("ckpt_path"),
                     color_result=ctx.color_result,
                     sequence_check=ctx.result.get("sequence_check"),
+                    error_message=ctx.result.get("error"),
                 )
             ctx.save_result = save_result
         except ResultPersistenceError as exc:
@@ -301,6 +313,8 @@ class PositionCheckStep(Step):
 
     def run(self, ctx: DetectionContext) -> None:
         """Validate detections against configured expected boxes and update status."""
+        if str(ctx.status).upper() == INFERENCE_ERROR_STATUS:
+            return
         detections = ctx.result.get("detections", []) or []
         missing = ctx.result.get("missing_items", [])
         if not detections and not missing:
@@ -327,6 +341,8 @@ class PositionCheckStep(Step):
         missing = ctx.result.get("missing_items", [])
         try:
             new_status = validator.evaluate_status(dets, missing)
+            if new_status == "FAIL":
+                new_status = DETECTION_FAIL_STATUS
             ctx.status = new_status
             self.logger.info(f"Position check evaluated status: {new_status}")
         except Exception as e:

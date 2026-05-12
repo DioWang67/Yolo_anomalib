@@ -92,6 +92,23 @@ class FakeYOLO:
         return {"pred": "ok", "shape": img.shape, "conf": conf, "iou": iou}
 
 
+class FakeExportedYOLO(FakeYOLO):
+    def __init__(self, weights):
+        super().__init__(weights)
+        self.call_devices = []
+
+    def __call__(self, img, conf, iou, **kwargs):
+        self.call_count += 1
+        self.call_devices.append(kwargs.get("device"))
+        return {
+            "pred": "ok",
+            "shape": img.shape,
+            "conf": conf,
+            "iou": iou,
+            "device": kwargs.get("device"),
+        }
+
+
 class FakeDetector:
     def __init__(self, model, config):
         self.model = model
@@ -313,6 +330,39 @@ def test_infer_uses_autocast_when_cuda(monkeypatch, image_bgr_dark):
     out = m.infer(image_bgr_dark, "P", "A")
     assert used["used"] is True
     assert out["status"] in {"PASS", "FAIL"}
+
+
+def test_openvino_exported_model_skips_torch_setup_and_passes_intel_device(
+    monkeypatch, image_bgr_dark, tmp_path
+):
+    openvino_dir = tmp_path / "best_openvino_model"
+    openvino_dir.mkdir()
+    (openvino_dir / "best.xml").write_text("<xml/>", encoding="utf-8")
+
+    cfg = DummyConfig(device="cpu", max_cache_size=3)
+    cfg.weights = str(openvino_dir)
+    cfg.set_items("P", "A", ["bolt"])
+    monkeypatch.setattr(yim, "YOLO", FakeExportedYOLO, raising=True)
+    monkeypatch.setattr(yim, "YOLODetector", FakeDetector, raising=True)
+    monkeypatch.setattr(yim, "PositionValidator", FakeValidator, raising=True)
+
+    m = YOLOInferenceModel(cfg)
+    m.logger = DummyLogger()
+    monkeypatch.setattr(
+        m.image_utils, "letterbox", lambda img, size, fill_color: img, raising=True
+    )
+    monkeypatch.setattr(yim.torch, "inference_mode", lambda: DummyCtx(), raising=True)
+
+    assert m.initialize("P", "A") is True
+    assert m.runtime_info is not None
+    assert m.runtime_info.runtime == "openvino"
+    assert m.model.to_device is None
+    assert m.model.fused is False
+
+    out = m.infer(image_bgr_dark, "P", "A")
+
+    assert out["status"] in {"PASS", "FAIL"}
+    assert m.model.call_devices[-1] == "intel:cpu"
 
 
 def test_infer_fail_status_when_missing_items(monkeypatch, image_bgr_dark, cfg_cpu):

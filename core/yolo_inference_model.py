@@ -17,13 +17,16 @@ from ultralytics import YOLO
 from core.base_model import BaseInferenceModel
 from core.detector import YOLODetector
 from core.exceptions import (
+    BackendInitializationError,
     ConfigurationError,
     ModelInferenceError,
     ModelInitializationError,
     ResourceExhaustionError,
 )
+from core.runtime_preflight import validate_runtime_for_model
 from core.position_validator import PositionValidator
 from core.utils import ImageUtils
+from core.yolo_runtime import YoloRuntimeInfo, detect_yolo_runtime
 
 
 class YOLOInferenceModel(BaseInferenceModel):
@@ -40,7 +43,8 @@ class YOLOInferenceModel(BaseInferenceModel):
     def __init__(self, config):
         super().__init__(config)
         self._cache_lock = threading.Lock()
-        self._warmup_registry: set[tuple[str, str]] = set()
+        self._warmup_registry: set[tuple[str, ...]] = set()
+        self.runtime_info: YoloRuntimeInfo | None = None
         self.model_cache: OrderedDict[tuple[str, str], tuple[YOLO, YOLODetector]] = (
             OrderedDict()
         )
@@ -75,17 +79,33 @@ class YOLOInferenceModel(BaseInferenceModel):
 
         try:
             self.logger.logger.info("Initializing YOLO model...")
+            self.runtime_info = detect_yolo_runtime(
+                self.config.weights,
+                getattr(self.config, "device", None),
+                cuda_available=torch.cuda.is_available(),
+            )
+            validate_runtime_for_model(self.config.weights)
             weights_key = (
                 os.path.abspath(str(self.config.weights)),
-                str(self.config.device),
+                str(self.runtime_info.setup_device or ""),
+                str(self.runtime_info.predict_device or ""),
+                self.runtime_info.runtime,
             )
             should_warmup = weights_key not in self._warmup_registry
 
             self.model = YOLO(self.config.weights)
-            self.model.to(self.config.device)
-            self.model.fuse()
-            if self.config.device != "cpu":
-                self.model.model.half()
+            if self.runtime_info.setup_device:
+                self.model.to(self.runtime_info.setup_device)
+                self.config.device = self.runtime_info.setup_device
+            elif self.runtime_info.predict_device:
+                self.config.device = self.runtime_info.predict_device
+
+            if self.runtime_info.call_fuse and hasattr(self.model, "fuse"):
+                self.model.fuse()
+            if self.runtime_info.use_torch_half:
+                inner_model = getattr(self.model, "model", None)
+                if hasattr(inner_model, "half"):
+                    inner_model.half()
                 torch.backends.cudnn.benchmark = True
             self.detector = YOLODetector(self.model, self.config)
 
@@ -94,13 +114,14 @@ class YOLOInferenceModel(BaseInferenceModel):
                     h, w = self.config.imgsz
                     dummy = np.zeros((h, w, 3), dtype=np.uint8)
                     with torch.inference_mode():
-                        _ = self.model(
-                            dummy,
-                            conf=self.config.conf_thres,
-                            iou=self.config.iou_thres,
-                        )
+                        _ = self._predict_yolo(dummy)
                     self._warmup_registry.add(weights_key)
                 except Exception as warmup_err:
+                    if self.runtime_info.runtime == "onnx":
+                        raise ModelInitializationError(
+                            "YOLO ONNX warmup failed after runtime preflight: "
+                            f"{warmup_err}"
+                        ) from warmup_err
                     self.logger.logger.warning(
                         "YOLO warmup failed: %s", warmup_err, exc_info=warmup_err
                     )
@@ -128,7 +149,9 @@ class YOLOInferenceModel(BaseInferenceModel):
 
             self.is_initialized = True
             self.logger.logger.info(
-                f"YOLO model initialized (device={self.config.device}, product={product}, area={area})"
+                "YOLO model initialized "
+                f"(runtime={self.runtime_info.runtime}, device={self.config.device}, "
+                f"product={product}, area={area})"
             )
             return True
         except FileNotFoundError as exc:
@@ -138,6 +161,8 @@ class YOLOInferenceModel(BaseInferenceModel):
             raise ConfigurationError(
                 f"模型權重檔案不存在: {self.config.weights}。請檢查路徑或配置。"
             ) from exc
+        except (BackendInitializationError, ModelInitializationError):
+            raise
         except RuntimeError as exc:
             self.logger.logger.exception(
                 "Runtime error (e.g., CUDA issue) during YOLO model initialization"
@@ -204,14 +229,15 @@ class YOLOInferenceModel(BaseInferenceModel):
                     f"Invalid product/area combination: {product},{area}"
                 )
 
-            amp_ctx = autocast if self.config.device != "cpu" else nullcontext
+            runtime_info = self.runtime_info or detect_yolo_runtime(
+                self.config.weights,
+                getattr(self.config, "device", None),
+                cuda_available=torch.cuda.is_available(),
+            )
+            amp_ctx = autocast if runtime_info.use_torch_amp else nullcontext
             with torch.inference_mode():
                 with amp_ctx():
-                    prediction = self.model(
-                        processed_image,
-                        conf=self.config.conf_thres,
-                        iou=self.config.iou_thres,
-                    )
+                    prediction = self._predict_yolo(processed_image)
 
             result_frame, detections, missing_items = self.detector.process_detections(
                 prediction, processed_image, image, expected_items
@@ -280,3 +306,18 @@ class YOLOInferenceModel(BaseInferenceModel):
         except Exception as exc:
             self.logger.logger.exception("YOLO inference failed")
             raise ModelInferenceError(str(exc)) from exc
+
+    def _predict_yolo(self, image: np.ndarray):
+        """Run the loaded YOLO model with runtime-specific device arguments."""
+        if self.runtime_info and self.runtime_info.predict_device:
+            return self.model(
+                image,
+                conf=self.config.conf_thres,
+                iou=self.config.iou_thres,
+                device=self.runtime_info.predict_device,
+            )
+        return self.model(
+            image,
+            conf=self.config.conf_thres,
+            iou=self.config.iou_thres,
+        )

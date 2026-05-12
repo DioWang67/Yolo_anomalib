@@ -3,7 +3,28 @@ from __future__ import annotations
 from typing import Any
 
 import cv2
-from ultralytics.utils.plotting import colors  # type: ignore[import]
+import numpy as np
+
+def colors(class_id: int | str, bgr: bool = True) -> tuple[int, int, int]:
+    """Return a deterministic class color without importing Ultralytics."""
+    try:
+        idx = int(class_id)
+    except (TypeError, ValueError):
+        idx = abs(hash(str(class_id)))
+    palette = (
+        (255, 56, 56),
+        (255, 157, 151),
+        (255, 112, 31),
+        (255, 178, 29),
+        (207, 210, 49),
+        (72, 249, 10),
+        (146, 204, 23),
+        (61, 219, 134),
+        (26, 147, 52),
+        (0, 212, 187),
+    )
+    rgb = palette[idx % len(palette)]
+    return rgb[::-1] if bgr else rgb
 
 from core.utils import ImageUtils
 

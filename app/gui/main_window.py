@@ -74,6 +74,11 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self.reconnect_camera_btn = None
         self.disconnect_camera_btn = None
         self.model_version_label = None  # Status bar version display
+        self._run_generation = 0
+        self._single_shot_running = False
+        self._single_shot_cancel_event = threading.Event()
+        self._shutdown_in_progress = False
+        self._stopping_generation: int | None = None
         # Models base path and settings
         from core.path_utils import project_root, resolve_path
         self._project_root = project_root()
@@ -461,7 +466,16 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
 
     def is_detection_running(self) -> bool:
         """Return True if a detection worker is running."""
-        return bool(self.worker and self.worker.isRunning())
+        if self._single_shot_running or self._shutdown_in_progress:
+            return True
+        if self.worker and self.worker.isRunning():
+            return True
+        if self.controller.has_system():
+            try:
+                return bool(self.controller.detection_system.pipeline_running)
+            except Exception:
+                return False
+        return False
 
     # update_camera_controls, handle_reconnect_camera, handle_disconnect_camera
     # → moved to CameraHandlerMixin (app/gui/camera_handler.py)
@@ -474,7 +488,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
                 and self.area_combo.currentText().strip()
                 and self.inference_combo.currentText().strip()
             )
-            self.start_btn.setEnabled(ok and not self.stop_btn.isEnabled())
+            self.start_btn.setEnabled(
+                ok and not self.stop_btn.isEnabled() and not self.is_detection_running()
+            )
         except Exception:
             pass
 
@@ -526,9 +542,17 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             f"開始檢測 - 產品：{product}，區域：{area}，類型：{inference_type}"
         )
         
+        self._run_generation += 1
+        run_generation = self._run_generation
+        self._shutdown_in_progress = False
+        self._stopping_generation = None
+        self._single_shot_cancel_event.clear()
+
         use_cam = self.use_camera_chk.isChecked()
         if use_cam:
-            # --- ASYNC PIPELINE MODE ---
+            # --- CAMERA SINGLE-SHOT PIPELINE MODE ---
+            self.controller.bridge.begin_run(run_generation)
+            self._single_shot_running = True
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
             self.stats_timer.start()
@@ -536,9 +560,19 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             # Use DetectionWorker as a start proxy (runs in separate thread to avoid UI lag)
             self.worker = self.controller.build_worker(
                 product, area, inference_type,
-                capture_interval=0.1 # Example interval
+                capture_interval=0.1, # Example interval
+                mode="single",
+                run_id=run_generation,
             )
-            self.worker.error_occurred.connect(self.on_detection_error)
+            self.worker.error_occurred.connect(
+                lambda msg, gen=run_generation: (
+                    self.on_detection_error(msg)
+                    if gen == self._run_generation else None
+                )
+            )
+            self.worker.finished.connect(
+                lambda gen=run_generation: self._on_start_worker_finished(gen)
+            )
             self.worker.start()
         else:
             # --- SINGLE SHOT MODE (Synchronous) ---
@@ -555,45 +589,118 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
                 return
 
             self.image_panel.update_image(image)
+            self._single_shot_running = True
             # Run one-off detection in a daemon thread to keep UI alive
             threading.Thread(
                 target=self._run_single_shot,
-                args=(image, product, area, inference_type),
+                args=(image, product, area, inference_type, run_generation),
                 daemon=True,
             ).start()
 
-    def _run_single_shot(self, frame, product, area, inference_type):
+    def _run_single_shot(self, frame, product, area, inference_type, run_generation):
         """Execute a single synchronous detect() call off the main thread."""
         try:
             result = self.controller.detection_system.detect(
-                product, area, inference_type, frame=frame
+                product,
+                area,
+                inference_type,
+                frame=frame,
+                cancel_cb=self._single_shot_cancel_event.is_set,
             )
+            if (
+                self._single_shot_cancel_event.is_set()
+                or run_generation != self._run_generation
+            ):
+                return
             # Use bridge signal to safely cross back to the main thread
             self.controller.bridge.result_ready.emit(result)
         except Exception as e:
-            self.controller.bridge.error_occurred.emit(str(e))
+            if (
+                not self._single_shot_cancel_event.is_set()
+                and run_generation == self._run_generation
+            ):
+                self.controller.bridge.error_occurred.emit(str(e))
+        finally:
+            if run_generation == self._run_generation:
+                self._single_shot_running = False
 
     def stop_detection(self):
         """優雅停止管線 (非阻塞)"""
         if not self.controller.has_system():
             return
-            
+
+        stopped_generation = self._run_generation
+        self._single_shot_cancel_event.set()
+        self.controller.bridge.end_run(stopped_generation)
+        self._stopping_generation = stopped_generation
+        self._run_generation += 1
+        self._shutdown_in_progress = True
         self.stop_btn.setEnabled(False)
+        startup_worker_running = bool(self.worker and self.worker.isRunning())
+        if startup_worker_running and hasattr(self.worker, "cancel"):
+            self.worker.cancel()
         self.stop_btn.setText("正在停止...")
         
-        # Use ShutdownWorker to handle blocking stop_pipeline()
+        if (
+            not self.controller.detection_system.pipeline_running
+            and self._single_shot_running
+        ):
+            self._single_shot_running = False
+            self._shutdown_in_progress = False
+            self._on_pipeline_stopped()
+            return
+
+        if (
+            not self.controller.detection_system.pipeline_running
+            and startup_worker_running
+        ):
+            self.log_message("正在取消啟動中的檢測...")
+            return
+
+        if not self.controller.detection_system.pipeline_running:
+            self._shutdown_in_progress = False
+            self._on_pipeline_stopped()
+            return
+
+        self._begin_pipeline_shutdown()
+
+    def _begin_pipeline_shutdown(self):
+        """Start a bounded background shutdown if one is not already active."""
+        shutdown_worker = getattr(self, "_shutdown_worker", None)
+        if shutdown_worker is not None and shutdown_worker.isRunning():
+            return
         self._shutdown_worker = self.controller.build_shutdown_worker()
         self._shutdown_worker.shutdown_complete.connect(self._on_pipeline_stopped)
         self._shutdown_worker.start()
 
+    def _on_start_worker_finished(self, run_generation):
+        """Finish a stop request that happened while start_pipeline() was loading."""
+        if self._stopping_generation != run_generation:
+            return
+        if (
+            self.controller.has_system()
+            and self.controller.detection_system.pipeline_running
+        ):
+            self._begin_pipeline_shutdown()
+            return
+        self._on_pipeline_stopped()
+
     def _on_pipeline_stopped(self):
         """Pipeline stopped callback."""
+        self.controller.bridge.end_run()
+        self._shutdown_in_progress = False
+        self._stopping_generation = None
         self.stats_timer.stop()
         self.stop_btn.setText("停止檢測")
         self._reset_ui_state()
         self.log_message("檢測管線已關閉 (IO 已落盤)")
 
     def _reset_ui_state(self):
+        self.controller.bridge.end_run()
+        self._single_shot_cancel_event.set()
+        self._single_shot_running = False
+        self._shutdown_in_progress = False
+        self._stopping_generation = None
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         if getattr(self, "big_status_label", None):
@@ -638,8 +745,14 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         task = result_or_task
         if not isinstance(task, DetectionTask) or task.result is None:
             return
-
         res = task.result
+        if (
+            self.controller.has_system()
+            and not self.controller.detection_system.pipeline_running
+            and str(res.get("status", "")).upper()
+            not in {"PASS", "DETECTION_FAIL", "INFERENCE_ERROR", "FAIL"}
+        ):
+            return
         items = [
             DetectionItem(
                 label=d.get("class", "unknown"),
@@ -666,6 +779,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             heatmap_path=res.get("heatmap_path", ""),
             original_image_path=res.get("original_image_path", ""),
             preprocessed_image_path=res.get("preprocessed_image_path", ""),
+            cropped_paths=res.get("cropped_paths", []),
+            color_check=res.get("color_check"),
+            sequence_check=res.get("sequence_check"),
             result_frame=res.get("result_frame"),
         )
         self.on_detection_complete(result)
@@ -679,6 +795,11 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
     @pyqtSlot(object)
     def on_image_ready(self, image: np.ndarray) -> None:
         """Handle live image frame from worker."""
+        if not (
+            self.controller.has_system()
+            and self.controller.detection_system.pipeline_running
+        ):
+            return
         if self.image_panel:
             self.image_panel.update_image(image)
 
@@ -692,7 +813,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             self.controller.has_system()
             and self.controller.detection_system.pipeline_running
         )
-        if not is_pipeline_running:
+        if self._single_shot_running or not is_pipeline_running:
+            self._single_shot_running = False
+            self.stats_timer.stop()
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
             self.update_camera_controls()
@@ -776,6 +899,11 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
 
     def on_detection_error(self, error_msg):
         """檢測錯誤回調"""
+        self.controller.bridge.end_run()
+        self._single_shot_cancel_event.set()
+        self._single_shot_running = False
+        self._shutdown_in_progress = False
+        self._stopping_generation = None
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         if getattr(self, "big_status_label", None):

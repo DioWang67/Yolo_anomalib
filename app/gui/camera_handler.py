@@ -164,7 +164,13 @@ class CameraHandlerMixin:
     # ------------------------------------------------------------------
 
     def _on_camera_disconnected(self) -> None:
-        """Camera disconnected mid-pipeline — shut down gracefully and offer reconnect."""
+        """Camera disconnected mid-pipeline and starts recovery."""
+        try:
+            self.controller.bridge.end_run(getattr(self, "_run_generation", None))
+            self._run_generation += 1
+            self._shutdown_in_progress = True
+        except Exception:
+            pass
         self.log_message("相機連線中斷（連續擷取失敗）")
         self.stats_timer.stop()
         self._shutdown_worker = self.controller.build_shutdown_worker()

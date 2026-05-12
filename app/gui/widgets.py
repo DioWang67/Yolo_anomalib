@@ -57,8 +57,8 @@ class BigStatusLabel(QLabel):
                 }
                 """
             )
-        elif status == "FAIL":
-            self.setText("FAIL")
+        elif status in {"FAIL", "DETECTION_FAIL"}:
+            self.setText("DETECTION FAIL" if status == "DETECTION_FAIL" else "FAIL")
             self.setStyleSheet(
                 """
                 QLabel {
@@ -70,8 +70,8 @@ class BigStatusLabel(QLabel):
                 }
                 """
             )
-        elif status == "ERROR":
-            self.setText("ERROR")
+        elif status in {"ERROR", "INFERENCE_ERROR"}:
+            self.setText("INFERENCE ERROR" if status == "INFERENCE_ERROR" else "ERROR")
             self.setStyleSheet(
                 """
                 QLabel {
@@ -121,12 +121,20 @@ class FailReasonLabel(QLabel):
 
     def update_from_result(self, result: "DetectionResult") -> None:
         """Extract top-level FAIL reasons and display them."""
-        if result.status != "FAIL":
+        if result.status not in {"FAIL", "DETECTION_FAIL", "INFERENCE_ERROR"}:
             self.setText("")
             self.setStyleSheet(self._STYLE_CLEAR)
             return
 
+        if result.status == "INFERENCE_ERROR":
+            self.setText(result.error or "Inference/backend runtime error")
+            self.setStyleSheet(self._STYLE_FAIL)
+            return
+
         reasons: list[str] = []
+
+        if result.error:
+            reasons.append(str(result.error))
 
         missing = result.missing_items or []
         if missing:
@@ -246,7 +254,7 @@ class SessionStatsWidget(QGroupBox):
         if status == "PASS":
             self._pass += 1
             self._consecutive_fails = 0
-        elif status == "FAIL":
+        elif status in {"FAIL", "DETECTION_FAIL"}:
             self._fail += 1
             self._consecutive_fails += 1
         self._refresh()
