@@ -774,6 +774,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             error=res.get("error"),
             anomaly_score=res.get("anomaly_score"),
             missing_items=res.get("missing_items", []),
+            missing_locations=res.get("missing_locations", []),
             unexpected_items=res.get("unexpected_items", []),
             annotated_path=res.get("annotated_path", ""),
             heatmap_path=res.get("heatmap_path", ""),

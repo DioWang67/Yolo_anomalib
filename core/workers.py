@@ -689,6 +689,7 @@ class StorageWorker(BaseWorker):
             task.result["annotated_path"] = save_result.get("annotated_path", "")
             task.result["heatmap_path"] = save_result.get("heatmap_path", "")
             task.result["cropped_paths"] = save_result.get("cropped_paths", [])
+            task.result["missing_locations"] = save_result.get("missing_locations", [])
 
     def _clear_drop_queue(self) -> int:
         """Drop queued inference tasks once single-shot has completed."""

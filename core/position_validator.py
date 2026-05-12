@@ -30,6 +30,86 @@ def _base_class_name(key: str) -> str:
     return key
 
 
+def build_missing_item_locations(
+    config: Any,
+    product: str | None,
+    area: str | None,
+    missing_items: list[str] | tuple[str, ...] | None,
+) -> list[dict[str, Any]]:
+    """Return expected boxes for missing items.
+
+    Args:
+        config: DetectionConfig-like object exposing ``get_position_config``.
+        product: Product name used to resolve position config.
+        area: Area name used to resolve position config.
+        missing_items: Missing class names reported by inference/count checks.
+
+    Returns:
+        List of dictionaries with ``class`` and ``bbox`` keys suitable for
+        annotation. Empty when the config has no expected box for an item.
+    """
+    if not config or not product or not area or not missing_items:
+        return []
+
+    try:
+        pos_config = config.get_position_config(product, area) or {}
+    except Exception:
+        return []
+
+    expected_boxes = pos_config.get("expected_boxes", {}) or {}
+    if not isinstance(expected_boxes, dict):
+        return []
+
+    locations: list[dict[str, Any]] = []
+    used_keys: set[str] = set()
+    for item in missing_items:
+        item_name = str(item).strip()
+        if not item_name:
+            continue
+        key = _find_expected_box_key(item_name, expected_boxes, used_keys)
+        if not key:
+            continue
+        box = expected_boxes.get(key) or {}
+        try:
+            bbox = [
+                int(round(float(box["x1"]))),
+                int(round(float(box["y1"]))),
+                int(round(float(box["x2"]))),
+                int(round(float(box["y2"]))),
+            ]
+        except (KeyError, TypeError, ValueError):
+            continue
+        used_keys.add(key)
+        locations.append(
+            {
+                "class": item_name,
+                "expected_key": key,
+                "bbox": bbox,
+                "reason": "missing",
+            }
+        )
+    return locations
+
+
+def _find_expected_box_key(
+    item_name: str,
+    expected_boxes: dict[str, Any],
+    used_keys: set[str],
+) -> str | None:
+    """Find an unused expected-box key for a missing item."""
+    if item_name in expected_boxes and item_name not in used_keys:
+        return item_name
+
+    candidates = [
+        key
+        for key in expected_boxes
+        if _base_class_name(str(key)) == item_name and key not in used_keys
+    ]
+    if candidates:
+        return sorted(candidates)[0]
+    return None
+
+
 class PositionValidator:
     """Validate whether detection centers stay within the expected tolerance."""
 

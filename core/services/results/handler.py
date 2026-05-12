@@ -16,6 +16,7 @@ from core.exceptions import (
     ResultPersistenceError,
 )
 from core.logging_config import DetectionLogger
+from core.position_validator import build_missing_item_locations
 from core.utils import DetectionResults, ImageUtils
 
 from .annotations import annotate_yolo_frame
@@ -167,6 +168,12 @@ class ResultHandler:
             )
             cropped_paths: list[str] = []
             heatmap_dest_path = ""
+            missing_locations = build_missing_item_locations(
+                self._config_source,
+                product,
+                area,
+                missing_items,
+            )
 
             if save_flags["original"]:
                 self._img_queue.enqueue(
@@ -188,7 +195,12 @@ class ResultHandler:
                 annotated_frame = processed_image.copy()
                 crop_source = processed_image
                 annotate_yolo_frame(
-                    self.image_utils, annotated_frame, detections, color_result, status
+                    self.image_utils,
+                    annotated_frame,
+                    detections,
+                    color_result,
+                    status,
+                    missing_locations,
                 )
                 self._img_queue.write_sync(
                     annotated_path,
@@ -215,9 +227,18 @@ class ResultHandler:
                     )
             elif detector_lower == "fusion" and save_flags["annotated"]:
                 if processed_image is not None and processed_image.size > 0:
+                    annotated_frame = processed_image.copy()
+                    annotate_yolo_frame(
+                        self.image_utils,
+                        annotated_frame,
+                        detections,
+                        color_result,
+                        status,
+                        missing_locations,
+                    )
                     self._img_queue.write_sync(
                         annotated_path,
-                        processed_image,
+                        annotated_frame,
                         (
                             imwrite_params_jpg
                             if annotated_path.lower().endswith(".jpg")
@@ -286,6 +307,7 @@ class ResultHandler:
                 "cropped_paths": cropped_paths,
                 "product": product,
                 "area": area,
+                "missing_locations": missing_locations,
             }
         except ImageWriteError as exc:
             self.logger.logger.exception("Image write failed")
