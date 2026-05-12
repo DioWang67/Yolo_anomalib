@@ -3,7 +3,7 @@
 
 # YOLO Model Weights Path (relative to project root or absolute path)
 # Example: models/LED/A/yolo/LED_color_mixing_best.pt
-weights: "models/LED/A/yolo/LED_color_mixing_best.pt"
+weights: "models/LED/A/yolo/weights/LED_color_mixing_v1.0.0_20260210.onnx"
 
 # Camera Settings
 # Exposure time in microseconds (e.g., 51170 = 51.17ms)

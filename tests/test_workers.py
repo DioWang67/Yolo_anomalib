@@ -17,6 +17,7 @@ import pytest
 
 from core.queues import OverwriteQueue
 from core.types import DetectionTask
+from core.async_pipeline import AsyncPipelineManager
 from core.workers import AcquisitionWorker, BaseWorker
 
 
@@ -226,6 +227,57 @@ class TestAcquisitionWorker:
             assert task.inference_type == "anomalib"
             assert task.timestamp > 0
             assert task.frame is not None
+
+
+# =====================================================================
+# AsyncPipelineManager Tests
+# =====================================================================
+
+class TestAsyncPipelineManager:
+    def test_stop_returns_when_inference_backend_is_blocked(self):
+        """stop() must not wait forever for a backend stuck in one inference call."""
+
+        class BlockingSystem:
+            def __init__(self):
+                self.entered = threading.Event()
+                self.release = threading.Event()
+                self.config = object()
+                self.result_sink = None
+                self.calls = 0
+
+            def _run_inference(self, *args, **kwargs):
+                self.calls += 1
+                self.entered.set()
+                self.release.wait(timeout=5.0)
+                return {"status": "PASS", "detections": []}
+
+            def _execute_pipeline(self, *args, **kwargs):
+                return None
+
+            def _log_summary(self, *args, **kwargs):
+                return None
+
+        manager = AsyncPipelineManager()
+        system = BlockingSystem()
+        manager.start(
+            camera=FakeCamera(),
+            detection_system=system,
+            product="P",
+            area="A",
+            inference_type="yolo",
+            capture_interval=0.001,
+        )
+        assert system.entered.wait(timeout=2.0)
+
+        started = time.perf_counter()
+        manager.stop(timeout=0.2)
+        elapsed = time.perf_counter() - started
+
+        system.release.set()
+        time.sleep(0.2)
+        assert elapsed < 1.0
+        assert manager.running is False
+        assert system.calls == 1
 
 
 # =====================================================================

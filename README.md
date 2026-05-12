@@ -559,15 +559,15 @@ OpenVINO export directories through the same inference wrapper; exported
 runtimes skip PyTorch-only setup such as `model.to()`, `fuse()` and FP16 module
 conversion.
 
-Use the deployment tools to export and measure before changing production
-configs:
+Export YOLO artifacts from the training project before changing production
+configs. This GUI/runtime project should only consume and measure those
+artifacts:
 
 ```powershell
-python tools\yolo_export.py `
-  --weights models\Cable1\A\yolo\weights\best.pt `
-  --format openvino `
-  --imgsz 640
+cd D:\Git\robotlearning\Yolo11_auto_train
+picture-tool-pipeline --config configs\<product>.yaml --tasks yolo_train,deploy
 
+cd D:\Git\robotlearning\yolo11_inference
 python tools\runtime_benchmark.py `
   --backend yolo `
   --model models\Cable1\A\yolo\weights\best.pt `

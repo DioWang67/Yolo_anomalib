@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from core.queues import OverwriteQueue
@@ -135,10 +136,10 @@ class AsyncPipelineManager:
             )
 
     def stop(self, timeout: float = 10.0) -> None:
-        """Gracefully shut down all workers via poison-pill propagation.
+        """Stop workers without letting one blocked backend freeze the GUI.
 
         Args:
-            timeout: Max seconds to wait for each worker to finish.
+            timeout: Total seconds to wait for all workers to finish.
         """
         with self._lock:
             if not self._active:
@@ -149,14 +150,23 @@ class AsyncPipelineManager:
             if self._acq_worker and self._acq_worker.is_alive():
                 self._acq_worker.stop()
 
-            for worker in (self._acq_worker, self._inf_worker, self._sto_worker):
-                if worker and worker.is_alive():
-                    worker.join(timeout=timeout)
-                    if worker.is_alive():
-                        logger.warning(
-                            "Worker %s did not stop within %.1fs",
-                            worker.name, timeout,
-                        )
+            self._wake_workers_for_shutdown()
+
+            workers = (self._acq_worker, self._inf_worker, self._sto_worker)
+            deadline = time.monotonic() + max(0.0, timeout)
+            for worker in workers:
+                if not worker or not worker.is_alive():
+                    continue
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining > 0:
+                    worker.join(timeout=remaining)
+                if worker.is_alive():
+                    logger.warning(
+                        "Worker %s still running after %.1fs stop budget; "
+                        "detaching so UI can recover",
+                        worker.name,
+                        timeout,
+                    )
 
             stats = self.stats()
             logger.info(
@@ -172,6 +182,52 @@ class AsyncPipelineManager:
             self._sto_worker = None
             self._inference_queue = None
             self._io_queue = None
+
+    def _wake_workers_for_shutdown(self) -> None:
+        """Best-effort wake-up for workers blocked on queues during shutdown."""
+        if self._inference_queue is not None:
+            try:
+                dropped = self._inference_queue.clear()
+                if dropped:
+                    logger.info(
+                        "Dropped %d queued inference tasks during stop",
+                        dropped,
+                    )
+                self._inference_queue.put(DetectionTask.poison_pill())
+            except Exception:
+                logger.exception("Failed to wake inference queue during stop")
+
+        if self._io_queue is not None:
+            try:
+                dropped = self._drain_io_queue_for_shutdown()
+                if dropped:
+                    logger.info(
+                        "Dropped %d queued storage tasks during stop",
+                        dropped,
+                    )
+                self._io_queue.put_nowait(DetectionTask.poison_pill())
+            except queue.Full:
+                logger.warning("IO queue full during stop; storage wake-up skipped")
+            except Exception:
+                logger.exception("Failed to wake IO queue during stop")
+
+    def _drain_io_queue_for_shutdown(self) -> int:
+        """Remove queued storage tasks so stop is not blocked by stale work."""
+        if self._io_queue is None:
+            return 0
+
+        dropped = 0
+        while True:
+            try:
+                self._io_queue.get_nowait()
+            except queue.Empty:
+                return dropped
+            else:
+                dropped += 1
+                try:
+                    self._io_queue.task_done()
+                except ValueError:
+                    logger.debug("IO queue task_done mismatch during stop", exc_info=True)
 
     def stats(self) -> dict[str, Any]:
         """Return a snapshot of pipeline counters for monitoring."""

@@ -139,6 +139,7 @@ class DetectionSystem:
         on_task_captured=None,
         on_task_processed=None,
         on_camera_lost=None,
+        cancel_cb=None,
     ) -> None:
         """Start the async Producer-Consumer detection pipeline.
 
@@ -158,6 +159,9 @@ class DetectionSystem:
             RuntimeError: If the pipeline is already running or camera
                 is unavailable.
         """
+        if self._is_canceled(cancel_cb):
+            return
+
         if not self.camera:
             raise RuntimeError(
                 "Cannot start pipeline: no camera available. "
@@ -168,7 +172,11 @@ class DetectionSystem:
 
         # Pre-load model configs so InferenceWorker is ready
         self.load_model_configs(product, area, inference_type)
+        if self._is_canceled(cancel_cb):
+            return
         self._prepare_resources(product, area, inference_type, _logger)
+        if self._is_canceled(cancel_cb):
+            return
 
         self._pipeline.start(
             camera=self.camera,

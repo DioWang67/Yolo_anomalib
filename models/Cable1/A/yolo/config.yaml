@@ -1,4 +1,4 @@
-weights: models/Cable1/A/yolo/weights/best.pt
+weights: models/Cable1/A/yolo/weights/best.onnx
 device: cpu
 conf_thres: 0.4
 iou_thres: 0.45

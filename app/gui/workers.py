@@ -25,6 +25,7 @@ delivery to the main thread via Qt's event loop.
 from __future__ import annotations
 
 import logging
+import threading
 import traceback
 from typing import TYPE_CHECKING
 
@@ -69,16 +70,36 @@ class PipelineBridge(QObject):
 
     def __init__(self) -> None:
         super().__init__()
+        self._lock = threading.Lock()
+        self._active_run_id: int | None = None
+
+    def begin_run(self, run_id: int) -> None:
+        """Mark a pipeline run as the only run allowed to emit GUI updates."""
+        with self._lock:
+            self._active_run_id = run_id
+
+    def end_run(self, run_id: int | None = None) -> None:
+        """Invalidate callbacks from a stopped pipeline run."""
+        with self._lock:
+            if run_id is None or self._active_run_id == run_id:
+                self._active_run_id = None
+
+    def _accepts_run(self, run_id: int | None) -> bool:
+        """Return True if a worker callback belongs to the active run."""
+        with self._lock:
+            return run_id is not None and self._active_run_id == run_id
 
     # ------------------------------------------------------------------
     # Callback hooks (called on core worker threads — emit only!)
     # ------------------------------------------------------------------
 
-    def on_task_captured(self, task: DetectionTask) -> None:
+    def on_task_captured(self, task: DetectionTask, run_id: int | None = None) -> None:
         """Hook injected into AcquisitionWorker.
 
         Emits the raw BGR ndarray via ``image_ready`` for ImagePanel.
         """
+        if not self._accepts_run(run_id):
+            return
         if task.frame is None:
             return
         try:
@@ -86,13 +107,15 @@ class PipelineBridge(QObject):
         except Exception:
             logger.error("PipelineBridge.on_task_captured failed", exc_info=True)
 
-    def on_task_processed(self, task: DetectionTask) -> None:
+    def on_task_processed(self, task: DetectionTask, run_id: int | None = None) -> None:
         """Hook injected into StorageWorker.
 
         Emits the entire ``DetectionTask`` so the GUI can extract
         ``task.result`` (the raw dict) and build a ``DetectionResult``
         for UI display.
         """
+        if not self._accepts_run(run_id):
+            return
         if task.result is None:
             return
         try:
@@ -100,11 +123,13 @@ class PipelineBridge(QObject):
         except Exception:
             logger.error("PipelineBridge.on_task_processed failed", exc_info=True)
 
-    def on_camera_lost(self) -> None:
+    def on_camera_lost(self, run_id: int | None = None) -> None:
         """Hook invoked by AcquisitionWorker when camera appears disconnected.
 
         Called on the AcquisitionWorker thread — must only emit signals.
         """
+        if not self._accepts_run(run_id):
+            return
         try:
             self.camera_disconnected.emit()
         except Exception:
@@ -118,9 +143,9 @@ class PipelineBridge(QObject):
 class ShutdownWorker(QThread):
     """Executes ``stop_pipeline()`` on a background thread.
 
-    ``stop_pipeline()`` contains ``join()`` calls that block until all
-    pipeline workers finish draining.  Running it on the main thread
-    would freeze the UI for up to ``timeout`` seconds.
+    ``stop_pipeline()`` uses a bounded total timeout. Backends such as ONNX
+    Runtime can occasionally block inside one inference call; the pipeline
+    must still release the GUI and stop camera acquisition promptly.
 
     Signals
     -------
@@ -134,7 +159,7 @@ class ShutdownWorker(QThread):
     def __init__(
         self,
         detection_system: DetectionSystem,
-        timeout: float = 10.0,
+        timeout: float = 3.0,
     ) -> None:
         super().__init__()
         self._system = detection_system
@@ -180,6 +205,7 @@ class DetectionWorker(QThread):
         inference_type: str,
         capture_interval: float = 0.5,
         bridge: PipelineBridge | None = None,
+        run_id: int | None = None,
     ) -> None:
         super().__init__()
         self._system = detection_system
@@ -188,24 +214,45 @@ class DetectionWorker(QThread):
         self._inference_type = inference_type
         self._interval = capture_interval
         self._bridge = bridge
+        self._run_id = run_id
+        self._cancel_event = threading.Event()
+
+    def cancel(self) -> None:
+        """Request cancellation before the pipeline is fully started."""
+        self._cancel_event.set()
+
+    def cancel_requested(self) -> bool:
+        """Return True when the GUI has requested startup cancellation."""
+        return self._cancel_event.is_set()
 
     def run(self) -> None:
         try:
+            if self.cancel_requested():
+                return
             self._system.start_pipeline(
                 self._product,
                 self._area,
                 self._inference_type,
                 capture_interval=self._interval,
                 on_task_captured=(
-                    self._bridge.on_task_captured if self._bridge else None
+                    (lambda task: self._bridge.on_task_captured(task, self._run_id))
+                    if self._bridge else None
                 ),
                 on_task_processed=(
-                    self._bridge.on_task_processed if self._bridge else None
+                    (lambda task: self._bridge.on_task_processed(task, self._run_id))
+                    if self._bridge else None
                 ),
                 on_camera_lost=(
-                    self._bridge.on_camera_lost if self._bridge else None
+                    (lambda: self._bridge.on_camera_lost(self._run_id))
+                    if self._bridge else None
                 ),
+                cancel_cb=self.cancel_requested,
             )
+            if self.cancel_requested():
+                try:
+                    self._system.stop_pipeline(timeout=1.0)
+                except Exception:
+                    logger.error("Failed to stop pipeline after startup cancel", exc_info=True)
         except Exception:
             self.error_occurred.emit(traceback.format_exc())
         finally:

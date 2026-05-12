@@ -22,17 +22,24 @@ exported artifacts through the same high-level API. Anomalib should not be
 moved into firmware as a Python/Lightning dependency; firmware should receive
 only an exported model and fixed post-processing logic.
 
-## New Tools
+## Repository Boundary
 
-Export YOLO:
+`yolo11_inference` is the GUI/runtime consumer. It should load and benchmark
+artifacts that were produced elsewhere, but it should not own the training-time
+export pipeline.
+
+YOLO export and model bundle creation belong in `Yolo11_auto_train`, where the
+training run, class names, detection config and position config are available
+in one place. This keeps the GUI project focused on inference behavior and
+deployment validation.
+
+## Runtime Tooling
+
+Export YOLO from the training project:
 
 ```powershell
-python tools\yolo_export.py `
-  --weights models\Cable1\A\yolo\weights\best.pt `
-  --format openvino `
-  --imgsz 640 `
-  --device cpu `
-  --manifest reports\Cable1_A_yolo_openvino_export.json
+cd D:\Git\robotlearning\Yolo11_auto_train
+picture-tool-pipeline --config configs\<product>.yaml --tasks yolo_train,deploy
 ```
 
 Benchmark PyTorch YOLO:

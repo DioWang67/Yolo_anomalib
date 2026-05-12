@@ -1,7 +1,7 @@
 # yolo11_inference Configuration
 # For configuration template and detailed explanations, see config.example.yaml
 
-weights: "models/LED/A/yolo/LED_color_mixing_best.pt"
+weights: "models/LED/A/yolo/weights/LED_color_mixing_v1.0.0_20260210.onnx"
 exposure_time: "51170.0000"
 gain: "23.0"
 MV_CC_GetImageBuffer_nMsec: 10000

@@ -1,55 +1,10 @@
 from __future__ import annotations
 
-import pytest
-
 from tools.runtime_benchmark import (
     collect_image_paths,
     parse_imgsz as parse_benchmark_imgsz,
     summarize_latencies,
 )
-from tools.yolo_export import ExportRequest, build_export_kwargs, parse_imgsz
-
-
-def test_yolo_export_parse_imgsz_accepts_square_and_rectangular_values():
-    assert parse_imgsz("640") == 640
-    assert parse_imgsz("640,480") == (640, 480)
-    assert parse_imgsz("640x480") == (640, 480)
-
-
-def test_yolo_export_rejects_conflicting_precision_modes(tmp_path):
-    request = ExportRequest(
-        weights=tmp_path / "best.pt",
-        export_format="openvino",
-        imgsz=640,
-        half=True,
-        int8=True,
-    )
-
-    with pytest.raises(ValueError, match="either half precision or int8"):
-        build_export_kwargs(request)
-
-
-def test_yolo_export_builds_openvino_kwargs(tmp_path):
-    request = ExportRequest(
-        weights=tmp_path / "best.pt",
-        export_format="openvino",
-        imgsz=(640, 640),
-        half=True,
-        device="cpu",
-        project=tmp_path / "exports",
-        name="best_ov",
-    )
-
-    kwargs = build_export_kwargs(request)
-
-    assert kwargs == {
-        "format": "openvino",
-        "imgsz": (640, 640),
-        "half": True,
-        "device": "cpu",
-        "project": str(tmp_path / "exports"),
-        "name": "best_ov",
-    }
 
 
 def test_collect_image_paths_returns_sorted_supported_images(tmp_path):

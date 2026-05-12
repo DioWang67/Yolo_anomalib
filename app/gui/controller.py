@@ -94,6 +94,7 @@ class DetectionController:
         inference_type: str,
         *,
         capture_interval: float = 0.5,
+        run_id: int | None = None,
     ) -> DetectionWorker:
         """Creates a detection worker (pipeline proxy) with injected system and bridge."""
         system = self.detection_system
@@ -103,10 +104,11 @@ class DetectionController:
             area=area,
             inference_type=inference_type,
             capture_interval=capture_interval,
-            bridge=self.bridge
+            bridge=self.bridge,
+            run_id=run_id,
         )
 
-    def build_shutdown_worker(self, timeout: float = 10.0) -> ShutdownWorker:
+    def build_shutdown_worker(self, timeout: float = 3.0) -> ShutdownWorker:
         """Creates a worker to handle blocking stop_pipeline() calls."""
         return ShutdownWorker(self.detection_system, timeout=timeout)
 
