@@ -16,7 +16,13 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from app.gui.widgets import BigStatusLabel, FailReasonLabel, ResultDisplayWidget, SessionStatsWidget
+from app.gui.widgets import (
+    BigStatusLabel,
+    FailReasonLabel,
+    OperatorGuidanceCard,
+    ResultDisplayWidget,
+    SessionStatsWidget,
+)
 
 if TYPE_CHECKING:
     from core.types import DetectionResult
@@ -44,6 +50,9 @@ class InfoPanel(QWidget):
         # ── FAIL 原因列 ──────────────────────────────────────────────
         self.fail_reason_label = FailReasonLabel()
         layout.addWidget(self.fail_reason_label)
+
+        self.operator_guidance_card = OperatorGuidanceCard()
+        layout.addWidget(self.operator_guidance_card)
 
         # ── 連續 NG 警示橫幅（平時隱藏）────────────────────────────────
         self._alert_banner = QFrame()
@@ -128,6 +137,7 @@ class InfoPanel(QWidget):
         """Update status indicators, fail reason, session stats, and result detail."""
         self.result_widget.update_result(result)
         self.fail_reason_label.update_from_result(result)
+        self.operator_guidance_card.update_from_result(result)
         self.session_stats.record_result(result.status)
         # Auto-hide the consecutive-FAIL banner the moment a PASS arrives.
         if result.status == "PASS":

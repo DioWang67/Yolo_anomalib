@@ -8,6 +8,7 @@ import numpy as np
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QImage, QPixmap
 from PyQt5.QtWidgets import (
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -15,6 +16,12 @@ from PyQt5.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+)
+
+from core.services.results.customer_message import build_customer_message
+from core.services.results.position_summary import (
+    format_fixture_shift_hint,
+    summarize_position_records,
 )
 
 if TYPE_CHECKING:
@@ -153,16 +160,19 @@ class FailReasonLabel(QLabel):
             reasons.append("排列順序錯誤" if reason_key == "order_mismatch" else "排列長度不符")
 
         all_items = result.items or []
-        pos_fails = [
-            i.label for i in all_items
-            if i.metadata.get("position_status") in ("FAIL", "WRONG", "UNEXPECTED", "INVALID", "ERROR")
-        ]
-        if pos_fails:
-            reasons.append(f"位置偏移：{', '.join(pos_fails[:3])}"
-                           + ("…" if len(pos_fails) > 3 else ""))
-            # All items failed position check → likely fixture shift, not individual defects
-            if all_items and len(pos_fails) == len(all_items):
-                reasons.append("⚙ 全件位置偏移，可能是治具移位，請通知工程師校正")
+        position_summary = summarize_position_records(
+            [
+                {"label": item.label, **item.metadata}
+                for item in all_items
+            ]
+        )
+        if position_summary.fail_count > 0:
+            labels = [issue.label for issue in position_summary.issues]
+            reasons.append(f"位置偏移：{', '.join(labels[:3])}"
+                           + ("…" if len(labels) > 3 else ""))
+            fixture_hint = format_fixture_shift_hint(position_summary)
+            if fixture_hint:
+                reasons.append(f"⚙ {fixture_hint}")
 
         if reasons:
             self.setText("⚠ " + "　|　".join(reasons))
@@ -176,6 +186,74 @@ class FailReasonLabel(QLabel):
 
 
 # ---------------------------------------------------------------------------
+
+
+class OperatorGuidanceCard(QFrame):
+    """Customer-facing guidance card with next action."""
+
+    _STYLES = {
+        "success": (
+            "QFrame { background-color: #e8f6ec; border: 2px solid #7bc47f; "
+            "border-radius: 10px; padding: 8px; }"
+        ),
+        "warning": (
+            "QFrame { background-color: #fff4db; border: 2px solid #f0b429; "
+            "border-radius: 10px; padding: 8px; }"
+        ),
+        "danger": (
+            "QFrame { background-color: #fdecea; border: 2px solid #d9534f; "
+            "border-radius: 10px; padding: 8px; }"
+        ),
+    }
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._headline = QLabel()
+        self._action = QLabel()
+        self._details = QLabel()
+        self._setup_ui()
+        self.show_message("等待檢測", "請放置工件後開始檢測", "warning", [])
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout()
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
+
+        self._headline.setFont(QFont("Microsoft JhengHei", 15, QFont.Bold))
+        self._headline.setWordWrap(True)
+
+        self._action.setFont(QFont("Microsoft JhengHei", 11, QFont.Bold))
+        self._action.setWordWrap(True)
+
+        self._details.setFont(QFont("Microsoft JhengHei", 10))
+        self._details.setWordWrap(True)
+
+        layout.addWidget(self._headline)
+        layout.addWidget(self._action)
+        layout.addWidget(self._details)
+        self.setLayout(layout)
+
+    def update_from_result(self, result: "DetectionResult") -> None:
+        message = build_customer_message(result)
+        self.show_message(
+            message.headline,
+            message.action,
+            message.severity,
+            message.details,
+        )
+
+    def show_message(
+        self,
+        headline: str,
+        action: str,
+        severity: str,
+        details: list[str],
+    ) -> None:
+        self.setStyleSheet(self._STYLES.get(severity, self._STYLES["warning"]))
+        self._headline.setText(headline)
+        self._action.setText(action)
+        self._details.setText("\n".join(f"- {detail}" for detail in details) if details else "")
+
 
 class SessionStatsWidget(QGroupBox):
     """Current-shift statistics: PASS/FAIL counts, yield rate, consecutive FAIL alert.
@@ -426,25 +504,32 @@ class ResultDisplayWidget(QWidget):
         ckpt_name = os.path.basename(result.ckpt_path) if result.ckpt_path else "N/A"
 
         lines: list[str] = []
-        lines.append("=== 檢測摘要 ===")
+        customer_message = build_customer_message(result)
+        lines.append("=== 現場判定 ===")
+        lines.append(f"結論: {customer_message.headline}")
+        lines.append(f"建議: {customer_message.action}")
+        for detail in customer_message.details:
+            lines.append(f"- {detail}")
+
+        lines.append("\n=== 基本資訊 ===")
         lines.append(f"狀態: {result.status}")
         lines.append(f"產品 / 區域: {product} / {area}")
         lines.append(f"類型: {inference_type}")
         lines.append(f"模型: {ckpt_name}")
         lines.append(f"延遲: {result.latency * 1000:.1f} ms")
 
-        lines.append("\n=== 數據 ===")
+        lines.append("\n=== 關鍵數量 ===")
         lines.append(f"偵測數量: {len(result.items)}")
 
         if result.anomaly_score is not None:
             lines.append(f"異常分數: {result.anomaly_score}")
 
         missing = result.missing_items or []
-        lines.append(f"缺失項目: {len(missing)}")
+        lines.append(f"缺件數量: {len(missing)}")
 
         unexpected = result.unexpected_items or []
         if isinstance(unexpected, (list, tuple)):
-            lines.append(f"未預期項目: {len(unexpected)}")
+            lines.append(f"多餘件數: {len(unexpected)}")
 
         # --- 排列檢查 ---
         seq_check = result.sequence_check
@@ -500,27 +585,34 @@ class ResultDisplayWidget(QWidget):
             lines.append("無")
 
         # --- 位置檢查匯總 ---
-        _POS_FAIL_STATES = {"WRONG", "UNEXPECTED", "INVALID", "ERROR", "FAIL"}
-        pos_fail_items = [
-            i for i in (result.items or [])
-            if i.metadata.get("position_status") in _POS_FAIL_STATES
-        ]
-        pos_ok_count = sum(
-            1 for i in (result.items or [])
-            if i.metadata.get("position_status") == "CORRECT"
+        position_summary = summarize_position_records(
+            [
+                {"label": item.label, **item.metadata}
+                for item in (result.items or [])
+            ]
         )
-        has_pos_data = any(
-            i.metadata.get("position_status") for i in (result.items or [])
-        )
-        if has_pos_data:
-            pos_summary = "PASS" if not pos_fail_items else "FAIL"
+        if position_summary.total_with_position > 0 or position_summary.skipped_count > 0:
+            pos_summary = "PASS" if position_summary.fail_count == 0 else "FAIL"
             lines.append(f"\n=== 位置檢查：{pos_summary} ===")
-            if pos_fail_items:
-                for item in pos_fail_items:
-                    state = item.metadata.get("position_status", "?")
-                    lines.append(f"  ✘ {item.label}  [{state}]")
+            lines.append(
+                "  "
+                f"正確 {position_summary.correct_count} 件 / "
+                f"異常 {position_summary.fail_count} 件 / "
+                f"略過 {position_summary.skipped_count} 件"
+            )
+            fixture_hint = format_fixture_shift_hint(position_summary)
+            if fixture_hint:
+                lines.append(f"  {fixture_hint}")
+            if position_summary.issues:
+                for issue in position_summary.issues[:5]:
+                    detail = f"  ✘ {issue.label} [{issue.status}]"
+                    if issue.error is not None:
+                        detail += f" d={issue.error:.1f}"
+                    if issue.dx is not None and issue.dy is not None:
+                        detail += f" dx={issue.dx:+.1f}, dy={issue.dy:+.1f}"
+                    lines.append(detail)
             else:
-                lines.append(f"  全部 {pos_ok_count} 件位置正確")
+                lines.append(f"  全部 {position_summary.correct_count} 件位置正確")
 
         # --- 偵測細節 ---
         if result.items:

@@ -51,6 +51,7 @@ class ControlPanel(QGroupBox):
 
     pick_image_requested = pyqtSignal()
     clear_image_requested = pyqtSignal()
+    show_detection_boxes_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("控制面板", parent)
@@ -165,6 +166,14 @@ class ControlPanel(QGroupBox):
         self.output_path_label.setWordWrap(True)
         self.output_path_label.setToolTip("目前結果儲存位置")
         layout.addWidget(self.output_path_label)
+
+        self.show_detection_boxes_chk = QCheckBox("顯示位置檢測框")
+        self.show_detection_boxes_chk.setChecked(True)
+        self.show_detection_boxes_chk.setToolTip("切換結果圖是否顯示位置檢測框線")
+        self.show_detection_boxes_chk.toggled.connect(
+            self.show_detection_boxes_toggled.emit
+        )
+        layout.addWidget(self.show_detection_boxes_chk)
 
         layout.addStretch()
         self.setLayout(layout)

@@ -5,6 +5,21 @@ from typing import Any
 import cv2
 import numpy as np
 
+from core.services.results.position_summary import (
+    POSITION_FAIL_STATES,
+    POSITION_OK_STATES,
+    format_fixture_shift_hint,
+    summarize_position_records,
+)
+from core.utils import ImageUtils
+
+COLOR_PANEL_MAX_ITEMS = 8
+POSITION_PANEL_MAX_ITEMS = 4
+EXPECTED_BOX_COLOR = (170, 170, 170)
+EXPECTED_CENTER_COLOR = (255, 255, 0)
+POSITION_LINE_COLOR = (0, 215, 255)
+
+
 def colors(class_id: int | str, bgr: bool = True) -> tuple[int, int, int]:
     """Return a deterministic class color without importing Ultralytics."""
     try:
@@ -26,9 +41,6 @@ def colors(class_id: int | str, bgr: bool = True) -> tuple[int, int, int]:
     rgb = palette[idx % len(palette)]
     return rgb[::-1] if bgr else rgb
 
-from core.utils import ImageUtils
-
-COLOR_PANEL_MAX_ITEMS = 8
 
 def annotate_yolo_frame(
     image_utils: ImageUtils,
@@ -36,8 +48,11 @@ def annotate_yolo_frame(
     detections: list[dict[str, Any]],
     color_result: dict[str, Any] | None,
     status: str,
+    *,
+    missing_items: list[str] | None = None,
+    expected_boxes: dict[str, dict[str, Any]] | None = None,
 ) -> None:
-    """Render detection metadata and color check cues onto the frame."""
+    """Render detection, color, and position cues onto the frame."""
     panel_lines: list[tuple[str, tuple[int, int, int]]] = []
     status_text = str(status or "").upper()
     if status_text:
@@ -61,10 +76,13 @@ def annotate_yolo_frame(
                         fail_indices.append(idx)
                 except Exception:
                     continue
+    _draw_missing_expected_boxes(frame, detections, missing_items, expected_boxes)
     if fail_indices:
         panel_lines.append(
             (f"NG idx: {', '.join(str(i) for i in fail_indices)}", (0, 0, 255))
         )
+
+    panel_lines.extend(_build_position_summary_lines(detections))
 
     if color_result:
         panel_lines.extend(_build_color_summary_lines(color_result, detections))
@@ -80,16 +98,165 @@ def _draw_detection_box(
     detection: dict[str, Any],
     color_item: dict[str, Any] | None = None,
 ) -> None:
-    x1, y1, x2, y2 = detection["bbox"]
+    x1, y1, x2, y2 = _coerce_bbox(detection.get("bbox"))
     label = f"{detection['class']} {detection['confidence']:.2f}"
-    color = colors(detection["class_id"], True)
+    color = _position_color(detection)
+
+    _draw_expected_position(frame, detection)
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+    _draw_position_offset(frame, detection)
 
     label_y = max(y1 - 10, 20)
-    image_utils.draw_label(frame, label, (x1, label_y), color)
+    status_suffix = _short_position_status(detection.get("position_status"))
+    image_utils.draw_label(frame, f"{label}{status_suffix}", (x1, label_y), color)
 
     if color_item and not color_item.get("is_ok", True):
         _draw_color_tag(image_utils, frame, x1, label_y, color_item)
+
+
+def _draw_expected_position(frame: np.ndarray, detection: dict[str, Any]) -> None:
+    expected_box = detection.get("position_expected_box")
+    if isinstance(expected_box, dict):
+        try:
+            x1 = int(float(expected_box["x1"]))
+            y1 = int(float(expected_box["y1"]))
+            x2 = int(float(expected_box["x2"]))
+            y2 = int(float(expected_box["y2"]))
+            cv2.rectangle(frame, (x1, y1), (x2, y2), EXPECTED_BOX_COLOR, 1)
+        except (KeyError, TypeError, ValueError):
+            pass
+
+    expected_center = detection.get("position_expected_center")
+    if isinstance(expected_center, dict):
+        try:
+            cx = int(float(expected_center["cx"]))
+            cy = int(float(expected_center["cy"]))
+            cv2.drawMarker(
+                frame,
+                (cx, cy),
+                EXPECTED_CENTER_COLOR,
+                markerType=cv2.MARKER_CROSS,
+                markerSize=12,
+                thickness=1,
+            )
+        except (KeyError, TypeError, ValueError):
+            pass
+
+
+def _draw_position_offset(frame: np.ndarray, detection: dict[str, Any]) -> None:
+    bbox = _coerce_bbox(detection.get("bbox"))
+    center = _bbox_center(bbox)
+    expected_center = detection.get("position_expected_center")
+    if not isinstance(expected_center, dict):
+        return
+    try:
+        exp_x = int(float(expected_center["cx"]))
+        exp_y = int(float(expected_center["cy"]))
+    except (KeyError, TypeError, ValueError):
+        return
+
+    cv2.circle(frame, center, 3, _position_color(detection), -1)
+    cv2.line(frame, center, (exp_x, exp_y), POSITION_LINE_COLOR, 1, cv2.LINE_AA)
+
+    error_distance = detection.get("position_error")
+    if not isinstance(error_distance, (int, float)):
+        return
+    cv2.putText(
+        frame,
+        f"d={float(error_distance):.1f}",
+        (center[0] + 6, center[1] + 16),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        POSITION_LINE_COLOR,
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def _draw_missing_expected_boxes(
+    frame: np.ndarray,
+    detections: list[dict[str, Any]] | None,
+    missing_items: list[str] | None,
+    expected_boxes: dict[str, dict[str, Any]] | None,
+) -> None:
+    if not missing_items or not expected_boxes:
+        return
+
+    shift_x, shift_y = _estimate_missing_box_shift(detections or [])
+    used_expected_keys = {
+        str(det.get("position_expected_key"))
+        for det in (detections or [])
+        if det.get("position_expected_key")
+    }
+    for expected_key in _resolve_missing_expected_keys(
+        missing_items, expected_boxes, used_expected_keys
+    ):
+        expected_box = expected_boxes.get(expected_key)
+        if not isinstance(expected_box, dict):
+            continue
+        try:
+            x1 = int(round(float(expected_box["x1"]) + shift_x))
+            y1 = int(round(float(expected_box["y1"]) + shift_y))
+            x2 = int(round(float(expected_box["x2"]) + shift_x))
+            y2 = int(round(float(expected_box["y2"]) + shift_y))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+        cv2.putText(
+            frame,
+            f"MISSING { _base_class_name(expected_key) }",
+            (x1, max(y1 - 8, 18)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 0, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+
+def _estimate_missing_box_shift(
+    detections: list[dict[str, Any]],
+) -> tuple[float, float]:
+    shifts_x: list[float] = []
+    shifts_y: list[float] = []
+    for det in detections:
+        dx, dy = _extract_detection_shift(det)
+        if dx is None or dy is None:
+            continue
+        shifts_x.append(dx)
+        shifts_y.append(dy)
+
+    if not shifts_x or not shifts_y:
+        return 0.0, 0.0
+    return float(np.median(shifts_x)), float(np.median(shifts_y))
+
+
+def _extract_detection_shift(
+    detection: dict[str, Any],
+) -> tuple[float | None, float | None]:
+    offset = detection.get("position_offset")
+    if isinstance(offset, dict):
+        try:
+            dx = float(offset["dx"])
+            dy = float(offset["dy"])
+            return dx, dy
+        except (KeyError, TypeError, ValueError):
+            pass
+
+    expected_center = detection.get("position_expected_center")
+    bbox = detection.get("bbox")
+    if isinstance(expected_center, dict) and bbox and len(bbox) >= 4:
+        try:
+            exp_x = float(expected_center["cx"])
+            exp_y = float(expected_center["cy"])
+            x1, y1, x2, y2 = (float(v) for v in bbox[:4])
+            return ((x1 + x2) / 2.0) - exp_x, ((y1 + y2) / 2.0) - exp_y
+        except (KeyError, TypeError, ValueError):
+            return None, None
+    return None, None
+
+
 def _highlight_color_failures(
     frame: np.ndarray,
     detections: list[dict[str, Any]],
@@ -103,10 +270,43 @@ def _highlight_color_failures(
             item = items[idx]
             if not item.get("is_ok", True):
                 color = (0, 0, 255)
-                x1, y1, x2, y2 = det["bbox"]
+                x1, y1, x2, y2 = _coerce_bbox(det.get("bbox"))
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
     except Exception:
         pass
+
+
+def _build_position_summary_lines(
+    detections: list[dict[str, Any]] | None,
+) -> list[tuple[str, tuple[int, int, int]]]:
+    lines: list[tuple[str, tuple[int, int, int]]] = []
+    if not detections:
+        return lines
+
+    summary = summarize_position_records(detections)
+    if summary.total_with_position <= 0 and summary.skipped_count <= 0:
+        return lines
+
+    summary_color = (0, 255, 0) if summary.fail_count == 0 else (0, 0, 255)
+    lines.append(
+        (
+            f"Pos: ok={summary.correct_count} ng={summary.fail_count} skip={summary.skipped_count}",
+            summary_color,
+        )
+    )
+
+    fixture_hint = format_fixture_shift_hint(summary)
+    if fixture_hint:
+        lines.append((fixture_hint, (0, 165, 255)))
+
+    for issue in summary.issues[:POSITION_PANEL_MAX_ITEMS]:
+        detail = issue.label
+        if issue.error is not None:
+            detail += f" d={issue.error:.1f}"
+        if issue.dx is not None and issue.dy is not None:
+            detail += f" ({issue.dx:+.1f},{issue.dy:+.1f})"
+        lines.append((f"{issue.status}: {detail}", (0, 0, 255)))
+    return lines
 
 
 def _build_color_summary_lines(
@@ -247,3 +447,72 @@ def _left_right_color_sequence(
         return [color for _, color in seq]
     except Exception:
         return []
+
+
+def _position_color(detection: dict[str, Any]) -> tuple[int, int, int]:
+    status = str(detection.get("position_status") or "").upper()
+    if status in POSITION_OK_STATES:
+        return (0, 200, 0)
+    if status == "WRONG":
+        return (0, 0, 255)
+    if status == "UNEXPECTED":
+        return (0, 140, 255)
+    if status in {"INVALID", "ERROR"}:
+        return (255, 0, 255)
+    return colors(detection.get("class_id", 0), True)
+
+
+def _short_position_status(status: Any) -> str:
+    value = str(status or "").upper()
+    if not value:
+        return ""
+    if value == "CORRECT":
+        return " [OK]"
+    if value == "WRONG":
+        return " [NG]"
+    if value == "UNEXPECTED":
+        return " [UNEXP]"
+    if value in {"INVALID", "ERROR", "UNKNOWN"}:
+        return f" [{value}]"
+    return ""
+
+
+def _coerce_bbox(bbox: Any) -> tuple[int, int, int, int]:
+    if not bbox or len(bbox) < 4:
+        return (0, 0, 0, 0)
+    return tuple(int(float(v)) for v in bbox[:4])
+
+
+def _bbox_center(bbox: tuple[int, int, int, int]) -> tuple[int, int]:
+    x1, y1, x2, y2 = bbox
+    return ((x1 + x2) // 2, (y1 + y2) // 2)
+
+
+def _base_class_name(key: str) -> str:
+    idx = key.rfind("#")
+    if idx > 0 and key[idx + 1 :].isdigit():
+        return key[:idx]
+    return key
+
+
+def _resolve_missing_expected_keys(
+    missing_items: list[str],
+    expected_boxes: dict[str, dict[str, Any]],
+    used_expected_keys: set[str],
+) -> list[str]:
+    matched_keys: list[str] = []
+    consumed = set(used_expected_keys)
+    expected_keys = list(expected_boxes.keys())
+    for missing_name in missing_items:
+        base_name = str(missing_name or "").strip()
+        if not base_name:
+            continue
+        for key in expected_keys:
+            if key in consumed:
+                continue
+            if _base_class_name(key) != base_name:
+                continue
+            matched_keys.append(key)
+            consumed.add(key)
+            break
+    return matched_keys

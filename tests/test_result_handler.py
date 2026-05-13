@@ -48,6 +48,10 @@ class DummyConfig:
     def __init__(self, buffer_limit=10, flush_interval=None):
         self.buffer_limit = buffer_limit
         self.flush_interval = flush_interval
+        self.position_config = {}
+
+    def get_position_config(self, product: str, area: str):
+        return self.position_config.get(product, {}).get(area, {})
 
 
 # ImageUtils / DetectionResults ??save/璅酉??堆???頛?撖虫?
@@ -244,6 +248,110 @@ def test_error_message_when_fail_and_missing_items(tmp_result_dir):
     row = df.iloc[-1]
     error_col = h.columns[10]
     assert "bolt" in str(row[error_col]) and "nut" in str(row[error_col])
+
+
+def test_save_results_draws_missing_expected_box(tmp_result_dir):
+    cfg = DummyConfig(buffer_limit=1)
+    cfg.position_config = {
+        "P": {
+            "A": {
+                "expected_boxes": {
+                    "bolt": {"x1": 86, "y1": 96, "x2": 116, "y2": 126},
+                }
+            }
+        }
+    }
+    h = ResultHandler(cfg, base_dir=tmp_result_dir, logger=DummyLogger())
+
+    frame = _mk_img(w=160, h=160)
+    processed = frame.copy()
+    out = h.save_results(
+        frame=frame,
+        detections=[],
+        status="FAIL",
+        detector="yolo",
+        missing_items=["bolt"],
+        processed_image=processed,
+        product="P",
+        area="A",
+        anomaly_score=None,
+        heatmap_path=None,
+        ckpt_path=None,
+    )
+
+    annotated = cv2.imread(out["annotated_path"])
+    assert annotated is not None
+    blue, green, red = (int(v) for v in annotated[96, 86])
+    assert red >= 180
+    assert blue <= 80
+    assert green <= 80
+
+
+def test_save_results_shifts_missing_expected_box_using_detected_offsets(tmp_result_dir):
+    cfg = DummyConfig(buffer_limit=1)
+    cfg.position_config = {
+        "P": {
+            "A": {
+                "expected_boxes": {
+                    "part_a": {"x1": 105, "y1": 95, "x2": 135, "y2": 125},
+                    "part_b": {"x1": 155, "y1": 95, "x2": 185, "y2": 125},
+                    "part_c": {"x1": 105, "y1": 145, "x2": 135, "y2": 175},
+                    "part_d": {"x1": 155, "y1": 145, "x2": 185, "y2": 175},
+                }
+            }
+        }
+    }
+    h = ResultHandler(cfg, base_dir=tmp_result_dir, logger=DummyLogger())
+
+    frame = _mk_img(w=240, h=240)
+    processed = frame.copy()
+    detections = [
+        {
+            "bbox": [85, 85, 115, 115],
+            "class": "part_a",
+            "class_id": 0,
+            "confidence": 0.9,
+            "position_expected_key": "part_a",
+            "position_offset": {"dx": -20.0, "dy": -10.0},
+        },
+        {
+            "bbox": [135, 85, 165, 115],
+            "class": "part_b",
+            "class_id": 1,
+            "confidence": 0.9,
+            "position_expected_key": "part_b",
+            "position_offset": {"dx": -20.0, "dy": -10.0},
+        },
+        {
+            "bbox": [85, 135, 115, 165],
+            "class": "part_c",
+            "class_id": 2,
+            "confidence": 0.9,
+            "position_expected_key": "part_c",
+            "position_offset": {"dx": -20.0, "dy": -10.0},
+        },
+    ]
+
+    out = h.save_results(
+        frame=frame,
+        detections=detections,
+        status="FAIL",
+        detector="yolo",
+        missing_items=["part_d"],
+        processed_image=processed,
+        product="P",
+        area="A",
+        anomaly_score=None,
+        heatmap_path=None,
+        ckpt_path=None,
+    )
+
+    annotated = cv2.imread(out["annotated_path"])
+    assert annotated is not None
+    blue, green, red = (int(v) for v in annotated[135, 135])
+    assert red >= 180
+    assert blue <= 80
+    assert green <= 80
 
 
 def test_buffer_and_manual_flush(tmp_result_dir):

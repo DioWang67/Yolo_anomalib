@@ -188,6 +188,25 @@ class PositionValidator:
             else:
                 class_name = det.get("class", "")
 
+            expected_box = self.expected_boxes.get(class_name)
+            det["position_expected_key"] = class_name if expected_box is not None else None
+            det["position_mode"] = self.mode
+            det["position_tolerance_px"] = (
+                self._get_class_tolerance_px(expected_box)
+                if expected_box is not None
+                else self.tolerance_px
+            )
+            det["position_expected_box"] = (
+                {
+                    "x1": float(expected_box["x1"]),
+                    "y1": float(expected_box["y1"]),
+                    "x2": float(expected_box["x2"]),
+                    "y2": float(expected_box["y2"]),
+                }
+                if expected_box is not None
+                else None
+            )
+
             (
                 status,
                 error_distance,

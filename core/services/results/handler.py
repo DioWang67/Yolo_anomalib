@@ -187,8 +187,15 @@ class ResultHandler:
             if detector_lower == "yolo" and save_flags["annotated"]:
                 annotated_frame = processed_image.copy()
                 crop_source = processed_image
+                expected_boxes = self._get_expected_boxes(product, area)
                 annotate_yolo_frame(
-                    self.image_utils, annotated_frame, detections, color_result, status
+                    self.image_utils,
+                    annotated_frame,
+                    detections,
+                    color_result,
+                    status,
+                    missing_items=missing_items,
+                    expected_boxes=expected_boxes,
                 )
                 self._img_queue.write_sync(
                     annotated_path,
@@ -353,4 +360,29 @@ class ResultHandler:
                 bool(self._cfg_get("save_crops", True)) and should_save_images
             ),
         }
+
+    def _get_expected_boxes(
+        self,
+        product: str | None,
+        area: str | None,
+    ) -> dict[str, dict[str, Any]]:
+        if not product or not area:
+            return {}
+
+        source = self._config_source
+        try:
+            if hasattr(source, "get_position_config"):
+                cfg = source.get_position_config(product, area)
+                boxes = cfg.get("expected_boxes", {}) if isinstance(cfg, dict) else {}
+                return boxes if isinstance(boxes, dict) else {}
+        except Exception:
+            return {}
+
+        try:
+            position_config = self._cfg_get("position_config", {})
+            area_cfg = position_config.get(product, {}).get(area, {})
+            boxes = area_cfg.get("expected_boxes", {}) if isinstance(area_cfg, dict) else {}
+            return boxes if isinstance(boxes, dict) else {}
+        except Exception:
+            return {}
 

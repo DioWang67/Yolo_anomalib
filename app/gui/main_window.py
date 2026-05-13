@@ -74,6 +74,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self.reconnect_camera_btn = None
         self.disconnect_camera_btn = None
         self.model_version_label = None  # Status bar version display
+        self.show_detection_boxes_chk = None
         self._run_generation = 0
         self._single_shot_running = False
         self._single_shot_cancel_event = threading.Event()
@@ -224,6 +225,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self.pick_image_btn = self.control_panel.pick_image_btn
         self.image_path_label = self.control_panel.image_path_label
         self.clear_image_btn = self.control_panel.clear_image_btn
+        self.show_detection_boxes_chk = self.control_panel.show_detection_boxes_chk
 
         self.original_image = self.image_panel.original_image
         self.processed_image = self.image_panel.processed_image
@@ -256,6 +258,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self.control_panel.pick_image_requested.connect(self.pick_image)
         self.control_panel.clear_image_requested.connect(self.clear_selected_image)
         self.control_panel.preset_selected.connect(self._apply_preset)
+        self.control_panel.show_detection_boxes_toggled.connect(
+            self._on_show_detection_boxes_toggled
+        )
 
         self.info_panel.session_stats.consecutive_fail_reached.connect(
             self._on_consecutive_fail_alert
@@ -280,6 +285,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         
         self.statusBar().showMessage("系統就緒")
         self.update_start_enabled()
+        self.show_detection_boxes_chk.setChecked(
+            self.preferences.restore_show_detection_boxes()
+        )
         build_menu_bar(self)
 
     def init_system(self):
@@ -849,47 +857,80 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             preprocessed_path,
             on_fail=lambda: self.processed_image.setText("尚無預處理影像"),
         )
-
-        # For result image, we favor finding annotations or heatmap paths
-        annotated_path = result.annotated_path
-        heatmap_path = result.heatmap_path
-
-        # Check if result frame data is available
-        result_frame_data = result.result_frame
-
-        def show_result_frame_data():
-            if isinstance(result_frame_data, np.ndarray) and result_frame_data.size > 0:
-                  self.result_image.display_image(result_frame_data)
-            else:
-                 self.result_image.setText("無法載入結果影像")
-
-        def load_heatmap():
-             if heatmap_path:
-                 load_image_with_retry(
-                     self.result_image,
-                     heatmap_path,
-                     attempts=3,
-                     delay_ms=200,
-                     on_fail=show_result_frame_data,
-                 )
-             else:
-                 show_result_frame_data()
-
-        if annotated_path:
-              load_image_with_retry(
-                  self.result_image,
-                  annotated_path,
-                  attempts=2,
-                  delay_ms=150,
-                 on_fail=load_heatmap,
-             )
-        else:
-             load_heatmap()
+        self._refresh_result_image()
 
         self.log_message(f"檢測完成 - 狀態: {result.status}")
         self.statusBar().showMessage(f"檢測完成 - {result.status}", 5000)
 
         # Consecutive FAIL alert is handled via SessionStatsWidget.consecutive_fail_reached signal.
+
+    @pyqtSlot(bool)
+    def _on_show_detection_boxes_toggled(self, checked: bool) -> None:
+        """Update the result tab when detection box visibility changes."""
+        self.preferences.save_show_detection_boxes(checked)
+        if self.current_result is not None:
+            self._refresh_result_image()
+
+    def _refresh_result_image(self) -> None:
+        """Render the result tab using either annotated or clean imagery."""
+        result = self.current_result
+        if result is None:
+            return
+
+        show_boxes = (
+            self.show_detection_boxes_chk.isChecked()
+            if self.show_detection_boxes_chk is not None
+            else True
+        )
+        inference_type = str(result.inference_type or "").lower()
+        is_yolo_like = inference_type in {"", "yolo"}
+
+        if not show_boxes and is_yolo_like:
+            clean_path = result.preprocessed_image_path or result.original_image_path
+            if clean_path:
+                load_image_with_retry(
+                    self.result_image,
+                    clean_path,
+                    attempts=2,
+                    delay_ms=150,
+                    on_fail=lambda: self.result_image.setText("無法載入結果影像"),
+                )
+            else:
+                self.result_image.setText("無法載入結果影像")
+            return
+
+        annotated_path = result.annotated_path
+        heatmap_path = result.heatmap_path
+        result_frame_data = result.result_frame
+
+        def show_result_frame_data() -> None:
+            if isinstance(result_frame_data, np.ndarray) and result_frame_data.size > 0:
+                self.result_image.display_image(result_frame_data)
+            else:
+                self.result_image.setText("無法載入結果影像")
+
+        def load_heatmap() -> None:
+            if heatmap_path:
+                load_image_with_retry(
+                    self.result_image,
+                    heatmap_path,
+                    attempts=3,
+                    delay_ms=200,
+                    on_fail=show_result_frame_data,
+                )
+            else:
+                show_result_frame_data()
+
+        if annotated_path:
+            load_image_with_retry(
+                self.result_image,
+                annotated_path,
+                attempts=2,
+                delay_ms=150,
+                on_fail=load_heatmap,
+            )
+        else:
+            load_heatmap()
 
     @pyqtSlot(int)
     def _on_consecutive_fail_alert(self, count: int) -> None:
@@ -1054,6 +1095,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
                 self.product_combo.currentText(),
                 self.area_combo.currentText(),
                 self.inference_combo.currentText(),
+            )
+            self.preferences.save_show_detection_boxes(
+                self.show_detection_boxes_chk.isChecked()
             )
         except Exception as e:
             self._logger.error(f"Shutdown error: {e}")

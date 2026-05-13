@@ -5,6 +5,7 @@ pytest.importorskip("pytestqt", reason="pytest-qt is required for GUI tests")
 pytestmark = pytest.mark.gui
 
 from app.gui.main_window import DetectionSystemGUI
+from core.types import DetectionResult
 
 
 @pytest.fixture
@@ -31,6 +32,7 @@ def test_initial_state(gui):
     assert gui.start_btn.isEnabled() is False  # Should be disabled until configs loaded/selected
     assert gui.stop_btn.isEnabled() is False
     assert gui.save_btn.isEnabled() is False
+    assert gui.show_detection_boxes_chk is not None
 
 def test_model_loading_async(gui, qtbot):
     """Verify that model loading triggers signals and updates combos."""
@@ -57,3 +59,31 @@ def test_interaction_flow(gui, qtbot):
         gui.product_combo.setCurrentIndex(0)
         # Check area update
         assert gui.area_combo.count() >= 0
+
+
+def test_result_image_uses_preprocessed_path_when_boxes_hidden(gui, monkeypatch):
+    """YOLO result view should switch to the clean image when boxes are hidden."""
+    calls: list[str] = []
+
+    def fake_load_image_with_retry(widget, image_path, **kwargs):
+        calls.append(image_path)
+
+    monkeypatch.setattr(
+        "app.gui.main_window.load_image_with_retry",
+        fake_load_image_with_retry,
+    )
+
+    gui.current_result = DetectionResult(
+        status="PASS",
+        product="P",
+        area="A",
+        inference_type="yolo",
+        original_image_path="original.jpg",
+        preprocessed_image_path="processed.jpg",
+        annotated_path="annotated.jpg",
+    )
+
+    gui.show_detection_boxes_chk.setChecked(True)
+    gui.show_detection_boxes_chk.setChecked(False)
+
+    assert calls[-1] == "processed.jpg"

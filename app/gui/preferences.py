@@ -32,3 +32,14 @@ class PreferencesManager:
         self._settings.setValue("last_product", product)
         self._settings.setValue("last_area", area)
         self._settings.setValue("last_infer", inference)
+
+    def restore_show_detection_boxes(self) -> bool:
+        """Return whether result images should show detection boxes."""
+        value = self._settings.value("show_detection_boxes", True)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+    def save_show_detection_boxes(self, enabled: bool) -> None:
+        """Persist the result-image detection box visibility preference."""
+        self._settings.setValue("show_detection_boxes", bool(enabled))
