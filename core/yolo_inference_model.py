@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from collections import Counter
 from collections import OrderedDict
 from contextlib import nullcontext
 from typing import Any
@@ -23,6 +24,7 @@ from core.exceptions import (
     ModelInitializationError,
     ResourceExhaustionError,
 )
+from core.services.missing_slot_checker import MissingSlotChecker
 from core.runtime_preflight import validate_runtime_for_model
 from core.position_validator import PositionValidator
 from core.utils import ImageUtils
@@ -250,18 +252,45 @@ class YOLOInferenceModel(BaseInferenceModel):
                 det["cx"] = (x1 + x2) / 2
                 det["cy"] = (y1 + y2) / 2
 
+            slot_check: dict[str, Any] | None = None
+
             # Position check can be toggled per product/area; skip entirely when disabled
             position_enabled = False
+            position_cfg: dict[str, Any] = {}
             try:
                 position_enabled = self.config.is_position_check_enabled(product, area)
             except Exception:
                 position_enabled = False
+            try:
+                position_cfg = self.config.get_position_config(product, area) or {}
+            except Exception:
+                position_cfg = {}
 
             if position_enabled:
                 validator = PositionValidator(self.config, product, area)
                 detections = validator.validate(detections)
+                missing_items, slot_mismatches = self._resolve_slot_mismatches(
+                    detections,
+                    missing_items,
+                    position_cfg,
+                )
+                missing_items, slot_check = self._refine_missing_items(
+                    processed_image,
+                    detections,
+                    missing_items,
+                    position_cfg,
+                    position_enabled=position_enabled,
+                )
                 status = validator.evaluate_status(detections, missing_items)
             else:
+                slot_mismatches = []
+                missing_items, slot_check = self._refine_missing_items(
+                    processed_image,
+                    detections,
+                    missing_items,
+                    position_cfg,
+                    position_enabled=position_enabled,
+                )
                 # When disabled, keep status purely based on missing items here
                 status = "FAIL" if missing_items else "PASS"
 
@@ -277,6 +306,8 @@ class YOLOInferenceModel(BaseInferenceModel):
                 if unexpected_items and getattr(
                     self.config, "fail_on_unexpected", True
                 ):
+                    status = "FAIL"
+                if slot_mismatches:
                     status = "FAIL"
             except Exception as item_err:
                 self.logger.logger.warning(
@@ -297,11 +328,13 @@ class YOLOInferenceModel(BaseInferenceModel):
                 "detections": detections,
                 "missing_items": list(missing_items),
                 "unexpected_items": unexpected_items,
+                "slot_mismatches": slot_mismatches,
                 "inference_time": inference_time,
                 "processed_image": processed_image,
                 "result_frame": result_frame,
                 "expected_items": expected_items,
                 "ckpt_path": str(self.config.weights),
+                "slot_check": slot_check,
             }
         except Exception as exc:
             self.logger.logger.exception("YOLO inference failed")
@@ -321,3 +354,221 @@ class YOLOInferenceModel(BaseInferenceModel):
             conf=self.config.conf_thres,
             iou=self.config.iou_thres,
         )
+
+    def _refine_missing_items(
+        self,
+        processed_image: np.ndarray,
+        detections: list[dict[str, Any]],
+        missing_items: list[str],
+        position_cfg: dict[str, Any],
+        *,
+        position_enabled: bool,
+    ) -> tuple[list[str], dict[str, Any] | None]:
+        """Refine count-based missing output using slot occupancy evidence."""
+        if not position_enabled:
+            return list(missing_items), None
+
+        expected_boxes = position_cfg.get("expected_boxes", {})
+        if not missing_items or not isinstance(expected_boxes, dict) or not expected_boxes:
+            return list(missing_items), None
+
+        options = position_cfg.get("missing_slot_check", {})
+        if not isinstance(options, dict) or not options.get("enabled", False):
+            return list(missing_items), None
+
+        checker = MissingSlotChecker(options if isinstance(options, dict) else None)
+        refined_missing, slot_check = checker.refine_missing_items(
+            processed_image=processed_image,
+            detections=detections,
+            missing_items=list(missing_items),
+            expected_boxes=expected_boxes,
+        )
+        recovered = slot_check.get("recovered_items", []) if slot_check else []
+        if recovered:
+            self.logger.logger.info(
+                "Missing slot checker recovered items: %s", recovered
+            )
+        return refined_missing, slot_check
+
+    def _resolve_slot_mismatches(
+        self,
+        detections: list[dict[str, Any]],
+        missing_items: list[str],
+        position_cfg: dict[str, Any],
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        """Convert occupied-but-misclassified missing slots into slot mismatches."""
+        expected_boxes = position_cfg.get("expected_boxes", {})
+        if not missing_items or not isinstance(expected_boxes, dict) or not expected_boxes:
+            return list(missing_items), []
+
+        shift_x, shift_y = self._estimate_global_shift(detections)
+        used_expected_keys = {
+            str(det.get("position_expected_key"))
+            for det in detections
+            if det.get("position_expected_key")
+        }
+        remaining_counter = Counter(str(name).strip() for name in missing_items if str(name).strip())
+        mismatch_records: list[dict[str, Any]] = []
+        used_detection_ids: set[int] = set()
+
+        for expected_key in self._resolve_missing_expected_keys(
+            missing_items,
+            expected_boxes,
+            used_expected_keys,
+        ):
+            expected_box = expected_boxes.get(expected_key)
+            if not isinstance(expected_box, dict):
+                continue
+
+            expected_class = self._base_class_name(expected_key)
+            shifted_box = self._shift_expected_box(expected_box, shift_x, shift_y)
+            mismatch_det = self._find_slot_mismatch_detection(
+                detections,
+                shifted_box,
+                expected_key=expected_key,
+                expected_class=expected_class,
+                used_detection_ids=used_detection_ids,
+            )
+            if mismatch_det is None:
+                continue
+
+            mismatch_records.append(
+                {
+                    "expected_key": expected_key,
+                    "expected_class": expected_class,
+                    "detected_class": str(mismatch_det.get("class") or "").strip(),
+                    "bbox": list(mismatch_det.get("bbox") or []),
+                }
+            )
+            mismatch_det["slot_mismatch_expected_key"] = expected_key
+            mismatch_det["slot_mismatch_expected_class"] = expected_class
+            mismatch_det["slot_mismatch_detected_class"] = str(
+                mismatch_det.get("class") or ""
+            ).strip()
+            used_detection_ids.add(id(mismatch_det))
+            if remaining_counter.get(expected_class, 0) > 0:
+                remaining_counter[expected_class] -= 1
+
+        refined_missing: list[str] = []
+        for name in missing_items:
+            key = str(name).strip()
+            if not key:
+                continue
+            if remaining_counter.get(key, 0) > 0:
+                refined_missing.append(key)
+                remaining_counter[key] -= 1
+        return refined_missing, mismatch_records
+
+    @staticmethod
+    def _base_class_name(key: str) -> str:
+        idx = key.rfind("#")
+        if idx > 0 and key[idx + 1 :].isdigit():
+            return key[:idx]
+        return key
+
+    def _resolve_missing_expected_keys(
+        self,
+        missing_items: list[str],
+        expected_boxes: dict[str, dict[str, Any]],
+        used_expected_keys: set[str],
+    ) -> list[str]:
+        matched_keys: list[str] = []
+        consumed = set(used_expected_keys)
+        expected_keys = list(expected_boxes.keys())
+        for missing_name in missing_items:
+            base_name = str(missing_name or "").strip()
+            if not base_name:
+                continue
+            for key in expected_keys:
+                if key in consumed:
+                    continue
+                if self._base_class_name(key) != base_name:
+                    continue
+                matched_keys.append(key)
+                consumed.add(key)
+                break
+        return matched_keys
+
+    @staticmethod
+    def _estimate_global_shift(
+        detections: list[dict[str, Any]],
+    ) -> tuple[float, float]:
+        shifts_x: list[float] = []
+        shifts_y: list[float] = []
+        for det in detections or []:
+            offset = det.get("position_offset")
+            if isinstance(offset, dict):
+                try:
+                    shifts_x.append(float(offset["dx"]))
+                    shifts_y.append(float(offset["dy"]))
+                    continue
+                except (KeyError, TypeError, ValueError):
+                    pass
+
+            expected_center = det.get("position_expected_center")
+            bbox = det.get("bbox")
+            if isinstance(expected_center, dict) and bbox and len(bbox) >= 4:
+                try:
+                    exp_x = float(expected_center["cx"])
+                    exp_y = float(expected_center["cy"])
+                    x1, y1, x2, y2 = (float(v) for v in bbox[:4])
+                    shifts_x.append(((x1 + x2) / 2.0) - exp_x)
+                    shifts_y.append(((y1 + y2) / 2.0) - exp_y)
+                except (KeyError, TypeError, ValueError):
+                    continue
+
+        if not shifts_x or not shifts_y:
+            return 0.0, 0.0
+        return float(np.median(shifts_x)), float(np.median(shifts_y))
+
+    @staticmethod
+    def _shift_expected_box(
+        expected_box: dict[str, Any],
+        shift_x: float,
+        shift_y: float,
+    ) -> tuple[int, int, int, int]:
+        return (
+            int(round(float(expected_box["x1"]) + shift_x)),
+            int(round(float(expected_box["y1"]) + shift_y)),
+            int(round(float(expected_box["x2"]) + shift_x)),
+            int(round(float(expected_box["y2"]) + shift_y)),
+        )
+
+    def _find_slot_mismatch_detection(
+        self,
+        detections: list[dict[str, Any]],
+        shifted_box: tuple[int, int, int, int],
+        *,
+        expected_key: str,
+        expected_class: str,
+        used_detection_ids: set[int],
+    ) -> dict[str, Any] | None:
+        sx1, sy1, sx2, sy2 = shifted_box
+        for det in detections or []:
+            if id(det) in used_detection_ids:
+                continue
+            if det.get("position_expected_key"):
+                continue
+
+            bbox = det.get("bbox")
+            if not bbox or len(bbox) < 4:
+                continue
+            try:
+                x1, y1, x2, y2 = (float(v) for v in bbox[:4])
+            except (TypeError, ValueError):
+                continue
+            cx = (x1 + x2) / 2.0
+            cy = (y1 + y2) / 2.0
+            if not (sx1 <= cx <= sx2 and sy1 <= cy <= sy2):
+                continue
+
+            detected_class = str(det.get("class") or "").strip()
+            if not detected_class:
+                continue
+            if detected_class == expected_class:
+                continue
+            det_expected_key = str(det.get("position_expected_key") or "").strip()
+            if det_expected_key and det_expected_key != expected_key:
+                continue
+            return det
+        return None

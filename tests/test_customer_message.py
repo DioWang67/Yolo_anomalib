@@ -24,7 +24,7 @@ def test_customer_message_missing_item_requests_recheck():
     message = build_customer_message(result)
 
     assert message.headline == "發現缺件"
-    assert "補件" in message.action or "供料" in message.action
+    assert "補件" in message.action or "重" in message.action
     assert any("bolt" in detail for detail in message.details)
 
 
@@ -60,3 +60,41 @@ def test_customer_message_fixture_shift_recommends_fixture_calibration():
     assert message.headline == "疑似治具偏移"
     assert "治具" in message.action
     assert message.severity == "danger"
+
+
+def test_customer_message_surfaces_slot_check_recovery():
+    result = DetectionResult(
+        status="PASS",
+        metadata={
+            "slot_check": {
+                "recovered_items": ["bolt"],
+                "remaining_missing_items": [],
+            }
+        },
+    )
+
+    message = build_customer_message(result)
+
+    assert message.severity == "warning"
+    assert any("bolt" in detail for detail in message.details)
+
+
+def test_customer_message_reports_slot_mismatch():
+    result = DetectionResult(
+        status="FAIL",
+        metadata={
+            "slot_mismatches": [
+                {
+                    "expected_key": "E",
+                    "expected_class": "E",
+                    "detected_class": "A",
+                }
+            ]
+        },
+    )
+
+    message = build_customer_message(result)
+
+    assert message.headline == "元件類別不符"
+    assert "錯料" in message.action or "分類" in message.action
+    assert any("E" in detail and "A" in detail for detail in message.details)

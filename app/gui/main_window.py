@@ -791,6 +791,10 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             color_check=res.get("color_check"),
             sequence_check=res.get("sequence_check"),
             result_frame=res.get("result_frame"),
+            metadata={
+                "slot_check": res.get("slot_check"),
+                "slot_mismatches": res.get("slot_mismatches", []),
+            },
         )
         self.on_detection_complete(result)
 

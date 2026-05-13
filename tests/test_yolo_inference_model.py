@@ -53,12 +53,20 @@ class DummyConfig:
         self.max_cache_size = max_cache_size
         self.weights = "fake.pt"
         self._items = {}  # (product, area) -> list[str]
+        self.position_config = {}
 
     def set_items(self, product, area, items):
         self._items[(product, area)] = list(items)
 
     def get_items_by_area(self, product, area):
         return self._items.get((product, area), [])
+
+    def get_position_config(self, product, area):
+        return self.position_config.get(product, {}).get(area, {})
+
+    def is_position_check_enabled(self, product, area):
+        cfg = self.get_position_config(product, area)
+        return bool(cfg.get("enabled", False))
 
 
 # 功能性 YOLO／Detector／Validator stub
@@ -390,6 +398,216 @@ def test_infer_fail_status_when_missing_items(monkeypatch, image_bgr_dark, cfg_c
 
     out = m.infer(image_bgr_dark, "P", "A")
     assert out["status"] == "FAIL"
+
+
+def test_infer_missing_slot_checker_disabled_by_default(monkeypatch, image_bgr_dark, cfg_cpu):
+    class FakeDetectorMissing(FakeDetector):
+        def process_detections(self, pred, processed_image, image, expected_items):
+            rf, det, _ = super().process_detections(
+                pred, processed_image, image, expected_items
+            )
+            return rf, det, ["screw"]
+
+    class FakeMissingSlotChecker:
+        def __init__(self, options=None):
+            raise AssertionError("checker should not run when feature is not enabled")
+
+    monkeypatch.setattr(yim, "YOLO", FakeYOLO, raising=True)
+    monkeypatch.setattr(yim, "YOLODetector", FakeDetectorMissing, raising=True)
+    monkeypatch.setattr(yim, "PositionValidator", FakeValidator, raising=True)
+    monkeypatch.setattr(yim, "MissingSlotChecker", FakeMissingSlotChecker, raising=True)
+
+    cfg_cpu.set_items("P", "A", ["screw"])
+    cfg_cpu.position_config = {
+        "P": {"A": {"expected_boxes": {"screw": {"x1": 0, "y1": 0, "x2": 20, "y2": 20}}}}
+    }
+    m = YOLOInferenceModel(cfg_cpu)
+    m.logger = DummyLogger()
+    monkeypatch.setattr(
+        m.image_utils, "letterbox", lambda img, size, fill_color: img, raising=True
+    )
+    assert m.initialize("P", "A") is True
+    monkeypatch.setattr(yim.torch, "inference_mode", lambda: DummyCtx(), raising=True)
+
+    out = m.infer(image_bgr_dark, "P", "A")
+
+    assert out["status"] == "FAIL"
+    assert out["missing_items"] == ["screw"]
+    assert out["slot_check"] is None
+
+
+def test_infer_missing_slot_checker_requires_position_check_enabled(
+    monkeypatch, image_bgr_dark, cfg_cpu
+):
+    class FakeDetectorMissing(FakeDetector):
+        def process_detections(self, pred, processed_image, image, expected_items):
+            rf, det, _ = super().process_detections(
+                pred, processed_image, image, expected_items
+            )
+            return rf, det, ["screw"]
+
+    class FakeMissingSlotChecker:
+        def __init__(self, options=None):
+            raise AssertionError("checker should not run when position check is disabled")
+
+    monkeypatch.setattr(yim, "YOLO", FakeYOLO, raising=True)
+    monkeypatch.setattr(yim, "YOLODetector", FakeDetectorMissing, raising=True)
+    monkeypatch.setattr(yim, "PositionValidator", FakeValidator, raising=True)
+    monkeypatch.setattr(yim, "MissingSlotChecker", FakeMissingSlotChecker, raising=True)
+
+    cfg_cpu.set_items("P", "A", ["screw"])
+    cfg_cpu.position_config = {
+        "P": {
+            "A": {
+                "expected_boxes": {"screw": {"x1": 0, "y1": 0, "x2": 20, "y2": 20}},
+                "missing_slot_check": {"enabled": True},
+            }
+        }
+    }
+    m = YOLOInferenceModel(cfg_cpu)
+    m.logger = DummyLogger()
+    monkeypatch.setattr(
+        m.image_utils, "letterbox", lambda img, size, fill_color: img, raising=True
+    )
+    assert m.initialize("P", "A") is True
+    monkeypatch.setattr(yim.torch, "inference_mode", lambda: DummyCtx(), raising=True)
+
+    out = m.infer(image_bgr_dark, "P", "A")
+
+    assert out["status"] == "FAIL"
+    assert out["missing_items"] == ["screw"]
+    assert out["slot_check"] is None
+
+
+def test_infer_missing_slot_checker_can_recover_missing_items(
+    monkeypatch, image_bgr_dark, cfg_cpu
+):
+    class FakeDetectorMissing(FakeDetector):
+        def process_detections(self, pred, processed_image, image, expected_items):
+            rf, det, _ = super().process_detections(
+                pred, processed_image, image, expected_items
+            )
+            return rf, det, ["screw"]
+
+    class FakeMissingSlotChecker:
+        def __init__(self, options=None):
+            self.options = options or {}
+
+        def refine_missing_items(
+            self, processed_image, detections, missing_items, expected_boxes
+        ):
+            return [], {
+                "enabled": True,
+                "recovered_items": ["screw"],
+                "remaining_missing_items": [],
+                "estimated_shift": {"dx": 0.0, "dy": 0.0},
+                "decisions": [],
+            }
+
+    monkeypatch.setattr(yim, "YOLO", FakeYOLO, raising=True)
+    monkeypatch.setattr(yim, "YOLODetector", FakeDetectorMissing, raising=True)
+    monkeypatch.setattr(yim, "PositionValidator", FakeValidator, raising=True)
+    monkeypatch.setattr(yim, "MissingSlotChecker", FakeMissingSlotChecker, raising=True)
+
+    cfg_cpu.set_items("P", "A", ["screw"])
+    cfg_cpu.position_config = {
+        "P": {
+            "A": {
+                "enabled": True,
+                "expected_boxes": {"screw": {"x1": 0, "y1": 0, "x2": 20, "y2": 20}},
+                "missing_slot_check": {"enabled": True},
+            }
+        }
+    }
+    m = YOLOInferenceModel(cfg_cpu)
+    m.logger = DummyLogger()
+    monkeypatch.setattr(
+        m.image_utils, "letterbox", lambda img, size, fill_color: img, raising=True
+    )
+    assert m.initialize("P", "A") is True
+    monkeypatch.setattr(yim.torch, "inference_mode", lambda: DummyCtx(), raising=True)
+
+    out = m.infer(image_bgr_dark, "P", "A")
+
+    assert out["status"] == "PASS"
+    assert out["missing_items"] == []
+    assert out["slot_check"]["recovered_items"] == ["screw"]
+
+
+def test_infer_slot_mismatch_does_not_report_missing_item(
+    monkeypatch, image_bgr_dark, cfg_cpu
+):
+    class FakeDetectorSlotMismatch(FakeDetector):
+        def process_detections(self, pred, processed_image, image, expected_items):
+            result_frame = np.zeros_like(image)
+            detections = [
+                {
+                    "bbox": [0, 0, 20, 20],
+                    "class": "A",
+                    "class_id": 0,
+                    "confidence": 0.9,
+                },
+                {
+                    "bbox": [20, 0, 40, 20],
+                    "class": "A",
+                    "class_id": 0,
+                    "confidence": 0.9,
+                },
+                {
+                    "bbox": [40, 0, 60, 20],
+                    "class": "B",
+                    "class_id": 1,
+                    "confidence": 0.9,
+                },
+                {
+                    "bbox": [60, 0, 80, 20],
+                    "class": "C",
+                    "class_id": 2,
+                    "confidence": 0.9,
+                },
+                {
+                    "bbox": [80, 0, 100, 20],
+                    "class": "D",
+                    "class_id": 3,
+                    "confidence": 0.9,
+                },
+            ]
+            return result_frame, detections, ["E"]
+
+    monkeypatch.setattr(yim, "YOLO", FakeYOLO, raising=True)
+    monkeypatch.setattr(yim, "YOLODetector", FakeDetectorSlotMismatch, raising=True)
+    monkeypatch.setattr(yim, "PositionValidator", FakeValidator, raising=True)
+
+    cfg_cpu.set_items("P", "A", ["A", "B", "C", "D", "E"])
+    cfg_cpu.position_config = {
+        "P": {
+            "A": {
+                "enabled": True,
+                "expected_boxes": {
+                    "A": {"x1": 0, "y1": 0, "x2": 20, "y2": 20},
+                    "B": {"x1": 40, "y1": 0, "x2": 60, "y2": 20},
+                    "C": {"x1": 60, "y1": 0, "x2": 80, "y2": 20},
+                    "D": {"x1": 80, "y1": 0, "x2": 100, "y2": 20},
+                    "E": {"x1": 20, "y1": 0, "x2": 40, "y2": 20},
+                },
+            }
+        }
+    }
+    m = YOLOInferenceModel(cfg_cpu)
+    m.logger = DummyLogger()
+    monkeypatch.setattr(
+        m.image_utils, "letterbox", lambda img, size, fill_color: img, raising=True
+    )
+    assert m.initialize("P", "A") is True
+    monkeypatch.setattr(yim.torch, "inference_mode", lambda: DummyCtx(), raising=True)
+
+    out = m.infer(image_bgr_dark, "P", "A")
+
+    assert out["status"] == "FAIL"
+    assert out["missing_items"] == []
+    assert len(out["slot_mismatches"]) == 1
+    assert out["slot_mismatches"][0]["expected_class"] == "E"
+    assert out["slot_mismatches"][0]["detected_class"] == "A"
 
 
 # mkdir reports 2>NUL

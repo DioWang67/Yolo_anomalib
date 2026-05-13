@@ -650,6 +650,10 @@ class DetectionSystem:
                 color_check=ctx.color_result,
                 sequence_check=ctx.result.get("sequence_check"),
                 result_frame=result.get("result_frame"),
+                metadata={
+                    "slot_check": result.get("slot_check"),
+                    "slot_mismatches": result.get("slot_mismatches", []),
+                },
             )
 
         except Exception as e:
