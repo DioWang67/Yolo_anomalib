@@ -2,7 +2,7 @@ from core.services.results.customer_message import build_customer_message
 from core.types import DetectionItem, DetectionResult
 
 
-def test_customer_message_pass_is_release_ready():
+def test_customer_message_pass_uses_sop_guidance():
     result = DetectionResult(
         status="PASS",
         items=[DetectionItem("part_a", 0.99, (0, 0, 1, 1))],
@@ -11,7 +11,8 @@ def test_customer_message_pass_is_release_ready():
     message = build_customer_message(result)
 
     assert message.headline == "檢測通過"
-    assert "放行" in message.action
+    assert message.action == "等待下一次檢測"
+    assert "放行" not in message.action
     assert message.severity == "success"
 
 
@@ -76,6 +77,8 @@ def test_customer_message_surfaces_slot_check_recovery():
     message = build_customer_message(result)
 
     assert message.severity == "warning"
+    assert "等待下一次檢測" in message.action
+    assert "放行" not in message.action
     assert any("bolt" in detail for detail in message.details)
 
 

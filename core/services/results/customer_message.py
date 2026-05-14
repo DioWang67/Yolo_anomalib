@@ -38,7 +38,11 @@ def build_customer_message(result: "DetectionResult") -> CustomerMessage:
             details.append(f"槽位複核補回: {', '.join(_limit_items(recovered_items))}")
         return CustomerMessage(
             headline="檢測通過" if not recovered_items else "檢測通過（已做槽位複核）",
-            action="可放行" if not recovered_items else "可放行，建議抽查複核槽位影像",
+            action=(
+                "等待下一次檢測"
+                if not recovered_items
+                else "等待下一次檢測，建議抽查複核槽位影像"
+            ),
             severity="success" if not recovered_items else "warning",
             details=details,
         )
