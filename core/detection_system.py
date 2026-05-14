@@ -106,6 +106,35 @@ class DetectionSystem:
         """Load global config from YAML into DetectionConfig dataclass."""
         return DetectionConfig.from_yaml(str(Path(config_path)))
 
+    def reload_model_settings(
+        self,
+        product: str | None = None,
+        area: str | None = None,
+        inference_type: str | None = None,
+    ) -> None:
+        """Clear cached model engines so future detection uses updated configs.
+
+        Args:
+            product: Optional product filter for cache invalidation.
+            area: Optional area filter for cache invalidation.
+            inference_type: Optional backend filter for cache invalidation.
+
+        Raises:
+            RuntimeError: If the async pipeline is currently running.
+        """
+        if self.pipeline_running:
+            raise RuntimeError("Cannot reload model settings while detection is running")
+        if self.inference_engine:
+            try:
+                self.inference_engine.shutdown()
+            except Exception:
+                pass
+            self.inference_engine = None
+        self.current_inference_type = None
+        self.model_manager.clear_cache(product, area, inference_type)
+        self.config = self.load_config(self.config_path)
+        self._refresh_result_sink()
+
     def shutdown(self) -> None:
         """Release resources: pipeline workers, models, camera, sinks."""
         # Stop async pipeline first (if running)

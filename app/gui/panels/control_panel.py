@@ -44,6 +44,7 @@ class ControlPanel(QGroupBox):
     start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     save_requested = pyqtSignal()
+    edit_model_config_requested = pyqtSignal()
 
     use_camera_toggled = pyqtSignal(bool)
     reconnect_camera_requested = pyqtSignal()
@@ -120,9 +121,13 @@ class ControlPanel(QGroupBox):
         self.save_btn.setEnabled(False)
         self.save_btn.clicked.connect(self.save_requested.emit)
 
+        self.edit_model_config_btn = QPushButton("編輯機種設定")
+        self.edit_model_config_btn.clicked.connect(self.edit_model_config_requested.emit)
+
         button_layout.addWidget(self.start_btn)
         button_layout.addWidget(self.stop_btn)
         button_layout.addWidget(self.save_btn)
+        button_layout.addWidget(self.edit_model_config_btn)
 
         # ── 相機控制 ─────────────────────────────────────────────────
         self.use_camera_chk = QCheckBox("使用相機")

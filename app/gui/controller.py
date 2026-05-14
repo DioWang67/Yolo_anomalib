@@ -120,6 +120,17 @@ class DetectionController:
     def build_camera_initializer(self) -> CameraInitWorker:
         return CameraInitWorker(self)
 
+    def reload_model_settings(
+        self,
+        product: str | None = None,
+        area: str | None = None,
+        inference_type: str | None = None,
+    ) -> None:
+        """Invalidate model caches so the next run reads updated YAML."""
+        self.catalog.refresh()
+        if self._system and hasattr(self._system, "reload_model_settings"):
+            self._system.reload_model_settings(product, area, inference_type)
+
     # --- Utilities (Should eventually move to services) ---
 
     def save_result_json(self, file_path: Path, result: DetectionResult) -> None:

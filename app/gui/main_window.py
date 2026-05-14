@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
 
 def _get_detection_class():
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return None
     try:
         mod = sys.modules.get("GUI")
         if mod:
@@ -39,6 +41,7 @@ from PyQt5.QtCore import Qt, QTimer, QSettings, pyqtSlot
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QLabel,
     QMainWindow,
@@ -51,6 +54,7 @@ from PyQt5.QtWidgets import (
 
 from app.gui.camera_handler import CameraHandlerMixin
 from app.gui.controller import DetectionController
+from app.gui.model_config_dialog import ModelConfigDialog
 from app.gui.panels.control_panel import ControlPanel
 from app.gui.panels.image_panel import ImagePanel
 from app.gui.panels.info_panel import InfoPanel
@@ -58,6 +62,7 @@ from app.gui.preferences import PreferencesManager
 from app.gui.utils import load_image_with_retry
 from app.gui.view_builder import build_menu_bar
 from core.services.model_catalog import ModelCatalog
+from core.services.model_config_editor import ModelConfigEditError, update_model_config
 
 
 class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
@@ -117,10 +122,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
                         )  # type: ignore[attr-defined]
                     except Exception:
                         self.controller._system = None
-            try:
-                self.detection_system = self.controller.detection_system
-            except Exception:
-                self.detection_system = None
+            self.detection_system = self.controller._system
             self.log_message("Skip init_system (test mode)")
 
         # 快捷鍵
@@ -219,6 +221,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self.start_btn = self.control_panel.start_btn
         self.stop_btn = self.control_panel.stop_btn
         self.save_btn = self.control_panel.save_btn
+        self.edit_model_config_btn = self.control_panel.edit_model_config_btn
         self.use_camera_chk = self.control_panel.use_camera_chk
         self.reconnect_camera_btn = self.control_panel.reconnect_camera_btn
         self.disconnect_camera_btn = self.control_panel.disconnect_camera_btn
@@ -250,6 +253,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self.control_panel.start_requested.connect(self.start_detection)
         self.control_panel.stop_requested.connect(self.stop_detection)
         self.control_panel.save_requested.connect(self.save_results)
+        self.control_panel.edit_model_config_requested.connect(self.edit_current_model_config)
 
         self.control_panel.use_camera_toggled.connect(self.on_use_camera_toggled)
         self.control_panel.reconnect_camera_requested.connect(self.handle_reconnect_camera)
@@ -1052,6 +1056,67 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         )
         if file_path:
             self.log_message(f"設定已儲存: {file_path}")
+
+    def edit_current_model_config(self):
+        """Open a guarded editor for the selected model config and hot-reload it."""
+        if self.is_detection_running():
+            QMessageBox.warning(self, "機種設定", "檢測進行中，請先停止後再修改設定。")
+            return
+
+        product = self.product_combo.currentText().strip()
+        area = self.area_combo.currentText().strip()
+        inference_type = self.inference_combo.currentText().strip()
+        if not all([product, area, inference_type]):
+            QMessageBox.warning(self, "機種設定", "請先選擇產品、區域與模型類型。")
+            return
+
+        if inference_type.lower() == "fusion":
+            QMessageBox.information(
+                self,
+                "機種設定",
+                "Fusion 由 YOLO 與 Anomalib 兩份設定組成，請先分別編輯 yolo 或 anomalib。",
+            )
+            return
+
+        config_path = self._catalog.config_path(product, area, inference_type)
+        try:
+            dialog = ModelConfigDialog(
+                product=product,
+                area=area,
+                inference_type=inference_type,
+                config_path=config_path,
+                parent=self,
+            )
+        except ModelConfigEditError as exc:
+            QMessageBox.critical(self, "機種設定", str(exc))
+            return
+
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        try:
+            result = update_model_config(
+                config_path,
+                dialog.changes(),
+                product=product,
+                area=area,
+            )
+            self.controller.reload_model_settings(product, area, inference_type)
+            self.load_available_models()
+        except Exception as exc:
+            QMessageBox.critical(self, "機種設定", f"儲存或熱更新失敗：\n{exc}")
+            return
+
+        self.log_message(
+            f"機種設定已更新並熱更新: {product}/{area}/{inference_type} "
+            f"(備份: {result.backup_path})"
+        )
+        QMessageBox.information(
+            self,
+            "機種設定",
+            "設定已儲存，下一次檢測會使用新設定。\n"
+            f"備份檔：{result.backup_path}",
+        )
 
     def show_about(self):
         """顯示關於資訊"""

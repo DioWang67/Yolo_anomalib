@@ -5,12 +5,12 @@ import os
 import threading
 from collections import OrderedDict
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml  # type: ignore[import]
 
 from core.config import DetectionConfig
 from core.config_validation import validate_model_cfg
-from core.inference_engine import InferenceEngine
 from core.logging_config import DetectionLogger
 from core.path_utils import project_root, resolve_path
 from core.version_utils import (
@@ -21,6 +21,9 @@ from core.version_utils import (
     parse_version_string,
     version_to_string,
 )
+
+if TYPE_CHECKING:  # pragma: no cover
+    from core.inference_engine import InferenceEngine
 
 # Repository root (two levels up from core/services)
 # Determine repository root (can be overridden by YOLO11_ROOT env var)
@@ -219,6 +222,8 @@ class ModelManager:
         # Version validation (if model uses versioned naming)
         self._validate_model_version(base_config, cfg, product, area, inference_type)
 
+        from core.inference_engine import InferenceEngine
+
         engine = InferenceEngine(base_config)
         if not engine.initialize():
             raise RuntimeError("Inference engine init failed")
@@ -261,6 +266,40 @@ class ModelManager:
             engines = self._cache.get((product, area), {})
             cached = engines.get(inference_type)
             return cached[0] if cached else None
+
+    def clear_cache(
+        self,
+        product: str | None = None,
+        area: str | None = None,
+        inference_type: str | None = None,
+    ) -> None:
+        """Shutdown and remove cached engines.
+
+        Args:
+            product: Optional product filter.
+            area: Optional area filter.
+            inference_type: Optional backend filter.
+        """
+        target_type = inference_type.lower() if inference_type else None
+        with self._cache_lock:
+            for key in list(self._cache.keys()):
+                key_product, key_area = key
+                if product is not None and key_product != product:
+                    continue
+                if area is not None and key_area != area:
+                    continue
+
+                engines = self._cache[key]
+                for backend in list(engines.keys()):
+                    if target_type is not None and backend.lower() != target_type:
+                        continue
+                    engine, _ = engines.pop(backend)
+                    try:
+                        engine.shutdown()
+                    except Exception:
+                        pass
+                if not engines:
+                    self._cache.pop(key, None)
 
     def _validate_model_version(
         self,

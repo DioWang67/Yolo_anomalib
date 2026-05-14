@@ -210,6 +210,10 @@ def build_menu_bar(gui: DetectionSystemGUI) -> QMenuBar:
     refresh_action.triggered.connect(gui.load_available_models)
     view_menu.addAction(refresh_action)
 
+    edit_model_action = QAction("編輯目前機種設定", gui)
+    edit_model_action.triggered.connect(gui.edit_current_model_config)
+    view_menu.addAction(edit_model_action)
+
     view_menu.addSeparator()
     reset_stats_action = QAction("重置當班統計", gui)
     reset_stats_action.setShortcut("Ctrl+R")
