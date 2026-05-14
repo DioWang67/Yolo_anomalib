@@ -65,6 +65,13 @@ class ModelConfigDialog(QDialog):
             "color_model_path": self.color_model_edit.text().strip() or None,
             "color_checker_type": self.color_checker_combo.currentText().strip(),
             "color_score_threshold": self.color_score_spin.value(),
+            "position_check_enabled": self.position_check_chk.isChecked(),
+            "position_mode": self.position_mode_combo.currentText().strip(),
+            "position_tolerance": self.position_tolerance_spin.value(),
+            "position_tolerance_unit": self.position_unit_combo.currentText().strip(),
+            "position_alignment_enabled": self.position_alignment_chk.isChecked(),
+            "missing_slot_check_enabled": self.missing_slot_chk.isChecked(),
+            "count_check_strict": self.count_check_strict_chk.isChecked(),
             "fail_on_unexpected": self.fail_on_unexpected_chk.isChecked(),
             "save_original": self.save_original_chk.isChecked(),
             "save_processed": self.save_processed_chk.isChecked(),
@@ -138,7 +145,36 @@ class ModelConfigDialog(QDialog):
 
         self.fail_on_unexpected_chk = QCheckBox("出現非預期類別時判 FAIL")
         behavior_form.addRow(self.fail_on_unexpected_chk)
+
+        self.count_check_strict_chk = QCheckBox("數量檢查嚴格模式（多件也判 FAIL）")
+        behavior_form.addRow(self.count_check_strict_chk)
         layout.addWidget(behavior_group)
+
+        position_group = QGroupBox("位置檢測")
+        position_form = QFormLayout(position_group)
+        self.position_check_chk = QCheckBox("啟用位置檢測")
+        position_form.addRow(self.position_check_chk)
+
+        self.position_mode_combo = QComboBox()
+        self.position_mode_combo.addItems(["center", "region", "iou"])
+        position_form.addRow("判定模式", self.position_mode_combo)
+
+        tolerance_row = QHBoxLayout()
+        self.position_tolerance_spin = QDoubleSpinBox()
+        self.position_tolerance_spin.setRange(0.0, 10000.0)
+        self.position_tolerance_spin.setSingleStep(0.1)
+        self.position_tolerance_spin.setDecimals(3)
+        tolerance_row.addWidget(self.position_tolerance_spin)
+        self.position_unit_combo = QComboBox()
+        self.position_unit_combo.addItems(["percent", "pixel"])
+        tolerance_row.addWidget(self.position_unit_combo)
+        position_form.addRow("容許偏差", tolerance_row)
+
+        self.position_alignment_chk = QCheckBox("啟用治具偏移自動校正")
+        self.missing_slot_chk = QCheckBox("啟用缺槽補判")
+        position_form.addRow(self.position_alignment_chk)
+        position_form.addRow(self.missing_slot_chk)
+        layout.addWidget(position_group)
 
         output_group = QGroupBox("輸出")
         output_form = QFormLayout(output_group)
@@ -174,7 +210,7 @@ class ModelConfigDialog(QDialog):
         layout.addWidget(items_group)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Save).setText("儲存並熱更新")
+        buttons.button(QDialogButtonBox.Save).setText("儲存更新")
         buttons.button(QDialogButtonBox.Cancel).setText("取消")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -198,6 +234,24 @@ class ModelConfigDialog(QDialog):
         self.color_model_edit.setText(str(cfg.get("color_model_path", "") or ""))
         self.color_checker_combo.setCurrentText(str(cfg.get("color_checker_type", "color_qc") or "color_qc"))
         self.color_score_spin.setValue(float(cfg.get("color_score_threshold", 0.0) or 0.0))
+        position_cfg = self._position_area_config()
+        self.position_check_chk.setChecked(bool(position_cfg.get("enabled", False)))
+        self.position_mode_combo.setCurrentText(str(position_cfg.get("mode", "center") or "center"))
+        self.position_tolerance_spin.setValue(float(position_cfg.get("tolerance", 0.0) or 0.0))
+        self.position_unit_combo.setCurrentText(str(position_cfg.get("tolerance_unit", "percent") or "percent"))
+        alignment_cfg = position_cfg.get("alignment", {})
+        self.position_alignment_chk.setChecked(
+            bool(alignment_cfg.get("enabled", True)) if isinstance(alignment_cfg, dict) else True
+        )
+        missing_slot_cfg = position_cfg.get("missing_slot_check", {})
+        self.missing_slot_chk.setChecked(
+            bool(missing_slot_cfg.get("enabled", False)) if isinstance(missing_slot_cfg, dict) else False
+        )
+        steps_cfg = cfg.get("steps", {})
+        count_cfg = steps_cfg.get("count_check", {}) if isinstance(steps_cfg, dict) else {}
+        self.count_check_strict_chk.setChecked(
+            bool(count_cfg.get("strict", False)) if isinstance(count_cfg, dict) else False
+        )
         self.fail_on_unexpected_chk.setChecked(bool(cfg.get("fail_on_unexpected", True)))
         self.save_original_chk.setChecked(bool(cfg.get("save_original", True)))
         self.save_processed_chk.setChecked(bool(cfg.get("save_processed", True)))
@@ -214,6 +268,16 @@ class ModelConfigDialog(QDialog):
                 if isinstance(area_values, list):
                     values = [str(item) for item in area_values]
         self.expected_items_edit.setPlainText("\n".join(values))
+
+    def _position_area_config(self) -> dict[str, Any]:
+        position_cfg = self._config.get("position_config", {})
+        if not isinstance(position_cfg, dict):
+            return {}
+        product_cfg = position_cfg.get(self.product, {})
+        if not isinstance(product_cfg, dict):
+            return {}
+        area_cfg = product_cfg.get(self.area, {})
+        return area_cfg if isinstance(area_cfg, dict) else {}
 
     def _browse_weights(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

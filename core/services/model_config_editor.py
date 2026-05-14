@@ -144,6 +144,12 @@ def update_model_config(
     sanitized = _sanitize_changes(changes)
 
     expected_items = sanitized.pop("expected_items", None)
+    position_changes = {
+        key: sanitized.pop(key)
+        for key in list(sanitized.keys())
+        if key.startswith("position_") or key in {"missing_slot_check_enabled"}
+    }
+    count_check_strict = sanitized.pop("count_check_strict", None)
     for key, value in sanitized.items():
         if value is None:
             data.pop(key, None)
@@ -161,6 +167,12 @@ def update_model_config(
         nested[product] = product_map
         data["expected_items"] = nested
 
+    if position_changes:
+        _apply_position_changes(data, product, area, position_changes)
+
+    if count_check_strict is not None:
+        _apply_count_check_strict(data, count_check_strict)
+
     return save_model_config(config_path, data)
 
 
@@ -170,6 +182,34 @@ def _sanitize_changes(changes: dict[str, Any]) -> dict[str, Any]:
     for key, value in changes.items():
         if key == "expected_items":
             output[key] = _normalize_expected_items(value)
+            continue
+        if key == "count_check_strict":
+            output[key] = bool(value)
+            continue
+        if key in {
+            "position_check_enabled",
+            "position_alignment_enabled",
+            "missing_slot_check_enabled",
+        }:
+            output[key] = bool(value)
+            continue
+        if key == "position_tolerance":
+            number = float(value)
+            if number < 0:
+                raise ModelConfigEditError("position_tolerance 不可小於 0")
+            output[key] = number
+            continue
+        if key == "position_tolerance_unit":
+            unit = str(value).strip().lower()
+            if unit not in {"percent", "pixel"}:
+                raise ModelConfigEditError("position_tolerance_unit 只支援 percent 或 pixel")
+            output[key] = unit
+            continue
+        if key == "position_mode":
+            mode = str(value).strip().lower()
+            if mode not in {"center", "region", "iou"}:
+                raise ModelConfigEditError("position_mode 只支援 center、region 或 iou")
+            output[key] = mode
             continue
         if key not in SCALAR_FIELDS:
             raise ModelConfigEditError(f"不支援編輯欄位: {key}")
@@ -234,3 +274,67 @@ def _normalize_expected_items(value: Any) -> list[str]:
         seen.add(item)
         items.append(item)
     return items
+
+
+def _area_position_config(
+    data: dict[str, Any],
+    product: str,
+    area: str,
+) -> dict[str, Any]:
+    position_config = data.get("position_config")
+    if not isinstance(position_config, dict):
+        position_config = {}
+    product_config = position_config.get(product)
+    if not isinstance(product_config, dict):
+        product_config = {}
+    area_config = product_config.get(area)
+    if not isinstance(area_config, dict):
+        area_config = {}
+    product_config[area] = area_config
+    position_config[product] = product_config
+    data["position_config"] = position_config
+    return area_config
+
+
+def _apply_position_changes(
+    data: dict[str, Any],
+    product: str,
+    area: str,
+    changes: dict[str, Any],
+) -> None:
+    area_config = _area_position_config(data, product, area)
+    mapping = {
+        "position_check_enabled": "enabled",
+        "position_tolerance": "tolerance",
+        "position_tolerance_unit": "tolerance_unit",
+        "position_mode": "mode",
+    }
+    for source_key, target_key in mapping.items():
+        if source_key in changes:
+            area_config[target_key] = changes[source_key]
+
+    if "position_alignment_enabled" in changes:
+        alignment = area_config.get("alignment")
+        if not isinstance(alignment, dict):
+            alignment = {}
+        alignment["enabled"] = changes["position_alignment_enabled"]
+        area_config["alignment"] = alignment
+
+    if "missing_slot_check_enabled" in changes:
+        missing_slot_check = area_config.get("missing_slot_check")
+        if not isinstance(missing_slot_check, dict):
+            missing_slot_check = {}
+        missing_slot_check["enabled"] = changes["missing_slot_check_enabled"]
+        area_config["missing_slot_check"] = missing_slot_check
+
+
+def _apply_count_check_strict(data: dict[str, Any], strict: bool) -> None:
+    steps = data.get("steps")
+    if not isinstance(steps, dict):
+        steps = {}
+    count_check = steps.get("count_check")
+    if not isinstance(count_check, dict):
+        count_check = {}
+    count_check["strict"] = bool(strict)
+    steps["count_check"] = count_check
+    data["steps"] = steps
