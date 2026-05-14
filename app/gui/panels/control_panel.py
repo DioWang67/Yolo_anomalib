@@ -62,49 +62,36 @@ class ControlPanel(QGroupBox):
     def _setup_ui(self) -> None:
         layout = QVBoxLayout()
 
-        # ── 快速預設 ────────────────────────────────────────────────
-        preset_group = QGroupBox("產線預設")
-        preset_layout = QVBoxLayout()
+        # ── 機種選擇 ────────────────────────────────────────────────
+        model_group = QGroupBox("機種選擇")
+        model_layout = QVBoxLayout()
         self.preset_combo = QComboBox()
         self.preset_combo.setToolTip("一鍵選擇常用的產品 / 區域 / 類型組合")
         self._rebuild_preset_combo()
         self.preset_combo.currentTextChanged.connect(self._on_preset_selected)
-        preset_layout.addWidget(self.preset_combo)
-        preset_group.setLayout(preset_layout)
-        layout.addWidget(preset_group)
+        model_layout.addWidget(QLabel("產線預設："))
+        model_layout.addWidget(self.preset_combo)
 
-        # ── 產品選擇 ─────────────────────────────────────────────────
-        product_group = QGroupBox("產品")
-        product_layout = QVBoxLayout()
         self.product_combo = QComboBox()
         self.product_combo.currentTextChanged.connect(self.product_changed.emit)
-        product_layout.addWidget(QLabel("產品："))
-        product_layout.addWidget(self.product_combo)
-        product_group.setLayout(product_layout)
-        layout.addWidget(product_group)
+        model_layout.addWidget(QLabel("產品："))
+        model_layout.addWidget(self.product_combo)
 
-        # ── 區域選擇 ─────────────────────────────────────────────────
-        area_group = QGroupBox("檢測區域")
-        area_layout = QVBoxLayout()
         self.area_combo = QComboBox()
         self.area_combo.currentTextChanged.connect(self.area_changed.emit)
-        area_layout.addWidget(QLabel("區域："))
-        area_layout.addWidget(self.area_combo)
-        area_group.setLayout(area_layout)
-        layout.addWidget(area_group)
+        model_layout.addWidget(QLabel("區域："))
+        model_layout.addWidget(self.area_combo)
 
-        # ── 模型類型 ─────────────────────────────────────────────────
-        inference_group = QGroupBox("模型類型")
-        inference_layout = QVBoxLayout()
         self.inference_combo = QComboBox()
         self.inference_combo.currentTextChanged.connect(self.inference_type_changed.emit)
-        inference_layout.addWidget(QLabel("類型："))
-        inference_layout.addWidget(self.inference_combo)
-        inference_group.setLayout(inference_layout)
-        layout.addWidget(inference_group)
+        model_layout.addWidget(QLabel("模型類型："))
+        model_layout.addWidget(self.inference_combo)
+
+        model_group.setLayout(model_layout)
+        layout.addWidget(model_group)
 
         # ── 操作按鈕 ─────────────────────────────────────────────────
-        button_group = QGroupBox("操作")
+        button_group = QGroupBox("OP 操作")
         button_layout = QVBoxLayout()
 
         self.start_btn = QPushButton("開始檢測")
@@ -121,13 +108,9 @@ class ControlPanel(QGroupBox):
         self.save_btn.setEnabled(False)
         self.save_btn.clicked.connect(self.save_requested.emit)
 
-        self.edit_model_config_btn = QPushButton("編輯機種設定")
-        self.edit_model_config_btn.clicked.connect(self.edit_model_config_requested.emit)
-
         button_layout.addWidget(self.start_btn)
         button_layout.addWidget(self.stop_btn)
         button_layout.addWidget(self.save_btn)
-        button_layout.addWidget(self.edit_model_config_btn)
 
         # ── 相機控制 ─────────────────────────────────────────────────
         self.use_camera_chk = QCheckBox("使用相機")
@@ -163,14 +146,28 @@ class ControlPanel(QGroupBox):
         button_group.setLayout(button_layout)
         layout.addWidget(button_group)
 
-        # ── 儲存路徑顯示 ─────────────────────────────────────────────
+        # ── 工程設定 ────────────────────────────────────────────────
+        self.engineering_toggle_btn = QPushButton("工程設定 ▸")
+        self.engineering_toggle_btn.setCheckable(True)
+        self.engineering_toggle_btn.setToolTip("展開機種與顯示相關設定")
+        self.engineering_toggle_btn.toggled.connect(self._set_engineering_visible)
+        layout.addWidget(self.engineering_toggle_btn)
+
+        self.engineering_panel = QWidget()
+        engineering_layout = QVBoxLayout(self.engineering_panel)
+        engineering_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.edit_model_config_btn = QPushButton("編輯機種設定")
+        self.edit_model_config_btn.clicked.connect(self.edit_model_config_requested.emit)
+        engineering_layout.addWidget(self.edit_model_config_btn)
+
         self.output_path_label = QLabel("儲存路徑：—")
         self.output_path_label.setStyleSheet(
             "color: #6c757d; font-size: 8pt; padding: 2px 4px;"
         )
         self.output_path_label.setWordWrap(True)
         self.output_path_label.setToolTip("目前結果儲存位置")
-        layout.addWidget(self.output_path_label)
+        engineering_layout.addWidget(self.output_path_label)
 
         self.show_detection_boxes_chk = QCheckBox("顯示位置檢測框")
         self.show_detection_boxes_chk.setChecked(True)
@@ -178,7 +175,10 @@ class ControlPanel(QGroupBox):
         self.show_detection_boxes_chk.toggled.connect(
             self.show_detection_boxes_toggled.emit
         )
-        layout.addWidget(self.show_detection_boxes_chk)
+        engineering_layout.addWidget(self.show_detection_boxes_chk)
+
+        self.engineering_panel.setVisible(False)
+        layout.addWidget(self.engineering_panel)
 
         layout.addStretch()
         self.setLayout(layout)
@@ -203,6 +203,11 @@ class ControlPanel(QGroupBox):
         if entry and entry != ("", "", ""):
             product, area, inf_type = entry
             self.preset_selected.emit(product, area, inf_type)
+
+    def _set_engineering_visible(self, visible: bool) -> None:
+        """Show or hide controls that are not part of normal OP flow."""
+        self.engineering_panel.setVisible(visible)
+        self.engineering_toggle_btn.setText("工程設定 ▾" if visible else "工程設定 ▸")
 
     # ------------------------------------------------------------------
     # Output path display
