@@ -19,8 +19,10 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QPushButton,
     QPlainTextEdit,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
 from core.services.model_config_editor import load_model_config
@@ -46,6 +48,7 @@ class ModelConfigDialog(QDialog):
         self._config = load_model_config(config_path)
         self.setWindowTitle(f"編輯機種設定 - {product}/{area}/{inference_type}")
         self.setMinimumWidth(560)
+        self.resize(640, 720)
         self._build_ui()
         self._load_values()
 
@@ -83,7 +86,13 @@ class ModelConfigDialog(QDialog):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(f"設定檔: {self.config_path}"))
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.addWidget(QLabel(f"設定檔: {self.config_path}"))
 
         model_group = QGroupBox("模型")
         model_form = QFormLayout(model_group)
@@ -116,7 +125,7 @@ class ModelConfigDialog(QDialog):
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(0, 3600)
         model_form.addRow("timeout 秒", self.timeout_spin)
-        layout.addWidget(model_group)
+        content_layout.addWidget(model_group)
 
         behavior_group = QGroupBox("檢測行為")
         behavior_form = QFormLayout(behavior_group)
@@ -148,7 +157,7 @@ class ModelConfigDialog(QDialog):
 
         self.count_check_strict_chk = QCheckBox("數量檢查嚴格模式（多件也判 FAIL）")
         behavior_form.addRow(self.count_check_strict_chk)
-        layout.addWidget(behavior_group)
+        content_layout.addWidget(behavior_group)
 
         position_group = QGroupBox("位置檢測")
         position_form = QFormLayout(position_group)
@@ -174,7 +183,7 @@ class ModelConfigDialog(QDialog):
         self.missing_slot_chk = QCheckBox("啟用缺槽補判")
         position_form.addRow(self.position_alignment_chk)
         position_form.addRow(self.missing_slot_chk)
-        layout.addWidget(position_group)
+        content_layout.addWidget(position_group)
 
         output_group = QGroupBox("輸出")
         output_form = QFormLayout(output_group)
@@ -199,15 +208,19 @@ class ModelConfigDialog(QDialog):
             self.save_fail_only_chk,
         ):
             output_form.addRow(checkbox)
-        layout.addWidget(output_group)
+        content_layout.addWidget(output_group)
 
         items_group = QGroupBox("應檢項目")
         items_layout = QVBoxLayout(items_group)
         self.expected_items_edit = QPlainTextEdit()
         self.expected_items_edit.setPlaceholderText("每行一個類別，例如 J5-1")
-        self.expected_items_edit.setMinimumHeight(90)
+        self.expected_items_edit.setMinimumHeight(80)
         items_layout.addWidget(self.expected_items_edit)
-        layout.addWidget(items_group)
+        content_layout.addWidget(items_group)
+
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll, stretch=1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Save).setText("儲存更新")
