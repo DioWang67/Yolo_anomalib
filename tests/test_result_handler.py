@@ -45,10 +45,10 @@ class DummyLogger:
 class DummyConfig:
     """Minimal config stub exposing buffer_limit/flush_interval."""
 
-    def __init__(self, buffer_limit=10, flush_interval=None):
+    def __init__(self, buffer_limit=10, flush_interval=None, position_config=None):
         self.buffer_limit = buffer_limit
         self.flush_interval = flush_interval
-        self.position_config = {}
+        self.position_config = position_config or {}
 
     def get_position_config(self, product: str, area: str):
         return self.position_config.get(product, {}).get(area, {})
@@ -352,6 +352,83 @@ def test_save_results_shifts_missing_expected_box_using_detected_offsets(tmp_res
     assert red >= 180
     assert blue <= 80
     assert green <= 80
+
+
+def test_save_results_yolo_draws_missing_item_location(tmp_result_dir):
+    cfg = DummyConfig(
+        buffer_limit=1,
+        position_config={
+            "P": {
+                "A": {
+                    "expected_boxes": {
+                        "nut": {"x1": 10, "y1": 12, "x2": 35, "y2": 32}
+                    }
+                }
+            }
+        },
+    )
+    h = ResultHandler(cfg, base_dir=tmp_result_dir, logger=DummyLogger())
+    frame = _mk_img(value=20)
+    processed = _mk_img(value=20)
+
+    out = h.save_results(
+        frame=frame,
+        detections=[],
+        status="DETECTION_FAIL",
+        detector="yolo",
+        missing_items=["nut"],
+        processed_image=processed,
+        product="P",
+        area="A",
+    )
+
+    assert out["missing_locations"] == [
+        {
+            "class": "nut",
+            "expected_key": "nut",
+            "bbox": [10, 12, 35, 32],
+            "reason": "missing",
+        }
+    ]
+    annotated = cv2.imread(out["annotated_path"])
+    assert annotated is not None
+    # JPEG compression can soften exact colors, so assert red channel dominance.
+    b, g, r = annotated[12, 10]
+    assert int(r) > 120 and int(r) > int(g) + 40 and int(r) > int(b) + 40
+
+
+def test_save_results_fusion_draws_missing_item_location(tmp_result_dir):
+    cfg = DummyConfig(
+        buffer_limit=1,
+        position_config={
+            "P": {
+                "A": {
+                    "expected_boxes": {
+                        "cover": {"x1": 8, "y1": 9, "x2": 28, "y2": 29}
+                    }
+                }
+            }
+        },
+    )
+    h = ResultHandler(cfg, base_dir=tmp_result_dir, logger=DummyLogger())
+    frame = _mk_img(value=30)
+    processed = _mk_img(value=30)
+
+    out = h.save_results(
+        frame=frame,
+        detections=[],
+        status="DETECTION_FAIL",
+        detector="fusion",
+        missing_items=["cover"],
+        processed_image=processed,
+        product="P",
+        area="A",
+    )
+
+    annotated = cv2.imread(out["annotated_path"])
+    assert annotated is not None
+    b, g, r = annotated[9, 8]
+    assert int(r) > 120 and int(r) > int(g) + 40 and int(r) > int(b) + 40
 
 
 def test_buffer_and_manual_flush(tmp_result_dir):

@@ -251,7 +251,8 @@ class SaveResultsStep(Step):
             self.logger.debug("SaveResultsStep is disabled, skipping.")
             return
         try:
-            if ctx.result.get("anomaly_score") is not None:
+            is_anomalib_only = str(ctx.inference_type).lower() == "anomalib"
+            if is_anomalib_only and ctx.result.get("anomaly_score") is not None:
                 save_result = self.sink.save(
                     frame=ctx.frame,
                     detections=[],
@@ -276,8 +277,9 @@ class SaveResultsStep(Step):
                     detector=ctx.inference_type,
                     missing_items=ctx.result.get("missing_items", []),
                     processed_image=ctx.processed_image,
-                    anomaly_score=None,
-                    heatmap_path=None,
+                    anomaly_score=ctx.result.get("anomaly_score"),
+                    heatmap_path=ctx.result.get("output_path")
+                    or ctx.result.get("heatmap_path"),
                     product=ctx.product,
                     area=ctx.area,
                     ckpt_path=ctx.result.get("ckpt_path"),

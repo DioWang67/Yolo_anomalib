@@ -56,6 +56,7 @@ def annotate_yolo_frame(
     *,
     missing_items: list[str] | None = None,
     expected_boxes: dict[str, dict[str, Any]] | None = None,
+    missing_locations: list[dict[str, Any]] | None = None,
 ) -> None:
     """Render detection, color, and position cues onto the frame."""
     panel_lines: list[tuple[str, tuple[int, int, int]]] = []
@@ -93,8 +94,20 @@ def annotate_yolo_frame(
         panel_lines.extend(_build_color_summary_lines(color_result, detections))
         _highlight_color_failures(frame, detections, color_result)
 
+    if missing_locations:
+        missing_names = [str(item.get("class", "")) for item in missing_locations]
+        panel_lines.append(
+            (
+                f"Missing: {', '.join(name for name in missing_names if name)}",
+                (0, 0, 255),
+            )
+        )
+
     if panel_lines:
         _draw_info_panel(frame, panel_lines, origin=(15, 35))
+
+    if missing_locations:
+        _draw_missing_locations(image_utils, frame, missing_locations)
 
 
 def _draw_detection_box(
@@ -175,7 +188,7 @@ def _draw_position_offset(frame: np.ndarray, detection: dict[str, Any]) -> None:
         POSITION_LINE_COLOR,
         1,
         cv2.LINE_AA,
-    )
+        )
 
 
 def _draw_missing_expected_boxes(
@@ -214,6 +227,42 @@ def _draw_missing_expected_boxes(
             (0, 0, 255),
             1,
             cv2.LINE_AA,
+        )
+
+
+def _draw_missing_locations(
+    image_utils: ImageUtils,
+    frame: np.ndarray,
+    missing_locations: list[dict[str, Any]],
+) -> None:
+    for item in missing_locations:
+        bbox = item.get("bbox")
+        if not bbox or len(bbox) < 4:
+            continue
+        try:
+            x1, y1, x2, y2 = [int(v) for v in bbox[:4]]
+        except (TypeError, ValueError):
+            continue
+
+        h, w = frame.shape[:2]
+        x1 = max(0, min(w - 1, x1))
+        x2 = max(0, min(w - 1, x2))
+        y1 = max(0, min(h - 1, y1))
+        y2 = max(0, min(h - 1, y2))
+        if x1 >= x2 or y1 >= y2:
+            continue
+
+        color = (0, 0, 255)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+        label = f"MISSING {item.get('class', '')}".strip()
+        label_y = max(y1 - 10, 20)
+        image_utils.draw_label(
+            frame,
+            label,
+            (x1, label_y),
+            color,
+            font_scale=0.65,
+            thickness=2,
         )
 
 

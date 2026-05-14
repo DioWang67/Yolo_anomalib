@@ -181,6 +181,39 @@ class TestSaveResultsStep:
             error_message=None,
         )
 
+    def test_run_handles_fusion_missing_items_with_anomaly_score(
+        self, mock_env, base_context
+    ):
+        """Fusion must preserve YOLO missing items even when anomalib adds a score."""
+        base_context.inference_type = "fusion"
+        base_context.result = {
+            "detections": [{"class": "J1"}],
+            "missing_items": ["J2"],
+            "anomaly_score": 0.42,
+            "heatmap_path": "path/to/fusion_heatmap.jpg",
+        }
+
+        mock_sink = mock_env.result_sink
+        step = SaveResultsStep(mock_sink, mock_env.logger)
+        step.run(base_context)
+
+        mock_sink.save.assert_called_with(
+            frame=base_context.frame,
+            detections=base_context.result["detections"],
+            status=base_context.status,
+            detector="fusion",
+            missing_items=base_context.result["missing_items"],
+            processed_image=base_context.processed_image,
+            anomaly_score=0.42,
+            heatmap_path="path/to/fusion_heatmap.jpg",
+            product=base_context.product,
+            area=base_context.area,
+            ckpt_path=None,
+            color_result=None,
+            sequence_check=None,
+            error_message=None,
+        )
+
     def test_run_with_save_disabled_does_not_call_sink(self, mock_env, base_context):
         """Test that the sink is not called if the step is disabled in config."""
         mock_sink = mock_env.result_sink
