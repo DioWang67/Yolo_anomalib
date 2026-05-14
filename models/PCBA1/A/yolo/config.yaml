@@ -1,6 +1,6 @@
 weights: models/PCBA1/A/yolo/weights/best.onnx
 device: cpu
-conf_thres: 0.85
+conf_thres: 0.8
 iou_thres: 0.45
 imgsz:
 - 640
@@ -12,7 +12,7 @@ current_product: PCBA1
 current_area: A
 expected_items:
   PCBA1:
-    A: &id001
+    A:
     - J5-1
     - J5-2
     - C22B
@@ -29,7 +29,7 @@ position_config:
   PCBA1:
     A:
       enabled: true
-      mode: center
+      mode: iou
       tolerance: 1.06
       expected_boxes:
         C22B:
@@ -83,4 +83,17 @@ position_config:
           sigma_cy: 1.8
           count: 21
       imgsz: 640
-      tolerance_unit: percent
+      tolerance_unit: pixel
+      alignment:
+        enabled: true
+      missing_slot_check:
+        enabled: false
+enable_anomalib: false
+color_checker_type: color_qc
+color_score_threshold: 0.0
+fail_on_unexpected: true
+save_original: true
+save_processed: true
+save_annotated: true
+save_crops: true
+save_fail_only: false
