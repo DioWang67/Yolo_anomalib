@@ -1,88 +1,86 @@
-conf_thres: 0.5
-current_product: PCBA1
+weights: models/PCBA1/A/yolo/weights/best.onnx
 device: cpu
-enable_yolo: true
-expected_items:
-  PCBA1:
-    A:
-    - C22B
-    - J5-1
-    - J5-2
-    - J6
-    - J7
-    B:
-    - C22B
-    - J5-1
-    - J5-2
-    - J6
-    - J7
+conf_thres: 0.85
+iou_thres: 0.45
 imgsz:
 - 640
 - 640
-iou_thres: 0.45
-model_version: 1.0.0
+timeout: 1
+enable_yolo: true
 output_dir: Result
+current_product: PCBA1
+current_area: A
+expected_items:
+  PCBA1:
+    A: &id001
+    - J5-1
+    - J5-2
+    - C22B
+    - J6
+    - J7
+pipeline:
+- count_check
+- save_results
+steps:
+  count_check:
+    strict: true
+enable_color_check: false
 position_config:
   PCBA1:
     A:
-      enabled: false
+      enabled: true
+      mode: center
+      tolerance: 1.06
       expected_boxes:
         C22B:
-          x1: 350
-          x2: 390
-          y1: 210
-          y2: 310
-        J5-1:
-          x1: 400
-          x2: 540
-          y1: 200
-          y2: 340
+          x1: 297
+          y1: 277
+          x2: 341
+          y2: 348
+          cx: 319.1
+          cy: 312.36
+          sigma_cx: 0.2
+          sigma_cy: 0.23
+          count: 21
         J5-2:
-          x1: 80
-          x2: 180
-          y1: 250
-          y2: 380
-        J6:
-          x1: 200
-          x2: 320
-          y1: 250
-          y2: 380
+          x1: 102
+          y1: 257
+          x2: 207
+          y2: 363
+          cx: 154.43
+          cy: 310.24
+          sigma_cx: 0.18
+          sigma_cy: 2.26
+          count: 21
         J7:
-          x1: 430
-          x2: 580
-          y1: 270
-          y2: 400
-      mode: bbox
-      tolerance: 2
-    B:
-      enabled: false
-      expected_boxes:
-        C22B:
-          x1: 350
-          x2: 390
-          y1: 210
-          y2: 310
+          x1: 302
+          y1: 346
+          x2: 422
+          y2: 445
+          cx: 361.76
+          cy: 395.48
+          sigma_cx: 1.15
+          sigma_cy: 0.49
+          count: 21
+        J6:
+          x1: 163
+          y1: 367
+          x2: 282
+          y2: 448
+          cx: 222.5
+          cy: 407.69
+          sigma_cx: 1.23
+          sigma_cy: 1.68
+          count: 21
         J5-1:
-          x1: 400
-          x2: 540
-          y1: 200
-          y2: 340
-        J5-2:
-          x1: 80
-          x2: 180
+          x1: 370
           y1: 250
-          y2: 380
-        J6:
-          x1: 200
-          x2: 320
-          y1: 250
-          y2: 380
-        J7:
-          x1: 430
-          x2: 580
-          y1: 270
-          y2: 400
-      mode: bbox
-      tolerance: 2
-timeout: 1
-weights: models/PCBA1/A/yolo/weights/PCBA1_A_v1.0.0_20260210.onnx
+          x2: 492
+          y2: 364
+          cx: 431.0
+          cy: 307.0
+          sigma_cx: 0.42
+          sigma_cy: 1.8
+          count: 21
+      imgsz: 640
+      tolerance_unit: percent

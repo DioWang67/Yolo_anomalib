@@ -24,6 +24,12 @@ from core.exceptions import (
     ModelInitializationError,
     ResourceExhaustionError,
 )
+from core.services.alignment import (
+    ExpectedLayoutAlignment,
+    base_class_name,
+    build_aligned_expected_boxes,
+    resolve_missing_expected_keys,
+)
 from core.services.missing_slot_checker import MissingSlotChecker
 from core.runtime_preflight import validate_runtime_for_model
 from core.position_validator import PositionValidator
@@ -253,6 +259,7 @@ class YOLOInferenceModel(BaseInferenceModel):
                 det["cy"] = (y1 + y2) / 2
 
             slot_check: dict[str, Any] | None = None
+            layout_alignment = ExpectedLayoutAlignment()
 
             # Position check can be toggled per product/area; skip entirely when disabled
             position_enabled = False
@@ -269,10 +276,16 @@ class YOLOInferenceModel(BaseInferenceModel):
             if position_enabled:
                 validator = PositionValidator(self.config, product, area)
                 detections = validator.validate(detections)
+                layout_alignment = getattr(
+                    validator,
+                    "last_alignment",
+                    ExpectedLayoutAlignment(),
+                )
                 missing_items, slot_mismatches = self._resolve_slot_mismatches(
                     detections,
                     missing_items,
                     position_cfg,
+                    alignment=layout_alignment,
                 )
                 missing_items, slot_check = self._refine_missing_items(
                     processed_image,
@@ -335,6 +348,11 @@ class YOLOInferenceModel(BaseInferenceModel):
                 "expected_items": expected_items,
                 "ckpt_path": str(self.config.weights),
                 "slot_check": slot_check,
+                "layout_alignment": layout_alignment.to_dict(),
+                "aligned_expected_boxes": build_aligned_expected_boxes(
+                    position_cfg.get("expected_boxes", {}),
+                    layout_alignment,
+                ),
             }
         except Exception as exc:
             self.logger.logger.exception("YOLO inference failed")
@@ -395,13 +413,14 @@ class YOLOInferenceModel(BaseInferenceModel):
         detections: list[dict[str, Any]],
         missing_items: list[str],
         position_cfg: dict[str, Any],
+        *,
+        alignment: ExpectedLayoutAlignment,
     ) -> tuple[list[str], list[dict[str, Any]]]:
         """Convert occupied-but-misclassified missing slots into slot mismatches."""
         expected_boxes = position_cfg.get("expected_boxes", {})
         if not missing_items or not isinstance(expected_boxes, dict) or not expected_boxes:
             return list(missing_items), []
 
-        shift_x, shift_y = self._estimate_global_shift(detections)
         used_expected_keys = {
             str(det.get("position_expected_key"))
             for det in detections
@@ -411,7 +430,7 @@ class YOLOInferenceModel(BaseInferenceModel):
         mismatch_records: list[dict[str, Any]] = []
         used_detection_ids: set[int] = set()
 
-        for expected_key in self._resolve_missing_expected_keys(
+        for expected_key in resolve_missing_expected_keys(
             missing_items,
             expected_boxes,
             used_expected_keys,
@@ -420,8 +439,8 @@ class YOLOInferenceModel(BaseInferenceModel):
             if not isinstance(expected_box, dict):
                 continue
 
-            expected_class = self._base_class_name(expected_key)
-            shifted_box = self._shift_expected_box(expected_box, shift_x, shift_y)
+            expected_class = base_class_name(expected_key)
+            shifted_box = alignment.shift_box(expected_box)
             mismatch_det = self._find_slot_mismatch_detection(
                 detections,
                 shifted_box,
@@ -458,81 +477,6 @@ class YOLOInferenceModel(BaseInferenceModel):
                 refined_missing.append(key)
                 remaining_counter[key] -= 1
         return refined_missing, mismatch_records
-
-    @staticmethod
-    def _base_class_name(key: str) -> str:
-        idx = key.rfind("#")
-        if idx > 0 and key[idx + 1 :].isdigit():
-            return key[:idx]
-        return key
-
-    def _resolve_missing_expected_keys(
-        self,
-        missing_items: list[str],
-        expected_boxes: dict[str, dict[str, Any]],
-        used_expected_keys: set[str],
-    ) -> list[str]:
-        matched_keys: list[str] = []
-        consumed = set(used_expected_keys)
-        expected_keys = list(expected_boxes.keys())
-        for missing_name in missing_items:
-            base_name = str(missing_name or "").strip()
-            if not base_name:
-                continue
-            for key in expected_keys:
-                if key in consumed:
-                    continue
-                if self._base_class_name(key) != base_name:
-                    continue
-                matched_keys.append(key)
-                consumed.add(key)
-                break
-        return matched_keys
-
-    @staticmethod
-    def _estimate_global_shift(
-        detections: list[dict[str, Any]],
-    ) -> tuple[float, float]:
-        shifts_x: list[float] = []
-        shifts_y: list[float] = []
-        for det in detections or []:
-            offset = det.get("position_offset")
-            if isinstance(offset, dict):
-                try:
-                    shifts_x.append(float(offset["dx"]))
-                    shifts_y.append(float(offset["dy"]))
-                    continue
-                except (KeyError, TypeError, ValueError):
-                    pass
-
-            expected_center = det.get("position_expected_center")
-            bbox = det.get("bbox")
-            if isinstance(expected_center, dict) and bbox and len(bbox) >= 4:
-                try:
-                    exp_x = float(expected_center["cx"])
-                    exp_y = float(expected_center["cy"])
-                    x1, y1, x2, y2 = (float(v) for v in bbox[:4])
-                    shifts_x.append(((x1 + x2) / 2.0) - exp_x)
-                    shifts_y.append(((y1 + y2) / 2.0) - exp_y)
-                except (KeyError, TypeError, ValueError):
-                    continue
-
-        if not shifts_x or not shifts_y:
-            return 0.0, 0.0
-        return float(np.median(shifts_x)), float(np.median(shifts_y))
-
-    @staticmethod
-    def _shift_expected_box(
-        expected_box: dict[str, Any],
-        shift_x: float,
-        shift_y: float,
-    ) -> tuple[int, int, int, int]:
-        return (
-            int(round(float(expected_box["x1"]) + shift_x)),
-            int(round(float(expected_box["y1"]) + shift_y)),
-            int(round(float(expected_box["x2"]) + shift_x)),
-            int(round(float(expected_box["y2"]) + shift_y)),
-        )
 
     def _find_slot_mismatch_detection(
         self,

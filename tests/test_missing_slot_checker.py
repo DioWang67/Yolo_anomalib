@@ -34,7 +34,9 @@ def test_missing_slot_checker_recovers_missing_item_from_roi_occupancy():
 
     assert remaining == []
     assert report["recovered_items"] == ["part_c"]
-    assert report["estimated_shift"] == {"dx": -20.0, "dy": -10.0}
+    assert report["estimated_shift"]["dx"] == -20.0
+    assert report["estimated_shift"]["dy"] == -10.0
+    assert report["estimated_shift"]["source_count"] == 2
 
 
 def test_missing_slot_checker_keeps_missing_item_when_roi_is_flat():

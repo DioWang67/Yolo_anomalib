@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 from unittest.mock import MagicMock, Mock
 
 import numpy as np
@@ -307,6 +308,7 @@ def _make_pos_config(
     mode: str = "center",
     imgsz: int = 640,
     enabled: bool = True,
+    alignment: dict | None = None,
 ) -> DetectionConfig:
     """Build a DetectionConfig with position_config wired up."""
     cfg = DetectionConfig(weights="dummy.pt")
@@ -319,6 +321,7 @@ def _make_pos_config(
                 "tolerance_unit": tolerance_unit,
                 "mode": mode,
                 "imgsz": imgsz,
+                "alignment": alignment or {},
             }
         }
     }
@@ -789,6 +792,70 @@ class TestPerClassTolerancePixelUnit:
         # 15px offset; per-class 20px (pixel) → CORRECT
         dets = v.validate([_det("W", 115.0, 100.0)])
         assert dets[0]["position_status"] == "CORRECT"
+
+
+class TestAlignmentAwareValidation:
+    def test_global_shift_is_compensated_when_two_or_more_sources_exist(self):
+        boxes = {
+            "A": {"x1": 90, "y1": 90, "x2": 110, "y2": 110},
+            "B": {"x1": 190, "y1": 190, "x2": 210, "y2": 210},
+            "C": {"x1": 290, "y1": 290, "x2": 310, "y2": 310},
+        }
+        cfg = _make_pos_config(
+            boxes,
+            tolerance=5.0,
+            tolerance_unit="pixel",
+            alignment={"enabled": True, "min_source_count": 2},
+        )
+        v = PositionValidator(cfg, "P", "A")
+        dets = v.validate([
+            _det("A", 80.0, 95.0),
+            _det("B", 180.0, 195.0),
+            _det("C", 280.0, 295.0),
+        ])
+        assert all(d["position_status"] == "CORRECT" for d in dets)
+        assert v.last_alignment.dx == pytest.approx(-20.0)
+        assert v.last_alignment.dy == pytest.approx(-5.0)
+        assert dets[0]["position_offset"] == {"dx": 0.0, "dy": 0.0}
+        assert dets[0]["position_offset_raw"] == {"dx": -20.0, "dy": -5.0}
+
+    def test_local_part_shift_still_fails_after_global_alignment(self):
+        boxes = {
+            "A": {"x1": 90, "y1": 90, "x2": 110, "y2": 110},
+            "B": {"x1": 190, "y1": 190, "x2": 210, "y2": 210},
+            "C": {"x1": 290, "y1": 290, "x2": 310, "y2": 310},
+        }
+        cfg = _make_pos_config(
+            boxes,
+            tolerance=5.0,
+            tolerance_unit="pixel",
+            alignment={"enabled": True, "min_source_count": 2},
+        )
+        v = PositionValidator(cfg, "P", "A")
+        dets = v.validate([
+            _det("A", 80.0, 95.0),
+            _det("B", 180.0, 195.0),
+            _det("C", 291.0, 308.0),
+        ])
+        status_by_class = {det["class"]: det["position_status"] for det in dets}
+        assert status_by_class["A"] == "CORRECT"
+        assert status_by_class["B"] == "CORRECT"
+        assert status_by_class["C"] == "WRONG"
+        wrong_det = next(det for det in dets if det["class"] == "C")
+        assert wrong_det["position_offset"] == {"dx": 11.0, "dy": 13.0}
+
+    def test_single_detection_does_not_auto_align_by_default(self):
+        boxes = {"A": {"x1": 90, "y1": 90, "x2": 110, "y2": 110}}
+        cfg = _make_pos_config(
+            boxes,
+            tolerance=5.0,
+            tolerance_unit="pixel",
+            alignment={"enabled": True, "min_source_count": 2},
+        )
+        v = PositionValidator(cfg, "P", "A")
+        dets = v.validate([_det("A", 80.0, 95.0)])
+        assert v.last_alignment.source_count == 0
+        assert dets[0]["position_status"] == "WRONG"
 
 
 class TestSequenceCheckStep:

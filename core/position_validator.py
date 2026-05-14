@@ -17,6 +17,8 @@ import logging
 from collections import defaultdict
 from typing import Any
 
+from core.services.alignment import ExpectedLayoutAlignment
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,6 +59,13 @@ class PositionValidator:
         self.tolerance_px = self._calculate_tolerance_px()
         self._validate_config()
         self.expected_centers = self._precompute_expected_centers()
+        self.alignment_config = self._get_alignment_config()
+        self.alignment_enabled = bool(self.alignment_config.get("enabled", True))
+        self.alignment_min_sources = max(
+            int(self.alignment_config.get("min_source_count", 2)),
+            1,
+        )
+        self.last_alignment = ExpectedLayoutAlignment()
 
         # Group expected boxes by base class for multi-instance matching
         self._base_class_groups: dict[str, list[str]] = defaultdict(list)
@@ -95,6 +104,10 @@ class PositionValidator:
                 return tol
             return self.imgsz * (tol / 100.0)
         return self.tolerance_px
+
+    def _get_alignment_config(self) -> dict[str, Any]:
+        alignment = self.pos_config.get("alignment", {})
+        return alignment if isinstance(alignment, dict) else {}
 
     def _validate_config(self) -> None:
         for class_name, box in self.expected_boxes.items():
@@ -165,6 +178,8 @@ class PositionValidator:
             candidates = det_by_class.get(base_class, [])
             self._greedy_assign(keys, candidates, assigned)
 
+        self.last_alignment = self._estimate_layout_alignment(detections, assigned)
+
         # Now annotate each detection
         for det in detections:
             if "cx" not in det or "cy" not in det:
@@ -189,14 +204,28 @@ class PositionValidator:
                 class_name = det.get("class", "")
 
             expected_box = self.expected_boxes.get(class_name)
+            raw_expected_center = self.expected_centers.get(class_name)
+            aligned_expected_box = self._build_aligned_expected_box(expected_box)
+            aligned_expected_center = self._build_aligned_expected_center(raw_expected_center)
             det["position_expected_key"] = class_name if expected_box is not None else None
             det["position_mode"] = self.mode
+            det["position_layout_alignment"] = self.last_alignment.to_dict()
             det["position_tolerance_px"] = (
                 self._get_class_tolerance_px(expected_box)
                 if expected_box is not None
                 else self.tolerance_px
             )
             det["position_expected_box"] = (
+                {
+                    "x1": float(aligned_expected_box["x1"]),
+                    "y1": float(aligned_expected_box["y1"]),
+                    "x2": float(aligned_expected_box["x2"]),
+                    "y2": float(aligned_expected_box["y2"]),
+                }
+                if aligned_expected_box is not None
+                else None
+            )
+            det["position_expected_box_raw"] = (
                 {
                     "x1": float(expected_box["x1"]),
                     "y1": float(expected_box["y1"]),
@@ -210,21 +239,130 @@ class PositionValidator:
             (
                 status,
                 error_distance,
-                offset,
+                local_offset,
                 expected_center,
                 edge_distance,
-            ) = self._check_position(class_name, cx, cy, det)
+            ) = self._check_position(
+                class_name,
+                cx,
+                cy,
+                det,
+                expected_box=aligned_expected_box,
+                expected_center=aligned_expected_center,
+            )
+
+            raw_offset = self._compute_offset(cx, cy, raw_expected_center)
 
             det["position_status"] = status
             det["position_error"] = error_distance
-            det["position_offset"] = {"dx": offset[0], "dy": offset[1]}
+            det["position_offset"] = {"dx": local_offset[0], "dy": local_offset[1]}
+            det["position_offset_raw"] = {"dx": raw_offset[0], "dy": raw_offset[1]}
             det["position_expected_center"] = (
                 {"cx": expected_center[0], "cy": expected_center[1]}
                 if expected_center
                 else None
             )
+            det["position_expected_center_raw"] = (
+                {"cx": raw_expected_center[0], "cy": raw_expected_center[1]}
+                if raw_expected_center
+                else None
+            )
             det["position_edge_distance"] = edge_distance
         return detections
+
+    def _estimate_layout_alignment(
+        self,
+        detections: list[dict[str, Any]],
+        assigned: dict[int, str],
+    ) -> ExpectedLayoutAlignment:
+        """Estimate a shared board translation from matched detections."""
+        if not self.alignment_enabled:
+            return ExpectedLayoutAlignment()
+
+        shifts_x: list[float] = []
+        shifts_y: list[float] = []
+        for det in detections:
+            expected_key = assigned.get(id(det))
+            if not expected_key:
+                cls = str(det.get("class", "")).strip()
+                keys = self._base_class_groups.get(cls, [])
+                if len(keys) == 1 and "#" not in keys[0]:
+                    expected_key = keys[0]
+            if not expected_key:
+                continue
+
+            expected_center = self.expected_centers.get(expected_key)
+            if expected_center is None:
+                continue
+            try:
+                cx = float(det["cx"])
+                cy = float(det["cy"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not self._is_valid_coordinate(cx, cy):
+                continue
+            shifts_x.append(cx - expected_center[0])
+            shifts_y.append(cy - expected_center[1])
+
+        source_count = min(len(shifts_x), len(shifts_y))
+        if source_count < self.alignment_min_sources:
+            return ExpectedLayoutAlignment()
+        paired_shifts = list(zip(shifts_x, shifts_y))
+        shifts_x.sort()
+        shifts_y.sort()
+        mid = source_count // 2
+        if source_count % 2 == 1:
+            dx = shifts_x[mid]
+            dy = shifts_y[mid]
+        else:
+            dx = (shifts_x[mid - 1] + shifts_x[mid]) / 2.0
+            dy = (shifts_y[mid - 1] + shifts_y[mid]) / 2.0
+        consistency_gate = float(
+            self.alignment_config.get(
+                "max_local_deviation_px",
+                max(self.tolerance_px * 2.0, 10.0),
+            )
+        )
+        inlier_count = sum(
+            1
+            for sx, sy in paired_shifts
+            if abs(sx - dx) <= consistency_gate and abs(sy - dy) <= consistency_gate
+        )
+        if inlier_count < self.alignment_min_sources:
+            return ExpectedLayoutAlignment()
+        return ExpectedLayoutAlignment(dx=float(dx), dy=float(dy), source_count=inlier_count)
+
+    def _build_aligned_expected_box(
+        self,
+        expected_box: dict[str, Any] | None,
+    ) -> dict[str, float] | None:
+        if expected_box is None:
+            return None
+        shifted = self.last_alignment.shift_box(expected_box)
+        return {
+            "x1": float(shifted[0]),
+            "y1": float(shifted[1]),
+            "x2": float(shifted[2]),
+            "y2": float(shifted[3]),
+        }
+
+    def _build_aligned_expected_center(
+        self,
+        expected_center: tuple[float, float] | None,
+    ) -> tuple[float, float] | None:
+        if expected_center is None:
+            return None
+        return self.last_alignment.shift_center(expected_center[0], expected_center[1])
+
+    @staticmethod
+    def _compute_offset(
+        cx: float,
+        cy: float,
+        expected_center: tuple[float, float] | None,
+    ) -> tuple[float, float]:
+        if expected_center is None:
+            return 0.0, 0.0
+        return cx - expected_center[0], cy - expected_center[1]
 
     def _greedy_assign(
         self,
@@ -296,7 +434,12 @@ class PositionValidator:
         det["position_status"] = "UNKNOWN"
         det["position_error"] = None
         det["position_offset"] = None
+        det["position_offset_raw"] = None
         det["position_expected_center"] = None
+        det["position_expected_center_raw"] = None
+        det["position_expected_box"] = None
+        det["position_expected_box_raw"] = None
+        det["position_layout_alignment"] = self.last_alignment.to_dict()
         det["position_edge_distance"] = None
         logger.warning("Position check skipped (%s): %s", reason, det)
 
@@ -304,7 +447,12 @@ class PositionValidator:
         det["position_status"] = "INVALID"
         det["position_error"] = None
         det["position_offset"] = None
+        det["position_offset_raw"] = None
         det["position_expected_center"] = None
+        det["position_expected_center_raw"] = None
+        det["position_expected_box"] = None
+        det["position_expected_box_raw"] = None
+        det["position_layout_alignment"] = self.last_alignment.to_dict()
         det["position_edge_distance"] = None
         logger.warning(
             "Detection out of image bounds: class=%s, cx=%.2f, cy=%.2f, size=%s",
@@ -315,7 +463,12 @@ class PositionValidator:
         det["position_status"] = "ERROR"
         det["position_error"] = None
         det["position_offset"] = None
+        det["position_offset_raw"] = None
         det["position_expected_center"] = None
+        det["position_expected_center_raw"] = None
+        det["position_expected_box"] = None
+        det["position_expected_box_raw"] = None
+        det["position_layout_alignment"] = self.last_alignment.to_dict()
         det["position_edge_distance"] = None
         logger.error("Position validation failed (%s): %s", reason, payload)
 
@@ -328,21 +481,26 @@ class PositionValidator:
         cx: float,
         cy: float,
         det: dict[str, Any] | None = None,
+        *,
+        expected_box: dict[str, Any] | None = None,
+        expected_center: tuple[float, float] | None = None,
     ) -> tuple[str, float | None, tuple[float, float], tuple[float, float] | None, float]:
-        box = self.expected_boxes.get(class_name)
-        if not box:
+        if not expected_box:
             return "UNEXPECTED", None, (0.0, 0.0), None, 0.0
 
         error_distance, dx, dy, expected_center, edge_distance = self._compute_position_error(
-            class_name, cx, cy, box, det
+            cx, cy, expected_box, expected_center, det
         )
 
-        effective_tolerance = self._get_class_tolerance_px(box)
+        raw_box = self.expected_boxes.get(class_name)
+        effective_tolerance = (
+            self._get_class_tolerance_px(raw_box) if raw_box is not None else self.tolerance_px
+        )
 
         if self.mode == "iou":
             # For IoU mode, tolerance is minimum acceptable IoU (0-1 scale).
             # Read raw config value directly (not pixel-converted).
-            raw_tol = box.get("tolerance")
+            raw_tol = raw_box.get("tolerance") if raw_box is not None else None
             if raw_tol is None:
                 raw_tol = float(self.pos_config.get("tolerance", 0.0))
             else:
@@ -409,10 +567,10 @@ class PositionValidator:
 
     def _compute_position_error(
         self,
-        class_name: str,
         cx: float,
         cy: float,
         box: dict[str, Any],
+        expected_center: tuple[float, float] | None,
         det: dict[str, Any] | None = None,
     ) -> tuple[float, float, float, tuple[float, float] | None, float]:
         edge_distance = self._point_to_rect_distance(
@@ -421,11 +579,7 @@ class PositionValidator:
             float(box["x2"]), float(box["y2"]),
         )
 
-        expected_center = self.expected_centers.get(class_name)
-        dx = dy = 0.0
-        if expected_center:
-            dx = cx - expected_center[0]
-            dy = cy - expected_center[1]
+        dx, dy = self._compute_offset(cx, cy, expected_center)
 
         # IoU mode: compare detection bbox against expected bbox
         if self.mode == "iou" and det is not None:

@@ -7,6 +7,13 @@ from typing import Any
 import cv2
 import numpy as np
 
+from core.services.alignment import (
+    ExpectedLayoutAlignment,
+    base_class_name,
+    extract_layout_alignment,
+    resolve_missing_expected_keys,
+)
+
 
 @dataclass(frozen=True)
 class MissingSlotDecision:
@@ -49,7 +56,7 @@ class MissingSlotChecker:
         ):
             return list(missing_items), self._empty_report(missing_items)
 
-        shift_x, shift_y = self._estimate_global_shift(detections)
+        alignment = extract_layout_alignment(detections)
         used_expected_keys = {
             str(det.get("position_expected_key"))
             for det in (detections or [])
@@ -58,7 +65,7 @@ class MissingSlotChecker:
 
         remaining = list(missing_items)
         decisions: list[MissingSlotDecision] = []
-        missing_keys = self._resolve_missing_expected_keys(
+        missing_keys = resolve_missing_expected_keys(
             missing_items,
             expected_boxes,
             used_expected_keys,
@@ -69,15 +76,15 @@ class MissingSlotChecker:
             expected_box = expected_boxes.get(expected_key)
             if not isinstance(expected_box, dict):
                 continue
-            shifted_box = self._shift_box(expected_box, shift_x, shift_y)
+            shifted_box = alignment.shift_box(expected_box)
             occupied, reason, score = self._evaluate_slot(
                 processed_image,
                 detections,
                 shifted_box,
                 expected_key=expected_key,
-                class_name=self._base_class_name(expected_key),
+                class_name=base_class_name(expected_key),
             )
-            class_name = self._base_class_name(expected_key)
+            class_name = base_class_name(expected_key)
             decisions.append(
                 MissingSlotDecision(
                     expected_key=expected_key,
@@ -102,7 +109,7 @@ class MissingSlotChecker:
 
         report = {
             "enabled": True,
-            "estimated_shift": {"dx": shift_x, "dy": shift_y},
+            "estimated_shift": alignment.to_dict(),
             "recovered_items": [
                 decision.class_name for decision in decisions if decision.occupied
             ],
@@ -209,88 +216,6 @@ class MissingSlotChecker:
             if det_class == class_name:
                 return True
         return False
-
-    def _estimate_global_shift(
-        self,
-        detections: list[dict[str, Any]],
-    ) -> tuple[float, float]:
-        shifts_x: list[float] = []
-        shifts_y: list[float] = []
-        for det in detections or []:
-            dx, dy = self._extract_detection_shift(det)
-            if dx is None or dy is None:
-                continue
-            shifts_x.append(dx)
-            shifts_y.append(dy)
-        if not shifts_x or not shifts_y:
-            return 0.0, 0.0
-        return float(np.median(shifts_x)), float(np.median(shifts_y))
-
-    @staticmethod
-    def _extract_detection_shift(
-        detection: dict[str, Any],
-    ) -> tuple[float | None, float | None]:
-        offset = detection.get("position_offset")
-        if isinstance(offset, dict):
-            try:
-                return float(offset["dx"]), float(offset["dy"])
-            except (KeyError, TypeError, ValueError):
-                pass
-
-        expected_center = detection.get("position_expected_center")
-        bbox = detection.get("bbox")
-        if isinstance(expected_center, dict) and bbox and len(bbox) >= 4:
-            try:
-                exp_x = float(expected_center["cx"])
-                exp_y = float(expected_center["cy"])
-                x1, y1, x2, y2 = (float(v) for v in bbox[:4])
-                return ((x1 + x2) / 2.0) - exp_x, ((y1 + y2) / 2.0) - exp_y
-            except (KeyError, TypeError, ValueError):
-                return None, None
-        return None, None
-
-    @staticmethod
-    def _shift_box(
-        expected_box: dict[str, Any],
-        shift_x: float,
-        shift_y: float,
-    ) -> tuple[int, int, int, int]:
-        return (
-            int(round(float(expected_box["x1"]) + shift_x)),
-            int(round(float(expected_box["y1"]) + shift_y)),
-            int(round(float(expected_box["x2"]) + shift_x)),
-            int(round(float(expected_box["y2"]) + shift_y)),
-        )
-
-    def _resolve_missing_expected_keys(
-        self,
-        missing_items: list[str],
-        expected_boxes: dict[str, dict[str, Any]],
-        used_expected_keys: set[str],
-    ) -> list[str]:
-        matched_keys: list[str] = []
-        consumed = set(used_expected_keys)
-        expected_keys = list(expected_boxes.keys())
-        for missing_name in missing_items:
-            base_name = str(missing_name or "").strip()
-            if not base_name:
-                continue
-            for key in expected_keys:
-                if key in consumed:
-                    continue
-                if self._base_class_name(key) != base_name:
-                    continue
-                matched_keys.append(key)
-                consumed.add(key)
-                break
-        return matched_keys
-
-    @staticmethod
-    def _base_class_name(key: str) -> str:
-        idx = key.rfind("#")
-        if idx > 0 and key[idx + 1 :].isdigit():
-            return key[:idx]
-        return key
 
     @staticmethod
     def _empty_report(missing_items: list[str]) -> dict[str, Any]:

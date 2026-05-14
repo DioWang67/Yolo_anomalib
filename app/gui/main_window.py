@@ -794,6 +794,8 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             metadata={
                 "slot_check": res.get("slot_check"),
                 "slot_mismatches": res.get("slot_mismatches", []),
+                "layout_alignment": res.get("layout_alignment"),
+                "aligned_expected_boxes": res.get("aligned_expected_boxes", {}),
             },
         )
         self.on_detection_complete(result)
