@@ -283,6 +283,11 @@ class YOLOInferenceModel(BaseInferenceModel):
                     "last_alignment",
                     ExpectedLayoutAlignment(),
                 )
+                alignment_quality = getattr(
+                    validator,
+                    "last_alignment_quality",
+                    {"enabled": False, "is_ok": True, "issues": []},
+                )
                 missing_items, slot_mismatches = self._resolve_slot_mismatches(
                     detections,
                     missing_items,
@@ -299,6 +304,7 @@ class YOLOInferenceModel(BaseInferenceModel):
                 status = validator.evaluate_status(detections, missing_items)
             else:
                 slot_mismatches = []
+                alignment_quality = {"enabled": False, "is_ok": True, "issues": []}
                 missing_items, slot_check = self._refine_missing_items(
                     processed_image,
                     detections,
@@ -333,6 +339,7 @@ class YOLOInferenceModel(BaseInferenceModel):
                 missing_items=list(missing_items),
                 unexpected_items=unexpected_items,
                 slot_mismatches=slot_mismatches,
+                alignment_quality=alignment_quality,
             )
             status = decision.status.value
 
@@ -355,6 +362,7 @@ class YOLOInferenceModel(BaseInferenceModel):
                 "ckpt_path": str(self.config.weights),
                 "slot_check": slot_check,
                 "layout_alignment": layout_alignment.to_dict(),
+                "alignment_quality": alignment_quality,
                 "aligned_expected_boxes": build_aligned_expected_boxes(
                     position_cfg.get("expected_boxes", {}),
                     layout_alignment,

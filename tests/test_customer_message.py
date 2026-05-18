@@ -101,3 +101,28 @@ def test_customer_message_reports_slot_mismatch():
     assert message.headline == "元件類別不符"
     assert "錯料" in message.action or "分類" in message.action
     assert any("E" in detail and "A" in detail for detail in message.details)
+
+
+def test_customer_message_reports_board_alignment_failure():
+    result = DetectionResult(
+        status="DETECTION_FAIL",
+        metadata={
+            "decision": {"reasons": ["BOARD_ALIGNMENT"]},
+            "alignment_quality": {
+                "enabled": True,
+                "is_ok": False,
+                "issues": ["alignment_shift_out_of_range"],
+                "dx": 12.0,
+                "dy": -3.0,
+                "observed_source_count": 2,
+                "required_source_count": 2,
+            },
+        },
+    )
+
+    message = build_customer_message(result)
+
+    assert message.headline == "板件對位異常"
+    assert "治具" in message.action
+    assert message.severity == "danger"
+    assert any("整板偏移超出範圍" in detail for detail in message.details)

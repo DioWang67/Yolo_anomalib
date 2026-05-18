@@ -690,6 +690,7 @@ class DetectionSystem:
                     "slot_check": result.get("slot_check"),
                     "slot_mismatches": result.get("slot_mismatches", []),
                     "layout_alignment": result.get("layout_alignment"),
+                    "alignment_quality": result.get("alignment_quality"),
                     "aligned_expected_boxes": result.get("aligned_expected_boxes", {}),
                 },
             )

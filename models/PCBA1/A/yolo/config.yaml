@@ -1,6 +1,6 @@
 weights: models/PCBA1/A/yolo/weights/best.onnx
 device: cpu
-conf_thres: 0.8
+conf_thres: 0.9
 iou_thres: 0.45
 imgsz:
 - 640
@@ -18,6 +18,17 @@ expected_items:
     - C22B
     - J6
     - J7
+defect_coverage:
+  covered:
+  - missing_component
+  - wrong_component
+  - position_shift
+  - unexpected_component
+  not_covered:
+  - solder_quality
+  - scratch
+  - contamination
+  - polarity_mark
 pipeline:
 - count_check
 - save_results
@@ -29,7 +40,7 @@ position_config:
   PCBA1:
     A:
       enabled: true
-      mode: iou
+      mode: region
       tolerance: 1.06
       expected_boxes:
         C22B:
@@ -83,11 +94,18 @@ position_config:
           sigma_cy: 1.8
           count: 21
       imgsz: 640
-      tolerance_unit: pixel
+      tolerance_unit: percent
       alignment:
-        enabled: true
-      missing_slot_check:
         enabled: false
+        min_source_count: 2
+        max_local_deviation_px: 15.0
+        quality_gate:
+          enabled: true
+          max_abs_dx_px: 30.0
+          max_abs_dy_px: 30.0
+          max_shift_px: 40.0
+      missing_slot_check:
+        enabled: true
 enable_anomalib: false
 color_checker_type: color_qc
 color_score_threshold: 0.0

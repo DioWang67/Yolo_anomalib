@@ -143,6 +143,23 @@ class FailReasonLabel(QLabel):
         if result.error:
             reasons.append(str(result.error))
 
+        decision = (result.metadata or {}).get("decision")
+        decision_reasons = []
+        if isinstance(decision, dict):
+            decision_reasons = [
+                str(reason) for reason in (decision.get("reasons") or [])
+            ]
+        if "BOARD_ALIGNMENT" in decision_reasons:
+            alignment_quality = (result.metadata or {}).get("alignment_quality")
+            detail = "板件放置偏移 / 治具對位異常"
+            if isinstance(alignment_quality, dict):
+                issues = alignment_quality.get("issues") or []
+                if issues:
+                    detail += ": " + "、".join(
+                        _alignment_issue_label(str(i)) for i in issues[:2]
+                    )
+            reasons.append(detail)
+
         missing = result.missing_items or []
         if missing:
             reasons.append(f"缺件：{', '.join(str(i) for i in missing[:3])}"
@@ -615,6 +632,37 @@ class ResultDisplayWidget(QWidget):
                 lines.append(f"  全部 {position_summary.correct_count} 件位置正確")
 
         # --- 偵測細節 ---
+        decision = result.metadata.get("decision") if result.metadata else None
+        if isinstance(decision, dict):
+            decision_reasons = decision.get("reasons") or []
+            if decision_reasons:
+                lines.append("\n=== Decision Reasons ===")
+                lines.append(", ".join(str(reason) for reason in decision_reasons))
+
+        alignment_quality = (
+            result.metadata.get("alignment_quality") if result.metadata else None
+        )
+        if isinstance(alignment_quality, dict) and alignment_quality.get("enabled"):
+            lines.append("\n=== Alignment Quality ===")
+            lines.append("PASS" if alignment_quality.get("is_ok", True) else "FAIL")
+            issues = alignment_quality.get("issues") or []
+            if issues:
+                lines.append(
+                    "issues: "
+                    + "、".join(_alignment_issue_label(str(issue)) for issue in issues)
+                )
+            try:
+                dx = float(alignment_quality.get("dx", 0.0))
+                dy = float(alignment_quality.get("dy", 0.0))
+                lines.append(f"shift: dx={dx:+.1f}, dy={dy:+.1f}")
+            except (TypeError, ValueError):
+                pass
+            lines.append(
+                "sources: "
+                f"{alignment_quality.get('observed_source_count', 0)}/"
+                f"{alignment_quality.get('required_source_count', 0)}"
+            )
+
         if result.items:
             lines.append("\n=== 偵測細節 (前 5 筆) ===")
             for idx, item in enumerate(result.items[:5], start=1):
@@ -630,3 +678,14 @@ class ResultDisplayWidget(QWidget):
 
         lines.append("===================")
         self._result_text.setPlainText("\n".join(lines))
+
+
+def _alignment_issue_label(issue: str) -> str:
+    labels = {
+        "insufficient_alignment_sources": "可用對位特徵不足",
+        "insufficient_alignment_inliers": "對位特徵一致性不足",
+        "alignment_dx_out_of_range": "水平偏移超出範圍",
+        "alignment_dy_out_of_range": "垂直偏移超出範圍",
+        "alignment_shift_out_of_range": "整板偏移超出範圍",
+    }
+    return labels.get(issue, issue)

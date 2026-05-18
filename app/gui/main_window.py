@@ -797,9 +797,11 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             sequence_check=res.get("sequence_check"),
             result_frame=res.get("result_frame"),
             metadata={
+                "decision": res.get("decision"),
                 "slot_check": res.get("slot_check"),
                 "slot_mismatches": res.get("slot_mismatches", []),
                 "layout_alignment": res.get("layout_alignment"),
+                "alignment_quality": res.get("alignment_quality"),
                 "aligned_expected_boxes": res.get("aligned_expected_boxes", {}),
             },
         )

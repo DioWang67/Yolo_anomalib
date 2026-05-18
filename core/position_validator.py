@@ -144,6 +144,11 @@ class PositionValidator:
             1,
         )
         self.last_alignment = ExpectedLayoutAlignment()
+        self.last_alignment_quality: dict[str, Any] = self._build_alignment_quality(
+            self.last_alignment,
+            observed_source_count=0,
+            inlier_count=0,
+        )
 
         # Group expected boxes by base class for multi-instance matching
         self._base_class_groups: dict[str, list[str]] = defaultdict(list)
@@ -288,6 +293,7 @@ class PositionValidator:
             det["position_expected_key"] = class_name if expected_box is not None else None
             det["position_mode"] = self.mode
             det["position_layout_alignment"] = self.last_alignment.to_dict()
+            det["position_alignment_quality"] = dict(self.last_alignment_quality)
             det["position_tolerance_px"] = (
                 self._get_class_tolerance_px(expected_box)
                 if expected_box is not None
@@ -384,6 +390,11 @@ class PositionValidator:
 
         source_count = min(len(shifts_x), len(shifts_y))
         if source_count < self.alignment_min_sources:
+            self.last_alignment_quality = self._build_alignment_quality(
+                ExpectedLayoutAlignment(),
+                observed_source_count=source_count,
+                inlier_count=0,
+            )
             return ExpectedLayoutAlignment()
         paired_shifts = list(zip(shifts_x, shifts_y))
         shifts_x.sort()
@@ -407,8 +418,62 @@ class PositionValidator:
             if abs(sx - dx) <= consistency_gate and abs(sy - dy) <= consistency_gate
         )
         if inlier_count < self.alignment_min_sources:
+            self.last_alignment_quality = self._build_alignment_quality(
+                ExpectedLayoutAlignment(),
+                observed_source_count=source_count,
+                inlier_count=inlier_count,
+            )
             return ExpectedLayoutAlignment()
-        return ExpectedLayoutAlignment(dx=float(dx), dy=float(dy), source_count=inlier_count)
+        alignment = ExpectedLayoutAlignment(dx=float(dx), dy=float(dy), source_count=inlier_count)
+        self.last_alignment_quality = self._build_alignment_quality(
+            alignment,
+            observed_source_count=source_count,
+            inlier_count=inlier_count,
+        )
+        return alignment
+
+    def _build_alignment_quality(
+        self,
+        alignment: ExpectedLayoutAlignment,
+        *,
+        observed_source_count: int,
+        inlier_count: int,
+    ) -> dict[str, Any]:
+        gate = self.alignment_config.get("quality_gate", {})
+        gate = gate if isinstance(gate, dict) else {}
+        enabled = bool(gate.get("enabled", False))
+        issues: list[str] = []
+
+        if enabled and self.alignment_enabled:
+            if observed_source_count < self.alignment_min_sources:
+                issues.append("insufficient_alignment_sources")
+            elif inlier_count < self.alignment_min_sources:
+                issues.append("insufficient_alignment_inliers")
+
+            max_abs_dx = gate.get("max_abs_dx_px")
+            if max_abs_dx is not None and abs(alignment.dx) > float(max_abs_dx):
+                issues.append("alignment_dx_out_of_range")
+
+            max_abs_dy = gate.get("max_abs_dy_px")
+            if max_abs_dy is not None and abs(alignment.dy) > float(max_abs_dy):
+                issues.append("alignment_dy_out_of_range")
+
+            max_shift = gate.get("max_shift_px")
+            if max_shift is not None:
+                shift = (alignment.dx ** 2 + alignment.dy ** 2) ** 0.5
+                if shift > float(max_shift):
+                    issues.append("alignment_shift_out_of_range")
+
+        return {
+            "enabled": enabled,
+            "is_ok": not issues,
+            "issues": issues,
+            "observed_source_count": int(observed_source_count),
+            "inlier_count": int(inlier_count),
+            "required_source_count": int(self.alignment_min_sources),
+            "dx": float(alignment.dx),
+            "dy": float(alignment.dy),
+        }
 
     def _build_aligned_expected_box(
         self,
@@ -518,6 +583,7 @@ class PositionValidator:
         det["position_expected_box"] = None
         det["position_expected_box_raw"] = None
         det["position_layout_alignment"] = self.last_alignment.to_dict()
+        det["position_alignment_quality"] = dict(self.last_alignment_quality)
         det["position_edge_distance"] = None
         logger.warning("Position check skipped (%s): %s", reason, det)
 
@@ -531,6 +597,7 @@ class PositionValidator:
         det["position_expected_box"] = None
         det["position_expected_box_raw"] = None
         det["position_layout_alignment"] = self.last_alignment.to_dict()
+        det["position_alignment_quality"] = dict(self.last_alignment_quality)
         det["position_edge_distance"] = None
         logger.warning(
             "Detection out of image bounds: class=%s, cx=%.2f, cy=%.2f, size=%s",
@@ -547,6 +614,7 @@ class PositionValidator:
         det["position_expected_box"] = None
         det["position_expected_box_raw"] = None
         det["position_layout_alignment"] = self.last_alignment.to_dict()
+        det["position_alignment_quality"] = dict(self.last_alignment_quality)
         det["position_edge_distance"] = None
         logger.error("Position validation failed (%s): %s", reason, payload)
 

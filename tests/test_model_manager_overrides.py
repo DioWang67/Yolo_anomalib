@@ -6,6 +6,7 @@ import yaml
 from core.config import DetectionConfig
 from core.exceptions import ModelConfigError
 from core.logging_config import DetectionLogger
+from core.path_utils import project_root
 from core.services.model_manager import ModelManager
 
 
@@ -81,9 +82,11 @@ def test_model_overrides_resolve_relative_paths_and_keep_globals(tmp_path, monke
         base_config, product="Cable1", area="A", inference_type="yolo"
     )
 
-    # Assert: relative paths resolved against model config folder
-    expected_output_dir = str((models_root / "outputs").resolve())
+    # Result output paths stay project-root-relative, not under the model bundle.
+    expected_output_dir = str((project_root() / "outputs").resolve())
     assert cfg_snapshot.output_dir == expected_output_dir
+
+    # Model resources still resolve relative to the model config folder.
     assert cfg_snapshot.color_model_path == str((models_root / "color.json").resolve())
 
     # Global-only fields should stay when not overridden

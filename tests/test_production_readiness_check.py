@@ -165,6 +165,86 @@ def test_run_readiness_checks_fails_enabled_color_without_model(tmp_path):
     assert any(check.name == "color_fail_closed" and check.status == "FAIL" for check in checks)
 
 
+def test_run_readiness_checks_warns_when_defect_coverage_is_missing(tmp_path):
+    weights = tmp_path / "best.onnx"
+    weights.write_bytes(b"model")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "weights": str(weights),
+                "current_product": "PCBA1",
+                "current_area": "A",
+                "expected_items": {"PCBA1": {"A": ["J5"]}},
+                "position_config": {
+                    "PCBA1": {
+                        "A": {
+                            "enabled": True,
+                            "expected_boxes": {"J5": {"x1": 1, "y1": 2, "x2": 3, "y2": 4}},
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    checks = run_readiness_checks(config_path)
+
+    assert any(
+        check.name == "defect_coverage_declared" and check.status == "WARN"
+        for check in checks
+    )
+
+
+def test_run_readiness_checks_passes_declared_defect_coverage_with_limitations(tmp_path):
+    weights = tmp_path / "best.onnx"
+    weights.write_bytes(b"model")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "weights": str(weights),
+                "current_product": "PCBA1",
+                "current_area": "A",
+                "expected_items": {"PCBA1": {"A": ["J5"]}},
+                "defect_coverage": {
+                    "covered": ["missing_component", "position_shift"],
+                    "not_covered": ["solder_quality"],
+                },
+                "position_config": {
+                    "PCBA1": {
+                        "A": {
+                            "enabled": True,
+                            "expected_boxes": {"J5": {"x1": 1, "y1": 2, "x2": 3, "y2": 4}},
+                            "alignment": {
+                                "enabled": True,
+                                "quality_gate": {"enabled": True, "max_shift_px": 10},
+                            },
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    checks = run_readiness_checks(config_path)
+
+    assert any(
+        check.name == "defect_coverage_declared" and check.status == "PASS"
+        for check in checks
+    )
+    assert any(
+        check.name == "defect_coverage_limitations" and check.status == "WARN"
+        for check in checks
+    )
+    assert any(
+        check.name == "alignment_quality_gate" and check.status == "PASS"
+        for check in checks
+    )
+
+
 def test_write_report_outputs_json(tmp_path):
     config_path = tmp_path / "missing.yaml"
     checks = run_readiness_checks(config_path, product="P", area="A")

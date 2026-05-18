@@ -18,6 +18,7 @@ class InspectionReason(str, Enum):
     MISSING = "MISSING"
     WRONG_COMPONENT = "WRONG_COMPONENT"
     POSITION_SHIFT = "POSITION_SHIFT"
+    BOARD_ALIGNMENT = "BOARD_ALIGNMENT"
     UNEXPECTED_COMPONENT = "UNEXPECTED_COMPONENT"
     LOW_CONFIDENCE = "LOW_CONFIDENCE"
 
@@ -66,6 +67,7 @@ class InspectionDecisionEngine:
         missing_items: list[str] | None = None,
         unexpected_items: list[str] | None = None,
         slot_mismatches: list[dict[str, Any]] | None = None,
+        alignment_quality: dict[str, Any] | None = None,
     ) -> InspectionDecision:
         """Evaluate final inspection status from normalized validation signals.
 
@@ -76,6 +78,7 @@ class InspectionDecisionEngine:
             unexpected_items: Classes detected but not expected by product config.
             slot_mismatches: Records where a missing expected slot is occupied by
                 a different class.
+            alignment_quality: Optional board alignment gate result.
 
         Returns:
             InspectionDecision containing PASS/FAIL and reason metadata.
@@ -113,6 +116,16 @@ class InspectionDecisionEngine:
                 details,
                 InspectionReason.POSITION_SHIFT,
                 {"items": shifted},
+            )
+
+        if isinstance(alignment_quality, dict) and not bool(
+            alignment_quality.get("is_ok", True)
+        ):
+            self._add_reason(
+                reasons,
+                details,
+                InspectionReason.BOARD_ALIGNMENT,
+                {"items": dict(alignment_quality)},
             )
 
         unexpected = [

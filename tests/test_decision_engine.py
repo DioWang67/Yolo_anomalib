@@ -60,6 +60,25 @@ def test_decision_engine_reports_position_shift():
     assert decision.details[0]["items"][0]["class"] == "U3"
 
 
+def test_decision_engine_reports_board_alignment_failure():
+    decision = InspectionDecisionEngine().evaluate(
+        detections=[],
+        missing_items=[],
+        unexpected_items=[],
+        alignment_quality={
+            "enabled": True,
+            "is_ok": False,
+            "issues": ["alignment_shift_out_of_range"],
+            "dx": 18.0,
+            "dy": 0.0,
+        },
+    )
+
+    assert decision.status == InspectionStatus.FAIL
+    assert decision.reasons == [InspectionReason.BOARD_ALIGNMENT]
+    assert decision.details[0]["items"]["issues"] == ["alignment_shift_out_of_range"]
+
+
 def test_decision_engine_respects_unexpected_fail_policy():
     strict_decision = InspectionDecisionEngine(fail_on_unexpected=True).evaluate(
         unexpected_items=["UNKNOWN_PART"]

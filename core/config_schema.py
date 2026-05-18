@@ -84,6 +84,7 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         color_fail_closed: bool | None = True
         output_dir: str | None = "Result"
         anomalib_config: dict[str, Any] | None = None
+        defect_coverage: dict[str, Any] | None = None
         position_config: dict[str, dict[str, dict[str, Any]]] = Field(
             default_factory=dict
         )
@@ -164,6 +165,7 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         expected_items: dict[str, dict[str, list[str]]] | None = None
         position_config: dict[str, dict[str, dict[str, Any]]] | None = None
         anomalib_config: dict[str, Any] | None = None
+        defect_coverage: dict[str, Any] | None = None
         backends: dict[str, dict[str, Any]] | None = None
         pipeline: list[str] | None = None
         steps: dict[str, Any] = Field(default_factory=dict)

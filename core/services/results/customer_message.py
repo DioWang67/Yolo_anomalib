@@ -24,6 +24,8 @@ def build_customer_message(result: "DetectionResult") -> CustomerMessage:
     status = str(result.status or "").upper()
     slot_check = _get_slot_check(result)
     slot_mismatches = _get_slot_mismatches(result)
+    decision_reasons = _get_decision_reasons(result)
+    alignment_quality = _get_alignment_quality(result)
     recovered_items = _slot_check_recovered_items(slot_check)
     position_summary = summarize_position_records(
         [{"label": item.label, **item.metadata} for item in (result.items or [])]
@@ -79,6 +81,14 @@ def build_customer_message(result: "DetectionResult") -> CustomerMessage:
             action="請確認錯料、模型分類或光源後重測",
             severity="danger",
             details=details,
+        )
+
+    if "BOARD_ALIGNMENT" in decision_reasons:
+        return CustomerMessage(
+            headline="板件對位異常",
+            action="請確認治具、相機視野與板件放置位置後重新檢測",
+            severity="danger",
+            details=_nonempty([_alignment_quality_detail(alignment_quality)]),
         )
 
     fixture_hint = format_fixture_shift_hint(position_summary)
@@ -163,6 +173,58 @@ def _get_slot_mismatches(result: "DetectionResult") -> list[dict[str, Any]]:
     metadata = getattr(result, "metadata", {}) or {}
     values = metadata.get("slot_mismatches") or []
     return [value for value in values if isinstance(value, dict)]
+
+
+def _get_decision_reasons(result: "DetectionResult") -> list[str]:
+    metadata = getattr(result, "metadata", {}) or {}
+    decision = metadata.get("decision")
+    if not isinstance(decision, dict):
+        return []
+    reasons = decision.get("reasons") or []
+    return [str(reason) for reason in reasons if str(reason).strip()]
+
+
+def _get_alignment_quality(result: "DetectionResult") -> dict[str, Any] | None:
+    metadata = getattr(result, "metadata", {}) or {}
+    value = metadata.get("alignment_quality")
+    return value if isinstance(value, dict) else None
+
+
+def _alignment_quality_detail(alignment_quality: dict[str, Any] | None) -> str | None:
+    if not isinstance(alignment_quality, dict):
+        return "板件與治具對位未通過"
+    issues = alignment_quality.get("issues") or []
+    issue_text = "、".join(
+        _alignment_issue_label(str(issue))
+        for issue in issues
+        if str(issue).strip()
+    )
+    dx = alignment_quality.get("dx")
+    dy = alignment_quality.get("dy")
+    sources = alignment_quality.get("observed_source_count")
+    required = alignment_quality.get("required_source_count")
+    parts = []
+    if issue_text:
+        parts.append(issue_text)
+    if dx is not None and dy is not None:
+        try:
+            parts.append(f"dx={float(dx):+.1f}, dy={float(dy):+.1f}")
+        except (TypeError, ValueError):
+            pass
+    if sources is not None and required is not None:
+        parts.append(f"sources={sources}/{required}")
+    return " | ".join(parts) if parts else "板件與治具對位未通過"
+
+
+def _alignment_issue_label(issue: str) -> str:
+    labels = {
+        "insufficient_alignment_sources": "可用對位特徵不足",
+        "insufficient_alignment_inliers": "對位特徵一致性不足",
+        "alignment_dx_out_of_range": "水平偏移超出範圍",
+        "alignment_dy_out_of_range": "垂直偏移超出範圍",
+        "alignment_shift_out_of_range": "整板偏移超出範圍",
+    }
+    return labels.get(issue, issue)
 
 
 def _slot_check_recovered_items(slot_check: dict[str, Any] | None) -> list[str]:

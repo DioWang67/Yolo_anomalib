@@ -41,6 +41,20 @@ output_dir: "./Result"
 # See configs/products/pcba_example.yaml for expected_items, position_config,
 # alignment, and missing_slot_check structure. Copy measured values into the
 # active config or model-specific config before enabling production checks.
+#
+# Production scope declaration. This does not add detection capability by
+# itself; it prevents confusing a YOLO presence/position model with full AOI.
+# defect_coverage:
+#   covered:
+#     - missing_component
+#     - wrong_component
+#     - position_shift
+#     - unexpected_component
+#   not_covered:
+#     - solder_quality
+#     - scratch
+#     - contamination
+#     - polarity_mark
 
 # Advanced Settings (Optional)
 

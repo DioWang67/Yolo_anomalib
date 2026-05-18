@@ -975,6 +975,51 @@ class TestAlignmentAwareValidation:
         assert v.last_alignment.source_count == 0
         assert dets[0]["position_status"] == "WRONG"
 
+    def test_alignment_quality_gate_fails_when_shift_exceeds_limit(self):
+        boxes = {
+            "A": {"x1": 90, "y1": 90, "x2": 110, "y2": 110},
+            "B": {"x1": 190, "y1": 190, "x2": 210, "y2": 210},
+        }
+        cfg = _make_pos_config(
+            boxes,
+            tolerance=30.0,
+            tolerance_unit="pixel",
+            alignment={
+                "enabled": True,
+                "min_source_count": 2,
+                "quality_gate": {"enabled": True, "max_shift_px": 10.0},
+            },
+        )
+        v = PositionValidator(cfg, "P", "A")
+        v.validate([
+            _det("A", 120.0, 100.0),
+            _det("B", 220.0, 200.0),
+        ])
+
+        assert v.last_alignment_quality["is_ok"] is False
+        assert "alignment_shift_out_of_range" in v.last_alignment_quality["issues"]
+
+    def test_alignment_quality_gate_fails_when_sources_are_insufficient(self):
+        boxes = {
+            "A": {"x1": 90, "y1": 90, "x2": 110, "y2": 110},
+            "B": {"x1": 190, "y1": 190, "x2": 210, "y2": 210},
+        }
+        cfg = _make_pos_config(
+            boxes,
+            tolerance=5.0,
+            tolerance_unit="pixel",
+            alignment={
+                "enabled": True,
+                "min_source_count": 2,
+                "quality_gate": {"enabled": True, "max_shift_px": 20.0},
+            },
+        )
+        v = PositionValidator(cfg, "P", "A")
+        v.validate([_det("A", 100.0, 100.0)])
+
+        assert v.last_alignment_quality["is_ok"] is False
+        assert "insufficient_alignment_sources" in v.last_alignment_quality["issues"]
+
 
 class TestSequenceCheckStep:
     def test_run_pass_l2r(self, mock_env, base_context):

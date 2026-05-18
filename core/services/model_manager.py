@@ -99,7 +99,7 @@ class ModelManager:
         _OPTIONAL_FIELDS = [
             "expected_items", "position_config", "anomalib_config",
             "color_threshold_overrides", "color_rules_overrides",
-            "backends", "pipeline",
+            "backends", "pipeline", "defect_coverage",
         ]
         for field in _OPTIONAL_FIELDS:
             if field in cfg and cfg.get(field) is not None:
@@ -109,7 +109,7 @@ class ModelManager:
         if "imgsz" in cfg and cfg.get("imgsz") is not None:
             base_config.imgsz = tuple(cfg["imgsz"])  # type: ignore[arg-type]
 
-        # --- output_dir: model config relative paths should stay bundle-local ---
+        # --- output_dir: all inspection outputs should stay under project root ---
         if "output_dir" in cfg:
             raw_output_dir = cfg.get("output_dir")
             if raw_output_dir:
@@ -117,8 +117,7 @@ class ModelManager:
                 if path_str:
                     resolved = Path(path_str)
                     if not resolved.is_absolute():
-                        base_dir = model_cfg_dir or PROJECT_ROOT
-                        resolved = (base_dir / resolved).resolve()
+                        resolved = (PROJECT_ROOT / resolved).resolve()
                     base_config.output_dir = str(resolved)
                 else:
                     self.logger.logger.warning(

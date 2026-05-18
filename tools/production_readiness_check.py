@@ -83,6 +83,8 @@ def run_readiness_checks(
     _add(checks, "conf_threshold_range", 0.0 < conf <= 1.0, f"conf_thres={conf}")
     _add(checks, "iou_threshold_range", 0.0 < iou <= 1.0, f"iou_thres={iou}")
     _add_position_tolerance_check(checks, position_cfg)
+    _add_alignment_quality_gate_check(checks, position_cfg)
+    _add_defect_coverage_checks(checks, config)
 
     _add(checks, "save_original", bool(config.get("save_original", True)), "raw image evidence should be saved")
     _add(checks, "save_annotated", bool(config.get("save_annotated", True)), "annotated image evidence should be saved")
@@ -241,6 +243,74 @@ def _add_color_readiness_checks(
         bool(config.get("color_fail_closed", True)),
         "color checker failures should block production inspections",
     )
+
+
+def _add_alignment_quality_gate_check(
+    checks: list[ReadinessCheck],
+    position_cfg: dict[str, Any],
+) -> None:
+    alignment = position_cfg.get("alignment") if isinstance(position_cfg, dict) else {}
+    alignment = alignment if isinstance(alignment, dict) else {}
+    gate = alignment.get("quality_gate") if isinstance(alignment, dict) else {}
+    gate = gate if isinstance(gate, dict) else {}
+    enabled = bool(gate.get("enabled", False))
+    _add(
+        checks,
+        "alignment_quality_gate",
+        enabled,
+        "recommended to fail when board alignment sources or shift exceed limits",
+        warn_only=True,
+    )
+    if not enabled:
+        return
+
+    has_limit = any(
+        key in gate for key in ("max_abs_dx_px", "max_abs_dy_px", "max_shift_px")
+    )
+    _add(
+        checks,
+        "alignment_shift_limits",
+        has_limit,
+        "quality_gate should define max_abs_dx_px/max_abs_dy_px or max_shift_px",
+    )
+
+
+def _add_defect_coverage_checks(
+    checks: list[ReadinessCheck],
+    config: dict[str, Any],
+) -> None:
+    coverage = config.get("defect_coverage")
+    if not isinstance(coverage, dict):
+        _add(
+            checks,
+            "defect_coverage_declared",
+            False,
+            "declare covered/not_covered defect types so production scope is explicit",
+            warn_only=True,
+        )
+        return
+
+    covered = _normalize_string_list(coverage.get("covered"))
+    not_covered = _normalize_string_list(coverage.get("not_covered"))
+    _add(
+        checks,
+        "defect_coverage_declared",
+        bool(covered),
+        f"covered defect types={', '.join(covered) if covered else '-'}",
+    )
+    _add(
+        checks,
+        "defect_coverage_limitations",
+        not bool(not_covered),
+        "not covered: " + ", ".join(not_covered) if not_covered else "no uncovered defect types declared",
+        warn_only=True,
+    )
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _add(

@@ -157,6 +157,7 @@ class DetectionConfig:
     color_fail_closed: bool = True
     output_dir: str = "Result"
     anomalib_config: dict[str, Any] | None = None
+    defect_coverage: dict[str, Any] | None = None
     position_config: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     max_cache_size: int = 3
     buffer_limit: int = 1
@@ -292,6 +293,7 @@ class DetectionConfig:
             "color_fail_closed": bool(normalized.get("color_fail_closed", True)),
             "output_dir": str(normalized.get("output_dir", "Result")),
             "anomalib_config": normalized.get("anomalib_config"),
+            "defect_coverage": normalized.get("defect_coverage"),
             "position_config": dict(normalized.get("position_config", {})),
             "max_cache_size": int(normalized.get("max_cache_size", 3)),
             "buffer_limit": int(normalized.get("buffer_limit", 10)),
