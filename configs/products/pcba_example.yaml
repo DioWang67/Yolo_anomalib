@@ -1,0 +1,52 @@
+# Example product-level PCBA inspection configuration.
+# Copy into the active model/global config only after replacing product, area,
+# class names, and box coordinates with measured values from a real fixture.
+
+current_product: PCBA_EXAMPLE
+current_area: TOP
+
+expected_items:
+  PCBA_EXAMPLE:
+    TOP:
+      - R101
+      - C205
+      - U3
+
+position_config:
+  PCBA_EXAMPLE:
+    TOP:
+      enabled: true
+      mode: center
+      imgsz: 640
+      tolerance: 12
+      tolerance_unit: pixel
+      alignment:
+        enabled: true
+        min_source_count: 2
+        max_local_deviation_px: 20
+      missing_slot_check:
+        enabled: true
+        min_roi_size: 12
+        min_intensity_std: 10.0
+        min_laplacian_var: 28.0
+        min_edge_ratio: 0.035
+        min_occupancy_score: 1.8
+      expected_boxes:
+        R101:
+          x1: 120
+          y1: 300
+          x2: 180
+          y2: 340
+          tolerance: 12
+        C205:
+          x1: 220
+          y1: 410
+          x2: 260
+          y2: 450
+          tolerance: 10
+        U3:
+          x1: 360
+          y1: 210
+          x2: 430
+          y2: 285
+          tolerance: 14

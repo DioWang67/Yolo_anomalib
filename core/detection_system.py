@@ -543,6 +543,9 @@ class DetectionSystem:
             return
         try:
             reasons = []
+            decision = ctx.result.get("decision")
+            if isinstance(decision, dict) and decision.get("reasons"):
+                reasons.append(f"decision reasons: {decision['reasons']}")
             if ctx.result.get("missing_items"):
                 reasons.append(f"missing items: {ctx.result['missing_items']}")
             if ctx.result.get("over_items"):
@@ -681,6 +684,9 @@ class DetectionSystem:
                 sequence_check=ctx.result.get("sequence_check"),
                 result_frame=result.get("result_frame"),
                 metadata={
+                    "decision": result.get("decision"),
+                    "model_info": result.get("model_info"),
+                    "inference_time": result.get("inference_time"),
                     "slot_check": result.get("slot_check"),
                     "slot_mismatches": result.get("slot_mismatches", []),
                     "layout_alignment": result.get("layout_alignment"),

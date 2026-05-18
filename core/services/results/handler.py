@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import shutil
 from dataclasses import asdict, is_dataclass
@@ -20,7 +21,7 @@ from core.position_validator import build_missing_item_locations
 from core.utils import DetectionResults, ImageUtils
 
 from .annotations import annotate_yolo_frame
-from .crops import save_detection_crops
+from .crops import save_detection_crops, save_failure_crops
 from .excel_buffer import ExcelWorkbookBuffer
 from .excel_formatter import build_excel_row
 from .image_queue import ImageWriteError, ImageWriteQueue
@@ -129,6 +130,10 @@ class ResultHandler:
         color_result: dict[str, Any] | None = None,
         sequence_check: dict[str, Any] | None = None,
         error_message: str | None = None,
+        decision: dict[str, Any] | None = None,
+        model_info: dict[str, Any] | None = None,
+        inference_time: float | None = None,
+        slot_mismatches: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         try:
             timestamp = datetime.now()
@@ -228,6 +233,20 @@ class ResultHandler:
                         params=imwrite_params_png,
                         limit=limit,
                     )
+                if save_flags["crops"] and str(status).upper() != "PASS":
+                    failure_crop_paths = save_failure_crops(
+                        self._img_queue,
+                        crop_source=crop_source,
+                        bundle=bundle,
+                        product=product,
+                        area=area,
+                        timestamp_text=bundle.timestamp,
+                        params=imwrite_params_png,
+                        missing_locations=missing_locations,
+                        detections=detections,
+                        slot_mismatches=slot_mismatches,
+                    )
+                    cropped_paths.extend(failure_crop_paths)
             elif detector_lower == "fusion" and save_flags["annotated"]:
                 if processed_image is not None and processed_image.size > 0:
                     annotated_frame = processed_image.copy()
@@ -301,6 +320,18 @@ class ResultHandler:
                 self.logger.logger.exception("Excel append failed")
                 raise ResultExcelWriteError(str(exc)) from exc
 
+            config_snapshot_path = self._write_config_snapshot(
+                bundle,
+                timestamp=timestamp,
+                status=status,
+                detector=detector,
+                product=product,
+                area=area,
+                decision=decision,
+                model_info=model_info,
+                inference_time=inference_time,
+            )
+
             return {
                 "status": "SUCCESS",
                 "original_path": original_path,
@@ -308,9 +339,16 @@ class ResultHandler:
                 "annotated_path": annotated_path,
                 "heatmap_path": heatmap_dest_path,
                 "cropped_paths": cropped_paths,
+                "failure_crop_paths": [
+                    path for path in cropped_paths if "_NG_" in os.path.basename(path)
+                ],
                 "product": product,
                 "area": area,
                 "missing_locations": missing_locations,
+                "decision": dict(decision or {}),
+                "model_info": dict(model_info or {}),
+                "inference_time": inference_time,
+                "config_snapshot_path": config_snapshot_path,
             }
         except ImageWriteError as exc:
             self.logger.logger.exception("Image write failed")
@@ -363,6 +401,63 @@ class ResultHandler:
         if value.__class__.__module__ == "unittest.mock":
             return default
         return value
+
+    def _write_config_snapshot(
+        self,
+        bundle,
+        *,
+        timestamp: datetime,
+        status: str,
+        detector: str,
+        product: str | None,
+        area: str | None,
+        decision: dict[str, Any] | None,
+        model_info: dict[str, Any] | None,
+        inference_time: float | None,
+    ) -> str:
+        """Persist a JSON snapshot of runtime config and decision metadata."""
+        metadata_dir = os.path.join(bundle.base_path, "metadata", bundle.detector_prefix)
+        os.makedirs(metadata_dir, exist_ok=True)
+        stem, _ = os.path.splitext(bundle.image_name)
+        snapshot_path = os.path.join(metadata_dir, f"{stem}_config_snapshot.json")
+        payload = {
+            "timestamp": timestamp.isoformat(),
+            "status": status,
+            "detector": detector,
+            "product": product,
+            "area": area,
+            "decision": dict(decision or {}),
+            "model_info": dict(model_info or {}),
+            "inference_time": inference_time,
+            "config": self._json_safe(self.config),
+        }
+        try:
+            with open(snapshot_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        except OSError as exc:
+            self.logger.logger.warning("Config snapshot write failed: %s", exc)
+            return ""
+        return snapshot_path
+
+    def _json_safe(self, value: Any) -> Any:
+        if is_dataclass(value) and not isinstance(value, type):
+            return self._json_safe(asdict(value))
+        if isinstance(value, dict):
+            return {str(key): self._json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [self._json_safe(item) for item in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        if hasattr(value, "__fspath__"):
+            return os.fspath(value)
+        if hasattr(value, "__dict__"):
+            public_attrs = {
+                key: item
+                for key, item in vars(value).items()
+                if not str(key).startswith("_")
+            }
+            return self._json_safe(public_attrs)
+        return str(value)
 
     def _resolve_save_flags(self, status: str) -> dict[str, bool]:
         only_fail = bool(self._cfg_get("save_fail_only", False))

@@ -148,6 +148,10 @@ class TestSaveResultsStep:
             color_result=base_context.color_result,
             sequence_check=None,
             error_message=None,
+            decision=None,
+            model_info=None,
+            inference_time=None,
+            slot_mismatches=[],
         )
 
     def test_run_handles_anomalib_parameters_correctly(self, mock_env, base_context):
@@ -179,6 +183,10 @@ class TestSaveResultsStep:
             color_result=None,
             sequence_check=None,
             error_message=None,
+            decision=None,
+            model_info=None,
+            inference_time=None,
+            slot_mismatches=[],
         )
 
     def test_run_handles_fusion_missing_items_with_anomaly_score(
@@ -212,6 +220,10 @@ class TestSaveResultsStep:
             color_result=None,
             sequence_check=None,
             error_message=None,
+            decision=None,
+            model_info=None,
+            inference_time=None,
+            slot_mismatches=[],
         )
 
     def test_run_with_save_disabled_does_not_call_sink(self, mock_env, base_context):

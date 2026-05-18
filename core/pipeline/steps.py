@@ -268,6 +268,10 @@ class SaveResultsStep(Step):
                     color_result=ctx.color_result,
                     sequence_check=ctx.result.get("sequence_check"),
                     error_message=ctx.result.get("error"),
+                    decision=ctx.result.get("decision"),
+                    model_info=ctx.result.get("model_info"),
+                    inference_time=ctx.result.get("inference_time"),
+                    slot_mismatches=ctx.result.get("slot_mismatches", []),
                 )
             else:
                 save_result = self.sink.save(
@@ -286,6 +290,10 @@ class SaveResultsStep(Step):
                     color_result=ctx.color_result,
                     sequence_check=ctx.result.get("sequence_check"),
                     error_message=ctx.result.get("error"),
+                    decision=ctx.result.get("decision"),
+                    model_info=ctx.result.get("model_info"),
+                    inference_time=ctx.result.get("inference_time"),
+                    slot_mismatches=ctx.result.get("slot_mismatches", []),
                 )
             ctx.save_result = save_result
         except ResultPersistenceError as exc:

@@ -1,4 +1,5 @@
 import os
+import json
 import time
 
 import cv2
@@ -165,9 +166,24 @@ def test_save_results_yolo_success_and_flush(tmp_result_dir):
         heatmap_path=None,
         ckpt_path="ckpt.pt",
         color_result=color_res,
+        decision={"status": "PASS", "reasons": []},
+        model_info={"weights": "ckpt.pt", "model_version": "1.0.0"},
+        inference_time=0.123,
     )
 
     assert out["status"] == "SUCCESS"
+    assert out["decision"] == {"status": "PASS", "reasons": []}
+    assert out["model_info"] == {"weights": "ckpt.pt", "model_version": "1.0.0"}
+    assert out["inference_time"] == 0.123
+    assert os.path.exists(out["config_snapshot_path"])
+    with open(out["config_snapshot_path"], "r", encoding="utf-8") as handle:
+        snapshot = json.load(handle)
+    assert snapshot["product"] == "P"
+    assert snapshot["area"] == "A"
+    assert snapshot["decision"] == {"status": "PASS", "reasons": []}
+    assert snapshot["model_info"]["model_version"] == "1.0.0"
+    assert snapshot["inference_time"] == 0.123
+    assert snapshot["config"]["buffer_limit"] == 1
     for key in ("original_path", "preprocessed_path", "annotated_path"):
         assert os.path.exists(out[key])
     assert len(out["cropped_paths"]) == 1 and os.path.exists(
@@ -395,6 +411,50 @@ def test_save_results_yolo_draws_missing_item_location(tmp_result_dir):
     # JPEG compression can soften exact colors, so assert red channel dominance.
     b, g, r = annotated[12, 10]
     assert int(r) > 120 and int(r) > int(g) + 40 and int(r) > int(b) + 40
+    assert len(out["failure_crop_paths"]) == 1
+    assert "_NG_MISSING_nut_" in os.path.basename(out["failure_crop_paths"][0])
+    assert os.path.exists(out["failure_crop_paths"][0])
+
+
+def test_save_results_yolo_saves_wrong_position_and_slot_mismatch_crops(tmp_result_dir):
+    h = ResultHandler(
+        DummyConfig(buffer_limit=1), base_dir=tmp_result_dir, logger=DummyLogger()
+    )
+    frame = _mk_img(value=20)
+    processed = _mk_img(value=20)
+
+    out = h.save_results(
+        frame=frame,
+        detections=[
+            {
+                "bbox": [5, 6, 25, 26],
+                "class": "ic",
+                "class_id": 1,
+                "confidence": 0.8,
+                "position_status": "WRONG",
+                "position_expected_key": "ic",
+            }
+        ],
+        status="FAIL",
+        detector="yolo",
+        missing_items=[],
+        processed_image=processed,
+        product="P",
+        area="A",
+        slot_mismatches=[
+            {
+                "expected_key": "cap",
+                "expected_class": "cap",
+                "detected_class": "resistor",
+                "bbox": [30, 30, 50, 50],
+            }
+        ],
+    )
+
+    names = [os.path.basename(path) for path in out["failure_crop_paths"]]
+    assert any("_NG_POSITION_SHIFT_ic_" in name for name in names)
+    assert any("_NG_WRONG_COMPONENT_cap_" in name for name in names)
+    assert all(os.path.exists(path) for path in out["failure_crop_paths"])
 
 
 def test_save_results_fusion_draws_missing_item_location(tmp_result_dir):

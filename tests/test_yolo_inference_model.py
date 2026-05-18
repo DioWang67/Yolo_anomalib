@@ -279,6 +279,8 @@ def test_infer_happy_path(model_cpu, cfg_cpu, image_bgr_dark, monkeypatch):
         "processed_image",
         "result_frame",
         "expected_items",
+        "decision",
+        "model_info",
     }
     assert required.issubset(out.keys())
     assert out["inference_type"] == "yolo"
@@ -286,6 +288,10 @@ def test_infer_happy_path(model_cpu, cfg_cpu, image_bgr_dark, monkeypatch):
     assert isinstance(out["processed_image"], np.ndarray)
     assert isinstance(out["result_frame"], np.ndarray)
     assert out["expected_items"] == ["bolt"]
+    assert out["decision"]["status"] in {"PASS", "FAIL"}
+    assert out["model_info"]["weights"] == "fake.pt"
+    assert out["model_info"]["conf_thres"] == 0.25
+    assert out["model_info"]["iou_thres"] == 0.45
     # bbox 注入的中心點與影像尺寸
     det = out["detections"][0]
     assert (
@@ -296,6 +302,17 @@ def test_infer_happy_path(model_cpu, cfg_cpu, image_bgr_dark, monkeypatch):
         det["image_width"] == image_bgr_dark.shape[1]
         and det["image_height"] == image_bgr_dark.shape[0]
     )
+
+
+def test_infer_model_info_extracts_version(model_cpu, cfg_cpu, image_bgr_dark, monkeypatch):
+    cfg_cpu.weights = "PCBA_detector_v1.2.3_20260518.pt"
+    cfg_cpu.set_items("P", "A", ["bolt"])
+    assert model_cpu.initialize("P", "A") is True
+    monkeypatch.setattr(yim.torch, "inference_mode", lambda: DummyCtx(), raising=True)
+
+    out = model_cpu.infer(image_bgr_dark, product="P", area="A")
+
+    assert out["model_info"]["model_version"] == "1.2.3"
 
 
 def test_infer_invalid_product_area_raises(model_cpu, image_bgr_dark):

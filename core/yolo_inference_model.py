@@ -30,10 +30,12 @@ from core.services.alignment import (
     build_aligned_expected_boxes,
     resolve_missing_expected_keys,
 )
+from core.services.decision_engine import InspectionDecisionEngine
 from core.services.missing_slot_checker import MissingSlotChecker
 from core.runtime_preflight import validate_runtime_for_model
 from core.position_validator import PositionValidator
 from core.utils import ImageUtils
+from core.version_utils import parse_model_version, version_to_string
 from core.yolo_runtime import YoloRuntimeInfo, detect_yolo_runtime
 
 
@@ -316,12 +318,6 @@ class YOLOInferenceModel(BaseInferenceModel):
                 unexpected_items = sorted(
                     {n for n in detected_names if n and n not in expected_set}
                 )
-                if unexpected_items and getattr(
-                    self.config, "fail_on_unexpected", True
-                ):
-                    status = "FAIL"
-                if slot_mismatches:
-                    status = "FAIL"
             except Exception as item_err:
                 self.logger.logger.warning(
                     "Failed to compute unexpected items: %s",
@@ -329,6 +325,16 @@ class YOLOInferenceModel(BaseInferenceModel):
                     exc_info=item_err,
                 )
                 unexpected_items = []
+
+            decision = InspectionDecisionEngine(
+                fail_on_unexpected=getattr(self.config, "fail_on_unexpected", True)
+            ).evaluate(
+                detections=detections,
+                missing_items=list(missing_items),
+                unexpected_items=unexpected_items,
+                slot_mismatches=slot_mismatches,
+            )
+            status = decision.status.value
 
             inference_time = time.time() - start_time
             self.logger.logger.debug(
@@ -353,6 +359,8 @@ class YOLOInferenceModel(BaseInferenceModel):
                     position_cfg.get("expected_boxes", {}),
                     layout_alignment,
                 ),
+                "decision": decision.to_dict(),
+                "model_info": self._build_model_info(runtime_info),
             }
         except Exception as exc:
             self.logger.logger.exception("YOLO inference failed")
@@ -372,6 +380,23 @@ class YOLOInferenceModel(BaseInferenceModel):
             conf=self.config.conf_thres,
             iou=self.config.iou_thres,
         )
+
+    def _build_model_info(self, runtime_info: YoloRuntimeInfo) -> dict[str, Any]:
+        """Build traceable model/runtime metadata for inspection outputs."""
+        weights = str(getattr(self.config, "weights", "") or "")
+        parsed_version = parse_model_version(weights)
+        return {
+            "weights": weights,
+            "model_version": (
+                version_to_string(parsed_version) if parsed_version else None
+            ),
+            "conf_thres": float(getattr(self.config, "conf_thres", 0.0)),
+            "iou_thres": float(getattr(self.config, "iou_thres", 0.0)),
+            "imgsz": list(getattr(self.config, "imgsz", []) or []),
+            "device": str(getattr(self.config, "device", "")),
+            "runtime": runtime_info.runtime,
+            "predict_device": runtime_info.predict_device,
+        }
 
     def _refine_missing_items(
         self,

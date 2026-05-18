@@ -37,6 +37,11 @@ max_cache_size: 3
 # Or absolute path: D:/Path/To/Result
 output_dir: "./Result"
 
+# PCBA inspection product config example:
+# See configs/products/pcba_example.yaml for expected_items, position_config,
+# alignment, and missing_slot_check structure. Copy measured values into the
+# active config or model-specific config before enabling production checks.
+
 # Advanced Settings (Optional)
 
 # Inference Image Size (for letterbox preprocessing)

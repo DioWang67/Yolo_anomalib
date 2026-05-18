@@ -106,6 +106,7 @@ class DetectionResult:
             "detections": self.detections,
             "missing_items": self.missing_items,
             "missing_locations": self.missing_locations,
+            "unexpected_items": self.unexpected_items,
             "items": [
                 {
                     "label": item.label,
