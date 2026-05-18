@@ -117,13 +117,8 @@ def _color_step_factory(env: PipelineEnv, options: dict) -> Step | None:
         return None
     if not getattr(cfg, "color_model_path", None):
         env.logger.warning(
-            "Color check enabled but color_model_path is missing; skipping step"
+            "Color check enabled but color_model_path is missing; color_check will fail closed"
         )
-        return None
-    if not env.color_service.is_ready():
-        env.logger.warning(
-            "Color checker not ready; skipping color_check step")
-        return None
     return ColorCheckStep(env.color_service, env.logger, options=options)
 
 

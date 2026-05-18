@@ -154,6 +154,7 @@ class DetectionConfig:
     color_rules_overrides: dict[str, dict[str, float | None]] | None = None
     color_checker_type: str = "color_qc"
     color_score_threshold: float | None = None
+    color_fail_closed: bool = True
     output_dir: str = "Result"
     anomalib_config: dict[str, Any] | None = None
     position_config: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
@@ -288,6 +289,7 @@ class DetectionConfig:
                 normalized.get("color_checker_type") or "color_qc"
             ),
             "color_score_threshold": normalized.get("color_score_threshold"),
+            "color_fail_closed": bool(normalized.get("color_fail_closed", True)),
             "output_dir": str(normalized.get("output_dir", "Result")),
             "anomalib_config": normalized.get("anomalib_config"),
             "position_config": dict(normalized.get("position_config", {})),

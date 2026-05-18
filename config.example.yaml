@@ -70,3 +70,7 @@ output_dir: "./Result"
 # color_rules_overrides:
 #   red:
 #     min_area: 3
+#
+# Production default: if color check is enabled but the color model/rules cannot
+# load, mark the inspection as FAIL instead of silently passing color validation.
+# color_fail_closed: true

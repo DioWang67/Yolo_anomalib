@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import yaml  # type: ignore[import]
 
 from core.config import DetectionConfig
+from core.exceptions import ModelConfigError
 from core.config_validation import validate_model_cfg
 from core.logging_config import DetectionLogger
 from core.path_utils import project_root, resolve_path
@@ -88,7 +89,7 @@ class ModelManager:
         # --- Simple scalar overrides ---
         _SCALAR_FIELDS = [
             "device", "conf_thres", "iou_thres", "enable_yolo", "enable_anomalib",
-            "enable_color_check",
+            "enable_color_check", "color_fail_closed",
         ]
         for field in _SCALAR_FIELDS:
             if field in cfg:
@@ -218,6 +219,8 @@ class ModelManager:
 
         context = f"{product}/{area}/{inference_type}"
         self._apply_model_config(base_config, cfg, context, model_cfg_dir=model_cfg_dir)
+        if str(inference_type).lower() == "yolo":
+            self._validate_inspection_scope(base_config, product, area, context)
 
         # Version validation (if model uses versioned naming)
         self._validate_model_version(base_config, cfg, product, area, inference_type)
@@ -248,6 +251,23 @@ class ModelManager:
                 )
 
         return engine, base_config
+
+    def _validate_inspection_scope(
+        self,
+        config: DetectionConfig,
+        product: str,
+        area: str,
+        context: str,
+    ) -> None:
+        """Fail fast when a model bundle cannot define the inspection scope."""
+        expected_items = config.get_items_by_area(product, area)
+        if expected_items:
+            return
+        raise ModelConfigError(
+            "Model config missing expected_items for "
+            f"{product}/{area} ({context}). "
+            "Add expected_items.<product>.<area> to the model config."
+        )
 
     def get_cached_engine(
         self, product: str, area: str, inference_type: str

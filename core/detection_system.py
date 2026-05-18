@@ -267,7 +267,7 @@ class DetectionSystem:
         except Exception as e:
             self.logger.logger.error(f"Camera init failed: {str(e)}")
             self.logger.logger.warning(
-                "Camera disabled; using dummy image for detection"
+                "Camera disabled; detection will fail unless an explicit frame is provided"
             )
             self.camera = None
 

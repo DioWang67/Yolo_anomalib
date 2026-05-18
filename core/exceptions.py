@@ -15,6 +15,10 @@ class ModelInferenceError(ModelError):
     """Raised when inference fails for a given model."""
 
 
+class ModelConfigError(ModelError):
+    """Raised when a model bundle is missing required inspection metadata."""
+
+
 class BackendInitializationError(ModelError):
     """Raised when the inference engine cannot initialize a backend."""
 

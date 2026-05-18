@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 from core.config import DetectionConfig
+from core.exceptions import ModelConfigError
 from core.logging_config import DetectionLogger
 from core.services.model_manager import ModelManager
 
@@ -30,6 +32,30 @@ def _write_model_config(model_dir: Path, weights_path: Path) -> Path:
     path = model_dir / "config.yaml"
     model_dir.mkdir(parents=True, exist_ok=True)
     (model_dir / "color.json").write_text("{}", encoding="utf-8")
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    return path
+
+
+def _write_pcba_model_config(model_dir: Path, weights_path: Path) -> Path:
+    config = {
+        "weights": str(weights_path),
+        "enable_yolo": True,
+        "output_dir": "outputs",
+        "expected_items": {"PCBA1": {"A": ["J5-1", "J5-2"]}},
+        "position_config": {
+            "PCBA1": {
+                "A": {
+                    "enabled": True,
+                    "expected_boxes": {
+                        "J5-1": {"x1": 1, "y1": 2, "x2": 3, "y2": 4},
+                        "J5-2": {"x1": 5, "y1": 6, "x2": 7, "y2": 8},
+                    },
+                }
+            }
+        },
+    }
+    path = model_dir / "config.yaml"
+    model_dir.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(config), encoding="utf-8")
     return path
 
@@ -65,3 +91,42 @@ def test_model_overrides_resolve_relative_paths_and_keep_globals(tmp_path, monke
 
     # Engine initialized lazily
     assert engine is not None
+
+
+def test_model_overrides_apply_expected_items_from_model_config(tmp_path, monkeypatch):
+    weights_path = tmp_path / "best.onnx"
+    weights_path.write_bytes(b"")
+    global_cfg_path = _write_global_config(tmp_path, weights_path)
+    models_root = tmp_path / "models" / "PCBA1" / "A" / "yolo"
+    _write_pcba_model_config(models_root, weights_path)
+    monkeypatch.chdir(tmp_path)
+
+    base_config = DetectionConfig.from_yaml(str(global_cfg_path))
+    manager = ModelManager(DetectionLogger())
+
+    _, cfg_snapshot = manager.switch(
+        base_config, product="PCBA1", area="A", inference_type="yolo"
+    )
+
+    assert cfg_snapshot.get_items_by_area("PCBA1", "A") == ["J5-1", "J5-2"]
+
+
+def test_model_manager_fails_fast_when_expected_items_missing(
+    tmp_path, monkeypatch
+):
+    weights_path = tmp_path / "best.onnx"
+    weights_path.write_bytes(b"")
+    global_cfg_path = _write_global_config(tmp_path, weights_path)
+    model_dir = tmp_path / "models" / "PCBA1" / "A" / "yolo"
+    model_dir.mkdir(parents=True)
+    (model_dir / "config.yaml").write_text(
+        yaml.safe_dump({"weights": str(weights_path), "enable_yolo": True}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    base_config = DetectionConfig.from_yaml(str(global_cfg_path))
+    manager = ModelManager(DetectionLogger())
+
+    with pytest.raises(ModelConfigError, match="missing expected_items"):
+        manager.switch(base_config, product="PCBA1", area="A", inference_type="yolo")

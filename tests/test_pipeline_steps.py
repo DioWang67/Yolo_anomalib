@@ -248,12 +248,14 @@ def mock_color_service():
 
 class TestColorCheckStep:
     def test_run_calls_color_service(self, mock_env, base_context, mock_color_service):
+        mock_color_service.is_ready.return_value = True
         step = ColorCheckStep(mock_color_service, mock_env.logger)
         step.run(base_context)
         mock_color_service.check_items.assert_called_once()
         assert "color_result" in base_context.__dict__ or hasattr(base_context, "color_result")
 
     def test_run_updates_status_on_fail(self, mock_env, base_context, mock_color_service):
+        mock_color_service.is_ready.return_value = True
         mock_it = MagicMock()
         mock_it.is_ok = False
         mock_it.index = 0
@@ -273,6 +275,36 @@ class TestColorCheckStep:
         step = ColorCheckStep(mock_color_service, mock_env.logger)
         step.run(base_context)
         assert base_context.status == "DETECTION_FAIL"
+
+    def test_run_fails_closed_when_color_checker_not_ready(
+        self, mock_env, base_context, mock_color_service
+    ):
+        mock_color_service.is_ready.return_value = False
+        base_context.config.color_fail_closed = True
+
+        step = ColorCheckStep(mock_color_service, mock_env.logger)
+        step.run(base_context)
+
+        mock_color_service.check_items.assert_not_called()
+        assert base_context.status == "DETECTION_FAIL"
+        assert base_context.color_result == {
+            "is_ok": False,
+            "items": [],
+            "error": "Not loaded",
+        }
+
+    def test_run_can_skip_unavailable_color_checker_when_fail_closed_disabled(
+        self, mock_env, base_context, mock_color_service
+    ):
+        mock_color_service.is_ready.return_value = False
+        base_context.config.color_fail_closed = False
+
+        step = ColorCheckStep(mock_color_service, mock_env.logger)
+        step.run(base_context)
+
+        mock_color_service.check_items.assert_not_called()
+        assert base_context.status == "PASS"
+        assert base_context.color_result["is_ok"] is False
 
 class TestCountCheckStep:
     def test_run_pass(self, mock_env, base_context):

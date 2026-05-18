@@ -35,7 +35,11 @@ class ColorCheckStep(Step):
             return
         if not self.color_service.is_ready():
             self.logger.warning("ColorChecker not ready (possibly missing JSON file); skipping color check")
-            ctx.color_result = {"is_ok": True, "items": [], "error": "Not loaded"}
+            ctx.color_result = {"is_ok": False, "items": [], "error": "Not loaded"}
+            fail_closed = bool(getattr(ctx.config, "color_fail_closed", True))
+            if fail_closed:
+                ctx.status = DETECTION_FAIL_STATUS
+                self.logger.info("Color checker unavailable -> overall FAIL")
             return
 
         detections: list[dict[str, Any]] = ctx.result.get("detections", [])

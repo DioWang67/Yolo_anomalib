@@ -82,6 +82,13 @@ def test_default_pipeline_skips_color_when_disabled():
     assert isinstance(built[0], SaveResultsStep)
 
 
+def test_color_step_is_built_when_checker_not_ready_for_fail_closed_runtime():
+    env = _make_env(enable_color=True, color_ready=False)
+    built = build_pipeline(["color_check", "save_results"], env, {})
+    assert len(built) == 2
+    assert isinstance(built[0], ColorCheckStep)
+
+
 def test_custom_step_registration_and_autosave_append():
     class _DummyStep(Step):
         def run(self, ctx):  # pragma: no cover - simple no-op for registry testing

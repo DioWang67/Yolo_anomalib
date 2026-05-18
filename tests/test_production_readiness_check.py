@@ -132,6 +132,39 @@ def test_run_readiness_checks_warns_for_loose_position_tolerance(tmp_path):
     assert any(check.name == "position_iou_tolerance" and check.status == "WARN" for check in checks)
 
 
+def test_run_readiness_checks_fails_enabled_color_without_model(tmp_path):
+    weights = tmp_path / "best.onnx"
+    weights.write_bytes(b"model")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "weights": str(weights),
+                "current_product": "PCBA1",
+                "current_area": "A",
+                "enable_color_check": True,
+                "color_fail_closed": False,
+                "expected_items": {"PCBA1": {"A": ["J5"]}},
+                "position_config": {
+                    "PCBA1": {
+                        "A": {
+                            "enabled": True,
+                            "expected_boxes": {"J5": {"x1": 1, "y1": 2, "x2": 3, "y2": 4}},
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    checks = run_readiness_checks(config_path)
+
+    assert has_blocking_failures(checks)
+    assert any(check.name == "color_model_configured" and check.status == "FAIL" for check in checks)
+    assert any(check.name == "color_fail_closed" and check.status == "FAIL" for check in checks)
+
+
 def test_write_report_outputs_json(tmp_path):
     config_path = tmp_path / "missing.yaml"
     checks = run_readiness_checks(config_path, product="P", area="A")

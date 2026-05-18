@@ -89,6 +89,7 @@ def run_readiness_checks(
     _add(checks, "save_crops", bool(config.get("save_crops", True)), "NG crop evidence should be saved")
     _add(checks, "output_dir", bool(str(config.get("output_dir") or "").strip()), f"output_dir={config.get('output_dir') or '-'}")
     _add(checks, "fail_on_unexpected", bool(config.get("fail_on_unexpected", True)), "unexpected classes should fail in production")
+    _add_color_readiness_checks(checks, path.parent, config)
 
     missing_slot = position_cfg.get("missing_slot_check") if isinstance(position_cfg, dict) else {}
     if isinstance(missing_slot, dict):
@@ -210,6 +211,36 @@ def _add_position_tolerance_check(
             f"position tolerance={tolerance}px",
             warn_only=True,
         )
+
+
+def _add_color_readiness_checks(
+    checks: list[ReadinessCheck],
+    base_dir: Path,
+    config: dict[str, Any],
+) -> None:
+    if not bool(config.get("enable_color_check", False)):
+        return
+
+    color_model = str(config.get("color_model_path") or "").strip()
+    color_model_path = _resolve_existing_path(base_dir, color_model) if color_model else None
+    _add(
+        checks,
+        "color_model_configured",
+        bool(color_model),
+        "color_model_path is required when enable_color_check is true",
+    )
+    _add(
+        checks,
+        "color_model_exists",
+        bool(color_model_path and color_model_path.exists()),
+        f"color_model_path={color_model_path or '-'}",
+    )
+    _add(
+        checks,
+        "color_fail_closed",
+        bool(config.get("color_fail_closed", True)),
+        "color checker failures should block production inspections",
+    )
 
 
 def _add(
