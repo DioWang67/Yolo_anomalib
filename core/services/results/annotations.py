@@ -82,7 +82,8 @@ def annotate_yolo_frame(
                         fail_indices.append(idx)
                 except Exception:
                     continue
-    _draw_missing_expected_boxes(frame, detections, missing_items, expected_boxes)
+    if not missing_locations:
+        _draw_missing_expected_boxes(frame, detections, missing_items, expected_boxes)
     if fail_indices:
         panel_lines.append(
             (f"NG idx: {', '.join(str(i) for i in fail_indices)}", (0, 0, 255))

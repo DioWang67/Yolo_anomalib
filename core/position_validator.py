@@ -17,7 +17,7 @@ import logging
 from collections import defaultdict
 from typing import Any
 
-from core.services.alignment import ExpectedLayoutAlignment
+from core.services.alignment import ExpectedLayoutAlignment, extract_layout_alignment
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ def build_missing_item_locations(
     product: str | None,
     area: str | None,
     missing_items: list[str] | tuple[str, ...] | None,
+    detections: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return expected boxes for missing items.
 
@@ -45,6 +46,7 @@ def build_missing_item_locations(
         product: Product name used to resolve position config.
         area: Area name used to resolve position config.
         missing_items: Missing class names reported by inference/count checks.
+        detections: Position-validated detections used to estimate board shift.
 
     Returns:
         List of dictionaries with ``class`` and ``bbox`` keys suitable for
@@ -64,6 +66,7 @@ def build_missing_item_locations(
 
     locations: list[dict[str, Any]] = []
     used_keys: set[str] = set()
+    alignment = extract_layout_alignment(detections or [])
     for item in missing_items:
         item_name = str(item).strip()
         if not item_name:
@@ -73,12 +76,7 @@ def build_missing_item_locations(
             continue
         box = expected_boxes.get(key) or {}
         try:
-            bbox = [
-                int(round(float(box["x1"]))),
-                int(round(float(box["y1"]))),
-                int(round(float(box["x2"]))),
-                int(round(float(box["y2"]))),
-            ]
+            bbox = list(alignment.shift_box(box))
         except (KeyError, TypeError, ValueError):
             continue
         used_keys.add(key)

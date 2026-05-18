@@ -343,7 +343,11 @@ class TestSequenceCheckErrorHandling:
 # ---------------------------------------------------------------------------
 # Position validation unit tests (PositionValidator directly)
 # ---------------------------------------------------------------------------
-from core.position_validator import PositionValidator, _base_class_name
+from core.position_validator import (
+    PositionValidator,
+    _base_class_name,
+    build_missing_item_locations,
+)
 
 
 def _make_pos_config(
@@ -396,6 +400,43 @@ class TestBaseClassNameInference:
 
     def test_non_numeric_hash(self):
         assert _base_class_name("C#Sharp") == "C#Sharp"
+
+
+class TestMissingItemLocations:
+    def test_build_missing_item_locations_uses_layout_alignment(self):
+        cfg = _make_pos_config(
+            {
+                "part_a": {"x1": 10, "y1": 10, "x2": 30, "y2": 30},
+                "part_b": {"x1": 50, "y1": 10, "x2": 70, "y2": 30},
+            }
+        )
+
+        locations = build_missing_item_locations(
+            cfg,
+            "P",
+            "A",
+            ["part_b"],
+            detections=[
+                {
+                    "class": "part_a",
+                    "position_expected_key": "part_a",
+                    "position_layout_alignment": {
+                        "dx": 5.0,
+                        "dy": -3.0,
+                        "source_count": 2,
+                    },
+                }
+            ],
+        )
+
+        assert locations == [
+            {
+                "class": "part_b",
+                "expected_key": "part_b",
+                "bbox": [55, 7, 75, 27],
+                "reason": "missing",
+            }
+        ]
 
 
 class TestEuclideanDistance:

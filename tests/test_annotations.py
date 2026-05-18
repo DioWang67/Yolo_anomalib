@@ -127,3 +127,30 @@ def test_annotate_yolo_frame_shifts_missing_expected_box_by_detected_offset():
     )
 
     assert tuple(frame[135, 135]) == (0, 0, 255)
+
+
+def test_annotate_yolo_frame_prefers_missing_locations_over_expected_boxes():
+    frame = np.zeros((180, 180, 3), dtype=np.uint8)
+
+    annotate_yolo_frame(
+        FakeImageUtils(),
+        frame,
+        detections=[],
+        color_result=None,
+        status="FAIL",
+        missing_items=["part_d"],
+        expected_boxes={
+            "part_d": {"x1": 110.0, "y1": 110.0, "x2": 140.0, "y2": 140.0},
+        },
+        missing_locations=[
+            {
+                "class": "part_d",
+                "expected_key": "part_d",
+                "bbox": [50, 50, 80, 80],
+                "reason": "missing",
+            }
+        ],
+    )
+
+    assert tuple(frame[50, 50]) == (0, 0, 255)
+    assert tuple(frame[110, 110]) == (0, 0, 0)

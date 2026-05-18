@@ -178,6 +178,7 @@ class ResultHandler:
                 product,
                 area,
                 missing_items,
+                detections,
             )
 
             if save_flags["original"]:
