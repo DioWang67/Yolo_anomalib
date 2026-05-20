@@ -9,6 +9,8 @@ from dataclasses import dataclass
 
 import cv2
 
+from core.security import ensure_subpath
+
 
 class ImageWriteError(RuntimeError):
     """Raised when cv2.imwrite fails (even if fallback succeeds)."""
@@ -39,8 +41,10 @@ class ImageWriteQueue:
         logger,
         maxsize: int = 1000,
         warn_threshold: float = 0.8,
+        allowed_root: str | None = None,
     ) -> None:
         self.logger = logger
+        self.allowed_root = allowed_root
         self.maxsize = max(0, maxsize)
         self.warn_threshold = None
         if self.maxsize > 0 and 0 < warn_threshold < 1:
@@ -113,6 +117,8 @@ class ImageWriteQueue:
         self, path: str, image, params: Sequence[int] | None = None
     ) -> None:
         try:
+            if self.allowed_root:
+                path = str(ensure_subpath(path, self.allowed_root, must_exist=False))
             if params is not None:
                 ok = cv2.imwrite(path, image, params)
             else:

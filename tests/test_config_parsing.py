@@ -48,3 +48,19 @@ def test_normalize_model_dict_allows_missing_imgsz(tmp_path):
 def test_normalize_model_dict_validates_imgsz(tmp_path):
     with pytest.raises(ConfigValidationError):
         DetectionConfig.normalize_model_dict({"imgsz": [640]}, "test")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"conf_thres": 1.5},
+        {"iou_thres": -0.1},
+        {"jpeg_quality": 101},
+        {"png_compression": 10},
+        {"buffer_limit": 0},
+        {"imgsz": [640, 0]},
+    ],
+)
+def test_normalize_model_dict_rejects_out_of_range_values(payload):
+    with pytest.raises(ConfigValidationError):
+        DetectionConfig.normalize_model_dict(payload, "test")

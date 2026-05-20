@@ -22,6 +22,9 @@ from core.config import DetectionConfig
 from core.logging_config import DetectionLogger
 
 
+CUSTOM_BACKEND_PREFIX = "core.backends."
+
+
 class InferenceEngine:
     """Manages model backends and provides a unified interface for inference.
 
@@ -148,6 +151,10 @@ class InferenceEngine:
                 self.models["anomalib"] = model
                 self.logger.logger.info("Anomalib backend ready (lazy)")
             else:
+                if not bool(getattr(self.config, "enable_custom_backends", False)):
+                    raise BackendNotAvailableError(
+                        f"Custom backend '{name}' is disabled"
+                    )
                 backends = getattr(self.config, "backends", None) or {}
                 spec = backends.get(name)
                 if not spec or not spec.get("enabled", True):
@@ -159,12 +166,18 @@ class InferenceEngine:
                     raise BackendInitializationError(
                         f"Backend '{name}' missing class_path"
                     )
+                class_path_text = str(class_path)
+                if not class_path_text.startswith(CUSTOM_BACKEND_PREFIX):
+                    raise BackendInitializationError(
+                        "Custom backend class_path must start with "
+                        f"'{CUSTOM_BACKEND_PREFIX}'"
+                    )
                 try:
-                    if "." not in str(class_path):
+                    if "." not in class_path_text:
                         raise BackendInitializationError(
                             f"Invalid class_path for backend '{name}': {class_path}"
                         )
-                    mod, clsname = str(class_path).rsplit(".", 1)
+                    mod, clsname = class_path_text.rsplit(".", 1)
                     cls: type[BaseInferenceModel] = getattr(
                         import_module(mod), clsname)  # type: ignore[attr-defined]
                     inst = cls(self.config)

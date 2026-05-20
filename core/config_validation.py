@@ -6,6 +6,8 @@ from pathlib import Path
 
 from core.path_utils import resolve_path
 
+CUSTOM_BACKEND_PREFIX = "core.backends."
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,4 +85,14 @@ def validate_model_cfg(
             if not spec.get("class_path"):
                 raise ValueError(
                     f"Custom backend '{name}' missing class_path in backends"
+                )
+            if not bool(cfg.get("enable_custom_backends", False)):
+                raise ValueError(
+                    f"Custom backend '{name}' requires enable_custom_backends=True"
+                )
+            class_path = str(spec.get("class_path"))
+            if not class_path.startswith(CUSTOM_BACKEND_PREFIX):
+                raise ValueError(
+                    "Custom backend class_path must start with "
+                    f"'{CUSTOM_BACKEND_PREFIX}'"
                 )

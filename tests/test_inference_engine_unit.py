@@ -13,6 +13,7 @@ def mock_config():
     config.enable_yolo = True
     config.enable_anomalib = True
     config.backends = {}
+    config.enable_custom_backends = False
     return config
 
 @patch("core.inference_engine.YOLOInferenceModel")
@@ -66,10 +67,11 @@ def test_backend_init_failure_propagation(MockYOLO, mock_config):
 
 def test_dynamic_backend_loading(mock_config):
     """測試通過 class_path 動態加載自定義後端"""
+    mock_config.enable_custom_backends = True
     mock_config.backends = {
         "custom": {
             "enabled": True,
-            "class_path": "unittest.mock.MagicMock"
+            "class_path": "core.backends.fake.MyCustomModel"
         }
     }
     engine = InferenceEngine(mock_config)
@@ -78,12 +80,38 @@ def test_dynamic_backend_loading(mock_config):
     with patch("core.inference_engine.import_module") as mock_import:
         mock_cls = MagicMock()
         mock_import.return_value = MagicMock(MyCustomModel=mock_cls)
-        mock_config.backends["custom"]["class_path"] = "fake_module.MyCustomModel"
 
         engine.infer(np.zeros((10, 10, 3)), "P", "A", "custom")
 
         assert "custom" in engine.models
-        mock_import.assert_called_with("fake_module")
+        mock_import.assert_called_with("core.backends.fake")
+
+
+def test_custom_backend_disabled_by_default(mock_config):
+    mock_config.backends = {
+        "custom": {
+            "enabled": True,
+            "class_path": "core.backends.fake.MyCustomModel",
+        }
+    }
+    engine = InferenceEngine(mock_config)
+
+    with pytest.raises(BackendNotAvailableError, match="disabled"):
+        engine.infer(np.zeros((10, 10, 3)), "P", "A", "custom")
+
+
+def test_custom_backend_rejects_untrusted_namespace(mock_config):
+    mock_config.enable_custom_backends = True
+    mock_config.backends = {
+        "custom": {
+            "enabled": True,
+            "class_path": "untrusted.module.MyCustomModel",
+        }
+    }
+    engine = InferenceEngine(mock_config)
+
+    with pytest.raises(BackendInitializationError, match="core.backends"):
+        engine.infer(np.zeros((10, 10, 3)), "P", "A", "custom")
 
 def test_shutdown_cleans_up_models(mock_config):
     """測試 shutdown 是否釋放所有模型的資源"""

@@ -42,6 +42,11 @@ def _normalize_sequence(value: Any, *, expect_len: int | None = None) -> Any:
     if isinstance(value, (list, tuple)):
         if expect_len is not None and len(value) != expect_len:
             raise ValueError(f"expected sequence length {expect_len}")
+        if expect_len == 2:
+            items = [int(v) for v in value]
+            if any(item <= 0 for item in items):
+                raise ValueError("imgsz values must be positive")
+            return items
         return [v for v in value]
     raise ValueError("expected list/tuple")
 
@@ -61,15 +66,15 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
     class GlobalConfigSchema(BaseModel):
         weights: str
         device: str | None = "cpu"
-        conf_thres: float | None = 0.25
-        iou_thres: float | None = 0.45
+        conf_thres: float | None = Field(default=0.25, ge=0.0, le=1.0)
+        iou_thres: float | None = Field(default=0.45, ge=0.0, le=1.0)
         imgsz: list[int] | None = Field(default_factory=lambda: [640, 640])
-        timeout: int | None = 2
+        timeout: int | None = Field(default=2, ge=0)
         exposure_time: str | None = "1000"
         gain: str | None = "1.0"
-        width: int | None = 640
-        height: int | None = 640
-        MV_CC_GetImageBuffer_nMsec: int | None = 10000
+        width: int | None = Field(default=640, gt=0)
+        height: int | None = Field(default=640, gt=0)
+        MV_CC_GetImageBuffer_nMsec: int | None = Field(default=10000, ge=0)
         current_product: str | None = None
         current_area: str | None = None
         expected_items: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
@@ -88,21 +93,22 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         position_config: dict[str, dict[str, dict[str, Any]]] = Field(
             default_factory=dict
         )
-        max_cache_size: int | None = 3
-        buffer_limit: int | None = 10
-        flush_interval: float | None = None
+        max_cache_size: int | None = Field(default=3, ge=0)
+        buffer_limit: int | None = Field(default=10, ge=1)
+        flush_interval: float | None = Field(default=None, gt=0)
         pipeline: list[str] | None = None
         steps: dict[str, Any] = Field(default_factory=dict)
         backends: dict[str, dict[str, Any]] | None = None
+        enable_custom_backends: bool | None = False
         disable_internal_cache: bool | None = True
         save_original: bool | None = True
         save_processed: bool | None = True
         save_annotated: bool | None = True
         save_crops: bool | None = True
         save_fail_only: bool | None = False
-        jpeg_quality: int | None = 95
-        png_compression: int | None = 3
-        max_crops_per_frame: int | None = None
+        jpeg_quality: int | None = Field(default=95, ge=1, le=100)
+        png_compression: int | None = Field(default=3, ge=0, le=9)
+        max_crops_per_frame: int | None = Field(default=None, ge=0)
         fail_on_unexpected: bool | None = True
 
         if _VALIDATOR_MODE == "v2":
@@ -145,15 +151,15 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
     class ModelConfigSchema(BaseModel):
         device: str | None = None
         weights: str | None = None
-        conf_thres: float | None = None
-        iou_thres: float | None = None
+        conf_thres: float | None = Field(default=None, ge=0.0, le=1.0)
+        iou_thres: float | None = Field(default=None, ge=0.0, le=1.0)
         imgsz: list[int] | None = None
-        timeout: int | None = None
+        timeout: int | None = Field(default=None, ge=0)
         exposure_time: str | None = None
         gain: str | None = None
-        width: int | None = None
-        height: int | None = None
-        MV_CC_GetImageBuffer_nMsec: int | None = None
+        width: int | None = Field(default=None, gt=0)
+        height: int | None = Field(default=None, gt=0)
+        MV_CC_GetImageBuffer_nMsec: int | None = Field(default=None, ge=0)
         output_dir: str | None = None
         enable_yolo: bool | None = None
         enable_anomalib: bool | None = None
@@ -167,6 +173,7 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         anomalib_config: dict[str, Any] | None = None
         defect_coverage: dict[str, Any] | None = None
         backends: dict[str, dict[str, Any]] | None = None
+        enable_custom_backends: bool | None = None
         pipeline: list[str] | None = None
         steps: dict[str, Any] = Field(default_factory=dict)
         disable_internal_cache: bool | None = None
@@ -175,13 +182,13 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         save_annotated: bool | None = None
         save_crops: bool | None = None
         save_fail_only: bool | None = None
-        jpeg_quality: int | None = None
-        png_compression: int | None = None
-        max_crops_per_frame: int | None = None
+        jpeg_quality: int | None = Field(default=None, ge=1, le=100)
+        png_compression: int | None = Field(default=None, ge=0, le=9)
+        max_crops_per_frame: int | None = Field(default=None, ge=0)
         fail_on_unexpected: bool | None = None
-        buffer_limit: int | None = None
-        flush_interval: float | None = None
-        max_cache_size: int | None = None
+        buffer_limit: int | None = Field(default=None, ge=1)
+        flush_interval: float | None = Field(default=None, gt=0)
+        max_cache_size: int | None = Field(default=None, ge=0)
 
         if _VALIDATOR_MODE == "v2":
             # type: ignore[assignment]

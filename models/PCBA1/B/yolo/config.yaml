@@ -1,0 +1,99 @@
+weights: models/PCBA1/B/yolo/weights/best.onnx
+device: cpu
+conf_thres: 0.4
+iou_thres: 0.45
+imgsz:
+- 640
+- 640
+timeout: 1
+enable_yolo: true
+output_dir: Result
+current_product: PCBA1
+current_area: B
+expected_items:
+  PCBA1:
+    B:
+    - J2-1
+    - J2-2
+    - C22A
+    - J3
+    - J4
+pipeline:
+- count_check
+- save_results
+steps:
+  count_check:
+    strict: true
+enable_color_check: false
+position_config:
+  PCBA1:
+    B:
+      enabled: true
+      mode: center
+      tolerance: 25.0
+      expected_boxes:
+        C22A:
+          x1: 275
+          y1: 273
+          x2: 321
+          y2: 345
+          cx: 297.81
+          cy: 309.05
+          sigma_cx: 21.9
+          sigma_cy: 3.89
+          count: 70
+        J3:
+          x1: 158
+          y1: 363
+          x2: 277
+          y2: 444
+          cx: 217.93
+          cy: 403.61
+          sigma_cx: 4.67
+          sigma_cy: 4.96
+          count: 70
+        J4:
+          x1: 298
+          y1: 345
+          x2: 418
+          y2: 442
+          cx: 357.96
+          cy: 393.79
+          sigma_cx: 3.94
+          sigma_cy: 1.89
+          count: 70
+        J2-2:
+          x1: 97
+          y1: 250
+          x2: 206
+          y2: 358
+          cx: 151.25
+          cy: 304.25
+          sigma_cx: 6.05
+          sigma_cy: 7.28
+          count: 70
+        J2-1:
+          x1: 361
+          y1: 250
+          x2: 484
+          y2: 362
+          cx: 422.44
+          cy: 305.89
+          sigma_cx: 9.56
+          sigma_cy: 1.62
+          count: 70
+      imgsz: 640
+      tolerance_unit: pixel
+      alignment:
+        enabled: true
+      missing_slot_check:
+        enabled: false
+enable_anomalib: false
+color_checker_type: color_qc
+color_score_threshold: 0.0
+fail_on_unexpected: true
+save_original: true
+save_processed: true
+save_annotated: true
+save_crops: true
+save_fail_only: false

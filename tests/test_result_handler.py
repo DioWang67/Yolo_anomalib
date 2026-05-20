@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from core.exceptions import ResultImageWriteError
+from core.security import SecurityError
 from core.services.results import handler as rh
 from core.services.results.handler import ResultHandler
 
@@ -134,6 +135,28 @@ def test_get_annotated_path_patterns(tmp_result_dir):
     assert "_0.7319.jpg" in os.path.basename(p2)
     assert os.path.dirname(p2).replace(
         "\\", "/").endswith("/annotated/anomalib")
+
+
+def test_result_paths_reject_product_traversal(tmp_result_dir):
+    h = ResultHandler(DummyConfig(), base_dir=tmp_result_dir, logger=DummyLogger())
+
+    with pytest.raises(SecurityError):
+        h.get_annotated_path(
+            status="PASS", detector="YOLO", product="..", area="A"
+        )
+
+    h.close()
+
+
+def test_result_paths_reject_area_path_separator(tmp_result_dir):
+    h = ResultHandler(DummyConfig(), base_dir=tmp_result_dir, logger=DummyLogger())
+
+    with pytest.raises(SecurityError):
+        h.get_annotated_path(
+            status="PASS", detector="YOLO", product="P", area="../A"
+        )
+
+    h.close()
 
 
 def test_save_results_yolo_success_and_flush(tmp_result_dir):

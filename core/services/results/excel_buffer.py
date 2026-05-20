@@ -15,6 +15,8 @@ from typing import Any
 import pandas as pd  # type: ignore[import]
 from openpyxl import load_workbook  # type: ignore[import]
 
+from core.security import ensure_subpath
+
 
 @dataclass
 class ExcelFlushResult:
@@ -32,12 +34,17 @@ class ExcelWorkbookBuffer:
     buffer_limit: int
     logger: Any
     flush_interval: float | None = None
+    allowed_root: str | None = None
     workbook_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.buffer: list[list[Any]] = []
         self._lock = threading.Lock()
+        if self.allowed_root:
+            ensure_subpath(self.path, self.allowed_root, must_exist=False)
         self.backup_path = self.path + ".bak"
+        if self.allowed_root:
+            ensure_subpath(self.backup_path, self.allowed_root, must_exist=False)
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         if not os.path.exists(self.path):
             self._initialize_excel()

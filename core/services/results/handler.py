@@ -6,6 +6,7 @@ import os
 import shutil
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -18,6 +19,7 @@ from core.exceptions import (
 )
 from core.logging_config import DetectionLogger
 from core.position_validator import build_missing_item_locations
+from core.security import ensure_subpath
 from core.utils import DetectionResults, ImageUtils
 
 from .annotations import annotate_yolo_frame
@@ -67,11 +69,17 @@ class ResultHandler:
             cfg_dict = config
         self._config_source = config
         self.config = cfg_dict
-        self.base_dir = base_dir
+        resolved_base_dir = Path(base_dir).resolve()
+        self.base_dir = str(
+            ensure_subpath(resolved_base_dir, resolved_base_dir, must_exist=False)
+        )
+        self.allowed_root = self.base_dir
         self.logger = logger or DetectionLogger()
         self.image_utils = ImageUtils()
         self.detection_results = DetectionResults(config)
-        self.path_manager = ResultPathManager(base_dir)
+        self.path_manager = ResultPathManager(
+            self.base_dir, allowed_root=self.allowed_root
+        )
         self.path_manager.ensure_base()
 
         self.columns = list(COLUMN_NAMES)
@@ -84,6 +92,7 @@ class ResultHandler:
             buffer_limit=buffer_limit,
             flush_interval=flush_interval,
             logger=self.logger.logger,
+            allowed_root=self.allowed_root,
         )
 
         queue_size = int(self._cfg_get("image_queue_maxsize", 1000) or 1000)
@@ -94,7 +103,9 @@ class ResultHandler:
         self._img_queue = ImageWriteQueue(
             self.logger.logger,
             maxsize=queue_size,
-            warn_threshold=warn_threshold)
+            warn_threshold=warn_threshold,
+            allowed_root=self.allowed_root,
+        )
 
         atexit.register(self.close)
 
@@ -277,6 +288,9 @@ class ResultHandler:
             ):
                 heatmap_dest_path = annotated_path or bundle.annotated_path
                 if heatmap_dest_path:
+                    ensure_subpath(
+                        heatmap_dest_path, self.allowed_root, must_exist=False
+                    )
                     src_norm = os.path.normcase(os.path.abspath(heatmap_path))
                     dest_norm = os.path.normcase(os.path.abspath(heatmap_dest_path))
                     if src_norm != dest_norm:
@@ -418,9 +432,11 @@ class ResultHandler:
     ) -> str:
         """Persist a JSON snapshot of runtime config and decision metadata."""
         metadata_dir = os.path.join(bundle.base_path, "metadata", bundle.detector_prefix)
+        ensure_subpath(metadata_dir, self.allowed_root, must_exist=False)
         os.makedirs(metadata_dir, exist_ok=True)
         stem, _ = os.path.splitext(bundle.image_name)
         snapshot_path = os.path.join(metadata_dir, f"{stem}_config_snapshot.json")
+        ensure_subpath(snapshot_path, self.allowed_root, must_exist=False)
         payload = {
             "timestamp": timestamp.isoformat(),
             "status": status,

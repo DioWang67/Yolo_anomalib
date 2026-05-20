@@ -156,6 +156,7 @@ def test_yolo_and_anomalib_end_to_end(monkeypatch, tmp_path):
                         fake_sink_factory, raising=True)
     monkeypatch.setattr(ds, "ModelManager", StubModelManager, raising=True)
     monkeypatch.setattr(ds, "CameraController", DummyCamera, raising=True)
+    monkeypatch.setattr(ds, "PROJECT_ROOT", tmp_path, raising=True)
 
     system = ds.DetectionSystem()
     sink = created_sink["instance"]

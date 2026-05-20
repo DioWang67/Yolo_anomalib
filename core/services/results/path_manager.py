@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+
+from core.security import ensure_subpath, safe_segment
 
 
 @dataclass
@@ -20,10 +23,13 @@ class SavePathBundle:
 class ResultPathManager:
     """Utility for building deterministic result paths."""
 
-    def __init__(self, base_dir: str) -> None:
-        self.base_dir = base_dir
+    def __init__(self, base_dir: str, allowed_root: str | None = None) -> None:
+        self.base_dir = str(Path(base_dir).resolve())
+        self.allowed_root = str(Path(allowed_root or self.base_dir).resolve())
+        ensure_subpath(self.base_dir, self.allowed_root, must_exist=False)
 
     def ensure_base(self) -> None:
+        ensure_subpath(self.base_dir, self.allowed_root, must_exist=False)
         os.makedirs(self.base_dir, exist_ok=True)
 
     def get_annotated_path(
@@ -59,12 +65,16 @@ class ResultPathManager:
         timestamp_dt = timestamp or datetime.now()
         date_folder = timestamp_dt.strftime("%Y%m%d")
         ts = timestamp_dt.strftime("%H%M%S")
-        detector_prefix = (detector or "").lower()
-        product = product or "unknown"
-        area = area or "unknown"
+        detector_prefix = safe_segment(
+            (detector or "unknown").lower(), field_name="detector"
+        )
+        product = safe_segment(product or "unknown", field_name="product")
+        area = safe_segment(area or "unknown", field_name="area")
+        status = safe_segment(status or "unknown", field_name="status")
 
         base_path = os.path.join(
             self.base_dir, date_folder, product, area, status)
+        ensure_subpath(base_path, self.allowed_root, must_exist=False)
         original_dir = os.path.join(base_path, "original", detector_prefix)
         preprocessed_dir = os.path.join(
             base_path, "preprocessed", detector_prefix)
@@ -82,14 +92,15 @@ class ResultPathManager:
                 else f"{detector_prefix}_{ts}.jpg"
             )
 
-        os.makedirs(original_dir, exist_ok=True)
-        os.makedirs(preprocessed_dir, exist_ok=True)
-        os.makedirs(annotated_dir, exist_ok=True)
-        os.makedirs(cropped_dir, exist_ok=True)
+        for directory in (original_dir, preprocessed_dir, annotated_dir, cropped_dir):
+            ensure_subpath(directory, self.allowed_root, must_exist=False)
+            os.makedirs(directory, exist_ok=True)
 
         original_path = os.path.join(original_dir, image_name)
         preprocessed_path = os.path.join(preprocessed_dir, image_name)
         annotated_path = os.path.join(annotated_dir, image_name)
+        for output_path in (original_path, preprocessed_path, annotated_path):
+            ensure_subpath(output_path, self.allowed_root, must_exist=False)
 
         return SavePathBundle(
             base_path=base_path,

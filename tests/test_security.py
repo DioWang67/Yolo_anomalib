@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from core.security import PathValidator, SecurityError
+from core.security import (
+    PathValidator,
+    SecurityError,
+    ensure_subpath,
+    resolve_output_dir,
+    safe_segment,
+)
 
 
 class TestPathValidator:
@@ -168,6 +174,39 @@ class TestPathValidator:
         root2_str = str(root2.resolve()).replace("\\", "\\\\")
         assert root1_str in error_msg or str(root1.resolve()) in error_msg
         assert root2_str in error_msg or str(root2.resolve()) in error_msg
+
+
+class TestSharedSecurityApi:
+    def test_safe_segment_accepts_simple_identifiers(self):
+        assert safe_segment("PCBA-1_A.2", field_name="product") == "PCBA-1_A.2"
+
+    @pytest.mark.parametrize("value", ["", ".", "..", "../x", "a/b", "a\\b", "C:tmp"])
+    def test_safe_segment_rejects_path_like_values(self, value):
+        with pytest.raises(SecurityError):
+            safe_segment(value, field_name="product")
+
+    def test_ensure_subpath_blocks_escape(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        with pytest.raises(SecurityError):
+            ensure_subpath(root / ".." / "outside.txt", root)
+
+    def test_resolve_output_dir_blocks_absolute_path_outside_root(self, tmp_path):
+        root = tmp_path / "project"
+        outside = tmp_path / "outside"
+        root.mkdir()
+        outside.mkdir()
+
+        with pytest.raises(SecurityError):
+            resolve_output_dir(outside, allowed_root=root)
+
+    def test_resolve_output_dir_accepts_relative_path_under_root(self, tmp_path):
+        root = tmp_path / "project"
+        root.mkdir()
+
+        resolved = resolve_output_dir("Result", base_dir=root, allowed_root=root)
+
+        assert resolved == (root / "Result").resolve()
 
 
 class TestGlobalPathValidator:

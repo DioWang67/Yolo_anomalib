@@ -205,6 +205,14 @@ class TestDetectionSystemIntegration(unittest.TestCase):
             default_threshold=0.7,
         )
 
+    def test_resolve_output_dir_rejects_project_escape(self):
+        from core.security import SecurityError
+
+        self.system.config.output_dir = ".."
+
+        with self.assertRaises(SecurityError):
+            self.system._resolve_output_dir()
+
 
 if __name__ == "__main__":
     unittest.main()

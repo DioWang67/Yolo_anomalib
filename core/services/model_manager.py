@@ -14,6 +14,7 @@ from core.exceptions import ModelConfigError
 from core.config_validation import validate_model_cfg
 from core.logging_config import DetectionLogger
 from core.path_utils import project_root, resolve_path
+from core.security import resolve_output_dir, safe_segment
 from core.version_utils import (
     ModelVersionError,
     check_compatibility,
@@ -89,7 +90,7 @@ class ModelManager:
         # --- Simple scalar overrides ---
         _SCALAR_FIELDS = [
             "device", "conf_thres", "iou_thres", "enable_yolo", "enable_anomalib",
-            "enable_color_check", "color_fail_closed",
+            "enable_color_check", "color_fail_closed", "enable_custom_backends",
         ]
         for field in _SCALAR_FIELDS:
             if field in cfg:
@@ -115,9 +116,11 @@ class ModelManager:
             if raw_output_dir:
                 path_str = str(raw_output_dir).strip()
                 if path_str:
-                    resolved = Path(path_str)
-                    if not resolved.is_absolute():
-                        resolved = (PROJECT_ROOT / resolved).resolve()
+                    resolved = resolve_output_dir(
+                        path_str,
+                        base_dir=PROJECT_ROOT,
+                        allowed_root=PROJECT_ROOT,
+                    )
                     base_config.output_dir = str(resolved)
                 else:
                     self.logger.logger.warning(
@@ -167,20 +170,25 @@ class ModelManager:
         Returns the engine and the (mutated) base_config snapshot after
         overrides.
         """
-        key = (product, area)
+        safe_product = safe_segment(product, field_name="product")
+        safe_area = safe_segment(area, field_name="area")
+        safe_inference_type = safe_segment(
+            inference_type.lower(), field_name="inference_type"
+        )
+        key = (safe_product, safe_area)
         with self._cache_lock:
-            if key in self._cache and inference_type in self._cache[key]:
+            if key in self._cache and safe_inference_type in self._cache[key]:
                 self.logger.logger.info(
-                    f"Using cached model: product={product}, "
-                    f"area={area}, type={inference_type}"
+                    f"Using cached model: product={safe_product}, "
+                    f"area={safe_area}, type={safe_inference_type}"
                 )
-                engine, cfg_snapshot = self._cache[key][inference_type]
+                engine, cfg_snapshot = self._cache[key][safe_inference_type]
                 base_config.__dict__.update(copy.deepcopy(cfg_snapshot.__dict__))
                 self._cache.move_to_end(key)
                 return engine, base_config
 
         model_config_path = os.path.join(
-            "models", product, area, inference_type, "config.yaml"
+            "models", safe_product, safe_area, safe_inference_type, "config.yaml"
         )
         if not os.path.exists(model_config_path):
             raise FileNotFoundError(f"Model config not found: {model_config_path}")
@@ -210,19 +218,25 @@ class ModelManager:
         # Validate critical fields/paths early with helpful messages
         try:
             validate_model_cfg(
-                cfg or {}, product, area, selected_backend=inference_type, model_cfg_dir=model_cfg_dir
+                cfg or {},
+                safe_product,
+                safe_area,
+                selected_backend=safe_inference_type,
+                model_cfg_dir=model_cfg_dir,
             )
         except Exception as e:
             self.logger.logger.error(f"Model config validation failed: {e}")
             raise
 
-        context = f"{product}/{area}/{inference_type}"
+        context = f"{safe_product}/{safe_area}/{safe_inference_type}"
         self._apply_model_config(base_config, cfg, context, model_cfg_dir=model_cfg_dir)
-        if str(inference_type).lower() == "yolo":
-            self._validate_inspection_scope(base_config, product, area, context)
+        if safe_inference_type == "yolo":
+            self._validate_inspection_scope(base_config, safe_product, safe_area, context)
 
         # Version validation (if model uses versioned naming)
-        self._validate_model_version(base_config, cfg, product, area, inference_type)
+        self._validate_model_version(
+            base_config, cfg, safe_product, safe_area, safe_inference_type
+        )
 
         from core.inference_engine import InferenceEngine
 
@@ -230,13 +244,13 @@ class ModelManager:
         if not engine.initialize():
             raise RuntimeError("Inference engine init failed")
 
-        if inference_type == "anomalib":
-            self._initialize_product_models(base_config, product)
+        if safe_inference_type == "anomalib":
+            self._initialize_product_models(base_config, safe_product)
 
         with self._cache_lock:
             if key not in self._cache:
                 self._cache[key] = {}
-            self._cache[key][inference_type] = (engine, copy.deepcopy(base_config))
+            self._cache[key][safe_inference_type] = (engine, copy.deepcopy(base_config))
             self._cache.move_to_end(key)
             if len(self._cache) > self.max_cache_size:
                 old_key, engines = self._cache.popitem(last=False)
@@ -281,9 +295,14 @@ class ModelManager:
         Returns:
             The cached inference engine, or ``None`` when it has not been loaded.
         """
+        safe_product = safe_segment(product, field_name="product")
+        safe_area = safe_segment(area, field_name="area")
+        safe_inference_type = safe_segment(
+            inference_type.lower(), field_name="inference_type"
+        )
         with self._cache_lock:
-            engines = self._cache.get((product, area), {})
-            cached = engines.get(inference_type)
+            engines = self._cache.get((safe_product, safe_area), {})
+            cached = engines.get(safe_inference_type)
             return cached[0] if cached else None
 
     def clear_cache(
@@ -299,13 +318,21 @@ class ModelManager:
             area: Optional area filter.
             inference_type: Optional backend filter.
         """
-        target_type = inference_type.lower() if inference_type else None
+        target_product = (
+            safe_segment(product, field_name="product") if product else None
+        )
+        target_area = safe_segment(area, field_name="area") if area else None
+        target_type = (
+            safe_segment(inference_type.lower(), field_name="inference_type")
+            if inference_type
+            else None
+        )
         with self._cache_lock:
             for key in list(self._cache.keys()):
                 key_product, key_area = key
-                if product is not None and key_product != product:
+                if target_product is not None and key_product != target_product:
                     continue
-                if area is not None and key_area != area:
+                if target_area is not None and key_area != target_area:
                     continue
 
                 engines = self._cache[key]

@@ -5,6 +5,7 @@ and other security vulnerabilities related to file system access.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -99,6 +100,93 @@ class PathValidator:
             return True
         except ValueError:
             return False
+
+
+_SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def safe_segment(value: object, *, field_name: str = "path segment") -> str:
+    """Validate one filesystem path segment.
+
+    Args:
+        value: Segment value from product, area, status, detector, or similar input.
+        field_name: Human-readable name used in error messages.
+
+    Returns:
+        The stripped segment string.
+
+    Raises:
+        SecurityError: If the value is empty or contains path separators,
+            traversal markers, drive prefixes, or unsupported characters.
+    """
+    segment = str(value or "").strip()
+    if not segment:
+        raise SecurityError(f"Invalid {field_name}: empty value")
+    if segment in {".", ".."}:
+        raise SecurityError(f"Invalid {field_name}: traversal marker")
+    if "/" in segment or "\\" in segment or ":" in segment:
+        raise SecurityError(f"Invalid {field_name}: path separators are not allowed")
+    if not _SAFE_SEGMENT_RE.fullmatch(segment):
+        raise SecurityError(
+            f"Invalid {field_name}: only letters, numbers, dot, underscore, "
+            "and dash are allowed"
+        )
+    return segment
+
+
+def ensure_subpath(
+    path: str | Path, root: str | Path, *, must_exist: bool = False
+) -> Path:
+    """Resolve ``path`` and ensure it stays under ``root``.
+
+    Args:
+        path: Path to validate.
+        root: Allowed root directory.
+        must_exist: Whether the target must already exist.
+
+    Returns:
+        Resolved absolute path.
+
+    Raises:
+        SecurityError: If the path resolves outside ``root``.
+        FileNotFoundError: If ``must_exist`` is true and the path does not exist.
+    """
+    validator = PathValidator([Path(root)])
+    return validator.validate_path(path, must_exist=must_exist)
+
+
+def resolve_output_dir(
+    value: str | Path | None,
+    *,
+    base_dir: str | Path | None = None,
+    allowed_root: str | Path | None = None,
+    default_name: str = "Result",
+) -> Path:
+    """Resolve and validate an output directory.
+
+    Relative output directories are resolved against ``base_dir`` when supplied,
+    otherwise against ``allowed_root``. Absolute output directories are accepted
+    only when they are under ``allowed_root``.
+
+    Args:
+        value: Raw configured output directory.
+        base_dir: Base for relative paths.
+        allowed_root: Directory that must contain the resolved output path.
+        default_name: Fallback directory when ``value`` is empty.
+
+    Returns:
+        Resolved absolute output directory.
+
+    Raises:
+        SecurityError: If the resolved path escapes ``allowed_root``.
+    """
+    root = Path(allowed_root or PROJECT_ROOT).resolve()
+    raw = str(value or "").strip() or default_name
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        base = Path(base_dir).resolve() if base_dir is not None else root
+        candidate = base / candidate
+    return ensure_subpath(candidate, root, must_exist=False)
 
 
 # Global path validator instance

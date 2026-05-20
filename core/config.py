@@ -165,6 +165,7 @@ class DetectionConfig:
     pipeline: list[str] | None = None
     steps: dict[str, Any] = field(default_factory=dict)
     backends: dict[str, dict[str, Any]] | None = None  # extra/custom backends
+    enable_custom_backends: bool = False
     # Avoid duplicating cache with YOLO internal cache (default: disable)
     disable_internal_cache: bool = True
     # Saving controls
@@ -301,6 +302,9 @@ class DetectionConfig:
             "pipeline": pipeline_value,
             "steps": dict(normalized.get("steps", {})),
             "backends": backends_value,
+            "enable_custom_backends": bool(
+                normalized.get("enable_custom_backends", False)
+            ),
             "disable_internal_cache": bool(
                 normalized.get("disable_internal_cache", True)
             ),

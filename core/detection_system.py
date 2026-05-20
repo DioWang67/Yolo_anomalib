@@ -34,6 +34,7 @@ from core.pipeline.context import DetectionContext
 from core.pipeline.registry import PipelineEnv, build_pipeline, default_pipeline
 from core.result_adapter import normalize_result
 from core.runtime_preflight import validate_runtime_for_model
+from core.security import ensure_subpath, resolve_output_dir
 from core.services.color_checker import ColorCheckerService
 from core.services.color_override_loader import ColorOverrideLoader
 from core.services.model_manager import ModelManager
@@ -82,9 +83,11 @@ class DetectionSystem:
         self.initialize_camera()
 
     def _resolve_output_dir(self) -> Path:
-        output_dir = Path(self.config.output_dir)
-        if not output_dir.is_absolute():
-            output_dir = (self.config_path.parent / output_dir).resolve()
+        output_dir = resolve_output_dir(
+            self.config.output_dir,
+            base_dir=PROJECT_ROOT,
+            allowed_root=PROJECT_ROOT,
+        )
         self.config.output_dir = str(output_dir)
         return output_dir
 
@@ -519,6 +522,8 @@ class DetectionSystem:
         )
         result["output_path"] = correct_path
         if temp_path != correct_path and os.path.exists(temp_path):
+            ensure_subpath(temp_path, self.config.output_dir, must_exist=True)
+            ensure_subpath(correct_path, self.config.output_dir, must_exist=False)
             os.makedirs(os.path.dirname(correct_path), exist_ok=True)
             try:
                 shutil.move(temp_path, correct_path)

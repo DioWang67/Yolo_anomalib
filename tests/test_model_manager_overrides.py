@@ -7,6 +7,7 @@ from core.config import DetectionConfig
 from core.exceptions import ModelConfigError
 from core.logging_config import DetectionLogger
 from core.path_utils import project_root
+from core.security import SecurityError
 from core.services.model_manager import ModelManager
 
 
@@ -132,4 +133,31 @@ def test_model_manager_fails_fast_when_expected_items_missing(
     manager = ModelManager(DetectionLogger())
 
     with pytest.raises(ModelConfigError, match="missing expected_items"):
+        manager.switch(base_config, product="PCBA1", area="A", inference_type="yolo")
+
+
+def test_model_manager_rejects_output_dir_outside_project(tmp_path, monkeypatch):
+    weights_path = tmp_path / "best.onnx"
+    weights_path.write_bytes(b"")
+    global_cfg_path = _write_global_config(tmp_path, weights_path)
+    model_dir = tmp_path / "models" / "PCBA1" / "A" / "yolo"
+    model_dir.mkdir(parents=True)
+    outside_dir = tmp_path / "outside_results"
+    (model_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "weights": str(weights_path),
+                "enable_yolo": True,
+                "output_dir": str(outside_dir),
+                "expected_items": {"PCBA1": {"A": ["J5-1"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    base_config = DetectionConfig.from_yaml(str(global_cfg_path))
+    manager = ModelManager(DetectionLogger())
+
+    with pytest.raises(SecurityError):
         manager.switch(base_config, product="PCBA1", area="A", inference_type="yolo")
