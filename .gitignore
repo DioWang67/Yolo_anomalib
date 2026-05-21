@@ -33,11 +33,16 @@ config.yaml
 .env.local
 
 # 推理輸出與暫存圖片（全部忽略，必要時再手動加回）
-Result/
-Results/
-output/
-outputs/
-runs/
+/Result/
+/Results/
+/output/
+/outputs/
+/runs/
+models/**/Result/
+models/**/Results/
+models/**/output/
+models/**/outputs/
+models/**/runs/
 *.jpg
 *.jpeg
 *.png
