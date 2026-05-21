@@ -62,6 +62,7 @@ class DetectionResult:
     # --- Pipeline outputs ---
     missing_items: list[str] = field(default_factory=list)
     missing_locations: list[dict[str, Any]] = field(default_factory=list)
+    over_items: list[str] = field(default_factory=list)
     unexpected_items: list[str] = field(default_factory=list)
     color_check: dict[str, Any] | None = None
     sequence_check: dict[str, Any] | None = None
@@ -106,6 +107,7 @@ class DetectionResult:
             "detections": self.detections,
             "missing_items": self.missing_items,
             "missing_locations": self.missing_locations,
+            "over_items": self.over_items,
             "unexpected_items": self.unexpected_items,
             "items": [
                 {

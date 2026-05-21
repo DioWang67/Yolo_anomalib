@@ -40,6 +40,8 @@ def normalize_result(
     # Detections / missing
     out["detections"] = _ensure_list(out.get("detections"), default=[])
     out["missing_items"] = _ensure_list(out.get("missing_items"), default=[])
+    out["over_items"] = _ensure_list(out.get("over_items"), default=[])
+    out["unexpected_items"] = _ensure_list(out.get("unexpected_items"), default=[])
 
     # Processed image
     proc = out.get("processed_image")

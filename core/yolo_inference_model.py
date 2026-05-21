@@ -103,7 +103,10 @@ class YOLOInferenceModel(BaseInferenceModel):
             )
             should_warmup = weights_key not in self._warmup_registry
 
-            self.model = YOLO(self.config.weights)
+            self.model = self._load_yolo_model(
+                self.config.weights,
+                runtime=self.runtime_info.runtime,
+            )
             if self.runtime_info.setup_device:
                 self.model.to(self.runtime_info.setup_device)
                 self.config.device = self.runtime_info.setup_device
@@ -373,6 +376,24 @@ class YOLOInferenceModel(BaseInferenceModel):
         except Exception as exc:
             self.logger.logger.exception("YOLO inference failed")
             raise ModelInferenceError(str(exc)) from exc
+
+    @staticmethod
+    def _load_yolo_model(weights: str, *, runtime: str | None = None) -> YOLO:
+        """Load a YOLO model with explicit task metadata for exported artifacts.
+
+        Args:
+            weights: Model artifact path.
+            runtime: Runtime family detected from the artifact extension.
+
+        Returns:
+            Initialized Ultralytics YOLO instance.
+        """
+        if runtime in {"onnx", "openvino", "tensorrt"}:
+            try:
+                return YOLO(weights, task="detect")
+            except TypeError:
+                return YOLO(weights)
+        return YOLO(weights)
 
     def _predict_yolo(self, image: np.ndarray):
         """Run the loaded YOLO model with runtime-specific device arguments."""

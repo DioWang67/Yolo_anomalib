@@ -50,6 +50,12 @@ set "BUILD_NAME=yolo11_inference"
 set "OUTPUT_PATH=%SOURCE_PATH%\dist"
 set "WORK_PATH=%SOURCE_PATH%\build"
 set "SPEC_PATH=%SOURCE_PATH%"
+set "TIMM_DATA_ARG="
+if exist "%SOURCE_PATH%\timm_cache" (
+    set "TIMM_DATA_ARG=--add-data ""%SOURCE_PATH%\timm_cache;timm_cache"""
+) else (
+    echo [WARNING] timm_cache not found; skipping bundled Patchcore backbone cache.
+)
 
 REM --- 清理上次輸出 ---
 echo [INFO] 清理舊輸出目錄...
@@ -79,7 +85,7 @@ REM --- 注意：在 ^ 續行的指令區塊中不可插入 REM 註解，否則�
   ^
   --add-data "%SOURCE_PATH%\Runtime;Runtime" ^
   --add-data "%SOURCE_PATH%\MvImport;MvImport" ^
-  --add-data "%SOURCE_PATH%\timm_cache;timm_cache" ^
+  %TIMM_DATA_ARG% ^
   ^
   --hidden-import torch ^
   --hidden-import torch.nn.functional ^
@@ -94,6 +100,7 @@ REM --- 注意：在 ^ 續行的指令區塊中不可插入 REM 註解，否則�
   --hidden-import anomalib ^
   --hidden-import lightning ^
   --hidden-import ultralytics ^
+  --hidden-import onnx ^
   --hidden-import onnxruntime ^
   --hidden-import onnxruntime.capi.onnxruntime_pybind11_state ^
   --hidden-import pandas ^
@@ -129,6 +136,8 @@ REM --- 注意：在 ^ 續行的指令區塊中不可插入 REM 註解，否則�
   ^
   --copy-metadata torch ^
   --copy-metadata ultralytics ^
+  --copy-metadata onnx ^
+  --copy-metadata onnxruntime ^
   --copy-metadata anomalib ^
   --copy-metadata lightning ^
   ^

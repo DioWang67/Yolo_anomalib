@@ -7,6 +7,7 @@ from core.exceptions import ResultPersistenceError
 from core.pipeline.context import DetectionContext
 from core.position_validator import PositionValidator
 from core.services.color_checker import ColorCheckerService
+from core.services.decision_engine import InspectionDecisionEngine
 from core.services.result_sink import ExcelImageResultSink
 
 
@@ -143,6 +144,8 @@ class CountCheckStep(Step):
 
         ctx.result["missing_items"] = missing_items
         ctx.result["over_items"] = over_items
+        if strict:
+            ctx.result["unexpected_items"] = list(over_items)
         ctx.result["count_check"] = {
             "expected": dict(expected_counter),
             "detected": dict(detected_counter),
@@ -161,6 +164,24 @@ class CountCheckStep(Step):
             )
         else:
             self.logger.info("Count check PASS")
+        self._sync_count_decision(ctx, missing_items, over_items, strict)
+
+    @staticmethod
+    def _sync_count_decision(
+        ctx: DetectionContext,
+        missing_items: list[str],
+        over_items: list[str],
+        strict: bool,
+    ) -> None:
+        """Keep decision metadata aligned with post-color count check output."""
+        decision = InspectionDecisionEngine(fail_on_unexpected=True).evaluate(
+            detections=ctx.result.get("detections", []) or [],
+            missing_items=missing_items,
+            unexpected_items=list(over_items) if strict else [],
+            slot_mismatches=ctx.result.get("slot_mismatches", []) or [],
+            alignment_quality=ctx.result.get("alignment_quality"),
+        )
+        ctx.result["decision"] = decision.to_dict()
 
 
 class SequenceCheckStep(Step):

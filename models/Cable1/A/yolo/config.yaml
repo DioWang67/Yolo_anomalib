@@ -39,3 +39,22 @@ steps:
 enable_color_check: true
 color_checker_type: stats
 color_model_path: models/Cable1/A/yolo/color_stats.json
+enable_anomalib: false
+color_score_threshold: 0.4
+fail_on_unexpected: true
+save_original: true
+save_processed: true
+save_annotated: true
+save_crops: true
+save_fail_only: false
+position_config:
+  Cable1:
+    A:
+      enabled: false
+      tolerance: 0.0
+      tolerance_unit: percent
+      mode: center
+      alignment:
+        enabled: false
+      missing_slot_check:
+        enabled: false

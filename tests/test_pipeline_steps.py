@@ -322,6 +322,37 @@ class TestCountCheckStep:
         assert base_context.status == "DETECTION_FAIL"
         assert "J1" in base_context.result["missing_items"]
 
+    def test_run_strict_overwrites_stale_missing_decision_with_over_item(
+        self, mock_env, base_context
+    ):
+        base_context.config.expected_items = {
+            "TestProduct": {"TestArea": ["Black", "Green"]}
+        }
+        base_context.result["detections"] = [
+            {"class": "Black"},
+            {"class": "Black"},
+            {"class": "Black", "verified_class": "Green"},
+        ]
+        base_context.result["decision"] = {
+            "status": "FAIL",
+            "reasons": ["MISSING"],
+            "details": [{"reason": "MISSING", "items": ["Green"]}],
+        }
+
+        step = CountCheckStep(
+            mock_env.logger,
+            base_context.product,
+            base_context.area,
+            options={"strict": True},
+        )
+        step.run(base_context)
+
+        assert base_context.status == "DETECTION_FAIL"
+        assert base_context.result["missing_items"] == []
+        assert base_context.result["over_items"] == ["Black"]
+        assert base_context.result["unexpected_items"] == ["Black"]
+        assert base_context.result["decision"]["reasons"] == ["UNEXPECTED_COMPONENT"]
+
     def test_run_skips_inference_error(self, mock_env, base_context):
         base_context.status = "INFERENCE_ERROR"
         base_context.result = {

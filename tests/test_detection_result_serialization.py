@@ -6,6 +6,7 @@ def test_detection_result_to_dict_includes_unexpected_items_and_metadata():
         status="FAIL",
         product="PCBA",
         area="TOP",
+        over_items=["Black"],
         unexpected_items=["UNKNOWN_PART"],
         metadata={"decision": {"status": "FAIL", "reasons": ["UNEXPECTED_COMPONENT"]}},
     )
@@ -13,4 +14,5 @@ def test_detection_result_to_dict_includes_unexpected_items_and_metadata():
     payload = result.to_dict()
 
     assert payload["unexpected_items"] == ["UNKNOWN_PART"]
+    assert payload["over_items"] == ["Black"]
     assert payload["metadata"]["decision"]["reasons"] == ["UNEXPECTED_COMPONENT"]

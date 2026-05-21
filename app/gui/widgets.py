@@ -287,6 +287,7 @@ class OperatorGuidanceCard(QFrame):
             return
 
         missing = result.missing_items or []
+        over = result.over_items or []
         unexpected = result.unexpected_items or []
         if result.status == "PASS":
             self.show_message("PASS", "Continue production.", "success", [])
@@ -602,6 +603,7 @@ class ResultDisplayWidget(QWidget):
         inference_type = result.inference_type or "N/A"
         ckpt_name = os.path.basename(result.ckpt_path) if result.ckpt_path else "N/A"
         missing = result.missing_items or []
+        over = result.over_items or []
         unexpected = result.unexpected_items or []
 
         lines: list[str] = []
@@ -619,12 +621,14 @@ class ResultDisplayWidget(QWidget):
         if result.anomaly_score is not None:
             lines.append(f"{tr(self._language, 'anomaly_score')}: {result.anomaly_score}")
         lines.append(f"{tr(self._language, 'missing_count')}: {len(missing)}")
+        lines.append(f"{tr(self._language, 'extra_count')}: {len(over)}")
         if isinstance(unexpected, (list, tuple)):
             lines.append(f"{tr(self._language, 'unexpected_count')}: {len(unexpected)}")
 
         self._append_sequence_lines(lines, result)
         self._append_color_lines(lines, result)
         self._append_list_section(lines, "missing_list", missing)
+        self._append_list_section(lines, "extra_items", over)
         self._append_list_section(lines, "unexpected_items", unexpected)
         self._append_position_lines(lines, result)
         self._append_decision_lines(lines, result)

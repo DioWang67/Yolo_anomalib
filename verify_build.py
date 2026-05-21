@@ -98,7 +98,7 @@ def check_dir(dist: Path) -> bool:
         print(f"  ✓  {REQUIRED_TIMM_CACHE}  ({size_mb:.0f} MB)")
     else:
         print(f"  ✗  {REQUIRED_TIMM_CACHE}  ← 缺少！anomalib 離線無法初始化")
-        passed = False
+        print("  [WARNING] timm_cache not bundled; YOLO packaging can still run.")
 
     # --- MvImport 抽查 ---
     print("\n[MvImport 抽查]")
