@@ -117,6 +117,32 @@ def test_gui_smoke(monkeypatch, tmp_path):
     window.on_detection_complete(res)
 
     assert window.info_panel.big_status_label.text() == "PASS"
+    assert window.start_btn.objectName() == "primaryAction"
+    assert window.stop_btn.objectName() == "dangerAction"
+    assert window.info_panel.log_group.isVisible() is False
+    assert window.image_panel.result_image.hasScaledContents() is False
+
+    window.control_panel.language_combo.setCurrentIndex(
+        window.control_panel.language_combo.findData("zh")
+    )
+    app.processEvents()
+    assert window.current_language == "zh"
+    assert window.start_btn.text() == "開始檢測"
+    assert window.image_panel.windowTitle() == ""
+    assert window.image_panel.title() == "影像檢視"
+    assert window.menuBar().actions()[0].text() == "檔案"
+    assert window.info_panel.session_stats.title() == "當班統計"
+
+    window.control_panel.language_combo.setCurrentIndex(
+        window.control_panel.language_combo.findData("en")
+    )
+    app.processEvents()
+    assert window.current_language == "en"
+    assert window.start_btn.text() == "Start Inspection"
+    assert window.menuBar().actions()[0].text() == "File"
+    assert window.info_panel.result_widget._title.text() == "Result Details"
+    assert "Field Decision" in window.info_panel.result_widget._result_text.toPlainText()
+    assert window.info_panel.session_stats.title() == "Shift Stats"
 
     window.close()
     app.processEvents()

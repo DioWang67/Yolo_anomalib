@@ -54,6 +54,7 @@ from PyQt5.QtWidgets import (
 
 from app.gui.camera_handler import CameraHandlerMixin
 from app.gui.controller import DetectionController
+from app.gui.i18n import normalize_language, tr
 from app.gui.model_config_dialog import ModelConfigDialog
 from app.gui.panels.control_panel import ControlPanel
 from app.gui.panels.image_panel import ImagePanel
@@ -95,6 +96,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         mdl_cand = resolve_path("models")
         self._models_base = mdl_cand if mdl_cand and mdl_cand.is_dir() else self._project_root / "models"
         self.preferences = PreferencesManager(QSettings())
+        self.current_language = normalize_language(self.preferences.restore_language())
         self._logger = logging.getLogger(__name__)
         self._catalog = ModelCatalog(self._models_base)
         self.controller = DetectionController(
@@ -145,52 +147,81 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             pass
 
     def init_ui(self):
-        self.setWindowTitle("AI 檢測系統 - PyQt 介面")
+        self.setWindowTitle(tr(self.current_language, "window_title"))
         self.setGeometry(100, 100, 1400, 900)
         self.setStyleSheet(
             """
             QMainWindow {
-                background-color: #ffffff;
+                background-color: #f4f6f8;
+            }
+            QWidget {
+                font-family: "Microsoft JhengHei", "Segoe UI", Arial;
+                color: #1f2933;
             }
             QPushButton {
-                background-color: #007bff;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-weight: bold;
+                background-color: #eef2f6;
+                color: #1f2933;
+                border: 1px solid #cbd5df;
+                padding: 8px 12px;
+                border-radius: 6px;
+                font-weight: 600;
             }
             QPushButton:hover {
-                background-color: #0056b3;
+                background-color: #e4ebf2;
+                border-color: #9fb0c3;
             }
             QPushButton:pressed {
-                background-color: #004085;
+                background-color: #d7e1ec;
+            }
+            QPushButton#primaryAction {
+                background-color: #16794c;
+                color: white;
+                border: none;
+            }
+            QPushButton#primaryAction:hover {
+                background-color: #12643f;
+            }
+            QPushButton#dangerAction {
+                background-color: #b42318;
+                color: white;
+                border: none;
+            }
+            QPushButton#dangerAction:hover {
+                background-color: #971d14;
+            }
+            QPushButton#secondaryAction {
+                background-color: #ffffff;
+                color: #243b53;
+                border: 1px solid #bcccdc;
             }
             QPushButton:disabled {
-                background-color: #6c757d;
-                color: #dee2e6;
+                background-color: #d9e2ec;
+                color: #829ab1;
+                border-color: #d9e2ec;
             }
             QComboBox {
-                padding: 6px 12px;
-                border: 1px solid #ced4da;
-                border-radius: 4px;
+                padding: 6px 10px;
+                border: 1px solid #bcccdc;
+                border-radius: 6px;
                 background-color: white;
                 min-width: 120px;
             }
             QComboBox:hover {
-                border-color: #80bdff;
+                border-color: #829ab1;
             }
             QGroupBox {
-                font-weight: bold;
-                border: 2px solid #dee2e6;
+                font-weight: 700;
+                border: 1px solid #d9e2ec;
                 border-radius: 8px;
                 margin-top: 1ex;
-                padding-top: 10px;
+                padding-top: 12px;
+                background-color: #ffffff;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 10px;
-                padding: 0 5px 0 5px;
+                padding: 0 6px 0 6px;
+                color: #334e68;
             }
         """
         )
@@ -210,8 +241,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         main_splitter.addWidget(self.info_panel)
 
         main_splitter.setStretchFactor(0, 0)
-        main_splitter.setStretchFactor(1, 2)
+        main_splitter.setStretchFactor(1, 3)
         main_splitter.setStretchFactor(2, 1)
+        main_splitter.setSizes([280, 760, 360])
         main_layout.addWidget(main_splitter)
 
         # Aliases for compatibility with existing methods
@@ -265,13 +297,16 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self.control_panel.show_detection_boxes_toggled.connect(
             self._on_show_detection_boxes_toggled
         )
+        self.control_panel.language_changed.connect(self.on_language_changed)
 
         self.info_panel.session_stats.consecutive_fail_reached.connect(
             self._on_consecutive_fail_alert
         )
 
         # Add model version label to status bar (permanent widget on the right)
-        self.model_version_label = QLabel("模型版本: --")
+        self.model_version_label = QLabel(
+            f"{tr(self.current_language, 'model_version')}: --"
+        )
         self.model_version_label.setStyleSheet(
             "padding: 2px 8px; color: #6c757d; font-size: 11px; border-left: 1px solid #dee2e6;"
         )
@@ -287,12 +322,35 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self.stats_timer.setInterval(1000)
         self.stats_timer.timeout.connect(self.update_pipeline_stats)
         
-        self.statusBar().showMessage("系統就緒")
+        self.apply_language(self.current_language)
+        self.statusBar().showMessage(tr(self.current_language, "ready"))
         self.update_start_enabled()
         self.show_detection_boxes_chk.setChecked(
             self.preferences.restore_show_detection_boxes()
         )
-        build_menu_bar(self)
+
+    def apply_language(self, language: str) -> None:
+        """Apply the selected language to operator-facing GUI text."""
+        self.current_language = normalize_language(language)
+        self.setWindowTitle(tr(self.current_language, "window_title"))
+        self.control_panel.set_language(self.current_language)
+        self.image_panel.set_language(self.current_language)
+        self.info_panel.set_language(self.current_language)
+        if self.model_version_label:
+            text = self.model_version_label.text()
+            suffix = text.split(":", 1)[1].strip() if ":" in text else "--"
+            self.model_version_label.setText(
+                f"{tr(self.current_language, 'model_version')}: {suffix}"
+            )
+        if hasattr(self, "menuBar"):
+            self.menuBar().clear()
+            build_menu_bar(self)
+
+    def on_language_changed(self, language: str) -> None:
+        """Persist and apply language changes from the control panel."""
+        self.apply_language(language)
+        self.preferences.save_language(self.current_language)
+        self.statusBar().showMessage(tr(self.current_language, "ready"), 3000)
 
     def init_system(self):
         """非同步初始化偵測系統與相機"""
@@ -651,7 +709,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         startup_worker_running = bool(self.worker and self.worker.isRunning())
         if startup_worker_running and hasattr(self.worker, "cancel"):
             self.worker.cancel()
-        self.stop_btn.setText("正在停止...")
+        self.stop_btn.setText(tr(self.current_language, "stopping"))
         
         if (
             not self.controller.detection_system.pipeline_running
@@ -703,7 +761,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self._shutdown_in_progress = False
         self._stopping_generation = None
         self.stats_timer.stop()
-        self.stop_btn.setText("停止檢測")
+        self.stop_btn.setText(tr(self.current_language, "stop"))
         self._reset_ui_state()
         self.log_message("檢測管線已關閉 (IO 已落盤)")
 
@@ -863,12 +921,12 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         load_image_with_retry(
             self.original_image,
             original_path,
-            on_fail=lambda: self.original_image.setText("尚無原始影像 — 請重新選擇影像"),
+            on_fail=lambda: self.original_image.setText("No original image available"),
         )
         load_image_with_retry(
             self.processed_image,
             preprocessed_path,
-            on_fail=lambda: self.processed_image.setText("尚無預處理影像"),
+            on_fail=lambda: self.processed_image.setText("No processed image available"),
         )
         self._refresh_result_image()
 
@@ -906,10 +964,10 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
                     clean_path,
                     attempts=2,
                     delay_ms=150,
-                    on_fail=lambda: self.result_image.setText("無法載入結果影像"),
+                    on_fail=lambda: self.result_image.setText("Unable to load result image"),
                 )
             else:
-                self.result_image.setText("無法載入結果影像")
+                self.result_image.setText("Unable to load result image")
             return
 
         annotated_path = result.annotated_path
@@ -920,7 +978,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             if isinstance(result_frame_data, np.ndarray) and result_frame_data.size > 0:
                 self.result_image.display_image(result_frame_data)
             else:
-                self.result_image.setText("無法載入結果影像")
+                self.result_image.setText("Unable to load result image")
 
         def load_heatmap() -> None:
             if heatmap_path:
@@ -1022,7 +1080,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         """清除當前選擇影像並切回相機"""
         self.selected_image_path = None
         try:
-            self.image_path_label.setText("尚未選擇影像（可切換使用相機）")
+            self.image_path_label.setText(tr(self.current_language, "no_image"))
         except Exception:
             pass
         try:
@@ -1203,7 +1261,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
                             version = parse_model_version(weights)
                             if version:
                                 version_str = version_to_string(version)
-                                self.model_version_label.setText(f"模型版本: v{version_str}")
+                                self.model_version_label.setText(
+                                    f"{tr(self.current_language, 'model_version')}: v{version_str}"
+                                )
                                 self.model_version_label.setToolTip(
                                     f"當前載入模型:\n{product}/{area}/{inference_type}\n版本: v{version_str}"
                                 )
@@ -1214,7 +1274,464 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             self.model_version_label.setToolTip(f"{product}/{area}/{inference_type}")
         except Exception as e:
             self._logger.debug(f"Failed to update version label: {e}")
-            self.model_version_label.setText("模型版本: --")
+            self.model_version_label.setText(
+                f"{tr(self.current_language, 'model_version')}: --"
+            )
+
+    # ------------------------------------------------------------------
+    # Localized operator-facing overrides
+    # ------------------------------------------------------------------
+
+    def _t(self, key: str, **kwargs: object) -> str:
+        """Translate a GUI string for the active language."""
+        text = tr(self.current_language, key)
+        return text.format(**kwargs) if kwargs else text
+
+    def init_system(self):
+        """Initialize detection system and camera asynchronously."""
+        self.log_message(self._t("init_system"))
+        self.camera_worker = self.controller.build_camera_initializer()
+        self.camera_worker.finished.connect(self._on_system_init_finished)
+        self.camera_worker.start()
+
+    def _on_system_init_finished(self, camera_success):
+        try:
+            self.detection_system = self.controller.detection_system
+            self.log_message(self._t("system_initialized"))
+            if camera_success:
+                self.log_message(self._t("camera_connected"))
+                if getattr(self, "use_camera_chk", None):
+                    self.use_camera_chk.setChecked(True)
+            else:
+                self.log_message(self._t("camera_init_failed"))
+        except Exception as exc:
+            self.log_message(self._t("system_callback_error", error=exc))
+        finally:
+            self.update_camera_controls()
+
+    def load_available_models(self):
+        """Async load available model information from the filesystem."""
+        self.log_message(self._t("loading_models"))
+        base_path = Path(self._models_base)
+        if not base_path.exists():
+            self.log_message(self._t("models_dir_missing", path=base_path))
+            return
+        self.model_loader = self.controller.build_model_loader()
+        self.model_loader.models_ready.connect(self._on_models_loaded)
+        self.model_loader.error_occurred.connect(self._on_model_load_error)
+        self.model_loader.start()
+
+    def _on_models_loaded(self):
+        try:
+            self._update_model_combos()
+            self.log_message(self._t("models_loaded", count=len(self.available_products)))
+            self._rebuild_presets()
+            self._update_output_path_label()
+        except Exception as exc:
+            self.log_message(self._t("model_menu_error", error=exc))
+
+    def _on_model_load_error(self, error_msg):
+        self.log_message(self._t("model_load_error", error=error_msg))
+        QMessageBox.critical(
+            self,
+            self._t("model_load_error_title"),
+            self._t("model_load_error", error=error_msg),
+        )
+
+    def start_detection(self):
+        """Launch detection workflow."""
+        product = self.product_combo.currentText()
+        area = self.area_combo.currentText()
+        inference_type = self.inference_combo.currentText()
+        if not all([product, area, inference_type]):
+            QMessageBox.warning(
+                self,
+                self._t("missing_params_title"),
+                self._t("missing_params"),
+            )
+            return
+        if not self._catalog.config_exists(product, area, inference_type):
+            config_path = self._catalog.config_path(product, area, inference_type)
+            QMessageBox.critical(
+                self,
+                self._t("model_missing_title"),
+                self._t("model_missing", path=config_path),
+            )
+            return
+        if not self.controller.has_system():
+            QMessageBox.critical(
+                self,
+                self._t("system_not_ready_title"),
+                self._t("system_not_ready"),
+            )
+            self.init_system()
+            if not self.controller.has_system():
+                self.start_btn.setEnabled(True)
+                self.stop_btn.setEnabled(False)
+                self.update_camera_controls()
+                return
+        else:
+            self.detection_system = self.controller.detection_system
+
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.update_camera_controls()
+        self.original_image.clear()
+        self.processed_image.clear()
+        self.result_image.clear()
+        if getattr(self, "big_status_label", None):
+            self.big_status_label.set_status("RUNNING...")
+        self.info_panel.fail_reason_label.clear_reason()
+        self.log_message(
+            self._t("start_log", product=product, area=area, model=inference_type)
+        )
+
+        self._run_generation += 1
+        run_generation = self._run_generation
+        self._shutdown_in_progress = False
+        self._stopping_generation = None
+        self._single_shot_cancel_event.clear()
+
+        use_cam = self.use_camera_chk.isChecked()
+        if use_cam:
+            self.controller.bridge.begin_run(run_generation)
+            self._single_shot_running = True
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+            self.stats_timer.start()
+            self.worker = self.controller.build_worker(
+                product,
+                area,
+                inference_type,
+                capture_interval=0.1,
+                mode="single",
+                run_id=run_generation,
+            )
+            self.worker.error_occurred.connect(
+                lambda msg, gen=run_generation: (
+                    self.on_detection_error(msg) if gen == self._run_generation else None
+                )
+            )
+            self.worker.finished.connect(
+                lambda gen=run_generation: self._on_start_worker_finished(gen)
+            )
+            self.worker.start()
+            return
+
+        selected = getattr(self, "selected_image_path", None)
+        if not selected:
+            QMessageBox.warning(
+                self,
+                self._t("input_source_title"),
+                self._t("select_image_first"),
+            )
+            self._reset_ui_state()
+            return
+
+        image = self.controller.load_image(Path(selected))
+        if image is None:
+            QMessageBox.warning(
+                self,
+                self._t("load_error_title"),
+                self._t("image_load_failed"),
+            )
+            self._reset_ui_state()
+            return
+
+        self.image_panel.update_image(image)
+        self._single_shot_running = True
+        threading.Thread(
+            target=self._run_single_shot,
+            args=(image, product, area, inference_type, run_generation),
+            daemon=True,
+        ).start()
+
+    @pyqtSlot(object)
+    def on_detection_complete(self, result: DetectionResult) -> None:
+        """Handle a completed detection result."""
+        self.current_result = result
+        is_pipeline_running = (
+            self.controller.has_system()
+            and self.controller.detection_system.pipeline_running
+        )
+        if self._single_shot_running or not is_pipeline_running:
+            self._single_shot_running = False
+            self.stats_timer.stop()
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            self.update_camera_controls()
+
+        self.save_btn.setEnabled(True)
+        if getattr(self, "big_status_label", None):
+            self.big_status_label.set_status(result.status)
+
+        product = result.product or self.product_combo.currentText()
+        area = result.area or self.area_combo.currentText()
+        inference_type = result.inference_type or self.inference_combo.currentText()
+        self._update_version_label(product, area, inference_type)
+        self.info_panel.update_result(result)
+
+        original_path = result.original_image_path or result.image_path
+        preprocessed_path = result.preprocessed_image_path
+        load_image_with_retry(
+            self.original_image,
+            original_path,
+            on_fail=lambda: self.original_image.setText("No original image available"),
+        )
+        load_image_with_retry(
+            self.processed_image,
+            preprocessed_path,
+            on_fail=lambda: self.processed_image.setText("No processed image available"),
+        )
+        self._refresh_result_image()
+
+        self.log_message(self._t("detect_done_log", status=result.status))
+        self.statusBar().showMessage(
+            self._t("detect_done_status", status=result.status), 5000
+        )
+
+    @pyqtSlot(int)
+    def _on_consecutive_fail_alert(self, count: int) -> None:
+        """Slot for SessionStatsWidget.consecutive_fail_reached signal."""
+        message = self._t("consecutive_fail", count=count)
+        self.log_message(message)
+        self.statusBar().showMessage(message, 8000)
+
+    def on_detection_error(self, error_msg):
+        """Handle detection error callback."""
+        self.controller.bridge.end_run()
+        self._single_shot_cancel_event.set()
+        self._single_shot_running = False
+        self._shutdown_in_progress = False
+        self._stopping_generation = None
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        if getattr(self, "big_status_label", None):
+            self.big_status_label.set_status("ERROR")
+        self.update_camera_controls()
+        self.log_message(f"{self._t('detect_error_title')}: {error_msg}")
+        QMessageBox.critical(
+            self,
+            self._t("detect_error_title"),
+            self._t("detect_error", error=error_msg),
+        )
+
+    def save_results(self):
+        """Save the latest detection result to disk."""
+        if not self.current_result:
+            QMessageBox.warning(self, self._t("no_result_title"), self._t("no_result"))
+            return
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            self._t("save_result_dialog"),
+            f"detection_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            "JSON files (*.json)",
+        )
+        if not file_path:
+            return
+        try:
+            self.controller.save_result_json(Path(file_path), self.current_result.to_dict())
+            self.log_message(self._t("save_success", path=file_path))
+            QMessageBox.information(
+                self,
+                self._t("save_success_title"),
+                self._t("save_success", path=file_path),
+            )
+        except Exception as exc:
+            self.log_message(self._t("save_error", error=exc))
+            QMessageBox.critical(
+                self,
+                self._t("save_error_title"),
+                self._t("save_error", error=exc),
+            )
+
+    def pick_image(self):
+        """Select an image file."""
+        options = QFileDialog.Options()
+        options |= QFileDialog.DontUseNativeDialog
+        fname, _ = QFileDialog.getOpenFileName(
+            self,
+            self._t("select_image_title"),
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp)",
+            options=options,
+        )
+        if not fname:
+            return
+        self.selected_image_path = fname
+        try:
+            self.image_path_label.setText(os.path.basename(fname))
+        except Exception:
+            pass
+        try:
+            self.original_image.set_image(fname)
+        except Exception:
+            pass
+
+    def open_config(self):
+        """Open a config file."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, self._t("open_config_title"), "", "YAML files (*.yaml *.yml)"
+        )
+        if file_path:
+            self.log_message(self._t("config_loaded", path=file_path))
+
+    def save_config(self):
+        """Save a config file."""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, self._t("save_config_title"), "config.yaml", "YAML files (*.yaml)"
+        )
+        if file_path:
+            self.log_message(self._t("config_saved", path=file_path))
+
+    def edit_current_model_config(self):
+        """Open a guarded editor for the selected model config and hot-reload it."""
+        if self.is_detection_running():
+            QMessageBox.warning(
+                self, self._t("model_config_title"), self._t("stop_before_edit")
+            )
+            return
+
+        product = self.product_combo.currentText().strip()
+        area = self.area_combo.currentText().strip()
+        inference_type = self.inference_combo.currentText().strip()
+        if not all([product, area, inference_type]):
+            QMessageBox.warning(
+                self, self._t("model_config_title"), self._t("select_model_first")
+            )
+            return
+
+        if inference_type.lower() == "fusion":
+            QMessageBox.information(
+                self, self._t("model_config_title"), self._t("fusion_edit_hint")
+            )
+            return
+
+        config_path = self._catalog.config_path(product, area, inference_type)
+        try:
+            dialog = ModelConfigDialog(
+                product=product,
+                area=area,
+                inference_type=inference_type,
+                config_path=config_path,
+                language=self.current_language,
+                parent=self,
+            )
+        except ModelConfigEditError as exc:
+            QMessageBox.critical(self, self._t("model_config_title"), str(exc))
+            return
+
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        try:
+            result = update_model_config(
+                config_path,
+                dialog.changes(),
+                product=product,
+                area=area,
+            )
+            self.controller.reload_model_settings(product, area, inference_type)
+            self.load_available_models()
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                self._t("model_config_title"),
+                self._t("model_config_save_error", error=exc),
+            )
+            return
+
+        self.log_message(
+            self._t(
+                "model_config_updated",
+                product=product,
+                area=area,
+                model=inference_type,
+                backup=result.backup_path,
+            )
+        )
+        QMessageBox.information(
+            self,
+            self._t("model_config_title"),
+            self._t("model_config_saved", backup=result.backup_path),
+        )
+
+    def show_about(self):
+        """Show the about dialog."""
+        QMessageBox.about(self, self._t("about_title"), self._t("about_body"))
+
+    def closeEvent(self, event):
+        """Close the GUI after persisting preferences."""
+        is_pipeline_running = self.is_detection_running()
+        if is_pipeline_running:
+            reply = QMessageBox.question(
+                self,
+                self._t("exit_title"),
+                self._t("exit_running"),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.No:
+                event.ignore()
+                return
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        try:
+            if self.controller.has_system():
+                self.controller.shutdown()
+            self.preferences.save_window_state(self.saveGeometry(), self.saveState())
+            self.preferences.save_last_selection(
+                self.product_combo.currentText(),
+                self.area_combo.currentText(),
+                self.inference_combo.currentText(),
+            )
+            self.preferences.save_show_detection_boxes(
+                self.show_detection_boxes_chk.isChecked()
+            )
+        except Exception as exc:
+            self._logger.error(f"Shutdown error: {exc}")
+        finally:
+            if is_pipeline_running:
+                QApplication.restoreOverrideCursor()
+            event.accept()
+
+    def _update_version_label(self, product: str, area: str, inference_type: str) -> None:
+        """Update the model version display in status bar."""
+        if not self.model_version_label:
+            return
+        try:
+            if self.detection_system and hasattr(self.detection_system, "model_manager"):
+                manager = self.detection_system.model_manager
+                cache_key = (product, area)
+                if hasattr(manager, "_cache") and cache_key in manager._cache:
+                    cached = manager._cache[cache_key].get(inference_type)
+                    if cached:
+                        _, config = cached
+                        weights = getattr(config, "weights", "")
+                        if weights:
+                            from core.version_utils import parse_model_version, version_to_string
+
+                            version = parse_model_version(weights)
+                            if version:
+                                version_str = version_to_string(version)
+                                self.model_version_label.setText(
+                                    f"{self._t('model_version')}: v{version_str}"
+                                )
+                                self.model_version_label.setToolTip(
+                                    self._t(
+                                        "current_model_tooltip",
+                                        product=product,
+                                        area=area,
+                                        model=inference_type,
+                                        version=version_str,
+                                    )
+                                )
+                                return
+            self.model_version_label.setText(f"{product}/{area}")
+            self.model_version_label.setToolTip(f"{product}/{area}/{inference_type}")
+        except Exception as exc:
+            self._logger.debug(f"Failed to update version label: {exc}")
+            self.model_version_label.setText(f"{self._t('model_version')}: --")
 
 def main():
     """Main entry point."""
