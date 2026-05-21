@@ -18,6 +18,21 @@ if getattr(sys, "frozen", False):
     if os.path.isdir(_timm_cache):
         os.environ.setdefault("TORCH_HOME", _timm_cache)
 
+if "--check-onnxruntime" in sys.argv:
+    from core.runtime_preflight import validate_runtime_for_model
+
+    try:
+        validate_runtime_for_model("preflight.onnx")
+    except Exception as exc:
+        print(f"ONNX Runtime preflight failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print("ONNX Runtime preflight OK")
+    sys.exit(0)
+
+if "--help" in sys.argv:
+    print("Usage: yolo11_inference.exe [--check-onnxruntime]")
+    sys.exit(0)
+
 from app.gui import DetectionSystemGUI, main  # noqa: E402
 
 # Expose DetectionSystem for tests that patch GUI.DetectionSystem

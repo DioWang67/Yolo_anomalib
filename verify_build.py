@@ -183,6 +183,37 @@ def check_dir(dist: Path) -> bool:
     else:
         print("  結果: 有問題 ✗  請檢查上方標示的缺少項目")
     print(hr("═"))
+    print("\n[ONNX Runtime preflight]")
+    model_configs = list((dist / "models").rglob("config.yaml"))
+    uses_onnx = any(
+        ".onnx" in path.read_text(encoding="utf-8", errors="ignore").lower()
+        for path in model_configs
+    )
+    if not uses_onnx:
+        print("  SKIP no packaged model config references .onnx weights")
+    elif exe.exists():
+        try:
+            result = subprocess.run(
+                [str(exe), "--check-onnxruntime"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode == 0:
+                print("  OK  packaged onnxruntime import passed")
+            else:
+                print(f"  FAIL packaged onnxruntime import exitcode={result.returncode}")
+                if result.stdout:
+                    print(f"     stdout: {result.stdout[:300]}")
+                if result.stderr:
+                    print(f"     stderr: {result.stderr[:500]}")
+                passed = False
+        except Exception as exc:
+            print(f"  FAIL packaged onnxruntime import check failed: {exc}")
+            passed = False
+    else:
+        print("  SKIP exe not found")
+
     return passed
 
 
