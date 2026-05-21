@@ -24,41 +24,29 @@ def _copy_models(source_root: Path, dist_root: Path) -> None:
     shutil.copytree(source_models, destination_models)
 
 
-def _rewrite_packaged_yolo_configs(dist_root: Path) -> int:
-    """Switch packaged YOLO configs from ONNX to PyTorch weights.
-
-    ONNX Runtime can fail to initialize inside the frozen executable on some
-    Windows environments. The packaged model folders include matching .pt
-    weights, so the release bundle uses those instead of .onnx files.
-    """
-    changed = 0
-    for config_path in (dist_root / "models").rglob("config.yaml"):
-        text = config_path.read_text(encoding="utf-8")
-        updated = text.replace(".onnx", ".pt")
-        if updated != text:
-            config_path.write_text(updated, encoding="utf-8")
-            changed += 1
-    return changed
-
-
-def _copy_onnxruntime_dlls(dist_root: Path) -> None:
-    internal = dist_root / "_internal"
-    capi = internal / "onnxruntime" / "capi"
-    if not capi.is_dir():
-        return
-    for dll_name in ("onnxruntime.dll", "onnxruntime_providers_shared.dll"):
-        source = capi / dll_name
-        if source.exists():
-            shutil.copy2(source, internal / dll_name)
+def _remove_conflicting_pyqt_runtime_dlls(dist_root: Path) -> list[str]:
+    """Remove PyQt-bundled MSVC runtime DLLs that conflict with ONNX Runtime."""
+    qt_bin = dist_root / "_internal" / "PyQt5" / "Qt5" / "bin"
+    removed: list[str] = []
+    for dll_name in (
+        "MSVCP140.dll",
+        "MSVCP140_1.dll",
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+    ):
+        dll_path = qt_bin / dll_name
+        if dll_path.exists():
+            dll_path.unlink()
+            removed.append(str(dll_path.relative_to(dist_root)))
+    return removed
 
 
 def postprocess(source_root: Path, dist_root: Path) -> None:
     _copy_file(source_root / "config.yaml", dist_root / "config.yaml")
     _copy_file(source_root / "config.example.yaml", dist_root / "config.example.yaml")
     _copy_models(source_root, dist_root)
-    changed = _rewrite_packaged_yolo_configs(dist_root)
-    _copy_onnxruntime_dlls(dist_root)
-    print(f"[OK] postprocess complete; rewritten_config_count={changed}")
+    removed = _remove_conflicting_pyqt_runtime_dlls(dist_root)
+    print(f"[OK] postprocess complete; removed_pyqt_runtime_dlls={len(removed)}")
 
 
 def main() -> int:
