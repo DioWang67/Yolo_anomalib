@@ -105,3 +105,14 @@ models_backup/
 *.zip
 *.spec
 models/*_backup/
+
+# Local ONNX Runtime/PyInstaller smoke-test workspaces.
+build_ort_smoke*/
+dist_ort_smoke*/
+
+# Local model training/review artifacts.
+models/**/config.yaml.bak
+models/**/args.yaml
+models/**/results.csv
+readiness_report_*.json
+review_manifest.*
