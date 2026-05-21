@@ -43,3 +43,12 @@ class PreferencesManager:
     def save_show_detection_boxes(self, enabled: bool) -> None:
         """Persist the result-image detection box visibility preference."""
         self._settings.setValue("show_detection_boxes", bool(enabled))
+
+    def restore_language(self) -> str:
+        """Return the persisted GUI language code."""
+        value = str(self._settings.value("language", "en"))
+        return value if value in {"en", "zh"} else "en"
+
+    def save_language(self, language: str) -> None:
+        """Persist the GUI language code."""
+        self._settings.setValue("language", language if language in {"en", "zh"} else "en")
