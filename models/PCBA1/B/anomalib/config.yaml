@@ -1,0 +1,21 @@
+enable_yolo: false
+enable_anomalib: true
+output_dir: Result
+anomalib_config:
+  threshold: 0.5
+  output: Result/anomalib/PCBA1/B/YYYYMMDD
+  baseline_only: true
+  usable_for_deployment: false
+  warnings:
+  - No abnormal validation/test images were configured.
+  - This run is a baseline-only model; adaptive thresholds are not deployment-grade.
+  model:
+    class_path: anomalib.models.Padim
+  data: {}
+  models:
+    PCBA1:
+      B:
+        ckpt_path: models/PCBA1/B/anomalib/weights/model.ckpt
+        threshold: 0.5
+        baseline_only: true
+        usable_for_deployment: false

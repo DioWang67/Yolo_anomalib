@@ -1,0 +1,44 @@
+{
+  "abnormal_image_count": 0,
+  "area": "B",
+  "baseline_only": true,
+  "checkpoint_path": "runs\\anomalib\\PCBA1\\B\\Padim\\PCBA1_B\\latest\\weights\\lightning\\model.ckpt",
+  "config": {
+    "abnormal_dir": null,
+    "accelerator": "cpu",
+    "backbone": "resnet18",
+    "devices": 1,
+    "eval_batch_size": 8,
+    "image_size": 256,
+    "layers": [
+      "layer1"
+    ],
+    "mask_dir": null,
+    "max_epochs": 1,
+    "model": "padim",
+    "n_features": 16,
+    "name": "PCBA1_B",
+    "normal_dir": "train\\images",
+    "normal_test_dir": null,
+    "num_workers": 0,
+    "patch_anomalib_symlink": true,
+    "pre_trained": false,
+    "project": "runs\\anomalib\\PCBA1\\B",
+    "require_anomalous_validation": false,
+    "root": "data\\PCBA1\\B\\split",
+    "task": "segmentation",
+    "test_split_mode": "none",
+    "train_batch_size": 8,
+    "val_split_mode": "from_train",
+    "val_split_ratio": 0.2
+  },
+  "input_dir": "data\\PCBA1\\B",
+  "normal_image_count": 280,
+  "product": "PCBA1",
+  "run_dir": "runs\\anomalib\\PCBA1\\B\\Padim\\PCBA1_B\\latest",
+  "usable_for_deployment": false,
+  "warnings": [
+    "No abnormal validation/test images were configured.",
+    "This run is a baseline-only model; adaptive thresholds are not deployment-grade."
+  ]
+}
