@@ -1,0 +1,20 @@
+{
+  "area": "B",
+  "baseline_only": true,
+  "class_path": "anomalib.models.EfficientAd",
+  "extract_under": "yolo11_inference/models",
+  "files": [
+    "PCBA1/B/anomalib/config.yaml",
+    "PCBA1/B/anomalib/training_report.json",
+    "PCBA1/B/anomalib/weights/model.ckpt"
+  ],
+  "model": "efficientad",
+  "package_type": "yolo11_inference_anomalib_model",
+  "product": "PCBA1",
+  "threshold": 0.5,
+  "usable_for_deployment": false,
+  "warnings": [
+    "No abnormal validation/test images were configured.",
+    "This run is a baseline-only model; adaptive thresholds are not deployment-grade."
+  ]
+}

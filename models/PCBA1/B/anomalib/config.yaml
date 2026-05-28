@@ -10,7 +10,7 @@ anomalib_config:
   - No abnormal validation/test images were configured.
   - This run is a baseline-only model; adaptive thresholds are not deployment-grade.
   model:
-    class_path: anomalib.models.Padim
+    class_path: anomalib.models.EfficientAd
   data: {}
   models:
     PCBA1:
