@@ -18,6 +18,24 @@ if getattr(sys, 'frozen', False):  # PyInstaller 打包後
 else:  # 開發環境
     dll_path = r"D:\Git\robotlearning\yolo11_inference\Runtime\MvCameraControl.dll"
 
+runtime_dir = os.path.dirname(dll_path)
+cl_protocol_dir = os.path.join(runtime_dir, "CLProtocol")
+_runtime_dll_dir_handle = None
+if sys.platform == "win32" and os.path.isdir(runtime_dir):
+    # Loading MvCameraControl.dll by absolute path is not enough on clean
+    # Windows machines; its dependent Hikrobot DLLs/CTI files also need the
+    # packaged Runtime directory on the DLL search path before WinDLL runs.
+    if hasattr(os, "add_dll_directory"):
+        _runtime_dll_dir_handle = os.add_dll_directory(runtime_dir)
+    os.environ["PATH"] = runtime_dir + os.pathsep + os.environ.get("PATH", "")
+    os.environ["GENICAM_GENTL64_PATH"] = (
+        runtime_dir
+        + os.pathsep
+        + os.environ.get("GENICAM_GENTL64_PATH", "")
+    )
+    if os.path.isdir(cl_protocol_dir):
+        os.environ["MVCAM_GENICAM_CLPROTOCOL"] = cl_protocol_dir
+
 # Platform-specific DLL loading
 
 class MockMvCamCtrldll:

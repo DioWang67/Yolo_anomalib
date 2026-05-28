@@ -190,9 +190,7 @@ class MVSCamera:
 
                 return frame
             else:
-                print("獲取影像失敗!")
-                if self._reconnect_camera():
-                    return self.get_frame()
+                print("Capture failed; no frame returned.")
                 return None
         except Exception as e:
             print(f"獲取影像時發生錯誤: {str(e)}")
@@ -232,6 +230,12 @@ class MVSCamera:
                 finally:
                     self.cam.MV_CC_FreeImageBuffer(stOutFrame)
             else:
+                if ret == MV_E_NODATA:
+                    print(
+                        "No image data received from camera buffer "
+                        f"(ret[0x{ret:x}], timeout={self.config.MV_CC_GetImageBuffer_nMsec}ms)."
+                    )
+                    return None
                 print(f"獲取影像緩衝區失敗! ret[0x{ret:x}]")
                 return None
         except Exception as e:
