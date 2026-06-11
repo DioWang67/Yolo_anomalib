@@ -1,8 +1,10 @@
 """MVS camera SDK loading and lifecycle guard tests."""
 
+from ctypes import POINTER, c_ubyte, cast
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 import MvImport.MvCameraControl_class as mvs_binding
@@ -80,8 +82,6 @@ def test_close_releases_each_reached_stage_once(mock_config):
 
 def test_get_frame_returns_unmodified_pixels(mock_config):
     """Captured frames feed inference; no overlay may be drawn on them."""
-    import numpy as np
-
     camera = MVSCamera(mock_config)
     pristine = np.full((64, 64, 3), 37, dtype=np.uint8)
     camera._get_frame_internal = lambda: pristine.copy()
@@ -90,6 +90,68 @@ def test_get_frame_returns_unmodified_pixels(mock_config):
 
     assert frame is not None
     assert np.array_equal(frame, pristine)
+
+
+class _FakeSdkCam:
+    """Simulates MV_CC_GetImageBuffer filling an SDK-owned Bayer buffer."""
+
+    def __init__(self, height: int, width: int, value: int = 37) -> None:
+        self._height = height
+        self._width = width
+        self._value = value
+        self.freed = 0
+        self._buf = None
+
+    def MV_CC_GetImageBuffer(self, st_out, timeout_ms):
+        n = self._height * self._width
+        self._buf = (c_ubyte * n)(*([self._value] * n))
+        st_out.pBufAddr = cast(self._buf, POINTER(c_ubyte))
+        st_out.stFrameInfo.nFrameLen = n
+        st_out.stFrameInfo.nWidth = self._width
+        st_out.stFrameInfo.nHeight = self._height
+        return 0
+
+    def MV_CC_FreeImageBuffer(self, st_out):
+        self.freed += 1
+        return 0
+
+
+def test_frame_decode_copies_pixels_out_of_sdk_buffer(mock_config):
+    """Decoded frame must be a stable BGR copy, valid after buffer release."""
+    camera = MVSCamera(mock_config)
+    fake = _FakeSdkCam(8, 8, value=37)
+    camera.cam = fake
+
+    frame = camera._get_frame_internal()
+
+    assert fake.freed == 1, "SDK buffer must be returned exactly once"
+    assert frame is not None
+    assert frame.shape == (8, 8, 3)
+    assert frame.dtype == np.uint8
+    # A constant Bayer plane demosaics to the same constant in every channel.
+    assert np.all(frame == 37)
+    # Frame must not alias the (already released) SDK buffer.
+    fake._buf[0] = 0
+    assert np.all(frame == 37)
+
+
+def test_frame_decode_rejects_short_buffer(mock_config):
+    """A truncated SDK buffer must be dropped, not crash reshape."""
+    camera = MVSCamera(mock_config)
+    fake = _FakeSdkCam(8, 8)
+
+    original = fake.MV_CC_GetImageBuffer
+
+    def short_buffer(st_out, timeout_ms):
+        ret = original(st_out, timeout_ms)
+        st_out.stFrameInfo.nFrameLen = 8  # claim 8x8 but provide 8 bytes
+        return ret
+
+    fake.MV_CC_GetImageBuffer = short_buffer
+    camera.cam = fake
+
+    assert camera._get_frame_internal() is None
+    assert fake.freed == 1
 
 
 def test_open_device_failure_releases_orphaned_handle(mock_config):

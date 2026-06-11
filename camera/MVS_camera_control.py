@@ -204,21 +204,22 @@ class MVSCamera:
             )
             if ret == 0:
                 try:
-                    pData = (c_ubyte * stOutFrame.stFrameInfo.nFrameLen)()
-                    cdll.msvcrt.memcpy(
-                        byref(pData),
-                        stOutFrame.pBufAddr,
-                        stOutFrame.stFrameInfo.nFrameLen,
+                    frame_len = int(stOutFrame.stFrameInfo.nFrameLen)
+                    height = int(stOutFrame.stFrameInfo.nHeight)
+                    width = int(stOutFrame.stFrameInfo.nWidth)
+                    if frame_len < height * width:
+                        _camera_logger.error(
+                            "Frame buffer smaller than expected: len=%d for %dx%d",
+                            frame_len, width, height,
+                        )
+                        return None
+                    # Zero-copy view into the SDK buffer; cvtColor below copies
+                    # the pixels out before FreeImageBuffer returns the buffer
+                    # to the SDK (saves a 6MB memcpy per frame at full res).
+                    buf = np.ctypeslib.as_array(
+                        stOutFrame.pBufAddr, shape=(frame_len,)
                     )
-                    data = np.frombuffer(
-                        pData,
-                        count=int(stOutFrame.stFrameInfo.nFrameLen),
-                        dtype=np.uint8,
-                    )
-                    bayer_img = data.reshape(
-                        (stOutFrame.stFrameInfo.nHeight,
-                         stOutFrame.stFrameInfo.nWidth)
-                    )
+                    bayer_img = buf[: height * width].reshape((height, width))
                     rgb_img = cv2.cvtColor(bayer_img, cv2.COLOR_BayerRG2RGB)
                     # CHANNEL CONTRACT: this frame gets channel-swapped once
                     # more in CameraController.capture_frame, so the pipeline
