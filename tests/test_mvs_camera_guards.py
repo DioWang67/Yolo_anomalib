@@ -37,3 +37,63 @@ def test_enum_devices_reports_dll_load_failure(mock_config, monkeypatch):
 
     with pytest.raises(CameraConnectionError, match="Failed to load X.dll"):
         camera.enum_devices()
+
+
+def test_basic_connect_rejects_out_of_range_device_index(mock_config):
+    """Without enumerated devices, connect must fail before any ctypes cast."""
+    camera = MVSCamera(mock_config)
+    camera.cam = MagicMock()
+    assert camera.deviceList.nDeviceNum == 0
+
+    assert camera._basic_connect(0) is False
+    camera.cam.MV_CC_CreateHandle.assert_not_called()
+
+
+def test_close_before_connect_is_a_noop(mock_config):
+    camera = MVSCamera(mock_config)
+    camera.cam = MagicMock()
+
+    camera.close()
+
+    camera.cam.MV_CC_StopGrabbing.assert_not_called()
+    camera.cam.MV_CC_CloseDevice.assert_not_called()
+    camera.cam.MV_CC_DestroyHandle.assert_not_called()
+
+
+def test_close_releases_each_reached_stage_once(mock_config):
+    camera = MVSCamera(mock_config)
+    camera.cam = MagicMock()
+    camera.cam.MV_CC_StopGrabbing.return_value = 0
+    camera.cam.MV_CC_CloseDevice.return_value = 0
+    camera.cam.MV_CC_DestroyHandle.return_value = 0
+    camera._handle_created = True
+    camera._device_opened = True
+    camera._grabbing = True
+
+    camera.close()
+    camera.close()  # idempotent
+
+    camera.cam.MV_CC_StopGrabbing.assert_called_once()
+    camera.cam.MV_CC_CloseDevice.assert_called_once()
+    camera.cam.MV_CC_DestroyHandle.assert_called_once()
+
+
+def test_open_device_failure_releases_orphaned_handle(mock_config):
+    """CreateHandle OK + OpenDevice FAIL must destroy the handle, not leak it."""
+    camera = MVSCamera(mock_config)
+    camera.cam = MagicMock()
+    camera.cam.MV_CC_CreateHandle.return_value = 0
+    camera.cam.MV_CC_OpenDevice.return_value = 0x80000000
+    camera.cam.MV_CC_DestroyHandle.return_value = 0
+    camera.deviceList = MagicMock()
+    camera.deviceList.nDeviceNum = 1
+    camera.deviceList.pDeviceInfo = (MagicMock(),)
+
+    import camera.MVS_camera_control as mvs_module
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(mvs_module, "cast", lambda *a, **k: MagicMock())
+        assert camera._basic_connect(0) is False
+
+    camera.cam.MV_CC_DestroyHandle.assert_called_once()
+    assert camera._handle_created is False

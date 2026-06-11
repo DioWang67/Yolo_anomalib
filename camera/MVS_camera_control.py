@@ -26,6 +26,11 @@ class MVSCamera:
         self.auto_exposure = False
         self.save_path = "captured_images"
         self.config = config
+        # SDK lifecycle stage flags; close() releases only the stages that
+        # were actually reached, making teardown safe and idempotent.
+        self._handle_created = False
+        self._device_opened = False
+        self._grabbing = False
 
         # if not os.path.exists(self.save_path):
         #     os.makedirs(self.save_path)
@@ -116,8 +121,14 @@ class MVSCamera:
             return False
 
         self.cam.MV_CC_StopGrabbing()
+        self._grabbing = False
         self.set_resolution(self.config.width, self.config.height)
-        self.cam.MV_CC_StartGrabbing()
+        ret = self.cam.MV_CC_StartGrabbing()
+        if ret != 0:
+            print(f"重新開始取流失敗! ret[0x{ret:x}]")
+            self.close()
+            return False
+        self._grabbing = True
         return True
 
     def set_exposure_time(self, exposure_time):
@@ -287,6 +298,18 @@ class MVSCamera:
 
     def _basic_connect(self, device_index):
         # 將原始的連接代碼移到這個內部方法
+        device_count = int(self.deviceList.nDeviceNum)
+        if device_index < 0 or device_index >= device_count:
+            # Casting pDeviceInfo[i] beyond nDeviceNum dereferences garbage
+            # and crashes the whole process, not just this call.
+            _camera_logger.error(
+                "Invalid device index %d (devices enumerated: %d); "
+                "call enum_devices() before connect_to_camera().",
+                device_index,
+                device_count,
+            )
+            return False
+
         stDeviceList = cast(
             self.deviceList.pDeviceInfo[device_index], POINTER(
                 MV_CC_DEVICE_INFO)
@@ -295,13 +318,19 @@ class MVSCamera:
         if ret != 0:
             print("創建相機句柄失敗! ret[0x%x]" % ret)
             return False
+        self._handle_created = True
 
         ret = self.cam.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
         if ret != 0:
             print("打開設備失敗! ret[0x%x]" % ret)
+            self.close()  # release the orphaned handle
             return False
+        self._device_opened = True
 
-        return self._setup_initial_parameters()
+        if not self._setup_initial_parameters():
+            self.close()
+            return False
+        return True
 
     def _setup_initial_parameters(self):
         # 設定像素格式為 Bayer RG 8
@@ -329,6 +358,7 @@ class MVSCamera:
         if ret != 0:
             print("開始取流失敗! ret[0x%x]" % ret)
             return False
+        self._grabbing = True
 
         print("相機連接成功!")
         return True
@@ -418,10 +448,34 @@ class MVSCamera:
         return True
 
     def close(self):
-        self.cam.MV_CC_StopGrabbing()
-        self.cam.MV_CC_CloseDevice()
-        self.cam.MV_CC_DestroyHandle()
-        print("相機已安全關閉")
+        """Release SDK resources for the stages that were reached. Idempotent."""
+        released_any = False
+        if self._grabbing:
+            ret = self.cam.MV_CC_StopGrabbing()
+            if ret != 0:
+                _camera_logger.warning(
+                    "MV_CC_StopGrabbing failed: ret=0x%x", ret & 0xFFFFFFFF
+                )
+            self._grabbing = False
+            released_any = True
+        if self._device_opened:
+            ret = self.cam.MV_CC_CloseDevice()
+            if ret != 0:
+                _camera_logger.warning(
+                    "MV_CC_CloseDevice failed: ret=0x%x", ret & 0xFFFFFFFF
+                )
+            self._device_opened = False
+            released_any = True
+        if self._handle_created:
+            ret = self.cam.MV_CC_DestroyHandle()
+            if ret != 0:
+                _camera_logger.warning(
+                    "MV_CC_DestroyHandle failed: ret=0x%x", ret & 0xFFFFFFFF
+                )
+            self._handle_created = False
+            released_any = True
+        if released_any:
+            print("相機已安全關閉")
 
     def create_control_window(self):
         """創建參數調整視窗（根據支援的功能）"""
