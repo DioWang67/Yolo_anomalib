@@ -209,12 +209,14 @@ ruff format .
 我們提供一鍵打包腳本，將專案封裝為獨立的可執行檔 (EXE)，方便在未安裝 Python 環境的機台上部署：
 
 ```bash
-# 執行包裹腳本
+# 執行包裹腳本（可用環境變數 YOLO11_PYTHON 覆蓋 Python 路徑）
 build_exe.bat
 ```
-封裝完成後，可執行檔會放置在 `D:\Git\robotlearning\build_exe\dist\GUI` 目錄下（根據腳本配置可能有所不同）。
-您只需將該目錄複製到目標機台，執行裡面的 `GUI.exe` 即可啟動檢測系統。請確保：
-- 目標機器環境已安裝相應的工業相機驅動 (MVS)。
+封裝完成後，可執行檔會放置在 `dist\yolo11_inference` 目錄下。
+您只需將該目錄複製到目標機台，執行裡面的 `yolo11_inference.exe` 即可啟動檢測系統。
+Hikrobot 相機 DLL（`Runtime/`）已隨包附帶，目標機台**不需要**另行安裝 MVS；
+可用 `yolo11_inference.exe --check-hikrobot-runtime` 與 `--check-camera-grab`
+做部署後預檢。請確保：
 - 模型路徑與設定檔維持與打包時的相對路徑關係。
 
 ## 配置說明

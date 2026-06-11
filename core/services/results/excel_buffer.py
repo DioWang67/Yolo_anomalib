@@ -71,11 +71,19 @@ class ExcelWorkbookBuffer:
             self.flush()
 
     def flush(self) -> ExcelFlushResult:
+        # The whole flush (buffer drain + workbook mutation + save) must run
+        # under the lock: the periodic timer thread, StorageWorker, and
+        # close() can flush concurrently, and openpyxl workbooks are not
+        # thread-safe — interleaved append/save corrupts the file.
         with self._lock:
             if not self.buffer:
                 return ExcelFlushResult(success=True, rows_written=0)
             rows = list(self.buffer)
             self.buffer.clear()
+            return self._write_rows_locked(rows)
+
+    def _write_rows_locked(self, rows: list[list[Any]]) -> ExcelFlushResult:
+        """Append rows and save the workbook. Caller must hold ``_lock``."""
         for attempt in range(3):
             try:
                 if os.path.exists(self.path):

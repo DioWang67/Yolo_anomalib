@@ -251,16 +251,6 @@ class MVSCamera:
             _camera_logger.error("獲取影像幀時發生錯誤: %s", e, exc_info=True)
             return None
 
-    def _reconnect_camera(self):
-        try:
-            _camera_logger.info("正在嘗試重新連線...")
-            self.close()
-            time.sleep(1)
-            return self.connect_to_camera()
-        except Exception as e:
-            _camera_logger.error("重新連線失敗: %s", e)
-            return False
-
     def process_key(self, key):
         """處理鍵盤輸入"""
         if key == ord("s"):  # 按's'保存圖片
