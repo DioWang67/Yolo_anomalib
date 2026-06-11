@@ -232,6 +232,13 @@ class DetectionSystem:
             on_task_captured=on_task_captured,
             on_task_processed=on_task_processed,
             on_camera_lost=on_camera_lost,
+            camera_lost_threshold=getattr(self.config, "camera_lost_threshold", 5),
+            camera_reconnect_attempts=getattr(
+                self.config, "camera_reconnect_attempts", 0
+            ),
+            camera_reconnect_backoff=getattr(
+                self.config, "camera_reconnect_backoff", 2.0
+            ),
         )
 
     def stop_pipeline(self, timeout: float = 10.0) -> None:

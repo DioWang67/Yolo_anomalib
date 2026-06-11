@@ -221,9 +221,16 @@ class AcquisitionWorker(threading.Thread):
         Inference mode ('yolo', 'anomalib', 'fusion').
     capture_interval : float
         Minimum seconds between captures (0 = as fast as possible).
+    lost_threshold : int
+        Consecutive capture failures before the camera is considered lost.
+    reconnect_attempts : int
+        Automatic reconnect attempts once the lost threshold is reached.
+        ``0`` (default) keeps the legacy behavior: report lost and stop.
+    reconnect_backoff : float
+        Base seconds between reconnect attempts (doubles per attempt).
     """
 
-    _CAMERA_LOST_THRESHOLD = 5
+    _CAMERA_LOST_THRESHOLD = 5  # default for ``lost_threshold``
 
     def __init__(
         self,
@@ -239,6 +246,9 @@ class AcquisitionWorker(threading.Thread):
         on_camera_lost: Optional[Callable[[], None]] = None,
         stop_event: threading.Event | None = None,
         mode: PipelineMode = "continuous",
+        lost_threshold: int | None = None,
+        reconnect_attempts: int = 0,
+        reconnect_backoff: float = 2.0,
     ) -> None:
         super().__init__(name=name, daemon=True)
         self.camera = camera
@@ -254,6 +264,11 @@ class AcquisitionWorker(threading.Thread):
         self._logger = logging.getLogger(f"{__name__}.{name}")
         self._frame_count: int = 0
         self._consecutive_failures: int = 0
+        self._lost_threshold = max(
+            1, int(lost_threshold or self._CAMERA_LOST_THRESHOLD)
+        )
+        self._reconnect_attempts = max(0, int(reconnect_attempts))
+        self._reconnect_backoff = max(0.0, float(reconnect_backoff))
 
     # ------------------------------------------------------------------
     # Public control
@@ -285,9 +300,12 @@ class AcquisitionWorker(threading.Thread):
             "%s (consecutive failures: %d/%d)",
             reason,
             self._consecutive_failures,
-            self._CAMERA_LOST_THRESHOLD,
+            self._lost_threshold,
         )
-        if self._consecutive_failures >= self._CAMERA_LOST_THRESHOLD:
+        if self._consecutive_failures >= self._lost_threshold:
+            if self._try_reconnect():
+                self._consecutive_failures = 0
+                return False
             self._logger.error(
                 "Camera lost — %d consecutive failures exceeded threshold",
                 self._consecutive_failures,
@@ -302,6 +320,46 @@ class AcquisitionWorker(threading.Thread):
             self.stop()
             return True
         self._stop_event.wait(backoff)
+        return False
+
+    def _try_reconnect(self) -> bool:
+        """Attempt automatic camera recovery with exponential backoff.
+
+        Returns ``True`` when the camera reports a successful reconnect.
+        Disabled (returns ``False`` immediately) when
+        ``reconnect_attempts`` is 0 or the camera lacks a ``reconnect()``.
+        """
+        if self._reconnect_attempts <= 0:
+            return False
+        reconnect = getattr(self.camera, "reconnect", None)
+        if not callable(reconnect):
+            self._logger.warning(
+                "Camera reconnect requested but camera has no reconnect()"
+            )
+            return False
+
+        for attempt in range(1, self._reconnect_attempts + 1):
+            if self._stop_event.is_set():
+                return False
+            self._logger.warning(
+                "Attempting camera reconnect (%d/%d)...",
+                attempt,
+                self._reconnect_attempts,
+            )
+            try:
+                if reconnect():
+                    self._logger.info(
+                        "Camera reconnected after %d attempt(s)", attempt
+                    )
+                    return True
+            except Exception:
+                self._logger.error("Camera reconnect raised", exc_info=True)
+            # Exponential backoff, interruptible by stop()
+            self._stop_event.wait(self._reconnect_backoff * (2 ** (attempt - 1)))
+
+        self._logger.error(
+            "Camera reconnect failed after %d attempts", self._reconnect_attempts
+        )
         return False
 
     # ------------------------------------------------------------------

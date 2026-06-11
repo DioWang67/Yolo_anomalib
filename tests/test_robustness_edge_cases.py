@@ -52,6 +52,35 @@ def test_camera_shutdown_is_idempotent(mock_config):
     assert controller.is_initialized is False
 
 
+def test_camera_reconnect_rebuilds_session(mock_config):
+    """reconnect() 應關閉舊 session 並重新枚舉+連線"""
+    with patch("camera.camera_controller.MVSCamera") as mock_mvs:
+        mock_inst = mock_mvs.return_value
+        mock_inst.enum_devices.return_value = True
+        mock_inst.connect_to_camera.return_value = True
+
+        controller = CameraController(mock_config)
+        old_camera = MagicMock()
+        controller.camera = old_camera
+        controller.is_initialized = True
+
+        assert controller.reconnect() is True
+        old_camera.close.assert_called_once()
+        assert controller.is_initialized is True
+        assert controller.camera is mock_inst
+
+
+def test_camera_reconnect_returns_false_on_failure(mock_config):
+    """重連失敗時回傳 False 而非拋出例外（呼叫端是背景 worker）"""
+    with patch("camera.camera_controller.MVSCamera") as mock_mvs:
+        mock_inst = mock_mvs.return_value
+        mock_inst.enum_devices.return_value = False
+
+        controller = CameraController(mock_config)
+        assert controller.reconnect() is False
+        assert controller.is_initialized is False
+
+
 def test_inference_engine_invalid_backend(mock_config):
     """測試請求不存在或已禁用的後端時是否拋出 BackendNotAvailableError"""
     mock_config.enable_yolo = False

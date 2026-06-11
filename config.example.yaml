@@ -16,6 +16,16 @@ gain: "23.0"
 # Camera image acquisition timeout in milliseconds
 MV_CC_GetImageBuffer_nMsec: 10000
 
+# Camera resilience (async pipeline)
+# Consecutive capture failures before the camera counts as lost.
+# Worst-case detection latency is roughly threshold x MV_CC_GetImageBuffer_nMsec.
+camera_lost_threshold: 5
+# Automatic reconnect attempts once the lost threshold is reached.
+# 0 disables auto-reconnect (camera-lost is reported immediately).
+camera_reconnect_attempts: 0
+# Base seconds between reconnect attempts; doubles per attempt (2s, 4s, 8s...)
+camera_reconnect_backoff: 2.0
+
 # General timeout setting (seconds)
 timeout: 1
 

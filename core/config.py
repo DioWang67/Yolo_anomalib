@@ -141,6 +141,11 @@ class DetectionConfig:
     width: int = 3072
     height: int = 2048
     MV_CC_GetImageBuffer_nMsec: int = 10000
+    # Camera resilience (async pipeline): consecutive capture failures
+    # before the camera counts as lost, and optional automatic reconnect.
+    camera_lost_threshold: int = 5
+    camera_reconnect_attempts: int = 0  # 0 = disabled (legacy behavior)
+    camera_reconnect_backoff: float = 2.0
     current_product: str | None = None
     current_area: str | None = None
     expected_items: dict[str, dict[str, list[str]]] = field(default_factory=dict)
@@ -277,6 +282,15 @@ class DetectionConfig:
             "height": int(normalized.get("height", 640)),
             "MV_CC_GetImageBuffer_nMsec": int(
                 normalized.get("MV_CC_GetImageBuffer_nMsec", 10000)
+            ),
+            "camera_lost_threshold": int(
+                normalized.get("camera_lost_threshold", 5)
+            ),
+            "camera_reconnect_attempts": int(
+                normalized.get("camera_reconnect_attempts", 0)
+            ),
+            "camera_reconnect_backoff": float(
+                normalized.get("camera_reconnect_backoff", 2.0)
             ),
             "current_product": normalized.get("current_product"),
             "current_area": normalized.get("current_area"),

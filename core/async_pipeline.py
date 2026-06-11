@@ -76,6 +76,9 @@ class AsyncPipelineManager:
         on_task_captured: Optional[Callable[[DetectionTask], None]] = None,
         on_task_processed: Optional[Callable[[DetectionTask], None]] = None,
         on_camera_lost: Optional[Callable[[], None]] = None,
+        camera_lost_threshold: int = 5,
+        camera_reconnect_attempts: int = 0,
+        camera_reconnect_backoff: float = 2.0,
     ) -> None:
         """Start the three-stage async pipeline.
 
@@ -94,6 +97,12 @@ class AsyncPipelineManager:
             on_task_processed: Optional GUI callback per stored result.
             on_camera_lost: Optional callback when camera disconnects
                 (consecutive capture failures exceed threshold).
+            camera_lost_threshold: Consecutive capture failures before the
+                camera counts as lost.
+            camera_reconnect_attempts: Automatic reconnect attempts before
+                declaring the camera lost (0 = disabled).
+            camera_reconnect_backoff: Base seconds between reconnect
+                attempts (doubles per attempt).
 
         Raises:
             RuntimeError: If the pipeline is already running.
@@ -130,6 +139,9 @@ class AsyncPipelineManager:
                 on_camera_lost=on_camera_lost,
                 stop_event=self._stop_event,
                 mode=run_mode,
+                lost_threshold=camera_lost_threshold,
+                reconnect_attempts=camera_reconnect_attempts,
+                reconnect_backoff=camera_reconnect_backoff,
             )
             self._inf_worker = InferenceWorker(
                 in_queue=self._inference_queue,

@@ -40,6 +40,30 @@ def test_from_yaml_normalizes_pipeline_and_numeric(tmp_path):
     assert cfg.max_crops_per_frame == 5
 
 
+def test_from_yaml_parses_camera_resilience_fields(tmp_path):
+    cfg_path = write_config(
+        tmp_path,
+        """
+        weights: "models/model.pt"
+        camera_lost_threshold: 3
+        camera_reconnect_attempts: 4
+        camera_reconnect_backoff: 1.5
+    """,
+    )
+    cfg = DetectionConfig.from_yaml(str(cfg_path))
+    assert cfg.camera_lost_threshold == 3
+    assert cfg.camera_reconnect_attempts == 4
+    assert cfg.camera_reconnect_backoff == 1.5
+
+
+def test_camera_resilience_defaults_keep_legacy_behavior(tmp_path):
+    cfg_path = write_config(tmp_path, 'weights: "models/model.pt"')
+    cfg = DetectionConfig.from_yaml(str(cfg_path))
+    assert cfg.camera_lost_threshold == 5
+    assert cfg.camera_reconnect_attempts == 0  # auto-reconnect disabled
+    assert cfg.camera_reconnect_backoff == 2.0
+
+
 def test_normalize_model_dict_allows_missing_imgsz(tmp_path):
     cfg = DetectionConfig.normalize_model_dict({}, "test")
     assert cfg.get("imgsz") is None

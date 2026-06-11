@@ -152,6 +152,22 @@ class CameraController:
             self.logger.logger.error(f"相機測試失敗: {str(e)}")
             return False
 
+    def reconnect(self) -> bool:
+        """Tear down and rebuild the camera session.
+
+        Runs a fresh device enumeration + connect, so it recovers from
+        cable re-plugs where the previously enumerated device list is stale.
+
+        Returns:
+            True when the camera is initialized again, False otherwise.
+        """
+        self.shutdown()
+        try:
+            return self.initialize()
+        except Exception as e:
+            self.logger.logger.error(f"相機重連失敗: {str(e)}")
+            return False
+
     def shutdown(self) -> None:
         """Close the camera once and release the controller reference."""
         if not self.is_initialized and self.camera is None:

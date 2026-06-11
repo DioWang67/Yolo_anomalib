@@ -252,6 +252,80 @@ class TestAcquisitionWorker:
         assert aw.frame_count == 3, f"只能捕獲 3 幀 (之後 None): got {aw.frame_count}"
         assert len(lost_events) == 1, "on_camera_lost 應被調用一次"
 
+    def test_reconnect_recovers_camera_and_continues(self):
+        """重連成功 → 連續失敗計數歸零、管線繼續、不觸發 on_camera_lost。"""
+
+        class ReconnectableCamera(FakeCamera):
+            def __init__(self):
+                super().__init__()
+                self.broken = False
+                self.reconnect_calls = 0
+
+            def capture_frame(self):
+                if self.broken:
+                    return None
+                return super().capture_frame()
+
+            def reconnect(self) -> bool:
+                self.reconnect_calls += 1
+                self.broken = False
+                return True
+
+        cam = ReconnectableCamera()
+        inf_q = OverwriteQueue(maxlen=50)
+        lost_events = []
+        aw = AcquisitionWorker(
+            cam, inf_q, product="P", area="A", capture_interval=0.01,
+            on_camera_lost=lambda: lost_events.append(True),
+            lost_threshold=2,
+            reconnect_attempts=3,
+            reconnect_backoff=0.01,
+        )
+        aw.start()
+        time.sleep(0.1)
+        frames_before = aw.frame_count
+        cam.broken = True  # simulate cable pull
+        time.sleep(0.5)    # threshold reached -> reconnect() repairs camera
+        aw.stop()
+        aw.join(timeout=3)
+
+        assert not aw.is_alive()
+        assert cam.reconnect_calls >= 1, "應嘗試自動重連"
+        assert aw.frame_count > frames_before, "重連後應繼續取像"
+        assert not lost_events, "重連成功不應回報 camera lost"
+
+    def test_reconnect_exhausted_reports_camera_lost(self):
+        """重連全部失敗 → 回報 on_camera_lost 並停止。"""
+
+        class DeadCamera(FakeCamera):
+            def __init__(self):
+                super().__init__()
+                self.reconnect_calls = 0
+
+            def capture_frame(self):
+                return None
+
+            def reconnect(self) -> bool:
+                self.reconnect_calls += 1
+                return False
+
+        cam = DeadCamera()
+        inf_q = OverwriteQueue(maxlen=10)
+        lost_events = []
+        aw = AcquisitionWorker(
+            cam, inf_q, product="P", area="A", capture_interval=0.01,
+            on_camera_lost=lambda: lost_events.append(True),
+            lost_threshold=2,
+            reconnect_attempts=2,
+            reconnect_backoff=0.01,
+        )
+        aw.start()
+        aw.join(timeout=5)
+
+        assert not aw.is_alive()
+        assert cam.reconnect_calls == 2, "應嘗試設定的重連次數"
+        assert len(lost_events) == 1, "重連耗盡後應回報 camera lost"
+
     def test_task_has_correct_metadata(self):
         """DetectionTask 應攜帶正確的 product/area/timestamp。"""
         inf_q = OverwriteQueue(maxlen=5)

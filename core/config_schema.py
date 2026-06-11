@@ -75,6 +75,9 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         width: int | None = Field(default=640, gt=0)
         height: int | None = Field(default=640, gt=0)
         MV_CC_GetImageBuffer_nMsec: int | None = Field(default=10000, ge=0)
+        camera_lost_threshold: int | None = Field(default=5, ge=1)
+        camera_reconnect_attempts: int | None = Field(default=0, ge=0)
+        camera_reconnect_backoff: float | None = Field(default=2.0, ge=0.0)
         current_product: str | None = None
         current_area: str | None = None
         expected_items: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
