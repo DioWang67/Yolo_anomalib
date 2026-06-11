@@ -5,7 +5,10 @@ import time
 import cv2
 import numpy as np
 
+import MvImport.MvCameraControl_class as _mvs_binding
 from MvImport.MvCameraControl_class import *
+
+from core.exceptions import CameraConnectionError
 
 _camera_logger = logging.getLogger("camera.mvs")
 
@@ -377,6 +380,17 @@ class MVSCamera:
         return {"current": stParam.fCurValue, "max": stParam.fMax, "min": stParam.fMin}
 
     def enum_devices(self):
+        # The mock DLL answers MV_OK to every call, so a load failure would
+        # otherwise surface as the misleading "no devices found". Report the
+        # real root cause (missing/broken Runtime DLLs) instead.
+        if _mvs_binding.MVCAM_DLL_LOAD_ERROR:
+            _camera_logger.error(
+                "Cannot enumerate cameras: %s", _mvs_binding.MVCAM_DLL_LOAD_ERROR
+            )
+            raise CameraConnectionError(
+                "MVS SDK DLL 載入失敗，無法使用相機: "
+                f"{_mvs_binding.MVCAM_DLL_LOAD_ERROR}"
+            )
         transport_mask = MV_GIGE_DEVICE | MV_USB_DEVICE
         _camera_logger.info(
             "Enumerating Hikrobot devices (transport_mask=0x%x)", transport_mask

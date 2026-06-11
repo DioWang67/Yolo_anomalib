@@ -3,6 +3,7 @@
 import sys
 import copy
 import ctypes
+import logging
 
 from ctypes import *
 import os
@@ -11,12 +12,18 @@ from MvImport.CameraParams_const import *
 from MvImport.CameraParams_header import *
 from MvImport.MvErrorDefine_const import *
 
-# 動態設置 DLL 路徑
+_dll_logger = logging.getLogger("camera.mvs.dll")
+
+# 動態設置 DLL 路徑（相對本檔案推導，不依賴 repo 在固定磁碟位置）
 if getattr(sys, 'frozen', False):  # PyInstaller 打包後
     # sys._MEIPASS 是打包後的臨時目錄
     dll_path = os.path.join(sys._MEIPASS, "Runtime", "MvCameraControl.dll")
-else:  # 開發環境
-    dll_path = r"D:\Git\robotlearning\yolo11_inference\Runtime\MvCameraControl.dll"
+else:  # 開發環境: MvImport/ 的上一層即 repo root
+    dll_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "Runtime",
+        "MvCameraControl.dll",
+    )
 
 runtime_dir = os.path.dirname(dll_path)
 cl_protocol_dir = os.path.join(runtime_dir, "CLProtocol")
@@ -44,38 +51,37 @@ class MockMvCamCtrldll:
             return 0
         return dummy_func
 
+# Non-None when the real SDK DLL could not be loaded on Windows. Camera code
+# must check this before trusting any SDK return code: the mock answers 0
+# (= MV_OK) to every call, which would otherwise disguise a driver/deployment
+# problem as "no camera found".
+MVCAM_DLL_LOAD_ERROR: str | None = None
+
 MvCamCtrldll = None
-if sys.platform == "win32":
-    # 嘗試載入 DLL
+if os.environ.get("YOLO11_CAMERA_MOCK") == "1":
+    MvCamCtrldll = MockMvCamCtrldll()
+    _dll_logger.info("YOLO11_CAMERA_MOCK=1; using mock camera DLL.")
+elif sys.platform == "win32":
     try:
         MvCamCtrldll = WinDLL(dll_path)
-        print("DLL loaded successfully!")
+        _dll_logger.info("MvCameraControl.dll loaded from %s", dll_path)
     except Exception as e:
-        print(f"Failed to load DLL: {e}")
-        print("Falling back to Mock Camera DLL for testing/CI environment.")
+        MVCAM_DLL_LOAD_ERROR = f"Failed to load {dll_path}: {e}"
+        # print as well: this runs at import time, possibly before logging
+        # is configured, and the message must not be lost in the field.
+        print(f"ERROR: {MVCAM_DLL_LOAD_ERROR}", file=sys.stderr)
+        _dll_logger.error(
+            "%s — camera features are unavailable; falling back to mock DLL "
+            "so image-file inference keeps working.",
+            MVCAM_DLL_LOAD_ERROR,
+        )
         MvCamCtrldll = MockMvCamCtrldll()
-
-    if MvCamCtrldll and not isinstance(MvCamCtrldll, MockMvCamCtrldll):
-        # Python3.8版本修改Dll加载策略, 默认不再搜索Path环境变量, 同时增加winmode参数以兼容旧版本
-        dllname = "MvCameraControl.dll"
-        try:
-            if "winmode" in ctypes.WinDLL.__init__.__code__.co_varnames:
-                MvCamCtrldll = WinDLL(dllname, winmode=0)
-            else:
-                MvCamCtrldll = WinDLL(dllname)
-        except Exception as e:
-            print(f"Failed to re-load DLL with winmode: {e}")
-            # If reload fails, keep the original handle if valid, or fallback?
-            # The original handle 'MvCamCtrldll' from line 26 works if loaded by absolute path.
-            # The re-load seems to be an attempt to use relative path?
-            # For safety, if reload fails, we continue with first load if it worked, or mock.
-            pass
 else:
     # On non-Windows platforms, create a mock object to allow tests to run.
     # The actual camera functionality will not work, but the application can start
     # and the test suite can mock out the camera controller.
     MvCamCtrldll = MockMvCamCtrldll()
-    print("Running on non-Windows platform. Using mock camera DLL.")
+    _dll_logger.info("Running on non-Windows platform. Using mock camera DLL.")
 
 
 # 用于回调函数传入相机实例
