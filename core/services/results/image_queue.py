@@ -51,6 +51,8 @@ class ImageWriteQueue:
             self.warn_threshold = int(self.maxsize * warn_threshold)
         self._queue: queue.Queue = queue.Queue(maxsize=self.maxsize)
         self._stop_event = threading.Event()
+        self._shutdown_lock = threading.Lock()
+        self._is_shutdown = False
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._stats = ImageWriteStats()
         self._worker.start()
@@ -95,11 +97,15 @@ class ImageWriteQueue:
             pass
 
     def shutdown(self) -> None:
-        self._stop_event.set()
-        try:
-            self._queue.put_nowait(None)
-        except Exception:
-            pass
+        with self._shutdown_lock:
+            if self._is_shutdown:
+                return
+            self._is_shutdown = True
+            self._stop_event.set()
+            try:
+                self._queue.put_nowait(None)
+            except queue.Full:
+                pass
         try:
             self._worker.join(timeout=5)
         except Exception:
@@ -168,6 +174,7 @@ class ImageWriteQueue:
             except Exception:
                 break
             if item is None:
+                self._queue.task_done()
                 continue
             path, image, params = item
             try:
