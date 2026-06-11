@@ -37,6 +37,21 @@ def test_camera_capture_without_init(mock_config):
     with pytest.raises(HardwareError, match="相機未初始化"):
         controller.capture_frame()
 
+
+def test_camera_shutdown_is_idempotent(mock_config):
+    controller = CameraController(mock_config)
+    camera = MagicMock()
+    controller.camera = camera
+    controller.is_initialized = True
+
+    controller.shutdown()
+    controller.shutdown()
+
+    camera.close.assert_called_once()
+    assert controller.camera is None
+    assert controller.is_initialized is False
+
+
 def test_inference_engine_invalid_backend(mock_config):
     """測試請求不存在或已禁用的後端時是否拋出 BackendNotAvailableError"""
     mock_config.enable_yolo = False

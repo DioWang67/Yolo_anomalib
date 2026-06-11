@@ -145,13 +145,18 @@ class CameraController:
             self.logger.logger.error(f"相機測試失敗: {str(e)}")
             return False
 
-    def shutdown(self):
+    def shutdown(self) -> None:
+        """Close the camera once and release the controller reference."""
+        if not self.is_initialized and self.camera is None:
+            return
+        camera = self.camera
+        self.camera = None
+        self.is_initialized = False
         try:
-            if self.camera:
+            if camera:
                 self.logger.logger.info("正在關閉相機...")
-                self.camera.close()
+                camera.close()
                 self.logger.logger.info("相機已關閉")
-            self.is_initialized = False
         except Exception as e:
             self.logger.logger.error(f"關閉相機時出錯: {str(e)}")
 
