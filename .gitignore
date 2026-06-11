@@ -28,6 +28,7 @@ htmlcov/
 # ===================== 專案特定 =====================
 # 敏感設定檔（請改用 config.example.yaml 當範本）
 config.yaml
+config.local.yaml
 *.env
 .env
 .env.local

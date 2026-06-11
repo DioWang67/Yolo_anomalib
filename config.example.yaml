@@ -1,5 +1,10 @@
 # yolo11_inference Configuration Template
 # Copy this file to config.yaml and adjust the values for your environment
+#
+# Machine-specific overrides: create a sibling config.local.yaml (gitignored)
+# with only the keys that differ on this station (e.g. exposure_time, gain,
+# output_dir). Top-level keys in config.local.yaml replace the ones in
+# config.yaml at load time.
 
 # YOLO Model Weights Path (relative to project root or absolute path)
 # Example: models/LED/A/yolo/LED_color_mixing_best.pt

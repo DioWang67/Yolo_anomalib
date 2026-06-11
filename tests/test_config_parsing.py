@@ -64,6 +64,34 @@ def test_camera_resilience_defaults_keep_legacy_behavior(tmp_path):
     assert cfg.camera_reconnect_backoff == 2.0
 
 
+def test_local_overlay_overrides_global_values(tmp_path):
+    write_config(
+        tmp_path,
+        """
+        weights: "models/model.pt"
+        exposure_time: "1000"
+        gain: "1.0"
+    """,
+    )
+    (tmp_path / "config.local.yaml").write_text(
+        'exposure_time: "51170.0"\noutput_dir: "Result_station2"\n',
+        encoding="utf-8",
+    )
+    cfg = DetectionConfig.from_yaml(str(tmp_path / "config.yaml"))
+    assert cfg.exposure_time == "51170.0"  # overridden
+    assert cfg.output_dir == "Result_station2"  # added
+    assert cfg.gain == "1.0"  # untouched
+
+
+def test_local_overlay_must_be_mapping(tmp_path):
+    write_config(tmp_path, 'weights: "models/model.pt"')
+    (tmp_path / "config.local.yaml").write_text(
+        "- not\n- a\n- mapping\n", encoding="utf-8"
+    )
+    with pytest.raises(ConfigValidationError, match="Local overlay"):
+        DetectionConfig.from_yaml(str(tmp_path / "config.yaml"))
+
+
 def test_normalize_model_dict_allows_missing_imgsz(tmp_path):
     cfg = DetectionConfig.normalize_model_dict({}, "test")
     assert cfg.get("imgsz") is None

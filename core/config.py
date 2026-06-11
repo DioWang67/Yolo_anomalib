@@ -165,7 +165,7 @@ class DetectionConfig:
     defect_coverage: dict[str, Any] | None = None
     position_config: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     max_cache_size: int = 3
-    buffer_limit: int = 1
+    buffer_limit: int = 10
     flush_interval: float | None = None
     pipeline: list[str] | None = None
     steps: dict[str, Any] = field(default_factory=dict)
@@ -254,6 +254,8 @@ class DetectionConfig:
                 f"Global configuration must be a mapping ({config_path})"
             )
 
+        raw = cls._apply_local_overlay(raw, config_path)
+
         normalized = cls.normalize_global_dict(raw, str(config_path))
         weights = normalized.get("weights")
         if not weights:
@@ -278,8 +280,8 @@ class DetectionConfig:
             "timeout": int(normalized.get("timeout", 2)),
             "exposure_time": str(normalized.get("exposure_time", "1000")),
             "gain": str(normalized.get("gain", "1.0")),
-            "width": int(normalized.get("width", 640)),
-            "height": int(normalized.get("height", 640)),
+            "width": int(normalized.get("width", 3072)),
+            "height": int(normalized.get("height", 2048)),
             "MV_CC_GetImageBuffer_nMsec": int(
                 normalized.get("MV_CC_GetImageBuffer_nMsec", 10000)
             ),
@@ -338,6 +340,43 @@ class DetectionConfig:
             kwargs["max_crops_per_frame"] = int(max_crops)
 
         return cls(**kwargs)
+
+    @staticmethod
+    def _apply_local_overlay(
+        raw: dict[str, Any], config_path: Path
+    ) -> dict[str, Any]:
+        """Merge a sibling ``config.local.yaml`` over the global config.
+
+        The local file holds machine-specific values (exposure, gain,
+        output_dir, ...) and is kept out of version control. Merging is
+        shallow: top-level keys in the local file replace the global ones.
+        A broken local file fails loudly — silently ignoring it would run
+        the station with wrong camera parameters.
+        """
+        local_path = config_path.parent / "config.local.yaml"
+        if not local_path.exists():
+            return raw
+        try:
+            with local_path.open("r", encoding="utf-8") as handle:
+                local_raw = yaml.safe_load(handle)
+        except (yaml.YAMLError, OSError) as exc:
+            raise ConfigLoadError(
+                f"Failed to read local overlay {local_path}: {exc}"
+            ) from exc
+        if local_raw is None:
+            return raw
+        if not isinstance(local_raw, dict):
+            raise ConfigValidationError(
+                f"Local overlay must be a mapping ({local_path})"
+            )
+        merged = dict(raw)
+        merged.update(local_raw)
+        logger.info(
+            "Applied local config overlay %s (keys: %s)",
+            local_path,
+            ", ".join(sorted(local_raw)),
+        )
+        return merged
 
     def get_items_by_area(self, product: str, area: str) -> list[str] | None:
         return self.expected_items.get(product, {}).get(area)
