@@ -1,6 +1,7 @@
 @echo off
 REM 指定 Miniconda 路徑
 set CONDA_PATH=D:\miniconda
+set PYTHON_EXE=%CONDA_PATH%\envs\yolo_anomalib\python.exe
 
 REM 設定環境變數 PATH
 set PATH=%CONDA_PATH%;%CONDA_PATH%\Scripts;%CONDA_PATH%\Library\bin;%PATH%
@@ -13,10 +14,14 @@ REM 切換到指定目錄
 cd /d D:\Git\robotlearning\yolo11_inference
 
 REM 確認 Python 環境和 torch 模組
-python --version
-where python
-python -c "import torch; print(torch.__version__)"
+if not exist "%PYTHON_EXE%" (
+    echo ERROR: Python environment not found: %PYTHON_EXE%
+    exit /b 1
+)
+
+"%PYTHON_EXE%" --version
+"%PYTHON_EXE%" -c "import torch; print(torch.__version__)"
 
 REM 執行主控腳本並保持視窗開啟
-python GUI.py %*
+"%PYTHON_EXE%" GUI.py %*
 cmd /k

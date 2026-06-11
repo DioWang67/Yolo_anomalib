@@ -32,6 +32,7 @@ dependencies = [
     "lightning==2.4.0",
     "anomalib==1.2.0",
     "ultralytics==8.3.156",
+    "onnxruntime==1.23.2",
     
     # Data processing
     "numpy==1.26.4",
