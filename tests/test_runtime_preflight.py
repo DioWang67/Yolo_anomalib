@@ -37,6 +37,9 @@ def test_validate_runtime_for_model_reports_onnxruntime_import_failure(monkeypat
     assert r"D:\models\PCBA1_A.onnx" in message
     assert sys.executable in message
     assert "onnxruntime_pybind11_state" in message
+    assert "onnxruntime_version=" in message
+    assert "onnxruntime_path=" in message
+    assert "path_head=" in message
     assert ".pt weights" in message
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 """Runtime checks that must pass before model inference starts."""
 
 import importlib
+import importlib.metadata
 import os
 import sys
 from pathlib import Path
@@ -10,6 +11,23 @@ from pathlib import Path
 from core.exceptions import BackendInitializationError
 
 _DLL_DIRECTORY_HANDLES: list[object] = []
+
+
+def _onnxruntime_diagnostics() -> str:
+    """Return import-safe ONNX Runtime installation details."""
+    try:
+        package_version = importlib.metadata.version("onnxruntime")
+    except importlib.metadata.PackageNotFoundError:
+        package_version = "not-installed"
+
+    package_spec = importlib.util.find_spec("onnxruntime")
+    package_path = package_spec.origin if package_spec else "not-found"
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    return (
+        f"onnxruntime_version={package_version}, "
+        f"onnxruntime_path={package_path}, "
+        f"path_head={path_entries[:5]}"
+    )
 
 
 def _prepare_packaged_onnxruntime_dll_path() -> None:
@@ -75,6 +93,7 @@ def validate_runtime_for_model(model_path: str | Path) -> None:
             f"model_path={path}, "
             f"python={sys.executable}, "
             f"version={sys.version}, "
+            f"{_onnxruntime_diagnostics()}, "
             f"onnxruntime_import_error={exc!r}. "
             "Reinstall onnxruntime, install the Microsoft Visual C++ "
             "Redistributable 2015-2022 x64, or switch this model to .pt "
