@@ -110,7 +110,7 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         """Verify that start_pipeline and stop_pipeline orchestrate workers correctly."""
         self.system.load_model_configs = MagicMock()
         self.system._prepare_resources = MagicMock()
-        self.system._run_inference = MagicMock(
+        self.system.run_inference = MagicMock(
             return_value={"status": "PASS", "detections": []}
         )
 
@@ -137,7 +137,7 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         """Verify stats reporting."""
         self.system.load_model_configs = MagicMock()
         self.system._prepare_resources = MagicMock()
-        self.system._run_inference = MagicMock(
+        self.system.run_inference = MagicMock(
             return_value={"status": "PASS", "detections": []}
         )
         self.system.start_pipeline("LED", "A", "yolo")
@@ -155,7 +155,7 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         with patch("core.detection_system.FusionInferenceRunner") as runner_cls:
             runner_cls.return_value = runner_instance
 
-            result = self.system._run_inference(
+            result = self.system.run_inference(
                 MagicMock(), "LED", "A", "fusion", MagicMock()
             )
 

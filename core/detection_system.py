@@ -13,6 +13,7 @@ Public entrypoints:
   - DetectionSystem.stop_pipeline()      — graceful shutdown
 """
 
+import copy
 import logging
 import os
 import shutil
@@ -62,7 +63,12 @@ class DetectionSystem:
             resolved = resolve_path("config.yaml")
             resolved_config = resolved if resolved and resolved.exists() else root_dir / "config.yaml"
         self.config_path = resolved_config
-        self.config = self.load_config(resolved_config)
+        # _base_config holds the pristine global config; switching models
+        # never mutates it. self.config is the active (model-merged) view and
+        # is replaced wholesale on each switch — an atomic reference swap, so
+        # concurrent readers always see a fully-built config object.
+        self._base_config = self.load_config(resolved_config)
+        self.config = copy.deepcopy(self._base_config)
 
         self.camera: CameraController | None = None
         self.result_sink: ExcelImageResultSink | None = None
@@ -135,7 +141,8 @@ class DetectionSystem:
             self.inference_engine = None
         self.current_inference_type = None
         self.model_manager.clear_cache(product, area, inference_type)
-        self.config = self.load_config(self.config_path)
+        self._base_config = self.load_config(self.config_path)
+        self.config = copy.deepcopy(self._base_config)
         self._refresh_result_sink()
 
     def shutdown(self) -> None:
@@ -310,28 +317,30 @@ class DetectionSystem:
     def load_model_configs(self, product: str, area: str, inference_type: str) -> None:
         """Switch to a specific (product, area, type) model configuration.
 
-        Uses ModelManager to keep an LRU cache of engines and snapshots of configs.
+        ModelManager.switch never mutates the base config; it returns a
+        merged copy which becomes the new active ``self.config`` via a
+        single reference assignment.
         """
         if inference_type.lower() == "fusion":
-            # Load Anomalib first
-            self.model_manager.switch(self.config, product, area, "anomalib")
-            # Save anomalib_config before it gets overwritten by YOLO's configuration
-            import copy
-            ano_cfg = copy.deepcopy(getattr(self.config, "anomalib_config", None))
-            
-            # Load YOLO second, so self.config holds YOLO's configuration for pipeline steps
-            self.model_manager.switch(self.config, product, area, "yolo")
-            
-            # Restore anomalib_config to the merged config
-            if ano_cfg is not None:
-                self.config.anomalib_config = ano_cfg
-                
+            # Merge both backends' configs: YOLO drives the pipeline steps,
+            # but the anomalib_config section must come from the anomalib
+            # model bundle.
+            _, ano_merged = self.model_manager.switch(
+                self._base_config, product, area, "anomalib"
+            )
+            _, merged = self.model_manager.switch(
+                self._base_config, product, area, "yolo"
+            )
+            if ano_merged.anomalib_config is not None:
+                merged.anomalib_config = ano_merged.anomalib_config
+            self.config = merged
             self.inference_engine = None
             self.current_inference_type = "fusion"
         else:
-            engine, _ = self.model_manager.switch(
-                self.config, product, area, inference_type
+            engine, merged = self.model_manager.switch(
+                self._base_config, product, area, inference_type
             )
+            self.config = merged
             self.inference_engine = engine
             self.current_inference_type = inference_type.lower()
         self._refresh_result_sink()
@@ -438,7 +447,7 @@ class DetectionSystem:
         )
         raise RuntimeError("No camera available and no frame provided.")
 
-    def _run_inference(
+    def run_inference(
         self,
         frame: np.ndarray,
         product: str,
@@ -446,7 +455,11 @@ class DetectionSystem:
         inference_type: str,
         run_logger,
     ) -> dict[str, Any]:
-        """Perform model inference and post-processing on the frame."""
+        """Perform model inference and post-processing on the frame.
+
+        Public entry point for pipeline workers (see
+        ``core.workers.DetectionPipelineHost``).
+        """
         if inference_type.lower() == "fusion":
             return FusionInferenceRunner(
                 self.model_manager, self.config, self.result_sink
@@ -544,6 +557,15 @@ class DetectionSystem:
             except Exception as cleanup_err:
                 run_logger.warning(f"Cleanup temp dir failed: {cleanup_err}")
 
+    def persist_detection(self, ctx: DetectionContext, run_logger) -> None:
+        """Run the post-processing pipeline and log the summary.
+
+        Public entry point for the storage stage of the async pipeline
+        (see ``core.workers.DetectionPipelineHost``).
+        """
+        self._execute_pipeline(ctx, run_logger)
+        self._log_summary(ctx, run_logger)
+
     def _log_summary(self, ctx: DetectionContext, run_logger):
         """Log a summary of the detection results and failure reasons."""
         if ctx.inference_type.lower() == "anomalib":
@@ -631,7 +653,7 @@ class DetectionSystem:
                     product, area, inference_type, "CANCELED"
                 )
 
-            result = self._run_inference(frame, product, area, inference_type, run_logger)
+            result = self.run_inference(frame, product, area, inference_type, run_logger)
             if result.get("status") in {"ERROR", "INFERENCE_ERROR"}:
                 error_msg = result.get("error", "Inference failed")
                 return self._build_result(

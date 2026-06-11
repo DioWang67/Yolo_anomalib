@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,80 @@ def test_model_overrides_apply_expected_items_from_model_config(tmp_path, monkey
     )
 
     assert cfg_snapshot.get_items_by_area("PCBA1", "A") == ["J5-1", "J5-2"]
+
+
+def test_switch_never_mutates_base_config(tmp_path, monkeypatch):
+    """switch() must treat the shared global config as read-only.
+
+    Workers and the GUI may read the global config concurrently; overrides
+    go onto a returned copy (adopted by atomic reference swap), both on
+    cache miss and cache hit.
+    """
+    weights_path = tmp_path / "dummy.pt"
+    weights_path.write_bytes(b"")
+    global_cfg_path = _write_global_config(tmp_path, weights_path)
+    models_root = tmp_path / "models" / "Cable1" / "A" / "yolo"
+    _write_model_config(models_root, weights_path)
+    monkeypatch.chdir(tmp_path)
+
+    base_config = DetectionConfig.from_yaml(str(global_cfg_path))
+    snapshot_before = copy.deepcopy(base_config.__dict__)
+    manager = ModelManager(DetectionLogger())
+
+    _, merged = manager.switch(
+        base_config, product="Cable1", area="A", inference_type="yolo"
+    )
+
+    assert merged is not base_config
+    assert base_config.__dict__ == snapshot_before, "cache-miss switch mutated base"
+
+    _, merged_again = manager.switch(
+        base_config, product="Cable1", area="A", inference_type="yolo"
+    )
+
+    assert merged_again is not merged, "cache hit must return a fresh copy"
+    assert base_config.__dict__ == snapshot_before, "cache-hit switch mutated base"
+    assert merged_again.output_dir == merged.output_dir
+
+
+def test_switch_has_no_cross_model_contamination(tmp_path, monkeypatch):
+    """Each switch merges from the pristine base — values set by a previous
+    model (e.g. color_model_path) must not leak into the next one."""
+    weights_path = tmp_path / "dummy.pt"
+    weights_path.write_bytes(b"")
+    global_cfg_path = _write_global_config(tmp_path, weights_path)
+
+    area_a = tmp_path / "models" / "Cable1" / "A" / "yolo"
+    _write_model_config(area_a, weights_path)  # sets color_model_path
+
+    area_b = tmp_path / "models" / "Cable1" / "B" / "yolo"
+    area_b.mkdir(parents=True)
+    (area_b / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "weights": str(weights_path),
+                "enable_yolo": True,
+                "expected_items": {"Cable1": {"B": ["Item9"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    base_config = DetectionConfig.from_yaml(str(global_cfg_path))
+    manager = ModelManager(DetectionLogger())
+
+    _, merged_a = manager.switch(
+        base_config, product="Cable1", area="A", inference_type="yolo"
+    )
+    assert merged_a.color_model_path  # A defines a color model
+
+    _, merged_b = manager.switch(
+        base_config, product="Cable1", area="B", inference_type="yolo"
+    )
+    assert merged_b.color_model_path is None, (
+        "B inherited A's color_model_path — switch order leaked state"
+    )
 
 
 def test_model_manager_fails_fast_when_expected_items_missing(

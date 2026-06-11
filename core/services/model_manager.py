@@ -85,7 +85,11 @@ class ModelManager:
         context: str | None = None,
         model_cfg_dir: Path | None = None,
     ) -> None:
-        """Apply per-model overrides into the shared DetectionConfig instance."""
+        """Apply per-model overrides onto a private DetectionConfig copy.
+
+        ``base_config`` here is always the caller-owned merged copy created
+        in :meth:`switch` — never the shared global config.
+        """
         # --- Simple scalar overrides ---
         _SCALAR_FIELDS = [
             "device", "conf_thres", "iou_thres", "enable_yolo", "enable_anomalib",
@@ -188,8 +192,14 @@ class ModelManager:
     ) -> tuple[InferenceEngine, DetectionConfig]:
         """Switch engine to (product, area, type), with LRU cache.
 
-        Returns the engine and the (mutated) base_config snapshot after
-        overrides.
+        ``base_config`` is treated as read-only: overrides are applied onto a
+        deep copy, so the shared global config is never mutated mid-switch
+        (workers and the GUI may be reading it concurrently). Callers adopt
+        the returned merged config by assignment, which is an atomic
+        reference swap.
+
+        Returns:
+            The inference engine and a caller-owned merged DetectionConfig.
         """
         safe_product = safe_segment(product, field_name="product")
         safe_area = safe_segment(area, field_name="area")
@@ -204,9 +214,8 @@ class ModelManager:
                     f"area={safe_area}, type={safe_inference_type}"
                 )
                 engine, cfg_snapshot = self._cache[key][safe_inference_type]
-                base_config.__dict__.update(copy.deepcopy(cfg_snapshot.__dict__))
                 self._cache.move_to_end(key)
-                return engine, base_config
+                return engine, copy.deepcopy(cfg_snapshot)
 
         model_config_path = self._locate_model_config(
             safe_product, safe_area, safe_inference_type
@@ -248,28 +257,32 @@ class ModelManager:
             raise
 
         context = f"{safe_product}/{safe_area}/{safe_inference_type}"
-        self._apply_model_config(base_config, cfg, context, model_cfg_dir=model_cfg_dir)
+        merged = copy.deepcopy(base_config)
+        self._apply_model_config(merged, cfg, context, model_cfg_dir=model_cfg_dir)
         if safe_inference_type == "yolo":
-            self._validate_inspection_scope(base_config, safe_product, safe_area, context)
+            self._validate_inspection_scope(merged, safe_product, safe_area, context)
 
         # Version validation (if model uses versioned naming)
         self._validate_model_version(
-            base_config, cfg, safe_product, safe_area, safe_inference_type
+            merged, cfg, safe_product, safe_area, safe_inference_type
         )
 
         from core.inference_engine import InferenceEngine
 
-        engine = InferenceEngine(base_config)
+        # The engine owns this merged config for its whole lifetime; later
+        # switches build new copies, so a cached engine never sees another
+        # product's values.
+        engine = InferenceEngine(merged)
         if not engine.initialize():
             raise RuntimeError("Inference engine init failed")
 
         if safe_inference_type == "anomalib":
-            self._initialize_product_models(base_config, safe_product)
+            self._initialize_product_models(merged, safe_product)
 
         with self._cache_lock:
             if key not in self._cache:
                 self._cache[key] = {}
-            self._cache[key][safe_inference_type] = (engine, copy.deepcopy(base_config))
+            self._cache[key][safe_inference_type] = (engine, copy.deepcopy(merged))
             self._cache.move_to_end(key)
             if len(self._cache) > self.max_cache_size:
                 old_key, engines = self._cache.popitem(last=False)
@@ -282,7 +295,7 @@ class ModelManager:
                     f"Evicted cached model: product={old_key[0]}, area={old_key[1]}"
                 )
 
-        return engine, base_config
+        return engine, merged
 
     def _validate_inspection_scope(
         self,

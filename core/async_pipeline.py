@@ -84,8 +84,9 @@ class AsyncPipelineManager:
 
         Args:
             camera: Initialised camera controller.
-            detection_system: The DetectionSystem instance (provides
-                ``_run_inference``, ``_execute_pipeline``, etc.).
+            detection_system: The pipeline host (see
+                ``core.workers.DetectionPipelineHost``; provides
+                ``run_inference`` and ``persist_detection``).
             product: Product identifier.
             area: Area identifier.
             inference_type: 'yolo', 'anomalib', or 'fusion'.

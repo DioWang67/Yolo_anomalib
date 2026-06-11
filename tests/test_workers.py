@@ -57,7 +57,7 @@ class PipelineSystem:
         self.inference_calls = 0
         self.saved_statuses: list[str] = []
 
-    def _run_inference(self, *args, **kwargs):
+    def run_inference(self, *args, **kwargs):
         self.inference_calls += 1
         if self.delay:
             time.sleep(self.delay)
@@ -70,7 +70,7 @@ class PipelineSystem:
             "processed_image": np.zeros((4, 4, 3), dtype=np.uint8),
         }
 
-    def _execute_pipeline(self, ctx, *_args, **_kwargs):
+    def persist_detection(self, ctx, *_args, **_kwargs):
         ctx.result["status"] = ctx.status
         ctx.save_result = {
             "original_path": "Result/original.jpg",
@@ -79,8 +79,6 @@ class PipelineSystem:
             "heatmap_path": "",
             "cropped_paths": [],
         }
-
-    def _log_summary(self, ctx, *_args, **_kwargs):
         self.saved_statuses.append(ctx.status)
 
 
@@ -364,16 +362,13 @@ class TestAsyncPipelineManager:
                 self.result_sink = None
                 self.calls = 0
 
-            def _run_inference(self, *args, **kwargs):
+            def run_inference(self, *args, **kwargs):
                 self.calls += 1
                 self.entered.set()
                 self.release.wait(timeout=5.0)
                 return {"status": "PASS", "detections": []}
 
-            def _execute_pipeline(self, *args, **kwargs):
-                return None
-
-            def _log_summary(self, *args, **kwargs):
+            def persist_detection(self, *args, **kwargs):
                 return None
 
         manager = AsyncPipelineManager()
@@ -524,7 +519,7 @@ class TestInferenceWorker:
             def __init__(self):
                 self.calls = 0
 
-            def _run_inference(self, *args, **kwargs):
+            def run_inference(self, *args, **kwargs):
                 self.calls += 1
                 raise ModelInferenceError("onnxruntime DLL load failed")
 
@@ -560,7 +555,7 @@ class TestInferenceWorker:
         """A backend error returned as a result is also fatal for async mode."""
 
         class ErrorResultSystem:
-            def _run_inference(self, *args, **kwargs):
+            def run_inference(self, *args, **kwargs):
                 return {
                     "status": "ERROR",
                     "error": "Model not loaded",

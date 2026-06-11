@@ -35,7 +35,7 @@ import queue
 import threading
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol
 
 from core.exceptions import (
     BackendInitializationError,
@@ -52,6 +52,27 @@ logger = logging.getLogger(__name__)
 
 PipelineMode = str
 TERMINAL_RESULT_STATUSES = {"PASS", "DETECTION_FAIL", "INFERENCE_ERROR", "FAIL"}
+
+
+class DetectionPipelineHost(Protocol):
+    """The narrow surface pipeline workers need from the detection system.
+
+    Workers must depend only on this protocol — never on DetectionSystem
+    private methods — so the host can be replaced by a lightweight fake in
+    tests and the system internals stay free to evolve.
+    """
+
+    config: Any
+
+    def run_inference(
+        self, frame: Any, product: str, area: str, inference_type: str, run_logger: Any
+    ) -> dict[str, Any]:
+        """Run model inference on a frame and return the result payload."""
+        ...
+
+    def persist_detection(self, ctx: Any, run_logger: Any) -> None:
+        """Run the post-processing pipeline and log the result summary."""
+        ...
 
 
 # ======================================================================
@@ -444,9 +465,8 @@ class InferenceWorker(BaseWorker):
         The inference queue (fed by ``AcquisitionWorker``).
     out_queue : queue.Queue[DetectionTask]
         The I/O queue (consumed by ``StorageWorker``).
-    detection_system : DetectionSystem
-        The existing system instance — provides ``_run_inference``,
-        ``_prepare_resources``, ``model_manager``, and ``config``.
+    detection_system : DetectionPipelineHost
+        Provides ``run_inference`` (see protocol above).
     """
 
     _IO_QUEUE_PUT_TIMEOUT: float = 5.0
@@ -456,7 +476,7 @@ class InferenceWorker(BaseWorker):
         self,
         in_queue: OverwriteQueue[DetectionTask],
         out_queue: queue.Queue[DetectionTask],
-        detection_system: Any,
+        detection_system: DetectionPipelineHost,
         *,
         name: str = "InferenceWorker",
         stop_event: threading.Event | None = None,
@@ -475,7 +495,7 @@ class InferenceWorker(BaseWorker):
         t0 = time.time()
 
         try:
-            result = self._system._run_inference(
+            result = self._system.run_inference(
                 task.frame,
                 task.product,
                 task.area,
@@ -622,15 +642,14 @@ class StorageWorker(BaseWorker):
     ----------
     in_queue : queue.Queue[DetectionTask]
         The I/O queue (fed by ``InferenceWorker``).
-    detection_system : DetectionSystem
-        Provides ``result_sink``, ``_execute_pipeline``, ``config``,
-        and ``_log_summary`` for persisting results.
+    detection_system : DetectionPipelineHost
+        Provides ``config`` and ``persist_detection`` (see protocol above).
     """
 
     def __init__(
         self,
         in_queue: queue.Queue[DetectionTask],
-        detection_system: Any,
+        detection_system: DetectionPipelineHost,
         *,
         name: str = "StorageWorker",
         on_task_processed: Optional[Callable[[DetectionTask], None]] = None,
@@ -680,8 +699,7 @@ class StorageWorker(BaseWorker):
                 config=self._system.config,
             )
 
-            self._system._execute_pipeline(ctx, self._logger)
-            self._system._log_summary(ctx, self._logger)
+            self._system.persist_detection(ctx, self._logger)
             self._attach_pipeline_outputs(task, ctx)
             self._saved_count += 1
 
