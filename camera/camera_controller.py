@@ -45,7 +45,14 @@ class CameraController:
             self.logger.logger.debug(
                 f"圖像形狀: {frame.shape}, 數據類型: {frame.dtype}"
             )
-            # 確保返回 BGR 格式
+            # CHANNEL CONTRACT: MVSCamera already returns BGR, so this swap
+            # makes the pipeline consume RGB-as-BGR. It looks like a bug, but
+            # every deployed model and color calibration was trained on frames
+            # produced by exactly this path (training data = saved originals).
+            # Removing either swap flips inspection outcomes — verified
+            # 2026-06-11 on the 2026-06-08 PCBA1/A field set (12/22 changed,
+            # 4 PASS -> FAIL). Only change together with full model
+            # retraining + revalidation. See also MVSCamera._get_frame_internal.
             if frame.shape[2] == 3 and frame.dtype == np.uint8:
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             if not self._validate_frame(frame):
