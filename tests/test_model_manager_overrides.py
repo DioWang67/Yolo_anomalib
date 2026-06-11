@@ -136,6 +136,34 @@ def test_model_manager_fails_fast_when_expected_items_missing(
         manager.switch(base_config, product="PCBA1", area="A", inference_type="yolo")
 
 
+def test_model_config_found_via_project_root_when_cwd_differs(
+    tmp_path, monkeypatch
+):
+    """Frozen exe / shortcut launches run with an arbitrary cwd; the model
+    bundle must still resolve against the project root."""
+    weights_path = tmp_path / "best.onnx"
+    weights_path.write_bytes(b"")
+    global_cfg_path = _write_global_config(tmp_path, weights_path)
+    models_root = tmp_path / "models" / "PCBA1" / "A" / "yolo"
+    _write_pcba_model_config(models_root, weights_path)
+
+    # cwd has no models/ directory; PROJECT_ROOT points at the bundle root.
+    other_cwd = tmp_path / "elsewhere"
+    other_cwd.mkdir()
+    monkeypatch.chdir(other_cwd)
+    import core.services.model_manager as mm
+    monkeypatch.setattr(mm, "PROJECT_ROOT", tmp_path)
+
+    base_config = DetectionConfig.from_yaml(str(global_cfg_path))
+    manager = ModelManager(DetectionLogger())
+
+    _, cfg_snapshot = manager.switch(
+        base_config, product="PCBA1", area="A", inference_type="yolo"
+    )
+
+    assert cfg_snapshot.get_items_by_area("PCBA1", "A") == ["J5-1", "J5-2"]
+
+
 def test_model_manager_rejects_output_dir_outside_project(tmp_path, monkeypatch):
     weights_path = tmp_path / "best.onnx"
     weights_path.write_bytes(b"")

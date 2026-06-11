@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import os
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -162,6 +161,28 @@ class ModelManager:
         merged_steps.update(steps_cfg)
         base_config.steps = merged_steps
 
+    @staticmethod
+    def _locate_model_config(product: str, area: str, inference_type: str) -> str:
+        """Locate models/<product>/<area>/<type>/config.yaml.
+
+        Search order: current working directory first (backward compatible
+        with existing callers and tests), then the project root, so the
+        bundle is still found when the app is launched from another cwd or
+        as a frozen executable.
+
+        Raises:
+            FileNotFoundError: If the config exists in neither location.
+        """
+        relative = Path("models") / product / area / inference_type / "config.yaml"
+        candidates = [Path.cwd() / relative, PROJECT_ROOT / relative]
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+        raise FileNotFoundError(
+            f"Model config not found: {relative} "
+            f"(searched: {[str(c) for c in candidates]})"
+        )
+
     def switch(
         self, base_config: DetectionConfig, product: str, area: str, inference_type: str
     ) -> tuple[InferenceEngine, DetectionConfig]:
@@ -187,11 +208,9 @@ class ModelManager:
                 self._cache.move_to_end(key)
                 return engine, base_config
 
-        model_config_path = os.path.join(
-            "models", safe_product, safe_area, safe_inference_type, "config.yaml"
+        model_config_path = self._locate_model_config(
+            safe_product, safe_area, safe_inference_type
         )
-        if not os.path.exists(model_config_path):
-            raise FileNotFoundError(f"Model config not found: {model_config_path}")
 
         with open(model_config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
