@@ -167,25 +167,11 @@ class MVSCamera:
 
             frame = self._get_frame_internal()
             if frame is not None:
-                cv2.putText(
-                    frame,
-                    f"FPS: {self.current_fps:.1f}",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 0),
-                    2,
-                )
-                if self.auto_exposure:
-                    cv2.putText(
-                        frame,
-                        "Auto Exposure: ON",
-                        (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1,
-                        (0, 255, 0),
-                        2,
-                    )
+                # NOTE: the frame is consumed by inference and color checks.
+                # Never draw overlays (FPS text, status, etc.) on it here —
+                # display decoration belongs to the preview layer, on a copy.
+                # Validated on 2026-06-08 PCBA1 field images via
+                # tools/validate_overlay_impact.py (26/26 outcomes unchanged).
                 if self.save_image:
                     try:
                         timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -518,8 +504,28 @@ if __name__ == "__main__":
                 while True:
                     frame = camera.get_frame()
                     if frame is not None:
-                        frame = cv2.resize(frame, (640, 640))
-                        cv2.imshow("Camera Frame", frame)
+                        # Display copy only — keep the captured frame clean.
+                        display = cv2.resize(frame, (640, 640))
+                        cv2.putText(
+                            display,
+                            f"FPS: {camera.current_fps:.1f}",
+                            (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            1,
+                            (0, 255, 0),
+                            2,
+                        )
+                        if camera.auto_exposure:
+                            cv2.putText(
+                                display,
+                                "Auto Exposure: ON",
+                                (10, 60),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                1,
+                                (0, 255, 0),
+                                2,
+                            )
+                        cv2.imshow("Camera Frame", display)
 
                         key = cv2.waitKey(1) & 0xFF
                         if not camera.process_key(key):

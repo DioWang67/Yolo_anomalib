@@ -78,6 +78,20 @@ def test_close_releases_each_reached_stage_once(mock_config):
     camera.cam.MV_CC_DestroyHandle.assert_called_once()
 
 
+def test_get_frame_returns_unmodified_pixels(mock_config):
+    """Captured frames feed inference; no overlay may be drawn on them."""
+    import numpy as np
+
+    camera = MVSCamera(mock_config)
+    pristine = np.full((64, 64, 3), 37, dtype=np.uint8)
+    camera._get_frame_internal = lambda: pristine.copy()
+
+    frame = camera.get_frame()
+
+    assert frame is not None
+    assert np.array_equal(frame, pristine)
+
+
 def test_open_device_failure_releases_orphaned_handle(mock_config):
     """CreateHandle OK + OpenDevice FAIL must destroy the handle, not leak it."""
     camera = MVSCamera(mock_config)
