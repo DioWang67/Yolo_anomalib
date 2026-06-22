@@ -100,6 +100,10 @@ class DetectionSystem:
     def _refresh_result_sink(self) -> None:
         output_dir = self._resolve_output_dir()
         if getattr(self, "_sink_base_dir", None) == output_dir:
+            if self.result_sink:
+                update_config = getattr(self.result_sink, "update_config", None)
+                if callable(update_config):
+                    update_config(self.config)
             return
         if self.result_sink:
             try:

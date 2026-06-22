@@ -213,6 +213,21 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         with self.assertRaises(SecurityError):
             self.system._resolve_output_dir()
 
+    def test_refresh_result_sink_updates_config_when_output_dir_unchanged(self):
+        """Model config switches must update the existing result sink."""
+        sink = MagicMock()
+        self.system.result_sink = sink
+        self.system._sink_base_dir = self.system._resolve_output_dir()
+        active_config = MagicMock(
+            output_dir=str(self.system._sink_base_dir),
+            buffer_limit=10,
+        )
+        self.system.config = active_config
+
+        self.system._refresh_result_sink()
+
+        sink.update_config.assert_called_once_with(active_config)
+
 
 if __name__ == "__main__":
     unittest.main()

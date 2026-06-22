@@ -439,6 +439,63 @@ def test_save_results_yolo_draws_missing_item_location(tmp_result_dir):
     assert os.path.exists(out["failure_crop_paths"][0])
 
 
+def test_update_config_refreshes_missing_item_locations(tmp_result_dir):
+    h = ResultHandler(
+        DummyConfig(buffer_limit=1),
+        base_dir=tmp_result_dir,
+        logger=DummyLogger(),
+    )
+    frame = _mk_img(value=20)
+    processed = _mk_img(value=20)
+
+    before = h.save_results(
+        frame=frame,
+        detections=[],
+        status="DETECTION_FAIL",
+        detector="yolo",
+        missing_items=["J3"],
+        processed_image=processed,
+        product="PCBA1",
+        area="B",
+    )
+    assert before["missing_locations"] == []
+
+    h.update_config(
+        DummyConfig(
+            buffer_limit=1,
+            position_config={
+                "PCBA1": {
+                    "B": {
+                        "expected_boxes": {
+                            "J3": {"x1": 10, "y1": 12, "x2": 35, "y2": 32}
+                        }
+                    }
+                }
+            },
+        )
+    )
+
+    after = h.save_results(
+        frame=frame,
+        detections=[],
+        status="DETECTION_FAIL",
+        detector="yolo",
+        missing_items=["J3"],
+        processed_image=processed,
+        product="PCBA1",
+        area="B",
+    )
+
+    assert after["missing_locations"] == [
+        {
+            "class": "J3",
+            "expected_key": "J3",
+            "bbox": [10, 12, 35, 32],
+            "reason": "missing",
+        }
+    ]
+
+
 def test_save_results_yolo_saves_wrong_position_and_slot_mismatch_crops(tmp_result_dir):
     h = ResultHandler(
         DummyConfig(buffer_limit=1), base_dir=tmp_result_dir, logger=DummyLogger()

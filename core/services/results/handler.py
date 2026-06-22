@@ -61,14 +61,7 @@ class ResultHandler:
 
     def __init__(self, config, base_dir: str = "Result",
                  logger: DetectionLogger | None = None) -> None:
-        if is_dataclass(config) and not isinstance(config, type):
-            cfg_dict = asdict(config)
-        elif isinstance(config, dict):
-            cfg_dict = dict(config)
-        else:
-            cfg_dict = config
-        self._config_source = config
-        self.config = cfg_dict
+        self._set_config(config)
         resolved_base_dir = Path(base_dir).resolve()
         self.base_dir = str(
             ensure_subpath(resolved_base_dir, resolved_base_dir, must_exist=False)
@@ -112,6 +105,16 @@ class ResultHandler:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def update_config(self, config) -> None:
+        """Update runtime config used for result metadata and missing boxes.
+
+        Args:
+            config: DetectionConfig-like object or dictionary. Existing output
+                queues and workbook remain open.
+        """
+        self._set_config(config)
+        self.detection_results = DetectionResults(config)
 
     def get_annotated_path(
         self,
@@ -407,6 +410,16 @@ class ResultHandler:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _set_config(self, config) -> None:
+        if is_dataclass(config) and not isinstance(config, type):
+            cfg_dict = asdict(config)
+        elif isinstance(config, dict):
+            cfg_dict = dict(config)
+        else:
+            cfg_dict = config
+        self._config_source = config
+        self.config = cfg_dict
 
     def _cfg_get(self, key: str, default: Any = None) -> Any:
         if isinstance(self.config, dict):

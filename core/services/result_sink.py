@@ -35,6 +35,10 @@ class ExcelImageResultSink(ResultSink):
     def save(self, *args, **kwargs) -> dict[str, Any]:
         return self._handler.save_results(*args, **kwargs)
 
+    def update_config(self, config) -> None:
+        """Update the handler with the active merged detection config."""
+        self._handler.update_config(config)
+
     def flush(self) -> None:
         self._handler.flush()
 
