@@ -8,6 +8,7 @@ This wrapper keeps the production tools available behind short commands:
     python tools/pcba_pilot.py collect --include-pass
     python tools/pcba_pilot.py summary A
     python tools/pcba_pilot.py pilot A --include-pass
+    python tools/pcba_pilot.py metrics
 """
 
 import argparse
@@ -19,6 +20,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.collect_review_cases import collect_review_cases, write_manifest
+from tools.inspection_metrics import (
+    compute_report,
+    load_manifest_rows,
+    render_console,
+    write_report as write_metrics_report,
+)
 from tools.pilot_acceptance_report import build_acceptance_summary, write_summary
 from tools.production_readiness_check import (
     has_blocking_failures,
@@ -136,6 +143,18 @@ def run_pilot_command(args: argparse.Namespace) -> int:
     return readiness_code
 
 
+def run_metrics_command(args: argparse.Namespace) -> int:
+    """Compute trust metrics (confusion matrix, escape/overkill) from labels."""
+    rows = load_manifest_rows(args.review_manifest_csv)
+    report = compute_report(rows)
+    print(render_console(report))
+    output_json = None if args.no_json else args.output_json
+    write_metrics_report(report, output_json)
+    if output_json:
+        print(f"\nWrote metrics report to {output_json}")
+    return 0
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build the CLI parser."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -173,6 +192,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     pilot.add_argument("--summary-md", default=None, help="Pilot summary Markdown path")
     pilot.add_argument("--include-pass", action="store_true", help="Include PASS cases for golden board review")
     pilot.set_defaults(func=run_pilot_command)
+
+    metrics = subparsers.add_parser(
+        "metrics", help="Confusion matrix + escape/overkill from labeled manifest"
+    )
+    metrics.add_argument(
+        "--review-manifest-csv", default="review_manifest.csv", help="Labeled review manifest CSV path"
+    )
+    metrics.add_argument(
+        "--output-json", default="inspection_metrics.json", help="Metrics report JSON path"
+    )
+    metrics.add_argument("--no-json", action="store_true", help="Do not write the JSON report")
+    metrics.set_defaults(func=run_metrics_command)
 
     return parser
 
