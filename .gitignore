@@ -111,6 +111,7 @@ models_backup/
 *.zip
 *.spec
 build_log.txt
+*.bak.*
 models/*_backup/
 
 # Local ONNX Runtime/PyInstaller smoke-test workspaces.

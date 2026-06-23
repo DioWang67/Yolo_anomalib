@@ -32,7 +32,9 @@ from core.logging_config import DetectionLogger
 from core.logging_utils import context_adapter
 from core.path_utils import project_root, resolve_path
 from core.pipeline.context import DetectionContext
+from core.pipeline.finalize import finalize_status
 from core.pipeline.registry import PipelineEnv, build_pipeline, default_pipeline
+from core.pipeline.steps import SaveResultsStep
 from core.result_adapter import normalize_result
 from core.runtime_preflight import validate_runtime_for_model
 from core.security import ensure_subpath, resolve_output_dir
@@ -529,7 +531,27 @@ class DetectionSystem:
             )
             steps = build_pipeline(["save_results"], env, step_opts)
 
-        for step in steps:
+        # Run verdict steps first, finalize the status from color-corrected
+        # signals, then persist — so saved artifacts/Excel reflect the final
+        # verdict and a YOLO misclassification the color checker fixed no longer
+        # leaves a stale FAIL on a good board.
+        save_steps = [s for s in steps if isinstance(s, SaveResultsStep)]
+        verdict_steps = [s for s in steps if not isinstance(s, SaveResultsStep)]
+
+        for step in verdict_steps:
+            if self._is_canceled(cancel_cb):
+                ctx.status = "CANCELED"
+                return
+            step.run(ctx)
+
+        if self._is_canceled(cancel_cb):
+            ctx.status = "CANCELED"
+            return
+        finalize_status(
+            ctx, fail_on_unexpected=getattr(self.config, "fail_on_unexpected", True)
+        )
+
+        for step in save_steps:
             if self._is_canceled(cancel_cb):
                 ctx.status = "CANCELED"
                 return
