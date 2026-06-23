@@ -74,10 +74,13 @@ REM        分析自動處理；只有非 Python 資源才需要 --add-data
 REM ==========================================================================
 REM --- 執行期需要的資料檔（非 Python 程式碼）、隱藏 import、子模組收集與 metadata 保留 ---
 REM --- 注意：在 ^ 續行的指令區塊中不可插入 REM 註解，否則可能導致參數被截斷或解析失敗 ---
+REM --- --noupx: 不壓縮原生 DLL。UPX 會在每次啟動時解壓 torch/MKL/Qt 等巨型 DLL，
+REM     拖慢啟動數秒，且可能損壞 torch/onnxruntime/Qt 原生 DLL 導致隨機崩潰。 ---
 "%ENV_PYTHON%" -m PyInstaller ^
   --noconfirm ^
   --onedir ^
   --console ^
+  --noupx ^
   --name "%BUILD_NAME%" ^
   --distpath "%OUTPUT_PATH%" ^
   --workpath "%WORK_PATH%" ^

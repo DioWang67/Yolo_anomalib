@@ -12,10 +12,12 @@ from core.exceptions import (
 )
 from core.yolo_inference_model import YOLOInferenceModel
 
-try:
-    from core.anomalib_inference_model import AnomalibInferenceModel
-except Exception:  # pragma: no cover
-    AnomalibInferenceModel = None  # type: ignore
+# Anomalib is lazy-loaded on first use: importing it eagerly pulls the entire
+# anomalib/lightning/timm/FrEIA dependency tree (several seconds) into process
+# startup even for YOLO-only runs. The module-level sentinel stays patchable by
+# tests (``@patch("core.inference_engine.AnomalibInferenceModel")``) and is
+# populated on demand in ``_init_backend``.
+AnomalibInferenceModel = None  # type: ignore[assignment]
 import numpy as np
 
 from core.config import DetectionConfig
@@ -124,8 +126,17 @@ class InferenceEngine:
                 self.models["yolo"] = model
                 self.logger.logger.info("YOLO backend ready (lazy)")
             elif name == "anomalib" and (force or getattr(self.config, "enable_anomalib", False)):
+                global AnomalibInferenceModel
                 if AnomalibInferenceModel is None:
-                    raise BackendNotAvailableError("Anomalib not available")
+                    try:
+                        from core.anomalib_inference_model import (
+                            AnomalibInferenceModel as _AnomalibInferenceModel,
+                        )
+                    except Exception as exc:  # pragma: no cover - env-specific
+                        raise BackendNotAvailableError(
+                            "Anomalib not available"
+                        ) from exc
+                    AnomalibInferenceModel = _AnomalibInferenceModel
                 model = AnomalibInferenceModel(
                     self.config)  # type: ignore[call-arg]
                 try:

@@ -110,6 +110,7 @@ models_backup/
 # Local model bundles/backups and generated PyInstaller specs.
 *.zip
 *.spec
+build_log.txt
 models/*_backup/
 
 # Local ONNX Runtime/PyInstaller smoke-test workspaces.
