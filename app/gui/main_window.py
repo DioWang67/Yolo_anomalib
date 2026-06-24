@@ -912,59 +912,6 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         if self.image_panel:
             self.image_panel.update_image(image)
 
-    @pyqtSlot(object)
-    def on_detection_complete(self, result: DetectionResult) -> None:
-        """檢測完成回調"""
-        self.current_result = result
-
-        # Only reset buttons if pipeline is NOT running (single-shot mode)
-        is_pipeline_running = (
-            self.controller.has_system()
-            and self.controller.detection_system.pipeline_running
-        )
-        if self._single_shot_running or not is_pipeline_running:
-            self._single_shot_running = False
-            self.stats_timer.stop()
-            self.start_btn.setEnabled(True)
-            self.stop_btn.setEnabled(False)
-            self.update_camera_controls()
-
-        self.save_btn.setEnabled(True)
-
-        # Update big status
-        if getattr(self, "big_status_label", None):
-            self.big_status_label.set_status(result.status)
-
-        # Update version label after model is loaded
-        product = result.product or self.product_combo.currentText()
-        area = result.area or self.area_combo.currentText()
-        inference_type = result.inference_type or self.inference_combo.currentText()
-        self._update_version_label(product, area, inference_type)
-
-        # 更新結果顯示
-        self.info_panel.update_result(result)
-
-        # 顯示圖像 — use explicit attributes instead of metadata.get()
-        original_path = result.original_image_path or result.image_path
-        preprocessed_path = result.preprocessed_image_path
-
-        load_image_with_retry(
-            self.original_image,
-            original_path,
-            on_fail=lambda: self.original_image.setText("No original image available"),
-        )
-        load_image_with_retry(
-            self.processed_image,
-            preprocessed_path,
-            on_fail=lambda: self.processed_image.setText("No processed image available"),
-        )
-        self._refresh_result_image()
-
-        self.log_message(f"檢測完成 - 狀態: {result.status}")
-        self.statusBar().showMessage(f"檢測完成 - {result.status}", 5000)
-
-        # Consecutive FAIL alert is handled via SessionStatsWidget.consecutive_fail_reached signal.
-
     @pyqtSlot(bool)
     def _on_show_detection_boxes_toggled(self, checked: bool) -> None:
         """Update the result tab when detection box visibility changes."""
