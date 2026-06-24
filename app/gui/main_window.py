@@ -934,7 +934,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         # Update big status
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status(result.status)
-        
+
         # Update version label after model is loaded
         product = result.product or self.product_combo.currentText()
         area = result.area or self.area_combo.currentText()
@@ -1495,6 +1495,14 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status(result.status)
 
+        # In Auto Mode, push the verdict onto the always-visible phase banner.
+        # This runs before the state machine transitions to SHOW_RESULT, so the
+        # banner's result-owned guard keeps PASS/FAIL on screen until removal.
+        if self._auto_controller is not None and self._auto_controller.is_running():
+            self.image_panel.auto_phase_banner.set_result(
+                result.status, self.current_language
+            )
+
         product = result.product or self.product_combo.currentText()
         area = result.area or self.area_combo.currentText()
         inference_type = result.inference_type or self.inference_combo.currentText()
@@ -1538,6 +1546,8 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self.stop_btn.setEnabled(False)
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("ERROR")
+        if self._auto_controller is not None and self._auto_controller.is_running():
+            self.image_panel.auto_phase_banner.set_result("ERROR", self.current_language)
         self.update_camera_controls()
         self.log_message(f"{self._t('detect_error_title')}: {error_msg}")
         QMessageBox.critical(
@@ -1862,6 +1872,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("AUTO")
         self.control_panel.set_auto_mode_status("WAIT_EMPTY")
+        self.image_panel.auto_phase_banner.activate(self.current_language)
         self.log_message(
             f"自動模式已啟動 — {product}/{area}/{inference_type}"
         )
@@ -1871,6 +1882,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         if self._auto_controller is not None:
             self._auto_controller.stop()
         self.control_panel.set_auto_mode_status("")
+        self.image_panel.auto_phase_banner.deactivate()
         self.statusBar().clearMessage()
         self.start_btn.setEnabled(True)
         self.use_camera_chk.setEnabled(True)
@@ -1883,6 +1895,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         """Update status label when auto-trigger state changes."""
         self.control_panel.set_auto_mode_status(state_name)
         self.statusBar().showMessage(f"Auto: {state_name}")
+        self.image_panel.auto_phase_banner.set_phase(state_name, self.current_language)
 
     def _on_auto_error(self, msg: str) -> None:
         """Handle fatal auto-inspection error (e.g. camera lost)."""

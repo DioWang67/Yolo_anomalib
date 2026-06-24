@@ -106,6 +106,120 @@ class BigStatusLabel(QLabel):
             )
 
 
+class AutoPhaseBanner(QLabel):
+    """Always-visible phase banner for Auto Mode.
+
+    Decouples operator state-awareness from the image tab selection: whatever
+    tab the operator is on, this banner above the viewer shows the current
+    auto-trigger phase in large localized text with a phase-specific colour.
+    A slow background pulse on the active phases (positioning / inspecting)
+    signals the system is alive — so a frozen pipeline is visually distinct
+    from a genuine "waiting" state.
+    """
+
+    # Phase -> (i18n key, base colour, text colour, pulse colour or None).
+    # TriggerState values are mapped to these operator-facing phases.
+    _PHASES: dict[str, tuple[str, str, str, str | None]] = {
+        "WAIT_EMPTY": ("auto_phase_wait_empty", "#e5e7eb", "#374151", None),
+        "PRODUCT_APPEAR": ("auto_phase_positioning", "#1d4ed8", "#ffffff", "#2563eb"),
+        "WAIT_STABLE": ("auto_phase_positioning", "#1d4ed8", "#ffffff", "#2563eb"),
+        "CAPTURE_LOCK": ("auto_phase_inspecting", "#b45309", "#ffffff", "#d97706"),
+        "INSPECTING": ("auto_phase_inspecting", "#b45309", "#ffffff", "#d97706"),
+    }
+    # States whose display is owned by set_result() — the banner must not
+    # overwrite the PASS/FAIL shown after inspection completes.
+    _RESULT_OWNED = frozenset({"SHOW_RESULT", "WAIT_REMOVE"})
+
+    _RESULT_COLORS: dict[str, tuple[str, str]] = {
+        "PASS": ("#16794c", "#ffffff"),
+        "FAIL": ("#b42318", "#ffffff"),
+        "DETECTION_FAIL": ("#b42318", "#ffffff"),
+        "ERROR": ("#f59e0b", "#111827"),
+        "INFERENCE_ERROR": ("#f59e0b", "#111827"),
+    }
+
+    def __init__(self) -> None:
+        super().__init__("")
+        self.setAlignment(Qt.AlignCenter)
+        self.setFont(QFont("Arial Black", 18, QFont.Bold))
+        self.setMinimumHeight(46)
+        self.hide()
+        self._pulse_on = False
+        self._base_color = ""
+        self._pulse_color: str | None = None
+        self._text_color = "#ffffff"
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.setInterval(450)
+        self._pulse_timer.timeout.connect(self._tick_pulse)
+
+    # -- public API ----------------------------------------------------
+
+    def set_phase(self, state_name: str, language: str) -> None:
+        """Show the operator-facing phase for an auto-trigger state.
+
+        Result-owned states (SHOW_RESULT/WAIT_REMOVE) are ignored so the
+        PASS/FAIL set by set_result() stays on screen until the next cycle.
+        """
+        if state_name in self._RESULT_OWNED:
+            return
+        phase = self._PHASES.get(state_name)
+        if phase is None:
+            return
+        key, base, text_color, pulse = phase
+        self._apply(tr(language, key), base, text_color, pulse)
+
+    def set_result(self, status: str, language: str) -> None:
+        """Show the inspection verdict (PASS/FAIL/ERROR) after a cycle."""
+        status = (status or "").upper()
+        base, text_color = self._RESULT_COLORS.get(status, ("#e5e7eb", "#374151"))
+        remove_hint = tr(language, "auto_phase_remove")
+        label = status.replace("_", " ") if status else remove_hint
+        self._apply(f"{label}  ·  {remove_hint}", base, text_color, None)
+
+    def activate(self, language: str) -> None:
+        """Show the banner and reset it to the initial waiting phase."""
+        self.set_phase("WAIT_EMPTY", language)
+        self.show()
+
+    def deactivate(self) -> None:
+        """Hide the banner and stop the pulse when leaving Auto Mode."""
+        self._pulse_timer.stop()
+        self.hide()
+
+    # -- internals -----------------------------------------------------
+
+    def _apply(self, text: str, base: str, text_color: str, pulse: str | None) -> None:
+        self.setText(text)
+        self._base_color = base
+        self._pulse_color = pulse
+        self._text_color = text_color
+        self._pulse_on = False
+        self._render(base)
+        if pulse is not None:
+            self._pulse_timer.start()
+        else:
+            self._pulse_timer.stop()
+
+    def _tick_pulse(self) -> None:
+        if self._pulse_color is None:
+            self._pulse_timer.stop()
+            return
+        self._pulse_on = not self._pulse_on
+        self._render(self._pulse_color if self._pulse_on else self._base_color)
+
+    def _render(self, bg: str) -> None:
+        self.setStyleSheet(
+            f"""
+            QLabel {{
+                background-color: {bg};
+                color: {self._text_color};
+                border-radius: 6px;
+                padding: 8px;
+            }}
+            """
+        )
+
+
 class FailReasonLabel(QLabel):
     """One-line summary of why the last result failed."""
 

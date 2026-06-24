@@ -2,7 +2,7 @@ import numpy as np
 from PyQt5.QtWidgets import QGroupBox, QTabWidget, QVBoxLayout, QWidget
 
 from app.gui.i18n import normalize_language, tr
-from app.gui.widgets import ImageViewer
+from app.gui.widgets import AutoPhaseBanner, ImageViewer
 
 
 class ImagePanel(QGroupBox):
@@ -17,6 +17,12 @@ class ImagePanel(QGroupBox):
         layout = QVBoxLayout()
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
+
+        # Always-visible Auto Mode phase banner (hidden outside Auto Mode).
+        # Sits above the tabs so operators see the phase regardless of which
+        # image tab is currently selected.
+        self.auto_phase_banner = AutoPhaseBanner()
+        layout.addWidget(self.auto_phase_banner)
 
         self.image_tabs = QTabWidget()
         self.image_tabs.setStyleSheet(
