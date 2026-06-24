@@ -535,7 +535,7 @@ class ImageViewer(QLabel):
                 )
                 self.setPixmap(
                     QPixmap.fromImage(qt_image).scaled(
-                        self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                        self.size(), Qt.KeepAspectRatio, Qt.FastTransformation
                     )
                 )
             else:

@@ -89,6 +89,32 @@ output_dir: "./Result"
 # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 # log_level: "INFO"
 
+# Auto-Trigger Configuration
+# Enables hands-free inspection: product placed under camera → auto-detected
+# → stability gate → single inspection → wait for removal → repeat.
+#
+# Set enabled: true and tune the thresholds for your specific product/lighting.
+# roi: [x, y, w, h] — region of interest in pixels; [0,0,0,0] = full frame.
+# appear_frames: consecutive frames with product before advancing to WAIT_STABLE.
+# stable_frames: consecutive low-motion, sharp frames required to trigger.
+# remove_frames: consecutive frames without product before resetting.
+# motion_threshold: ROI absdiff mean < this value = stable (lower = stricter).
+# sharpness_threshold: Laplacian variance > this value = sharp (higher = stricter).
+# product_area_threshold: total Canny contour area > this = product present.
+# inspection_cooldown_ms: minimum ms between successive inspection triggers.
+#
+# auto_trigger:
+#   enabled: false
+#   roi: [0, 0, 0, 0]
+#   frame_buffer_size: 15
+#   appear_frames: 5
+#   stable_frames: 12
+#   remove_frames: 8
+#   motion_threshold: 3.0
+#   sharpness_threshold: 100.0
+#   product_area_threshold: 5000
+#   inspection_cooldown_ms: 500
+
 # Optional per-model color checker overrides.
 # Prefer placing these in models/<product>/<area>/<type>/config.yaml when a
 # threshold/rule applies only to one model bundle.

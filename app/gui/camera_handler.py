@@ -38,7 +38,15 @@ class CameraHandlerMixin:
                     self.use_camera_chk.setChecked(False)
                     self.use_camera_chk.blockSignals(False)
                 self.use_camera_chk.setEnabled(camera_connected and not running)
-            if not camera_connected:
+            # Enable image-file controls when not in camera mode, regardless of
+            # whether a camera is physically connected.  Previously this branch
+            # only ran when the camera was disconnected, leaving pick_image_btn
+            # permanently disabled after the first camera-mode inspection.
+            use_cam_checked = (
+                getattr(self, "use_camera_chk", None) is not None
+                and self.use_camera_chk.isChecked()
+            )
+            if not camera_connected or (not use_cam_checked and not running):
                 if getattr(self, "pick_image_btn", None):
                     self.pick_image_btn.setEnabled(True)
                 if getattr(self, "clear_image_btn", None):

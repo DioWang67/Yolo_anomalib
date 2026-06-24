@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import logging
 import os
@@ -11,6 +12,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import yaml
 
 if TYPE_CHECKING:
     from core.types import DetectionResult
@@ -52,6 +55,10 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from app.gui.auto_inspection_controller import (
+    AutoInspectionController,
+    DEFAULT_AUTO_TRIGGER_CONFIG,
+)
 from app.gui.camera_handler import CameraHandlerMixin
 from app.gui.controller import DetectionController
 from app.gui.i18n import normalize_language, tr
@@ -62,6 +69,7 @@ from app.gui.panels.info_panel import InfoPanel
 from app.gui.preferences import PreferencesManager
 from app.gui.utils import load_image_with_retry
 from app.gui.view_builder import build_menu_bar
+from core.auto_trigger import AutoTriggerConfig
 from core.services.model_catalog import ModelCatalog
 from core.services.model_config_editor import ModelConfigEditError, update_model_config
 
@@ -86,6 +94,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self._single_shot_cancel_event = threading.Event()
         self._shutdown_in_progress = False
         self._stopping_generation: int | None = None
+        self._auto_controller: AutoInspectionController | None = None
         # Models base path and settings
         from core.path_utils import project_root, resolve_path
         self._project_root = project_root()
@@ -134,6 +143,11 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             )
             QShortcut(QKeySequence("Ctrl+O"), self).activated.connect(self.open_config)
             QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_config)
+            # Space / Enter：只在 start_btn 可用時觸發，避免誤觸
+            for key in ("Space", "Return"):
+                QShortcut(QKeySequence(key), self).activated.connect(
+                    self._trigger_start_if_ready
+                )
         except Exception:
             pass
         # Restore window geometry/state
@@ -261,6 +275,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self.image_path_label = self.control_panel.image_path_label
         self.clear_image_btn = self.control_panel.clear_image_btn
         self.show_detection_boxes_chk = self.control_panel.show_detection_boxes_chk
+        self.auto_mode_chk = self.control_panel.auto_mode_chk
 
         self.original_image = self.image_panel.original_image
         self.processed_image = self.image_panel.processed_image
@@ -297,7 +312,11 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         self.control_panel.show_detection_boxes_toggled.connect(
             self._on_show_detection_boxes_toggled
         )
+        self.control_panel.auto_mode_toggled.connect(self._on_auto_mode_toggled)
         self.control_panel.language_changed.connect(self.on_language_changed)
+        self.control_panel.calib_sample_empty_requested.connect(self._on_calib_sample_empty)
+        self.control_panel.calib_sample_product_requested.connect(self._on_calib_sample_product)
+        self.control_panel.calib_apply_requested.connect(self._on_calib_apply)
 
         self.info_panel.session_stats.consecutive_fail_reached.connect(
             self._on_consecutive_fail_alert
@@ -549,6 +568,11 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
 
     # update_camera_controls, handle_reconnect_camera, handle_disconnect_camera
     # → moved to CameraHandlerMixin (app/gui/camera_handler.py)
+
+    def _trigger_start_if_ready(self) -> None:
+        """Space / Enter shortcut: fire start_detection only when the button is active."""
+        if self.start_btn.isEnabled():
+            self.start_detection()
 
     def update_start_enabled(self):
         """根據選擇是否完整，自動啟用/停用開始檢測按鈕"""
@@ -875,11 +899,15 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
 
     @pyqtSlot(object)
     def on_image_ready(self, image: np.ndarray) -> None:
-        """Handle live image frame from worker."""
-        if not (
+        """Handle live image frame from worker or auto-inspection preview."""
+        auto_active = (
+            self._auto_controller is not None and self._auto_controller.is_running()
+        )
+        pipeline_active = (
             self.controller.has_system()
             and self.controller.detection_system.pipeline_running
-        ):
+        )
+        if not (auto_active or pipeline_active):
             return
         if self.image_panel:
             self.image_panel.update_image(image)
@@ -1662,6 +1690,209 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         """Show the about dialog."""
         QMessageBox.about(self, self._t("about_title"), self._t("about_body"))
 
+    # ------------------------------------------------------------------
+    # Auto Mode
+    # ------------------------------------------------------------------
+
+    def _auto_trigger_config_path(self) -> Path | None:
+        """Return models/{product}/{area}/auto_trigger.yaml for the current selection."""
+        product = self.product_combo.currentText().strip()
+        area = self.area_combo.currentText().strip()
+        if not product or not area:
+            return None
+        return Path(self._models_base) / product / area / "auto_trigger.yaml"
+
+    def _build_auto_trigger_config(self) -> AutoTriggerConfig:
+        """Build AutoTriggerConfig with three-layer priority:
+        1. Defaults (DEFAULT_AUTO_TRIGGER_CONFIG)
+        2. Global config.yaml auto_trigger section
+        3. Product/area-level models/{product}/{area}/auto_trigger.yaml  ← highest priority
+        """
+        cfg_dict = dict(DEFAULT_AUTO_TRIGGER_CONFIG)
+        # Layer 2: global config
+        try:
+            if self.controller.has_system():
+                raw = getattr(self.controller.detection_system.config, "auto_trigger", None)
+                if isinstance(raw, dict):
+                    cfg_dict.update(raw)
+        except Exception as exc:
+            self._logger.debug("Could not read global auto_trigger config: %s", exc)
+        # Layer 3: product/area config
+        try:
+            path = self._auto_trigger_config_path()
+            if path and path.exists():
+                with open(path, encoding="utf-8") as f:
+                    product_cfg = yaml.safe_load(f) or {}
+                cfg_dict.update(product_cfg)
+                self._logger.debug("Loaded auto_trigger from %s", path)
+        except Exception as exc:
+            self._logger.debug("Could not read product auto_trigger config: %s", exc)
+        return AutoTriggerConfig.from_dict(cfg_dict)
+
+    def _on_calib_sample_empty(self) -> None:
+        if self._auto_controller is None or not self._auto_controller.is_running():
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(self, self._t("auto_trigger_calib"), self._t("calib_start_auto_first"))
+            return
+        area = self._auto_controller.get_current_contour_area()
+        if area is not None:
+            self.control_panel.set_calib_empty(area)
+
+    def _on_calib_sample_product(self) -> None:
+        if self._auto_controller is None or not self._auto_controller.is_running():
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(self, self._t("auto_trigger_calib"), self._t("calib_start_auto_first"))
+            return
+        area = self._auto_controller.get_current_contour_area()
+        if area is not None:
+            self.control_panel.set_calib_product(area)
+
+    def _on_calib_apply(self, threshold: int) -> None:
+        """Save calibrated threshold to product/area config and restart worker."""
+        from PyQt5.QtWidgets import QMessageBox
+
+        save_path = self._auto_trigger_config_path()
+        if save_path is None:
+            QMessageBox.warning(self, self._t("auto_trigger_calib"), self._t("missing_params"))
+            return
+
+        # Load existing file or start fresh, then update only product_area_threshold
+        existing: dict = {}
+        if save_path.exists():
+            try:
+                with open(save_path, encoding="utf-8") as f:
+                    existing = yaml.safe_load(f) or {}
+            except Exception:
+                pass
+        existing["product_area_threshold"] = threshold
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(save_path, "w", encoding="utf-8") as f:
+            yaml.dump(existing, f, allow_unicode=True, default_flow_style=False)
+
+        # Restart worker so it picks up the newly saved YAML
+        was_running = self._auto_controller is not None and self._auto_controller.is_running()
+        if was_running:
+            self._stop_auto_mode()
+            self._start_auto_mode()
+
+        product = self.product_combo.currentText()
+        area = self.area_combo.currentText()
+        QMessageBox.information(
+            self,
+            self._t("calib_saved_title"),
+            self._t("calib_saved_msg").format(threshold=f"{threshold:,}", product=product, area=area),
+        )
+
+    def _on_auto_mode_toggled(self, enabled: bool) -> None:
+        """Start or stop the auto-inspection controller."""
+        if enabled:
+            self._start_auto_mode()
+        else:
+            self._stop_auto_mode()
+
+    def _start_auto_mode(self) -> None:
+        """Validate prerequisites and start AutoInspectionController."""
+        product = self.product_combo.currentText()
+        area = self.area_combo.currentText()
+        inference_type = self.inference_combo.currentText()
+        if not all([product, area, inference_type]):
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                self._t("missing_params_title"),
+                self._t("missing_params"),
+            )
+            self.auto_mode_chk.blockSignals(True)
+            self.auto_mode_chk.setChecked(False)
+            self.auto_mode_chk.blockSignals(False)
+            return
+
+        if not self.controller.has_system():
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                self,
+                self._t("system_not_ready_title"),
+                self._t("system_not_ready"),
+            )
+            self.auto_mode_chk.blockSignals(True)
+            self.auto_mode_chk.setChecked(False)
+            self.auto_mode_chk.blockSignals(False)
+            return
+
+        if not self.controller.is_camera_connected():
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Auto Mode", self._t("auto_mode_camera_missing"))
+            self.auto_mode_chk.blockSignals(True)
+            self.auto_mode_chk.setChecked(False)
+            self.auto_mode_chk.blockSignals(False)
+            return
+
+        # Stop any running pipeline/single-shot before taking exclusive camera access
+        if self.is_detection_running():
+            self.stop_detection()
+
+        config = self._build_auto_trigger_config()
+        if self._auto_controller is None:
+            self._auto_controller = AutoInspectionController(
+                detection_system=self.controller.detection_system,
+                bridge=self.controller.bridge,
+                config=config,
+                show_debug_overlay=True,
+            )
+            self._auto_controller.auto_state_changed.connect(
+                self._on_auto_state_changed
+            )
+            self._auto_controller.auto_error.connect(self._on_auto_error)
+        else:
+            self._auto_controller.set_config(config)
+
+        ok = self._auto_controller.start(product, area, inference_type)
+        if not ok:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Auto Mode", self._t("auto_mode_start_failed"))
+            self.auto_mode_chk.blockSignals(True)
+            self.auto_mode_chk.setChecked(False)
+            self.auto_mode_chk.blockSignals(False)
+            return
+
+        # Disable button-triggered inspection while auto mode is running
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(False)
+        self.use_camera_chk.setEnabled(False)
+        if getattr(self, "big_status_label", None):
+            self.big_status_label.set_status("AUTO")
+        self.control_panel.set_auto_mode_status("WAIT_EMPTY")
+        self.log_message(
+            f"自動模式已啟動 — {product}/{area}/{inference_type}"
+        )
+
+    def _stop_auto_mode(self) -> None:
+        """Stop the auto-inspection controller and restore UI."""
+        if self._auto_controller is not None:
+            self._auto_controller.stop()
+        self.control_panel.set_auto_mode_status("")
+        self.statusBar().clearMessage()
+        self.start_btn.setEnabled(True)
+        self.use_camera_chk.setEnabled(True)
+        if getattr(self, "big_status_label", None):
+            self.big_status_label.set_status("READY")
+        self.log_message("自動模式已停止")
+        self.update_start_enabled()
+
+    def _on_auto_state_changed(self, state_name: str) -> None:
+        """Update status label when auto-trigger state changes."""
+        self.control_panel.set_auto_mode_status(state_name)
+        self.statusBar().showMessage(f"Auto: {state_name}")
+
+    def _on_auto_error(self, msg: str) -> None:
+        """Handle fatal auto-inspection error (e.g. camera lost)."""
+        self.log_message(f"自動模式錯誤: {msg}")
+        # Turn off auto mode checkbox to avoid a locked-down UI
+        self.auto_mode_chk.blockSignals(True)
+        self.auto_mode_chk.setChecked(False)
+        self.auto_mode_chk.blockSignals(False)
+        self._stop_auto_mode()
+
     def closeEvent(self, event):
         """Close the GUI after persisting preferences."""
         is_pipeline_running = self.is_detection_running()
@@ -1679,6 +1910,8 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
             QApplication.setOverrideCursor(Qt.WaitCursor)
 
         try:
+            if self._auto_controller is not None:
+                self._auto_controller.stop()
             if self.controller.has_system():
                 self.controller.shutdown()
             self.preferences.save_window_state(self.saveGeometry(), self.saveState())

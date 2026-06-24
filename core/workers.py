@@ -415,7 +415,7 @@ class AcquisitionWorker(threading.Thread):
                     product=self.product,
                     area=self.area,
                     inference_type=self.inference_type,
-                    frame=frame,
+                    frame=frame.copy(),
                 )
                 # Put into queue (OverwriteQueue won't block)
                 self.out_queue.put(task)

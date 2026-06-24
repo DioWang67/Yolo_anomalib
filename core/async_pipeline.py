@@ -59,8 +59,38 @@ class AsyncPipelineManager:
 
     @property
     def running(self) -> bool:
-        """Whether the pipeline is currently active."""
-        return self._active and not self._stop_event.is_set()
+        """Whether the pipeline is currently active.
+
+        When ``mode='single'`` workers finish naturally via poison-pill
+        propagation, ``_active`` is never reset automatically. This property
+        detects that case and auto-resets, allowing the next start() call
+        and is_detection_running() to see the correct idle state.
+
+        Uses a non-blocking lock attempt so the UI thread is never frozen
+        while ``stop()`` holds ``_lock`` during a worker.join().
+        """
+        if not self._active or self._stop_event.is_set():
+            return False
+        # Thread.is_alive() is inherently thread-safe — no lock needed for the check.
+        if not self._any_worker_alive():
+            # All workers finished naturally. Try to grab the lock for cleanup,
+            # but if stop() is already in progress (lock busy), skip — stop()
+            # will do its own cleanup.
+            acquired = self._lock.acquire(blocking=False)
+            if acquired:
+                try:
+                    if self._active and not self._any_worker_alive():
+                        logger.info(
+                            "All pipeline workers finished naturally; "
+                            "resetting active state"
+                        )
+                        self._active = False
+                        self._clear_worker_refs_locked()
+                finally:
+                    self._lock.release()
+            # Whether or not we got the lock, workers are dead → not running.
+            return False
+        return True
 
     def start(
         self,
