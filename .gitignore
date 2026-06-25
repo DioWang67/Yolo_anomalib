@@ -110,6 +110,10 @@ models_backup/
 # Local model bundles/backups and generated PyInstaller specs.
 *.zip
 *.spec
+# Exception: this spec is the hand-maintained, path-independent build source of
+# truth (resolves paths via SPECPATH), tracked on purpose. build_exe.bat builds
+# from it rather than regenerating it.
+!yolo11_inference.spec
 build_log.txt
 *.bak.*
 models/*_backup/
