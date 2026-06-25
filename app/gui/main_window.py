@@ -61,8 +61,8 @@ from app.gui.auto_inspection_controller import (
 )
 from app.gui.camera_handler import CameraHandlerMixin
 from app.gui.controller import DetectionController
-from app.gui.i18n import normalize_language, tr
 from app.gui.light_handler import LightHandlerMixin
+from app.gui.i18n import normalize_language, tr
 from app.gui.model_config_dialog import ModelConfigDialog
 from app.gui.panels.control_panel import ControlPanel
 from app.gui.panels.image_panel import ImagePanel
@@ -559,6 +559,8 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
         """Return True if a detection worker is running."""
         if self._single_shot_running or self._shutdown_in_progress:
             return True
+        if self._auto_controller is not None and self._auto_controller.is_running():
+            return True
         if self.worker and self.worker.isRunning():
             return True
         if self.controller.has_system():
@@ -722,6 +724,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
 
     def stop_detection(self):
         """優雅停止管線 (非阻塞)"""
+        if self._auto_controller is not None and self._auto_controller.is_running():
+            self._stop_auto_mode()
+            return
         if not self.controller.has_system():
             return
 
@@ -1322,6 +1327,11 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
         product = self.product_combo.currentText()
         area = self.area_combo.currentText()
         inference_type = self.inference_combo.currentText()
+        # Auto Mode armed: Start launches the auto-inspection loop instead of a
+        # single manual inspection.
+        if self.auto_mode_chk.isChecked():
+            self._start_auto_mode()
+            return
         if not all([product, area, inference_type]):
             QMessageBox.warning(
                 self,
@@ -1743,11 +1753,24 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
         )
 
     def _on_auto_mode_toggled(self, enabled: bool) -> None:
-        """Start or stop the auto-inspection controller."""
+        """Arm or disarm Auto Mode.
+
+        Checking the box only *selects* the mode; the auto-inspection loop is
+        started when the operator presses Start (see ``start_detection``).
+        Unchecking stops a running loop and disarms.
+        """
         if enabled:
-            self._start_auto_mode()
+            # Arm only. Stop any manual inspection so Start is free for Auto.
+            if self.is_detection_running():
+                self.stop_detection()
+            self.log_message(self._t("auto_armed"))
+            self.statusBar().showMessage(self._t("auto_armed"), 4000)
+            self.update_start_enabled()
         else:
-            self._stop_auto_mode()
+            if self._auto_controller is not None and self._auto_controller.is_running():
+                self._stop_auto_mode()
+            else:
+                self.update_start_enabled()
 
     def _start_auto_mode(self) -> None:
         """Validate prerequisites and start AutoInspectionController."""
@@ -1814,9 +1837,9 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
             self.auto_mode_chk.blockSignals(False)
             return
 
-        # Disable button-triggered inspection while auto mode is running
+        # While Auto runs: Start is locked, Stop ends the loop.
         self.start_btn.setEnabled(False)
-        self.stop_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
         self.use_camera_chk.setEnabled(False)
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("AUTO")
@@ -1834,6 +1857,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
         self.image_panel.auto_phase_banner.deactivate()
         self.statusBar().clearMessage()
         self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
         self.use_camera_chk.setEnabled(True)
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("READY")
