@@ -207,6 +207,25 @@ def build_menu_bar(gui: DetectionSystemGUI) -> QMenuBar:
     )
     view_menu.addAction(reset_stats_action)
 
+    lighting_menu = menubar.addMenu(tr(language, "lighting_menu"))
+    light_on_action = QAction(tr(language, "light_on"), gui)
+    light_on_action.triggered.connect(gui._light_turn_on)
+    lighting_menu.addAction(light_on_action)
+
+    light_off_action = QAction(tr(language, "light_off"), gui)
+    light_off_action.triggered.connect(gui._light_turn_off)
+    lighting_menu.addAction(light_off_action)
+
+    brightness_action = QAction(tr(language, "light_brightness"), gui)
+    brightness_action.triggered.connect(gui._light_open_brightness_dialog)
+    lighting_menu.addAction(brightness_action)
+
+    lighting_menu.addSeparator()
+
+    # Dynamic submenu: repopulated with live COM ports each time it opens.
+    port_menu = lighting_menu.addMenu(tr(language, "light_port"))
+    port_menu.aboutToShow.connect(lambda: gui.populate_light_port_menu(port_menu))
+
     help_menu = menubar.addMenu(tr(language, "help_menu"))
     about_action = QAction(tr(language, "about"), gui)
     about_action.triggered.connect(gui.show_about)

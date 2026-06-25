@@ -62,6 +62,7 @@ from app.gui.auto_inspection_controller import (
 from app.gui.camera_handler import CameraHandlerMixin
 from app.gui.controller import DetectionController
 from app.gui.i18n import normalize_language, tr
+from app.gui.light_handler import LightHandlerMixin
 from app.gui.model_config_dialog import ModelConfigDialog
 from app.gui.panels.control_panel import ControlPanel
 from app.gui.panels.image_panel import ImagePanel
@@ -74,10 +75,11 @@ from core.services.model_catalog import ModelCatalog
 from core.services.model_config_editor import ModelConfigEditError, update_model_config
 
 
-class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
+class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
     def __init__(self):
         super().__init__()
         self.detection_system = None
+        self._light_controller = None
         self.worker = None
         self.available_products = []
         self.available_areas = {}
@@ -1872,6 +1874,7 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin):
         try:
             if self._auto_controller is not None:
                 self._auto_controller.stop()
+            self.shutdown_light()
             if self.controller.has_system():
                 self.controller.shutdown()
             self.preferences.save_window_state(self.saveGeometry(), self.saveState())

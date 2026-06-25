@@ -52,3 +52,23 @@ class PreferencesManager:
     def save_language(self, language: str) -> None:
         """Persist the GUI language code."""
         self._settings.setValue("language", language if language in {"en", "zh"} else "en")
+
+    def restore_light_port(self) -> str:
+        """Return the last serial port used for the LED light ('' if none)."""
+        return str(self._settings.value("light_port", ""))
+
+    def save_light_port(self, port: str) -> None:
+        """Persist the serial port used for the LED light."""
+        self._settings.setValue("light_port", port or "")
+
+    def restore_light_brightness(self) -> int:
+        """Return the persisted LED brightness percentage (0..100, default 100)."""
+        try:
+            value = int(self._settings.value("light_brightness", 100))
+        except (TypeError, ValueError):
+            return 100
+        return max(0, min(100, value))
+
+    def save_light_brightness(self, percent: int) -> None:
+        """Persist the LED brightness percentage (0..100)."""
+        self._settings.setValue("light_brightness", max(0, min(100, int(percent))))
