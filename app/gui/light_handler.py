@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -20,6 +20,8 @@ from core.services.light_controller import (
     available_ports,
     serial_backend_available,
 )
+
+LIGHT_KEEPALIVE_INTERVAL_MS = 30_000
 
 
 def _percent_to_value(percent: int, max_value: int) -> int:
@@ -185,8 +187,10 @@ class LightHandlerMixin:
         try:
             controller.set_brightness(value)
         except LightControlError as exc:
+            self._stop_light_keepalive()
             self._report_light_error(exc)
             return
+        self._start_light_keepalive(value)
         self.log_message(self._t("light_status_on", percent=percent))
         self.statusBar().showMessage(self._t("light_status_on", percent=percent), 3000)
 
@@ -197,8 +201,10 @@ class LightHandlerMixin:
         try:
             controller.turn_off()
         except LightControlError as exc:
+            self._stop_light_keepalive()
             self._report_light_error(exc)
             return
+        self._stop_light_keepalive()
         self.log_message(self._t("light_status_off"))
         self.statusBar().showMessage(self._t("light_status_off"), 3000)
 
@@ -222,6 +228,11 @@ class LightHandlerMixin:
 
         final_percent = dialog.value()
         self.preferences.save_light_brightness(final_percent)
+        final_value = _percent_to_value(final_percent, controller.max_value)
+        if final_value > 0:
+            self._start_light_keepalive(final_value)
+        else:
+            self._stop_light_keepalive()
         self.log_message(self._t("light_brightness_set", percent=final_percent))
 
     def populate_light_port_menu(self, menu) -> None:
@@ -270,8 +281,44 @@ class LightHandlerMixin:
             self._t("light_send_failed", error=exc),
         )
 
+    def _start_light_keepalive(self, brightness_value: int) -> None:
+        """Keep controllers with idle watchdogs alive while the light is on."""
+        if brightness_value <= 0:
+            self._stop_light_keepalive()
+            return
+        self._light_keepalive_value = brightness_value
+        timer = getattr(self, "_light_keepalive_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setInterval(LIGHT_KEEPALIVE_INTERVAL_MS)
+            timer.timeout.connect(self._send_light_keepalive)
+            self._light_keepalive_timer = timer
+        if not timer.isActive():
+            timer.start()
+
+    def _stop_light_keepalive(self) -> None:
+        """Stop periodic light refresh commands."""
+        timer = getattr(self, "_light_keepalive_timer", None)
+        if timer is not None:
+            timer.stop()
+        self._light_keepalive_value = 0
+
+    def _send_light_keepalive(self) -> None:
+        """Refresh the current brightness without showing modal errors."""
+        value = int(getattr(self, "_light_keepalive_value", 0) or 0)
+        if value <= 0:
+            self._stop_light_keepalive()
+            return
+        controller = self._ensure_light_controller()
+        try:
+            controller.set_brightness(value)
+        except LightControlError as exc:
+            self._stop_light_keepalive()
+            self.log_message(self._t("light_send_failed", error=exc))
+
     def shutdown_light(self) -> None:
         """Close the serial port during application shutdown (best effort)."""
+        self._stop_light_keepalive()
         controller = getattr(self, "_light_controller", None)
         if controller is not None:
             controller.close()

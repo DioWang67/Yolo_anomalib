@@ -21,10 +21,18 @@ class FakeSerial:
         self.is_open = True
         self.writes: list[bytes] = []
         self.closed = False
+        self.fail_writes = 0
+        self.partial_write_bytes: int | None = None
 
     def write(self, data: bytes) -> int:
+        if self.fail_writes > 0:
+            self.fail_writes -= 1
+            raise OSError("device disconnected")
         if not self.is_open:
             raise OSError("port closed")
+        if self.partial_write_bytes is not None:
+            self.writes.append(bytes(data[: self.partial_write_bytes]))
+            return self.partial_write_bytes
         self.writes.append(bytes(data))
         return len(data)
 
@@ -101,13 +109,74 @@ def test_open_failure_wraps_error_and_stays_closed():
     assert controller.port is None
 
 
-def test_write_failure_raises_light_control_error():
+def test_closed_port_write_reopens_port_and_recovers():
     record: list[FakeSerial] = []
     controller = _make(record)
     controller.open("COM3")
     record[0].is_open = False  # simulate cable yanked
-    with pytest.raises(LightControlError):
+
+    controller.turn_on()
+
+    assert len(record) == 2
+    assert record[0].closed is True
+    assert record[1].writes == [controller.build_frame(255)]
+
+
+def test_write_failure_reopens_port_and_retries_once():
+    record: list[FakeSerial] = []
+    controller = _make(record)
+    controller.open("COM3")
+    record[0].fail_writes = 1
+
+    controller.turn_on()
+
+    assert len(record) == 2
+    assert record[0].closed is True
+    assert record[1].port == "COM3"
+    assert record[1].writes == [controller.build_frame(255)]
+    assert controller.is_open is True
+    assert controller.port == "COM3"
+
+
+def test_write_failure_after_reopen_closes_stale_port():
+    record: list[FakeSerial] = []
+
+    def factory(port: str, baudrate: int, timeout: float) -> FakeSerial:
+        fake = FakeSerial(port, baudrate, timeout)
+        fake.fail_writes = 1
+        record.append(fake)
+        return fake
+
+    controller = LightController(serial_factory=factory)
+    controller.open("COM3")
+
+    with pytest.raises(LightControlError, match="reconnect/write failed"):
         controller.turn_on()
+
+    assert len(record) == 2
+    assert record[0].closed is True
+    assert record[1].closed is True
+    assert controller.is_open is False
+    assert controller.port is None
+
+
+def test_partial_write_is_reported_as_failure():
+    record: list[FakeSerial] = []
+
+    def factory(port: str, baudrate: int, timeout: float) -> FakeSerial:
+        fake = FakeSerial(port, baudrate, timeout)
+        fake.partial_write_bytes = 3
+        record.append(fake)
+        return fake
+
+    controller = LightController(serial_factory=factory)
+    controller.open("COM3")
+
+    with pytest.raises(LightControlError, match="reconnect/write failed"):
+        controller.turn_on()
+
+    assert len(record) == 2
+    assert controller.is_open is False
 
 
 def test_close_is_idempotent():

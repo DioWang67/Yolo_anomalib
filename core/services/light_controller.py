@@ -197,12 +197,52 @@ class LightController:
         with self._lock:
             if self._serial is None:
                 raise LightControlError("Light port is not connected.")
+            port = self._port
             try:
-                self._serial.write(frame)
-            except Exception as exc:
-                raise LightControlError(f"Failed to send light command: {exc}") from exc
+                self._write_frame_locked(frame)
+            except LightControlError as first_exc:
+                if not port:
+                    self._close_locked()
+                    raise first_exc
+                self._logger.warning(
+                    "Light write failed on %s; reopening serial port once: %s",
+                    port,
+                    first_exc,
+                )
+                try:
+                    self._reopen_locked(port)
+                    self._write_frame_locked(frame)
+                except Exception as retry_exc:
+                    self._close_locked()
+                    raise LightControlError(
+                        f"Light connection lost on {port}; reconnect/write failed: {retry_exc}"
+                    ) from retry_exc
             self._last_brightness = clamped
         self._logger.debug("Light brightness set to %d", clamped)
+
+    def _write_frame_locked(self, frame: bytes) -> None:
+        """Write one command frame. Caller must hold ``self._lock``."""
+        if self._serial is None:
+            raise LightControlError("Light port is not connected.")
+        try:
+            written = self._serial.write(frame)
+        except Exception as exc:
+            raise LightControlError(f"Failed to send light command: {exc}") from exc
+        if written is not None and written != len(frame):
+            raise LightControlError(
+                f"Failed to send complete light command: wrote {written}/{len(frame)} bytes."
+            )
+
+    def _reopen_locked(self, port: str) -> None:
+        """Replace the serial handle for *port*. Caller must hold ``self._lock``."""
+        self._close_locked()
+        try:
+            self._serial = self._serial_factory(port, self._baudrate, self._write_timeout)
+        except Exception as exc:
+            self._serial = None
+            self._port = None
+            raise LightControlError(f"Failed to reopen {port}: {exc}") from exc
+        self._port = port
 
     def turn_on(self) -> None:
         """Turn the light on at full brightness."""
