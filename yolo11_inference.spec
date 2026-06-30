@@ -21,7 +21,7 @@ if os.path.isdir(timm_cache_dir):
     datas.append((timm_cache_dir, 'timm_cache'))
 
 binaries = []
-hiddenimports = ['torch', 'torch.nn.functional', 'torchvision', 'cv2', 'numpy', 'scipy', 'scipy.special._ufuncs', 'PIL', 'kornia', 'anomalib', 'lightning', 'ultralytics', 'onnx', 'onnxruntime', 'onnxruntime.capi.onnxruntime_pybind11_state', 'pandas', 'openpyxl', 'openpyxl.cell._writer', 'yaml', 'pydantic', 'tqdm', 'timm', 'einops', 'FrEIA', 'imgaug', 'PyQt5', 'PyQt5.sip', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'pkg_resources', 'importlib.metadata', 'jsonargparse']
+hiddenimports = ['torch', 'torch.nn.functional', 'torchvision', 'cv2', 'numpy', 'scipy', 'scipy.special._ufuncs', 'PIL', 'kornia', 'anomalib', 'lightning', 'ultralytics', 'onnx', 'onnxruntime', 'onnxruntime.capi.onnxruntime_pybind11_state', 'pandas', 'openpyxl', 'openpyxl.cell._writer', 'yaml', 'pydantic', 'tqdm', 'timm', 'einops', 'FrEIA', 'imgaug', 'serial', 'serial.tools', 'serial.tools.list_ports', 'PyQt5', 'PyQt5.sip', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'pkg_resources', 'importlib.metadata', 'jsonargparse']
 datas += collect_data_files('anomalib')
 datas += collect_data_files('open_clip')
 datas += collect_data_files('ultralytics')
