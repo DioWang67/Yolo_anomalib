@@ -91,6 +91,8 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
         self.disconnect_camera_btn = None
         self.model_version_label = None  # Status bar version display
         self.show_detection_boxes_chk = None
+        self.show_original_tab_chk = None
+        self.show_processed_tab_chk = None
         self._run_generation = 0
         self._single_shot_running = False
         self._single_shot_cancel_event = threading.Event()
@@ -277,6 +279,8 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
         self.image_path_label = self.control_panel.image_path_label
         self.clear_image_btn = self.control_panel.clear_image_btn
         self.show_detection_boxes_chk = self.control_panel.show_detection_boxes_chk
+        self.show_original_tab_chk = self.control_panel.show_original_tab_chk
+        self.show_processed_tab_chk = self.control_panel.show_processed_tab_chk
         self.auto_mode_chk = self.control_panel.auto_mode_chk
 
         self.original_image = self.image_panel.original_image
@@ -314,6 +318,12 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
         self.control_panel.show_detection_boxes_toggled.connect(
             self._on_show_detection_boxes_toggled
         )
+        self.control_panel.show_original_tab_toggled.connect(
+            self._on_image_tab_visibility_toggled
+        )
+        self.control_panel.show_processed_tab_toggled.connect(
+            self._on_image_tab_visibility_toggled
+        )
         self.control_panel.auto_mode_toggled.connect(self._on_auto_mode_toggled)
         self.control_panel.language_changed.connect(self.on_language_changed)
         self.control_panel.calib_sample_empty_requested.connect(self._on_calib_sample_empty)
@@ -349,6 +359,13 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
         self.show_detection_boxes_chk.setChecked(
             self.preferences.restore_show_detection_boxes()
         )
+        self.show_original_tab_chk.setChecked(
+            self.preferences.restore_show_original_tab()
+        )
+        self.show_processed_tab_chk.setChecked(
+            self.preferences.restore_show_processed_tab()
+        )
+        self._apply_image_tab_visibility()
 
     def apply_language(self, language: str) -> None:
         """Apply the selected language to operator-facing GUI text."""
@@ -926,6 +943,30 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
         if self.current_result is not None:
             self._refresh_result_image()
 
+    @pyqtSlot(bool)
+    def _on_image_tab_visibility_toggled(self, _checked: bool) -> None:
+        """Persist and apply original/processed image tab visibility."""
+        self._apply_image_tab_visibility()
+
+    def _apply_image_tab_visibility(self) -> None:
+        """Apply image-viewer tab visibility from engineer settings."""
+        show_original = (
+            self.show_original_tab_chk.isChecked()
+            if self.show_original_tab_chk is not None
+            else True
+        )
+        show_processed = (
+            self.show_processed_tab_chk.isChecked()
+            if self.show_processed_tab_chk is not None
+            else True
+        )
+        self.preferences.save_show_original_tab(show_original)
+        self.preferences.save_show_processed_tab(show_processed)
+        self.image_panel.set_optional_tabs_visible(
+            show_original=show_original,
+            show_processed=show_processed,
+        )
+
     def _refresh_result_image(self) -> None:
         """Render the result tab using either annotated or clean imagery."""
         result = self.current_result
@@ -1214,6 +1255,12 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
             )
             self.preferences.save_show_detection_boxes(
                 self.show_detection_boxes_chk.isChecked()
+            )
+            self.preferences.save_show_original_tab(
+                self.show_original_tab_chk.isChecked()
+            )
+            self.preferences.save_show_processed_tab(
+                self.show_processed_tab_chk.isChecked()
             )
         except Exception as e:
             self._logger.error(f"Shutdown error: {e}")
@@ -1909,6 +1956,12 @@ class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
             )
             self.preferences.save_show_detection_boxes(
                 self.show_detection_boxes_chk.isChecked()
+            )
+            self.preferences.save_show_original_tab(
+                self.show_original_tab_chk.isChecked()
+            )
+            self.preferences.save_show_processed_tab(
+                self.show_processed_tab_chk.isChecked()
             )
         except Exception as exc:
             self._logger.error(f"Shutdown error: {exc}")

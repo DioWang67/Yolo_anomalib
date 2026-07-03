@@ -157,6 +157,8 @@ class ControlPanel(QGroupBox):
     pick_image_requested = pyqtSignal()
     clear_image_requested = pyqtSignal()
     show_detection_boxes_toggled = pyqtSignal(bool)
+    show_original_tab_toggled = pyqtSignal(bool)
+    show_processed_tab_toggled = pyqtSignal(bool)
     calib_sample_empty_requested = pyqtSignal()
     calib_sample_product_requested = pyqtSignal()
     calib_apply_requested = pyqtSignal(int)  # new threshold value
@@ -395,6 +397,18 @@ class ControlPanel(QGroupBox):
         self.show_detection_boxes_chk.toggled.connect(self.show_detection_boxes_toggled.emit)
         debug_layout.addWidget(self.show_detection_boxes_chk)
 
+        self.show_original_tab_chk = QCheckBox("Show original tab")
+        self.show_original_tab_chk.setChecked(True)
+        self.show_original_tab_chk.setToolTip("Show or hide the original image tab")
+        self.show_original_tab_chk.toggled.connect(self.show_original_tab_toggled.emit)
+        debug_layout.addWidget(self.show_original_tab_chk)
+
+        self.show_processed_tab_chk = QCheckBox("Show processed tab")
+        self.show_processed_tab_chk.setChecked(True)
+        self.show_processed_tab_chk.setToolTip("Show or hide the processed image tab")
+        self.show_processed_tab_chk.toggled.connect(self.show_processed_tab_toggled.emit)
+        debug_layout.addWidget(self.show_processed_tab_chk)
+
         debug_group.setLayout(debug_layout)
         eng_layout.addWidget(debug_group)
 
@@ -616,6 +630,8 @@ class ControlPanel(QGroupBox):
         self.debug_group.setTitle(tr(self._language, "debug_config_group"))
         self.edit_model_config_btn.setText(tr(self._language, "edit_model_config"))
         self.show_detection_boxes_chk.setText(tr(self._language, "show_detection_boxes"))
+        self.show_original_tab_chk.setText(tr(self._language, "show_original_tab"))
+        self.show_processed_tab_chk.setText(tr(self._language, "show_processed_tab"))
         self.output_path_label.setText(
             f"{tr(self._language, 'output')}: {self._output_path}"
         )

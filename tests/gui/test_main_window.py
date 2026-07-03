@@ -4,6 +4,7 @@ pytest.importorskip("PyQt5", reason="PyQt5 is required for GUI tests")
 pytest.importorskip("pytestqt", reason="pytest-qt is required for GUI tests")
 pytestmark = pytest.mark.gui
 
+from app.gui.i18n import tr
 from app.gui.main_window import DetectionSystemGUI
 from core.types import DetectionResult
 
@@ -19,7 +20,7 @@ def gui(qtbot):
 
 def test_window_title(gui):
     """Verify window title indicates correct system."""
-    assert "AI 檢測系統" in gui.windowTitle()
+    assert gui.windowTitle() == tr(gui.current_language, "window_title")
 
 def test_panels_present(gui):
     """Verify all major panels are instantiated."""
@@ -33,6 +34,8 @@ def test_initial_state(gui):
     assert gui.stop_btn.isEnabled() is False
     assert gui.save_btn.isEnabled() is False
     assert gui.show_detection_boxes_chk is not None
+    assert gui.show_original_tab_chk is not None
+    assert gui.show_processed_tab_chk is not None
 
 def test_model_loading_async(gui, qtbot):
     """Verify that model loading triggers signals and updates combos."""
@@ -87,3 +90,27 @@ def test_result_image_uses_preprocessed_path_when_boxes_hidden(gui, monkeypatch)
     gui.show_detection_boxes_chk.setChecked(False)
 
     assert calls[-1] == "processed.jpg"
+
+
+def test_engineer_image_tab_toggles_hide_optional_tabs(gui):
+    """Engineer settings should control original/processed tab visibility."""
+    gui.show_original_tab_chk.setChecked(True)
+    gui.show_processed_tab_chk.setChecked(True)
+
+    assert gui.image_panel.image_tabs.indexOf(gui.original_image) >= 0
+    assert gui.image_panel.image_tabs.indexOf(gui.processed_image) >= 0
+    assert gui.image_panel.image_tabs.indexOf(gui.result_image) >= 0
+
+    gui.show_original_tab_chk.setChecked(False)
+    assert gui.image_panel.image_tabs.indexOf(gui.original_image) == -1
+    assert gui.image_panel.image_tabs.indexOf(gui.processed_image) >= 0
+    assert gui.image_panel.image_tabs.indexOf(gui.result_image) >= 0
+
+    gui.show_processed_tab_chk.setChecked(False)
+    assert gui.image_panel.image_tabs.indexOf(gui.original_image) == -1
+    assert gui.image_panel.image_tabs.indexOf(gui.processed_image) == -1
+    assert gui.image_panel.image_tabs.indexOf(gui.result_image) >= 0
+    assert gui.image_panel.image_tabs.count() == 1
+
+    gui.show_original_tab_chk.setChecked(True)
+    gui.show_processed_tab_chk.setChecked(True)
