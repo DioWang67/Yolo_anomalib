@@ -176,6 +176,80 @@ def update_model_config(
     return save_model_config(config_path, data)
 
 
+def save_calibration_settings(
+    config_path: Path,
+    *,
+    exposure_time: float | None = None,
+    gain: float | None = None,
+    light_brightness: int | None = None,
+    target_luma: float | None = None,
+    tolerance: float | None = None,
+    roi: tuple[int, int, int, int] | None = None,
+) -> ModelConfigEditResult:
+    """Persist camera/light values and a brightness calibration target.
+
+    Writes ``exposure_time``/``gain`` (as strings, matching the camera config
+    convention), ``light_brightness`` (0..100 percent), and a nested
+    ``calibration`` block that ``AutoCalibrator`` consumes. Only supplied
+    fields are updated; ``None`` leaves the existing value untouched. A ``.bak``
+    backup is created by :func:`save_model_config`.
+
+    Args:
+        config_path: Existing model config path.
+        exposure_time: Camera exposure in device units (microseconds).
+        gain: Camera gain.
+        light_brightness: LED brightness percent (0..100).
+        target_luma: Recorded target mean luma (0..255).
+        tolerance: Acceptance half-band in luma units.
+        roi: Optional ``(x1, y1, x2, y2)`` pixel box for the target.
+
+    Returns:
+        Save result including the backup path.
+
+    Raises:
+        ModelConfigEditError: If a value is out of its valid range.
+    """
+    data = load_model_config(config_path)
+
+    if exposure_time is not None:
+        value = float(exposure_time)
+        if value <= 0:
+            raise ModelConfigEditError("exposure_time 必須大於 0")
+        data["exposure_time"] = f"{value:.4f}"
+    if gain is not None:
+        value = float(gain)
+        if value < 0:
+            raise ModelConfigEditError("gain 不可小於 0")
+        data["gain"] = f"{value:.1f}"
+    if light_brightness is not None:
+        percent = int(light_brightness)
+        if not 0 <= percent <= 100:
+            raise ModelConfigEditError("light_brightness 必須介於 0 到 100")
+        data["light_brightness"] = percent
+
+    calibration = data.get("calibration")
+    if not isinstance(calibration, dict):
+        calibration = {}
+    if target_luma is not None:
+        luma = float(target_luma)
+        if not 0.0 <= luma <= 255.0:
+            raise ModelConfigEditError("target_luma 必須介於 0 到 255")
+        calibration["target_luma"] = luma
+    if tolerance is not None:
+        tol = float(tolerance)
+        if tol <= 0:
+            raise ModelConfigEditError("tolerance 必須大於 0")
+        calibration["tolerance"] = tol
+    if roi is not None:
+        if len(roi) != 4:
+            raise ModelConfigEditError("roi 必須是 (x1, y1, x2, y2)")
+        calibration["roi"] = [int(v) for v in roi]
+    if calibration:
+        data["calibration"] = calibration
+
+    return save_model_config(config_path, data)
+
+
 def _sanitize_changes(changes: dict[str, Any]) -> dict[str, Any]:
     """Validate and normalize editable config values."""
     output: dict[str, Any] = {}

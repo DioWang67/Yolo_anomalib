@@ -135,3 +135,78 @@ def test_update_model_config_rejects_invalid_position_unit(tmp_path):
             product="PCBA1",
             area="A",
         )
+
+
+def test_save_calibration_settings_writes_camera_and_target(tmp_path):
+    from core.services.model_config_editor import save_calibration_settings
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"weights": "best.onnx"}, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = save_calibration_settings(
+        config_path,
+        exposure_time=51170.0,
+        gain=23.0,
+        light_brightness=80,
+        target_luma=138.5,
+        tolerance=3.0,
+        roi=(10, 20, 300, 400),
+    )
+
+    saved = load_model_config(config_path)
+    assert saved["exposure_time"] == "51170.0000"
+    assert saved["gain"] == "23.0"
+    assert saved["light_brightness"] == 80
+    assert saved["calibration"] == {
+        "target_luma": 138.5,
+        "tolerance": 3.0,
+        "roi": [10, 20, 300, 400],
+    }
+    assert saved["weights"] == "best.onnx"  # untouched
+    assert result.backup_path.exists()
+
+
+def test_save_calibration_settings_partial_update_preserves_existing(tmp_path):
+    from core.services.model_config_editor import save_calibration_settings
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "exposure_time": "1000.0000",
+                "gain": "5.0",
+                "calibration": {"target_luma": 100.0, "tolerance": 4.0},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    # Only update exposure and the target luma; gain + tolerance must remain.
+    save_calibration_settings(config_path, exposure_time=2000.0, target_luma=150.0)
+
+    saved = load_model_config(config_path)
+    assert saved["exposure_time"] == "2000.0000"
+    assert saved["gain"] == "5.0"
+    assert saved["calibration"]["target_luma"] == 150.0
+    assert saved["calibration"]["tolerance"] == 4.0
+
+
+def test_save_calibration_settings_rejects_out_of_range(tmp_path):
+    from core.services.model_config_editor import (
+        ModelConfigEditError,
+        save_calibration_settings,
+    )
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("weights: best.onnx\n", encoding="utf-8")
+
+    with pytest.raises(ModelConfigEditError):
+        save_calibration_settings(config_path, light_brightness=150)
+    with pytest.raises(ModelConfigEditError):
+        save_calibration_settings(config_path, target_luma=300.0)
+    with pytest.raises(ModelConfigEditError):
+        save_calibration_settings(config_path, exposure_time=-1.0)

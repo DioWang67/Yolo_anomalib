@@ -138,6 +138,10 @@ class DetectionConfig:
     timeout: int = 2
     exposure_time: str = "1000"
     gain: str = "1.0"
+    # LED brightness percent (0..100) recorded with the model; applied on load.
+    light_brightness: int | None = None
+    # Brightness auto-calibration target: {target_luma, tolerance, roi}.
+    calibration: dict[str, Any] | None = None
     width: int = 3072
     height: int = 2048
     MV_CC_GetImageBuffer_nMsec: int = 10000
@@ -283,6 +287,8 @@ class DetectionConfig:
             "timeout": int(normalized.get("timeout", 2)),
             "exposure_time": str(normalized.get("exposure_time", "1000")),
             "gain": str(normalized.get("gain", "1.0")),
+            "light_brightness": normalized.get("light_brightness"),
+            "calibration": normalized.get("calibration"),
             "width": int(normalized.get("width", 3072)),
             "height": int(normalized.get("height", 2048)),
             "MV_CC_GetImageBuffer_nMsec": int(
