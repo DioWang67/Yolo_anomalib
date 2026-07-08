@@ -18,6 +18,17 @@ exposure_time: "51170.0000"
 # Typical range: 0-24, higher values increase brightness but may introduce noise
 gain: "23.0"
 
+# Illumination auto-calibration (set via GUI: Lighting -> Illumination
+# Calibration). Recorded per model bundle so exposure/gain follow the model.
+# light_brightness is the recorded LED brightness percent (0..100); it is saved
+# for reproducibility and applied during calibration. exposure_time/gain above
+# are re-applied to the camera automatically on model switch.
+# light_brightness: 80
+# calibration:
+#   target_luma: 138.5   # desired mean image brightness (0..255)
+#   tolerance: 3.0       # acceptance half-band in luma units
+#   roi: [10, 20, 300, 400]  # optional pixel box the target is measured over
+
 # Camera image acquisition timeout in milliseconds
 MV_CC_GetImageBuffer_nMsec: 10000
 
