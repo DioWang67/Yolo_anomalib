@@ -16,6 +16,7 @@ utf8 <file>` if Chinese text appears garbled.
 | Prepare a PCBA pilot | `docs/PCBA_PILOT_RUNBOOK.md` | `docs/PRODUCTION_GO_LIVE_CHECKLIST.md` |
 | Operator command reference | `docs/PCBA_OPERATOR_COMMANDS.md` | `docs/PCBA_PILOT_ACCEPTANCE_TEMPLATE.md` |
 | Release or roll back runtime/model/config | `docs/RELEASE_ROLLBACK_SOP.md` | `docs/MODEL_VERSION_GUIDE.md` |
+| Handle a false FAIL / escaped defect on the line | `docs/MISJUDGE_TRIAGE_SOP.md` | `tools/collect_review_cases.py` |
 | Diagnose camera runtime issues | `docs/CAMERA_RUNTIME_DIAGNOSTICS.md` | `tools/diagnostics/diagnose_camera.bat` |
 | Benchmark exported runtime artifacts | `docs/FIRMWARE_RUNTIME_PLAN.md` | `tools/runtime_benchmark.py` |
 | Review security constraints | `docs/SECURITY.md` | `tests/test_security.py` |
@@ -60,6 +61,8 @@ utf8 <file>` if Chinese text appears garbled.
   inspection PC.
 - `docs/RELEASE_ROLLBACK_SOP.md`: release bundle, model/config promotion, and
   rollback procedure.
+- `docs/MISJUDGE_TRIAGE_SOP.md`: false-FAIL / escaped-defect triage flow,
+  fail-reason codes, image retention policy, and threshold change control.
 - `docs/CAMERA_RUNTIME_DIAGNOSTICS.md`: packaged Hikrobot runtime checks and
   on-site camera diagnostics.
 - `docs/FIRMWARE_RUNTIME_PLAN.md`: runtime artifact split and benchmark criteria
