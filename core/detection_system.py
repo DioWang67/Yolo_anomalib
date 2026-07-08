@@ -73,6 +73,9 @@ class DetectionSystem:
         self.config = copy.deepcopy(self._base_config)
 
         self.camera: CameraController | None = None
+        # Last (exposure, gain) pushed to the camera, so per-model settings are
+        # only re-applied on change (never on the per-frame hot path).
+        self._applied_camera_settings: tuple[str, str] | None = None
         self.result_sink: ExcelImageResultSink | None = None
         self._sink_base_dir: Path | None = None
         self._refresh_result_sink()
@@ -350,6 +353,33 @@ class DetectionSystem:
             self.inference_engine = engine
             self.current_inference_type = inference_type.lower()
         self._refresh_result_sink()
+        self._apply_camera_settings_from_config()
+
+    def _apply_camera_settings_from_config(self) -> None:
+        """Push the active config's exposure/gain to the camera when changed.
+
+        Models calibrated via the calibration dialog carry their own
+        ``exposure_time``/``gain``; models without those keys keep the
+        currently-set (global) values. Change-detection guarantees this never
+        touches hardware unless a value actually differs, so it is safe on the
+        model-switch path that runs before every inspection.
+        """
+        camera = self.camera
+        if camera is None or not getattr(camera, "is_initialized", False):
+            return
+        exposure = getattr(self.config, "exposure_time", None)
+        gain = getattr(self.config, "gain", None)
+        desired = (str(exposure), str(gain))
+        if desired == self._applied_camera_settings:
+            return
+        try:
+            if exposure is not None:
+                camera.set_exposure(float(exposure))
+            if gain is not None:
+                camera.set_gain(float(gain))
+            self._applied_camera_settings = desired
+        except (ValueError, TypeError) as exc:
+            self.logger.logger.warning("套用相機曝光/增益失敗: %s", exc)
 
     def _validate_runtime_for_current_model(
         self, product: str, area: str, inference_type: str, run_logger

@@ -207,6 +207,37 @@ class TestDetectionSystemIntegration(unittest.TestCase):
             decision_tuning={"yellow_h_min": 18},
         )
 
+    def test_apply_camera_settings_pushes_exposure_and_gain_once(self):
+        """Per-model exposure/gain applied on change, skipped when unchanged."""
+        self.system.camera = MagicMock()
+        self.system.camera.is_initialized = True
+        self.system.config.exposure_time = "51170.0000"
+        self.system.config.gain = "23.0"
+
+        self.system._apply_camera_settings_from_config()
+        self.system.camera.set_exposure.assert_called_once_with(51170.0)
+        self.system.camera.set_gain.assert_called_once_with(23.0)
+
+        # Same values again -> no redundant hardware calls (hot-path guard)
+        self.system._apply_camera_settings_from_config()
+        self.system.camera.set_exposure.assert_called_once()
+        self.system.camera.set_gain.assert_called_once()
+
+        # Changed exposure -> re-applied
+        self.system.config.exposure_time = "42000.0000"
+        self.system._apply_camera_settings_from_config()
+        self.assertEqual(self.system.camera.set_exposure.call_count, 2)
+
+    def test_apply_camera_settings_noop_when_camera_uninitialized(self):
+        self.system.camera = MagicMock()
+        self.system.camera.is_initialized = False
+        self.system.config.exposure_time = "1000"
+        self.system.config.gain = "1.0"
+
+        self.system._apply_camera_settings_from_config()
+        self.system.camera.set_exposure.assert_not_called()
+        self.system.camera.set_gain.assert_not_called()
+
     def test_resolve_output_dir_rejects_project_escape(self):
         from core.security import SecurityError
 
