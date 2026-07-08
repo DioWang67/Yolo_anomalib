@@ -68,6 +68,9 @@ class CalibrationHandlerMixin:
         # A save may have changed exposure/gain/light or the target; hot-reload.
         try:
             self.controller.reload_model_settings(product, area, inference_type)
+            apply_light = getattr(self, "_apply_model_light_brightness", None)
+            if callable(apply_light):
+                apply_light(product, area, inference_type)
         except Exception as exc:  # noqa: BLE001
             self.log_message(self._t("calib_error", error=exc))
 

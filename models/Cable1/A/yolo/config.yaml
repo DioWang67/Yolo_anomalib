@@ -58,3 +58,9 @@ position_config:
         enabled: false
       missing_slot_check:
         enabled: false
+exposure_time: '23150.0000'
+gain: '23.0'
+light_brightness: 0
+calibration:
+  target_luma: 56.5
+  tolerance: 4.0

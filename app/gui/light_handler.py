@@ -20,6 +20,7 @@ from core.services.light_controller import (
     available_ports,
     serial_backend_available,
 )
+from core.services.model_config_editor import load_model_config
 
 LIGHT_KEEPALIVE_INTERVAL_MS = 30_000
 
@@ -234,6 +235,91 @@ class LightHandlerMixin:
         else:
             self._stop_light_keepalive()
         self.log_message(self._t("light_brightness_set", percent=final_percent))
+
+    def _apply_model_light_brightness(
+        self, product: str, area: str, inference_type: str
+    ) -> None:
+        """Apply the selected model's saved LED brightness, if configured.
+
+        Args:
+            product: Selected product name.
+            area: Selected area/station name.
+            inference_type: Selected inference backend. Fusion uses the YOLO
+                model config for shared camera/light calibration.
+
+        The method is intentionally best-effort: a missing COM port should not
+        crash inspection startup, but stale keepalive state must never override
+        a model-calibrated 0% brightness.
+        """
+        percent = self._read_model_light_brightness(product, area, inference_type)
+        if percent is None:
+            return
+
+        controller = self._open_light_controller_if_available()
+        if controller is None:
+            if percent <= 0:
+                self._stop_light_keepalive()
+            return
+
+        value = _percent_to_value(percent, controller.max_value)
+        try:
+            controller.set_brightness(value)
+        except LightControlError as exc:
+            self._stop_light_keepalive()
+            self.log_message(self._t("light_send_failed", error=exc))
+            return
+
+        if value > 0:
+            self._start_light_keepalive(value)
+        else:
+            self._stop_light_keepalive()
+
+    def _read_model_light_brightness(
+        self, product: str, area: str, inference_type: str
+    ) -> int | None:
+        """Return model-configured LED brightness percent, or None if absent."""
+        model_type = "yolo" if inference_type.lower() == "fusion" else inference_type
+        try:
+            config_path = self._catalog.config_path(product, area, model_type)
+            config = load_model_config(config_path)
+        except Exception as exc:  # noqa: BLE001 - config parse/open errors are non-fatal here.
+            self.log_message(self._t("model_config_save_error", error=exc))
+            return None
+
+        raw_percent = config.get("light_brightness")
+        if raw_percent is None:
+            return None
+        try:
+            percent = int(raw_percent)
+        except (TypeError, ValueError):
+            self.log_message(
+                self._t("light_send_failed", error="invalid light_brightness")
+            )
+            return None
+        if not 0 <= percent <= 100:
+            self.log_message(
+                self._t("light_send_failed", error="light_brightness out of range")
+            )
+            return None
+        return percent
+
+    def _open_light_controller_if_available(self) -> LightController | None:
+        """Return an open light controller without prompting the operator."""
+        controller = getattr(self, "_light_controller", None)
+        if controller is not None and controller.is_open:
+            return controller
+
+        saved_port = self.preferences.restore_light_port()
+        if not saved_port:
+            return None
+
+        controller = self._ensure_light_controller()
+        try:
+            controller.open(saved_port)
+        except LightControlError as exc:
+            self.log_message(self._t("light_port_open_failed", port=saved_port, error=exc))
+            return None
+        return controller
 
     def populate_light_port_menu(self, menu) -> None:
         """Rebuild the dynamic 'Port' submenu with currently available ports."""

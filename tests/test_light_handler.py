@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -30,6 +31,16 @@ class FakePreferences:
 
     def save_light_brightness(self, percent: int) -> None:
         self.brightness = percent
+
+
+class FakeCatalog:
+    """Return one model config path for light-sync tests."""
+
+    def __init__(self, config_path: Path) -> None:
+        self._config_path = config_path
+
+    def config_path(self, product: str, area: str, inference_type: str) -> Path:
+        return self._config_path
 
 
 class FakeStatusBar:
@@ -126,3 +137,35 @@ def test_keepalive_failure_stops_timer_without_modal_error(app: QApplication) ->
     assert host._light_keepalive_value == 0
     assert host._light_keepalive_timer.isActive() is False
     assert any("simulated disconnect" in message for message in host.logs)
+
+
+def test_model_zero_brightness_stops_stale_keepalive(
+    app: QApplication, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("light_brightness: 0\n", encoding="utf-8")
+    host = LightHost()
+    host._catalog = FakeCatalog(config_path)
+    host._light_turn_on()
+
+    host._apply_model_light_brightness("Cable1", "A", "yolo")
+
+    assert host._light_controller.values[-1] == 0
+    assert host._light_keepalive_value == 0
+    assert host._light_keepalive_timer.isActive() is False
+
+
+def test_model_positive_brightness_updates_keepalive_without_changing_preference(
+    app: QApplication, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("light_brightness: 25\n", encoding="utf-8")
+    host = LightHost()
+    host._catalog = FakeCatalog(config_path)
+
+    host._apply_model_light_brightness("Cable1", "A", "yolo")
+
+    assert host._light_controller.values == [64]
+    assert host._light_keepalive_value == 64
+    assert host._light_keepalive_timer.isActive() is True
+    assert host.preferences.brightness == 80

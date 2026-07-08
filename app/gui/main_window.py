@@ -1412,6 +1412,7 @@ class DetectionSystemGUI(
         else:
             self.detection_system = self.controller.detection_system
 
+        self._apply_model_light_brightness(product, area, inference_type)
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.update_camera_controls()
@@ -1858,6 +1859,8 @@ class DetectionSystemGUI(
             self.auto_mode_chk.setChecked(False)
             self.auto_mode_chk.blockSignals(False)
             return
+
+        self._apply_model_light_brightness(product, area, inference_type)
 
         # Stop any running pipeline/single-shot before taking exclusive camera access
         if self.is_detection_running():
