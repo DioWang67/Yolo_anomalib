@@ -10,7 +10,7 @@ import numpy as np
 
 from core.color_qc_enhanced import ColorQCEnhanced
 from core.models import ColorCheckItemResult, ColorCheckResult
-from core.stats_color_checker import StatsColorChecker
+from core.stats_color_checker import ColorDecisionTuning, StatsColorChecker
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ class ColorCheckerService:
         self._checker: Any | None = None
         self._model_path: str | None = None
         self._checker_type: str = "color_qc"
+        self._decision_tuning: dict[str, Any] | None = None
 
     def ensure_loaded(
         self,
@@ -35,6 +36,7 @@ class ColorCheckerService:
         rules_overrides: dict[str, dict[str, float | None]] | None = None,
         checker_type: str = "color_qc",
         default_threshold: float | None = None,
+        decision_tuning: dict[str, Any] | None = None,
     ) -> None:
         """Load/Reload the color model if needed and apply overrides if provided."""
         checker_type = (checker_type or "color_qc").lower()
@@ -44,13 +46,24 @@ class ColorCheckerService:
             self._checker is None
             or self._model_path != model_path
             or self._checker_type != checker_type
+            or (checker_type == "stats" and self._decision_tuning != decision_tuning)
         )
         if need_reload and checker_type == "stats":
+            try:
+                tuning = ColorDecisionTuning.from_dict(decision_tuning)
+            except (TypeError, ValueError) as e:
+                logger.warning(
+                    "Invalid color_decision_tuning %s (%s); using defaults",
+                    decision_tuning,
+                    e,
+                )
+                tuning = ColorDecisionTuning()
             try:
                 self._checker = StatsColorChecker.from_json(
                     model_path,
                     default_threshold=default_threshold or None,
                     color_thresholds=overrides,
+                    tuning=tuning,
                 )
                 if default_threshold is not None:
                     try:
@@ -59,10 +72,14 @@ class ColorCheckerService:
                         pass
                 self._checker_type = checker_type
                 self._model_path = model_path
+                self._decision_tuning = (
+                    dict(decision_tuning) if decision_tuning else None
+                )
             except Exception as e:
                 logger.warning("Failed to load StatsColorChecker from %s: %s", model_path, e)
                 self._checker = None
                 self._model_path = None
+                self._decision_tuning = None
                 return
             overrides = None  # already applied during creation
             rules_overrides = None

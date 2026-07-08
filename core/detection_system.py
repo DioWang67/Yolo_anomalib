@@ -404,12 +404,14 @@ class DetectionSystem:
             )
         if self.config.enable_color_check and self.config.color_model_path:
             try:
-                overrides, rules_over = self.color_override_loader.load(
-                    self.config,
-                    product,
-                    area,
-                    inference_type,
-                    self.logger.logger,
+                overrides, rules_over, decision_tuning = (
+                    self.color_override_loader.load(
+                        self.config,
+                        product,
+                        area,
+                        inference_type,
+                        self.logger.logger,
+                    )
                 )
                 checker_type = (
                     getattr(self.config, "color_checker_type", "color_qc") or "color_qc"
@@ -421,6 +423,7 @@ class DetectionSystem:
                     rules_overrides=rules_over,
                     checker_type=checker_type,
                     default_threshold=default_threshold,
+                    decision_tuning=decision_tuning,
                 )
                 run_logger.info(f"Color checker loaded ({checker_type})")
             except Exception as e:

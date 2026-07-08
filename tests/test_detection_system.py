@@ -184,6 +184,7 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         self.system.color_override_loader.load.return_value = (
             {"red": 0.91},
             {"red": {"min_area": 3}},
+            {"yellow_h_min": 18},
         )
         self.system.color_service = MagicMock()
         run_logger = MagicMock()
@@ -203,6 +204,7 @@ class TestDetectionSystemIntegration(unittest.TestCase):
             rules_overrides={"red": {"min_area": 3}},
             checker_type="color_qc",
             default_threshold=0.7,
+            decision_tuning={"yellow_h_min": 18},
         )
 
     def test_resolve_output_dir_rejects_project_escape(self):

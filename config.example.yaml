@@ -126,6 +126,23 @@ output_dir: "./Result"
 #   red:
 #     min_area: 3
 #
+# StatsColorChecker decision knobs (checker_type: stats only). All keys are
+# optional; omitted keys keep the built-in defaults shown below. Prefer the
+# per-model models/<product>/<area>/<type>/config.yaml so tuning follows the
+# model bundle. Changing any value requires the misjudge regression set to
+# pass first (docs/MISJUDGE_TRIAGE_SOP.md section 5).
+# color_decision_tuning:
+#   sat_threshold: 20.0          # pixels below this saturation are ignored
+#   black_s_threshold: 50.0      # S below this and V below black_v -> black
+#   black_v_threshold: 80.0
+#   black_min_coverage: 0.6      # black pixel coverage shortcut trigger
+#   yellow_h_min: 20             # HSV hue window for yellow detection
+#   yellow_h_max: 35
+#   yellow_s_min: 80
+#   yellow_v_min: 150
+#   orange_red_tie_margin: 0.15  # score gap below this triggers tie-break
+#   center_margin_ratio: 0.15    # ROI border ratio excluded from sampling
+#
 # Production default: if color check is enabled but the color model/rules cannot
 # load, mark the inspection as FAIL instead of silently passing color validation.
 # color_fail_closed: true

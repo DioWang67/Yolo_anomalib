@@ -91,6 +91,7 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         color_rules_overrides: dict[str, dict[str, float | None]] | None = None
         color_checker_type: str | None = "color_qc"
         color_score_threshold: float | None = None
+        color_decision_tuning: dict[str, float] | None = None
         color_fail_closed: bool | None = True
         output_dir: str | None = "Result"
         anomalib_config: dict[str, Any] | None = None
@@ -172,6 +173,7 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         color_model_path: str | None = None
         color_checker_type: str | None = None
         color_score_threshold: float | None = None
+        color_decision_tuning: dict[str, float] | None = None
         color_fail_closed: bool | None = None
         expected_items: dict[str, dict[str, list[str]]] | None = None
         position_config: dict[str, dict[str, dict[str, Any]]] | None = None

@@ -159,6 +159,9 @@ class DetectionConfig:
     color_rules_overrides: dict[str, dict[str, float | None]] | None = None
     color_checker_type: str = "color_qc"
     color_score_threshold: float | None = None
+    # Global fallback for StatsColorChecker decision knobs; per-model
+    # config.yaml ``color_decision_tuning`` takes precedence.
+    color_decision_tuning: dict[str, float] | None = None
     color_fail_closed: bool = True
     output_dir: str = "Result"
     anomalib_config: dict[str, Any] | None = None
@@ -307,6 +310,7 @@ class DetectionConfig:
                 normalized.get("color_checker_type") or "color_qc"
             ),
             "color_score_threshold": normalized.get("color_score_threshold"),
+            "color_decision_tuning": normalized.get("color_decision_tuning"),
             "color_fail_closed": bool(normalized.get("color_fail_closed", True)),
             "output_dir": str(normalized.get("output_dir", "Result")),
             "anomalib_config": normalized.get("anomalib_config"),

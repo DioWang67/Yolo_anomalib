@@ -27,8 +27,12 @@ class ColorOverrideLoader:
         area: str,
         inference_type: str,
         logger: Any,
-    ) -> tuple[dict[str, float] | None, dict[str, dict[str, Any]] | None]:
-        """Return color threshold/rule overrides for the active model config.
+    ) -> tuple[
+        dict[str, float] | None,
+        dict[str, dict[str, Any]] | None,
+        dict[str, Any] | None,
+    ]:
+        """Return color threshold/rule/decision-tuning overrides for the model.
 
         Args:
             config: Current detection config; global overrides are used as
@@ -39,10 +43,13 @@ class ColorOverrideLoader:
             logger: Logger-compatible object used for warnings.
 
         Returns:
-            A tuple of ``(threshold_overrides, rule_overrides)``.
+            A tuple of ``(threshold_overrides, rule_overrides,
+            decision_tuning)``.
         """
         fallback_overrides = getattr(config, "color_threshold_overrides", None)
         fallback_rules = getattr(config, "color_rules_overrides", None)
+        fallback_tuning = getattr(config, "color_decision_tuning", None)
+        fallbacks = (fallback_overrides, fallback_rules, fallback_tuning)
         cfg_path = self.models_root / product / area / inference_type / "config.yaml"
         cache_key = str(cfg_path)
 
@@ -50,29 +57,29 @@ class ColorOverrideLoader:
             stat = cfg_path.stat()
         except FileNotFoundError:
             self._cache.pop(cache_key, None)
-            return fallback_overrides, fallback_rules
+            return fallbacks
 
         cached = self._cache.get(cache_key)
         if cached and cached.get("mtime") == stat.st_mtime:
-            return self._with_fallback(cached, fallback_overrides, fallback_rules)
+            return self._with_fallback(cached, fallbacks)
 
         yaml_module = _import_yaml()
         if yaml_module is None:
             logger.warning(
                 "PyYAML is not available; skipping color overrides from %s", cfg_path
             )
-            return fallback_overrides, fallback_rules
+            return fallbacks
 
         try:
             with cfg_path.open("r", encoding="utf-8") as handle:
                 model_cfg = yaml_module.safe_load(handle)
         except (OSError, yaml_module.YAMLError) as exc:
             logger.warning("Failed to reload color overrides from %s: %s", cfg_path, exc)
-            return fallback_overrides, fallback_rules
+            return fallbacks
 
         if not isinstance(model_cfg, dict):
             logger.warning("Color override config %s is not a valid mapping, skipping", cfg_path)
-            return fallback_overrides, fallback_rules
+            return fallbacks
 
         disk_overrides = self._non_empty_mapping_or_none(
             model_cfg.get("color_threshold_overrides")
@@ -80,16 +87,21 @@ class ColorOverrideLoader:
         disk_rules = self._non_empty_mapping_or_none(
             model_cfg.get("color_rules_overrides")
         )
+        disk_tuning = self._non_empty_mapping_or_none(
+            model_cfg.get("color_decision_tuning")
+        )
 
         self._cache[cache_key] = {
             "mtime": stat.st_mtime,
             "overrides": disk_overrides,
             "rules": disk_rules,
+            "tuning": disk_tuning,
         }
         self._trim_cache(latest_key=cache_key)
         return (
             disk_overrides if disk_overrides is not None else fallback_overrides,
             disk_rules if disk_rules is not None else fallback_rules,
+            disk_tuning if disk_tuning is not None else fallback_tuning,
         )
 
     @staticmethod
@@ -101,15 +113,25 @@ class ColorOverrideLoader:
     @staticmethod
     def _with_fallback(
         cached: dict[str, Any],
-        fallback_overrides: dict[str, float] | None,
-        fallback_rules: dict[str, dict[str, Any]] | None,
-    ) -> tuple[dict[str, float] | None, dict[str, dict[str, Any]] | None]:
-        cached_overrides = cached.get("overrides")
-        cached_rules = cached.get("rules")
-        return (
-            cached_overrides if cached_overrides is not None else fallback_overrides,
-            cached_rules if cached_rules is not None else fallback_rules,
+        fallbacks: tuple[
+            dict[str, float] | None,
+            dict[str, dict[str, Any]] | None,
+            dict[str, Any] | None,
+        ],
+    ) -> tuple[
+        dict[str, float] | None,
+        dict[str, dict[str, Any]] | None,
+        dict[str, Any] | None,
+    ]:
+        cached_values = (
+            cached.get("overrides"),
+            cached.get("rules"),
+            cached.get("tuning"),
         )
+        return tuple(
+            cached_value if cached_value is not None else fallback
+            for cached_value, fallback in zip(cached_values, fallbacks)
+        )  # type: ignore[return-value]
 
     def _trim_cache(self, latest_key: str) -> None:
         if len(self._cache) <= self.max_cache_size:

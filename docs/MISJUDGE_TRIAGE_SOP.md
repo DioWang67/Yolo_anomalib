@@ -106,8 +106,11 @@ python tools/export_review_dataset.py `
 任何閾值/設定變更（conf、iou、顏色參數、位置容差、anomalib 閾值）：
 
 1. 變更前記下當前 `config_hash`（任一近期 snapshot 內有）。
-2. 變更只能改 config/模型檔，**禁止**改程式碼中的常數；若目標值目前寫死在
-   程式碼中，先開票將其搬到 config 再改。
+2. 變更只能改 config/模型檔，**禁止**改程式碼中的常數。顏色判定參數
+   （黃色色相窗、黑色門檻、橘紅平手邊界等）已可在
+   `models/<product>/<area>/<type>/config.yaml` 的 `color_decision_tuning`
+   區塊設定（鍵名見 `config.example.yaml`），存檔即生效（mtime 熱重載），
+   不需重新打包。
 3. 變更後必跑回歸集：歷史 OVERKILL/UNDERKILL 案例 + 金板（golden sample），
    確認「舊過殺不復發、舊攔截不放行」。
 4. 記錄於 `docs/PROGRESS_LOG.md`：日期、變更項、新舊值、回歸結果、批准人。
