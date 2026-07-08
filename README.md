@@ -56,7 +56,10 @@ yolo11_inference/
 │               └── config.yaml
 ├── Result/                     # 輸出結果
 ├── docs/                       # 文檔
-│   └── TECH_GUIDE.md                  # 技術深度指南 (~1300 行)
+│   ├── DOCUMENTATION_INDEX.md         # 文件入口索引
+│   ├── TECH_GUIDE.md                  # 技術深度指南 (~1300 行)
+│   ├── WINDOWS_DEPLOYMENT_SOP.md      # Windows 現場部署 SOP
+│   └── RELEASE_ROLLBACK_SOP.md        # 發版與回滾 SOP
 ├── config.yaml                 # 全域配置
 ├── config.example.yaml         # 配置範本
 ├── requirements.txt            # 核心依賴
@@ -214,10 +217,24 @@ build_exe.bat
 ```
 封裝完成後，可執行檔會放置在 `dist\yolo11_inference` 目錄下。
 您只需將該目錄複製到目標機台，執行裡面的 `yolo11_inference.exe` 即可啟動檢測系統。
+
+打包後的 `yolo11_inference.exe` 入口來自 `GUI.py`，因此部署診斷參數
+`--check-hikrobot-runtime`、`--check-camera-grab` 是封裝版 exe / `GUI.py`
+支援的參數，不是 `python main.py` 的 CLI 參數。
+
 Hikrobot 相機 DLL（`Runtime/`）已隨包附帶，目標機台**不需要**另行安裝 MVS；
-可用 `yolo11_inference.exe --check-hikrobot-runtime` 與 `--check-camera-grab`
-做部署後預檢。請確保：
+可用以下命令做部署後預檢：
+
+```powershell
+.\yolo11_inference.exe --check-hikrobot-runtime
+.\yolo11_inference.exe --check-camera-grab
+```
+
+請確保：
 - 模型路徑與設定檔維持與打包時的相對路徑關係。
+
+完整現場部署流程請看 `docs/WINDOWS_DEPLOYMENT_SOP.md`；
+release / rollback 流程請看 `docs/RELEASE_ROLLBACK_SOP.md`。
 
 ## 配置說明
 
@@ -348,12 +365,24 @@ cp runs/detect/<name>/auto_position_config.yaml models/<product>/<area>/yolo/pos
 
 ## 文檔
 
-- 📖 [技術深度指南](docs/TECH_GUIDE.md) - ~1300 行從 JR 到 SR 的完整教學
-- 🏗️ [模組架構說明](docs/MODULE_ARCHITECTURE.md) - 軟體設計與互動流程
-- 🏷️ [模型版本管理指南](docs/MODEL_VERSION_GUIDE.md) - Git LFS + 語義化版本命名
-- 🔒 [安全指南](docs/SECURITY.md) - 路徑驗證與安全最佳實踐
-- 📝 配置範本：`config.example.yaml`
-- 🧪 測試範例：`tests/` 目錄
+建議從 [文件入口索引](docs/DOCUMENTATION_INDEX.md) 開始。常用文件：
+
+| 類別 | 文件 |
+|------|------|
+| 技術總覽 | [技術深度指南](docs/TECH_GUIDE.md) |
+| 模組責任 | [模組架構說明](docs/MODULE_ARCHITECTURE.md) |
+| Windows 現場部署 | [Windows Deployment SOP](docs/WINDOWS_DEPLOYMENT_SOP.md) |
+| 發版與回滾 | [Release and Rollback SOP](docs/RELEASE_ROLLBACK_SOP.md) |
+| PCBA pilot | [PCBA Pilot Runbook](docs/PCBA_PILOT_RUNBOOK.md) |
+| 操作員命令 | [PCBA Operator Commands](docs/PCBA_OPERATOR_COMMANDS.md) |
+| 上線檢查 | [Production Go-Live Checklist](docs/PRODUCTION_GO_LIVE_CHECKLIST.md) |
+| 相機診斷 | [Camera Runtime Diagnostics](docs/CAMERA_RUNTIME_DIAGNOSTICS.md) |
+| 模型版本 | [Model Version Management Guide](docs/MODEL_VERSION_GUIDE.md) |
+| 安全 | [Security Guide](docs/SECURITY.md) |
+
+目前 PCBA 文件支援 controlled pilot；若要 unattended production，仍需完成
+golden board、known NG、dry run review、readiness WARN 接受/修正與 rollback
+記錄。
 
 ## 常見問題
 

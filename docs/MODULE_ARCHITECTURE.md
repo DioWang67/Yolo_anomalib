@@ -1,145 +1,218 @@
-# 軟體模組架構說明書 (Module Architecture)
+# Module Architecture
 
-本文件說明 `yolo11_inference` 專案的軟體架構設計，重點介紹各模組的職責以及它們之間的互動關係。
+This document describes the current `yolo11_inference` runtime architecture. It
+is meant to help engineers find the right module before changing behavior.
 
-## 1. 系統高階架構 (High-Level Architecture)
+## Classification
 
-系統採用 **分層架構 (Layered Architecture)**，主要分為兩層：
-1.  **Core Layer (`core/`)**: 負責核心商業邏輯、AI 推論、硬體控制與結果處理。此層不依賴任何 GUI 函式庫。
-2.  **App/GUI Layer (`app/gui/`)**: 負責使用者介面、非同步任務排程與狀態管理。
+Class B: business/internal production tooling with CV inference. The code needs
+clear module ownership, testable boundaries and safe resource handling, but it
+should not be forced into enterprise-style layers where simple functions are
+enough.
+
+## High-Level Layers
 
 ```mermaid
 graph TD
-    User[使用者] --> GUI[GUI Layer (Qt)]
-    GUI --> Controller[DetectionController]
-    Controller --> Core[Core Layer (DetectionSystem)]
-    
-    subgraph "App / GUI Layer"
-        GUI
-        Controller
-        Workers[Async Workers]
-    end
-    
-    subgraph "Core Layer"
-        Core
-        YOLO[YOLO Detector]
-        Anom[Anomalib Detector]
-        Cam[Camera Control]
-        Res[Result Handler]
-    end
-
-    Controller --> Workers
-    Workers -.->|Signal| GUI
-    Core --> YOLO
-    Core --> Anom
-    Core --> Cam
-    Core --> Res
+    User[Operator / Engineer] --> Entrypoints[main.py / GUI.py / pcba.bat]
+    Entrypoints --> App[app CLI and GUI layer]
+    App --> Core[core DetectionSystem]
+    Core --> ModelManager[ModelManager]
+    Core --> InferenceEngine[InferenceEngine]
+    Core --> Pipeline[Pipeline Steps]
+    Core --> Camera[CameraController]
+    Core --> Results[Result Sinks]
+    InferenceEngine --> YOLO[YOLOInferenceModel]
+    InferenceEngine --> Anomalib[AnomalibInferenceModel]
+    Core --> Fusion[FusionInferenceRunner]
+    Results --> Disk[Result images / JSON / CSV / Excel]
 ```
 
----
+## Entrypoints
 
-## 2. Core Layer (核心層)
+| Entrypoint | Purpose | Notes |
+| --- | --- | --- |
+| `main.py` | CLI interactive or one-shot inference | `--type` currently accepts `yolo` and `anomalib` |
+| `GUI.py` | PyQt GUI and packaged exe entrypoint | Handles packaged diagnostics such as `--check-hikrobot-runtime` |
+| `pcba.bat` | Operator wrapper for PCBA pilot commands | Calls `tools/pcba_pilot.py` with the project Python when available |
+| `tools/*.py` | Focused operations tools | Readiness, review collection, benchmark, dataset export |
 
-位於 `core/` 目錄，是系統的引擎。
+The PyInstaller spec builds `yolo11_inference.exe` from `GUI.py`. Do not assume
+that every packaged exe flag is accepted by `python main.py`.
 
-### 2.1 `DetectionSystem` (Facade)
-*   **檔案**: `core/detection_system.py`
-*   **用途**: 這是核心層的單一入口點 (Facade Pattern)。
-*   **職責**:
-    *   載入設定檔 (`config.yaml`)。
-    *   初始化硬體 (相機) 與 AI 模型。
-    *   提供統一的 `detect()` 方法供上層呼叫。
-    *   管理資源釋放 (`shutdown`)。
+## Core Runtime
 
-### 2.2 偵測策略 (`detectors/`)
-*   **用途**: 定義具體的檢測演算法。
-*   **`InferenceEngine`**: 根據設定動態載入不同的偵測器 (YOLO 或 Anomalib)。
-*   **`YOLODetector`**: 封裝 Ultralytics YOLOv11 推論邏輯。
-*   **`AnomalibDetector`**: 封裝 Anomalib (PatchCore/PaDiM) 推論邏輯。
+### `core/detection_system.py`
 
-### 2.3 服務元件 (`services/`)
-*   **`CameraService`**: 相機控制抽象層，支援 OpenCV 模擬或 MVS 工業相機。
-*   **`ResultHandler`**: 負責將推論結果 (JSON/Excel) 與影像寫入磁碟。
-*   **`PositionValidator`**: 負責多物件的幾何位置校驗邏輯。
+`DetectionSystem` is the runtime orchestrator. It owns:
 
-### 2.4 安全組件 (`core/security.py`)
-*   **`PathValidator`**: 負責防止路徑遍歷攻擊，驗證所有檔案 I/O 操作的路徑安全性。
-*   **Check Points**: 整合於 `Config` 載入、`DetectionSystem` 初始化及影像讀取流程中。
+- global config loading;
+- product/area/type config merge through `ModelManager`;
+- camera lifecycle;
+- inference engine lifecycle;
+- sync `detect(...)`;
+- async `start_pipeline(...)` / `stop_pipeline()`;
+- result sink refresh and shutdown;
+- runtime preflight checks where relevant.
 
----
+The class is intentionally a facade because GUI, CLI and tools need one stable
+entrypoint. Keep business decisions in services or pipeline steps when they can
+be isolated.
 
-## 3. GUI Layer (介面層)
+### `core/services/model_manager.py`
 
-位於 `app/gui/` 目錄，採用 **MVC (Model-View-Controller)** 的變體設計。
+`ModelManager` loads `models/<product>/<area>/<type>/config.yaml`, applies
+model-level overrides onto a copy of the base config, and manages an LRU cache
+of initialized engines.
 
-### 3.1 `DetectionSystemGUI` (View/Main Window)
-*   **檔案**: `app/gui/main_window.py`
-*   **用途**: 主視窗，負責組裝各個 UI 面板並協調它們。
-*   **職責**:
-    *   **Layout Management**: 使用 `QSplitter` 將介面分為控制、影像、資訊三區。
-    *   **Event Handling**: 接收按鈕點擊、選單操作。
-    *   **Signal Routing**: 將底層信號 (如偵測完成) 轉發給對應的顯示元件。
+State safety:
 
-### 3.2 UI 面板 (Panels)
-為了降低耦合度，UI 被拆分為三個獨立模組 (位於 `app/gui/panels/`)：
+- config overrides are applied to a deep copy, not the shared base config;
+- cached engines are guarded by a lock;
+- returned config snapshots are copied before use.
 
-1.  **`ControlPanel`**: 
-    *   **用途**: 左側控制區。
-    *   **內容**: 產品/區域下拉選單、開始/停止按鈕、相機連接控制。
-    *   **輸出**: 發出 `start_requested`, `stop_requested` 等信號。
-    
-2.  **`ImagePanel`**:
-    *   **用途**: 中間影像顯示區。
-    *   **內容**: Tab 頁籤 (原始影像/處理後/結果圖)，內含 `ImageViewer`。
-    
-3.  **`InfoPanel`**:
-    *   **用途**: 右側資訊區。
-    *   **內容**: `BigStatusLabel` (PASS/FAIL 大燈號)、系統狀態顯示整合、`ResultDisplayWidget` (詳細數據)、日誌視窗。
+### `core/inference_engine.py`
 
-### 3.3 `DetectionController` (Controller)
-*   **檔案**: `app/gui/controller.py`
-*   **用途**: 連接 GUI 與 Core 的橋樑。
-*   **職責**:
-    *   持有 `DetectionSystem` 實例 (單例模式)。
-    *   管理 `ModelCatalog` (掃描模型目錄結構)。
-    *   **Worker Factory**: 負責建立非同步的工作執行緒 (Worker)。
+`InferenceEngine` dispatches inference to lazy-loaded backends:
 
-### 3.4 非同步工作者 (Workers)
-*   **檔案**: `app/gui/workers.py`
-*   **用途**: 將耗時操作移出 UI 執行緒 (避免介面凍結)。
-*   **類別**:
-    *   `ModelLoaderWorker`: 背景掃描模型目錄。
-    *   `CameraInitWorker`: 背景連接相機與初始化系統。
-    *   `DetectionWorker`: 執行單次或連續偵測任務。
+- `YOLOInferenceModel` for YOLO artifacts;
+- `AnomalibInferenceModel` for Anomalib configs;
+- optional custom backends under the `core.backends.` prefix.
 
----
+Lazy loading keeps YOLO-only startup fast and avoids importing the full
+Anomalib/Lightning stack until required.
 
-## 4. 模組互動流程圖 (Signal/Slot Flow)
+### `core/fusion_inference.py`
 
-### 4.1 系統初始化 (System Init)
-1.  **GUI** 啟動，呼叫 `init_system()`。
-2.  **Controller** 建立 `CameraInitWorker`。
-3.  **Worker** 在背景執行 `DetectionSystem` 初始化 (載入權重、連接相機)。
-4.  **Worker** 發出 `finished` 信號。
-5.  **GUI** 接收信號，更新狀態燈號為 "READY"。
+Fusion combines YOLO and Anomalib results when both backends are available for a
+product/area. GUI/API paths can use fusion; the current `main.py --type` CLI
+does not expose `fusion`.
 
-### 4.2 執行偵測 (Detection Loop)
-1.  **User** 點擊 `ControlPanel` 的「開始」按鈕。
-2.  **GUI** 鎖定按鈕，並請求 **Controller** 建立 `DetectionWorker`。
-3.  **Worker** 啟動線程，進入迴圈：
-    *   從相機擷取影像。
-    *   呼叫 `DetectionSystem.detect()`。
-    *   取得結果 `dict` 並轉換為 `DetectionResult` 物件。
-    *   發出 `result_ready(DetectionResult)` 信號。
-4.  **GUI** 的 `on_detection_complete` 槽函數被觸發：
-    *   呼叫 `ImagePanel` 顯示結果圖。
-    *   呼叫 `InfoPanel` 更新 PASS/FAIL 燈號與詳細數據。
-5.  若為單次模式，Worker 結束；若為連續模式，Worker 繼續下一張。
+### `core/pipeline/*`
 
----
+The pipeline registry builds configured processing steps such as color checks,
+count checks, sequence checks, position logic and result saving. Use pipeline
+steps for optional per-product behavior instead of adding product-specific
+branches inside `DetectionSystem`.
 
-## 5. 設計決策 (Design Decisions)
+### `core/services/results/*`
 
-1.  **非同步優先 (Async-First)**: 所有涉及 I/O (磁碟讀取、硬體通訊、AI 推論) 的操作一律封裝在 `QThread` Worker 中，確保 GUI 永遠流暢。
-2.  **信號驅動 (Signal-Driven)**: Panel 之間互不知曉，全透過 `DetectionSystemGUI` 轉發信號，降低模組間的耦合 (Decoupling)。
-3.  **依賴注入 (Dependency Injection)**: `DetectionController` 被注入到 GUI 中，使 GUI 不需要知道 `Core` 如何實作，方便未來替換或測試 mock。
+The result services handle:
+
+- output path management;
+- annotation images;
+- failure crops;
+- Excel buffering;
+- JSON/CSV-style traceability;
+- operator/customer-facing messages.
+
+Result writing is intentionally separate from inference so tests can validate
+decision behavior without real camera or GPU dependencies.
+
+## Camera Layer
+
+| Module | Responsibility |
+| --- | --- |
+| `camera/camera_controller.py` | high-level camera lifecycle used by core |
+| `camera/MVS_camera_control.py` | Hikrobot MVS SDK integration |
+| `camera/preview/*` | preview app and metrics |
+
+Packaged camera diagnostics are implemented in `GUI.py` so they are available
+inside `yolo11_inference.exe`.
+
+## GUI Layer
+
+```mermaid
+graph TD
+    MainWindow[DetectionSystemGUI] --> Controller[DetectionController]
+    MainWindow --> Panels[Control/Image/Info Panels]
+    Controller --> Workers[QThread Workers]
+    Workers --> Core[DetectionSystem]
+    Core --> Bridge[PipelineBridge Signals]
+    Bridge --> MainWindow
+```
+
+### `app/gui/main_window.py`
+
+Owns the main Qt window and connects UI panels, controller actions and display
+updates. It should coordinate UI state, not implement inspection logic.
+
+### `app/gui/controller.py`
+
+`DetectionController` is the application coordinator. It lazily creates
+`DetectionSystem`, builds workers and reloads model settings. It should not own
+domain decisions.
+
+### `app/gui/workers.py`
+
+Workers move blocking operations off the UI thread:
+
+- model catalog loading;
+- camera initialization;
+- detection pipeline execution;
+- shutdown.
+
+Use worker signals for UI updates. Avoid direct widget mutation from background
+threads.
+
+## Sync Detection Flow
+
+1. CLI/GUI calls `DetectionSystem.detect(product, area, inference_type, frame)`.
+2. `DetectionSystem` loads and merges the product config.
+3. `ModelManager` returns an engine/config pair.
+4. `InferenceEngine` lazy-loads the requested backend if needed.
+5. Backend returns raw inference results.
+6. Result adapter normalizes output into `DetectionResult`.
+7. Pipeline/finalization logic computes status and reason codes.
+8. Result sink writes evidence according to config.
+
+## Async Detection Flow
+
+1. GUI builds `DetectionWorker`.
+2. Worker starts `DetectionSystem.start_pipeline(...)`.
+3. `AsyncPipelineManager` coordinates acquisition, inference and storage.
+4. Queues decouple camera capture from model inference and disk I/O.
+5. Stop requests call `stop_pipeline()` and flush pending storage work.
+
+The async path is useful for high-FPS or continuous inspection, but one-shot
+CLI inference remains simpler for validation and debugging.
+
+## Configuration Ownership
+
+| Config | Owner | Notes |
+| --- | --- | --- |
+| `config.yaml` | global runtime defaults | not necessarily production-ready for PCBA |
+| `config.example.yaml` | template | safe starting point, not a validated product config |
+| `models/<product>/<area>/<type>/config.yaml` | product model/runtime config | readiness gate should target this file for pilot |
+| `configs/products/*.yaml` | product examples/templates | not a substitute for measured fixture values |
+
+External inputs are treated as untrusted: product, area, type and paths are
+validated or normalized before use.
+
+## State And Concurrency Safety
+
+- GUI work that can block is routed through `QThread` workers.
+- Model cache access is protected by a lock.
+- Config switching uses copied config snapshots.
+- Output paths are constrained under the project root by security helpers.
+- Async queues prevent unbounded frame buildup.
+
+Avoid adding shared mutable state directly to GUI widgets, workers or global
+module variables. If state must be shared, make the owner explicit and document
+the lifecycle.
+
+## Extension Rules
+
+Use the smallest extension point that fits the change:
+
+- New product or area: add a model config and weights under `models/`.
+- New optional post-processing behavior: add or configure a pipeline step.
+- New inference backend: add a backend under `core.backends.` and enable custom
+  backends explicitly.
+- New operator workflow: add a focused tool under `tools/` or extend
+  `tools/pcba_pilot.py`.
+- New UI behavior: keep UI state in `app/gui`, domain decisions in `core`.
+
+Do not add a new interface or factory unless there is a real second
+implementation or a clear variation axis.
+
