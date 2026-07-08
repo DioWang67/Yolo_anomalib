@@ -226,6 +226,11 @@ def build_menu_bar(gui: DetectionSystemGUI) -> QMenuBar:
     port_menu = lighting_menu.addMenu(tr(language, "light_port"))
     port_menu.aboutToShow.connect(lambda: gui.populate_light_port_menu(port_menu))
 
+    lighting_menu.addSeparator()
+    calibration_action = QAction(tr(language, "calibration_menu"), gui)
+    calibration_action.triggered.connect(gui.open_calibration_dialog)
+    lighting_menu.addAction(calibration_action)
+
     help_menu = menubar.addMenu(tr(language, "help_menu"))
     about_action = QAction(tr(language, "about"), gui)
     about_action.triggered.connect(gui.show_about)

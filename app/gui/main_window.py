@@ -59,6 +59,7 @@ from app.gui.auto_inspection_controller import (
     AutoInspectionController,
     DEFAULT_AUTO_TRIGGER_CONFIG,
 )
+from app.gui.calibration_handler import CalibrationHandlerMixin
 from app.gui.camera_handler import CameraHandlerMixin
 from app.gui.controller import DetectionController
 from app.gui.light_handler import LightHandlerMixin
@@ -75,7 +76,9 @@ from core.services.model_catalog import ModelCatalog
 from core.services.model_config_editor import ModelConfigEditError, update_model_config
 
 
-class DetectionSystemGUI(QMainWindow, CameraHandlerMixin, LightHandlerMixin):
+class DetectionSystemGUI(
+    QMainWindow, CameraHandlerMixin, LightHandlerMixin, CalibrationHandlerMixin
+):
     def __init__(self):
         super().__init__()
         self.detection_system = None
