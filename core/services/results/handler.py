@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import os
 import shutil
@@ -19,6 +20,7 @@ from core.exceptions import (
 )
 from core.logging_config import DetectionLogger
 from core.position_validator import build_missing_item_locations
+from core.services.decision_engine import collect_fail_reasons
 from core.security import ensure_subpath
 from core.utils import DetectionResults, ImageUtils
 
@@ -348,6 +350,19 @@ class ResultHandler:
                 decision=decision,
                 model_info=model_info,
                 inference_time=inference_time,
+                detections=detections,
+                missing_items=missing_items,
+                anomaly_score=anomaly_score,
+                color_result=color_result,
+                sequence_check=sequence_check,
+                error_message=error_message,
+                artifacts={
+                    "original_path": original_path,
+                    "preprocessed_path": preprocessed_path,
+                    "annotated_path": annotated_path,
+                    "heatmap_path": heatmap_dest_path,
+                    "cropped_paths": list(cropped_paths),
+                },
             )
 
             return {
@@ -442,24 +457,59 @@ class ResultHandler:
         decision: dict[str, Any] | None,
         model_info: dict[str, Any] | None,
         inference_time: float | None,
+        detections: list[dict[str, Any]] | None = None,
+        missing_items: list[str] | None = None,
+        anomaly_score: float | None = None,
+        color_result: dict[str, Any] | None = None,
+        sequence_check: dict[str, Any] | None = None,
+        error_message: str | None = None,
+        artifacts: dict[str, Any] | None = None,
     ) -> str:
-        """Persist a JSON snapshot of runtime config and decision metadata."""
+        """Persist the full per-inspection result record (result.json).
+
+        The file keeps the historical ``*_config_snapshot.json`` suffix because
+        tools/collect_review_cases.py globs on it, but since schema_version 2 it
+        is the complete traceability record for one inspection: verdict with
+        merged fail reasons, detections, check outputs, artifact paths, and the
+        runtime config (plus its hash) that produced them.
+        """
         metadata_dir = os.path.join(bundle.base_path, "metadata", bundle.detector_prefix)
         ensure_subpath(metadata_dir, self.allowed_root, must_exist=False)
         os.makedirs(metadata_dir, exist_ok=True)
         stem, _ = os.path.splitext(bundle.image_name)
         snapshot_path = os.path.join(metadata_dir, f"{stem}_config_snapshot.json")
         ensure_subpath(snapshot_path, self.allowed_root, must_exist=False)
+        safe_config = self._json_safe(self.config)
         payload = {
+            "schema_version": 2,
             "timestamp": timestamp.isoformat(),
             "status": status,
             "detector": detector,
             "product": product,
             "area": area,
             "decision": dict(decision or {}),
+            "fail_reasons": collect_fail_reasons(
+                status=status,
+                decision=decision,
+                color_result=color_result,
+                sequence_check=sequence_check,
+                detector=detector,
+                anomaly_score=anomaly_score,
+                error_message=error_message,
+            ),
             "model_info": dict(model_info or {}),
             "inference_time": inference_time,
-            "config": self._json_safe(self.config),
+            "detections": self._json_safe(list(detections or [])),
+            "missing_items": list(missing_items or []),
+            "anomaly_score": (
+                float(anomaly_score) if anomaly_score is not None else None
+            ),
+            "color_result": self._json_safe(color_result or {}),
+            "sequence_check": self._json_safe(sequence_check or {}),
+            "error_message": error_message or "",
+            "artifacts": self._json_safe(artifacts or {}),
+            "config_hash": self._hash_config(safe_config),
+            "config": safe_config,
         }
         try:
             with open(snapshot_path, "w", encoding="utf-8") as handle:
@@ -469,9 +519,21 @@ class ResultHandler:
             return ""
         return snapshot_path
 
+    @staticmethod
+    def _hash_config(safe_config: Any) -> str:
+        """Return a short stable hash so runs can be compared without diffing."""
+        serialized = json.dumps(
+            safe_config, ensure_ascii=False, sort_keys=True, default=str
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:12]
+
     def _json_safe(self, value: Any) -> Any:
         if is_dataclass(value) and not isinstance(value, type):
             return self._json_safe(asdict(value))
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, np.ndarray):
+            return value.tolist()
         if isinstance(value, dict):
             return {str(key): self._json_safe(item) for key, item in value.items()}
         if isinstance(value, (list, tuple, set)):

@@ -228,6 +228,62 @@ def test_save_results_yolo_success_and_flush(tmp_result_dir):
     assert any(abs(float(str(v)) - 0.10) < 1e-6 for v in diff_values)
 
 
+def test_save_results_fail_snapshot_contains_traceability_record(tmp_result_dir):
+    h = ResultHandler(
+        DummyConfig(buffer_limit=1), base_dir=tmp_result_dir, logger=DummyLogger()
+    )
+
+    detections = [
+        {
+            "bbox": [5, 6, 20, 22],
+            "class": "wire",
+            "class_id": np.int64(2),
+            "confidence": np.float32(0.91),
+            "verified_class": "green",
+        }
+    ]
+    out = h.save_results(
+        frame=_mk_img(),
+        detections=detections,
+        status="DETECTION_FAIL",
+        detector="yolo",
+        missing_items=["red"],
+        processed_image=_mk_img(),
+        product="P",
+        area="A",
+        anomaly_score=None,
+        heatmap_path=None,
+        ckpt_path="ckpt.pt",
+        color_result={"is_ok": False, "items": [{"diff": 9.9}]},
+        sequence_check={"is_ok": False, "reason": "order_mismatch"},
+        decision={"status": "FAIL", "reasons": ["MISSING"]},
+        model_info={"weights": "ckpt.pt", "model_version": "1.0.0"},
+        inference_time=0.2,
+    )
+
+    with open(out["config_snapshot_path"], "r", encoding="utf-8") as handle:
+        snapshot = json.load(handle)
+
+    assert snapshot["schema_version"] == 2
+    assert snapshot["fail_reasons"] == [
+        "MISSING",
+        "COLOR_MISMATCH",
+        "SEQUENCE_MISMATCH",
+    ]
+    assert snapshot["missing_items"] == ["red"]
+    assert snapshot["detections"][0]["class"] == "wire"
+    assert snapshot["detections"][0]["bbox"] == [5, 6, 20, 22]
+    assert snapshot["detections"][0]["confidence"] == pytest.approx(0.91, abs=1e-4)
+    assert snapshot["color_result"]["is_ok"] is False
+    assert snapshot["sequence_check"]["reason"] == "order_mismatch"
+    assert snapshot["artifacts"]["annotated_path"] == out["annotated_path"]
+    assert snapshot["artifacts"]["original_path"] == out["original_path"]
+    assert isinstance(snapshot["config_hash"], str)
+    assert len(snapshot["config_hash"]) == 12
+
+    h.close()
+
+
 def test_save_results_anomalib_with_existing_heatmap(tmp_result_dir, tmp_path):
     h = ResultHandler(
         DummyConfig(buffer_limit=1), base_dir=tmp_result_dir, logger=DummyLogger()

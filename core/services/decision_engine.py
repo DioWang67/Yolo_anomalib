@@ -21,6 +21,80 @@ class InspectionReason(str, Enum):
     BOARD_ALIGNMENT = "BOARD_ALIGNMENT"
     UNEXPECTED_COMPONENT = "UNEXPECTED_COMPONENT"
     LOW_CONFIDENCE = "LOW_CONFIDENCE"
+    COLOR_MISMATCH = "COLOR_MISMATCH"
+    SEQUENCE_MISMATCH = "SEQUENCE_MISMATCH"
+    ANOMALY_DETECTED = "ANOMALY_DETECTED"
+    INFERENCE_ERROR = "INFERENCE_ERROR"
+
+
+def collect_fail_reasons(
+    *,
+    status: str,
+    decision: dict[str, Any] | None = None,
+    color_result: dict[str, Any] | None = None,
+    sequence_check: dict[str, Any] | None = None,
+    detector: str | None = None,
+    anomaly_score: float | None = None,
+    error_message: str | None = None,
+) -> list[str]:
+    """Merge every failure signal into one machine-readable reason list.
+
+    ``InspectionDecisionEngine`` only sees YOLO-side signals (missing, slot,
+    position, alignment). Color check, sequence check, anomalib verdicts, and
+    inference errors set the FAIL status outside the engine, so a saved result
+    could say FAIL with an empty ``decision.reasons``. This helper is the single
+    place that folds all of them together for the persisted result record.
+
+    Args:
+        status: Final inspection status string (e.g. ``PASS``,
+            ``DETECTION_FAIL``, ``INFERENCE_ERROR``).
+        decision: ``InspectionDecision.to_dict()`` payload, if available.
+        color_result: Color check result dict with an ``is_ok`` flag.
+        sequence_check: Sequence check result dict with an ``is_ok`` flag.
+        detector: Detector name (``yolo`` / ``anomalib`` / ``fusion``).
+        anomaly_score: Anomaly score when the anomalib path ran.
+        error_message: Error text when inference itself failed.
+
+    Returns:
+        Ordered, de-duplicated reason code strings; empty when status is PASS.
+    """
+    normalized_status = str(status or "").upper()
+    if normalized_status == "PASS":
+        return []
+
+    reasons: list[str] = []
+
+    def _add(code: str) -> None:
+        if code not in reasons:
+            reasons.append(code)
+
+    if normalized_status in {"INFERENCE_ERROR", "ERROR"} or error_message:
+        _add(InspectionReason.INFERENCE_ERROR.value)
+
+    for code in (decision or {}).get("reasons", []) or []:
+        _add(str(code))
+
+    if isinstance(color_result, dict) and not color_result.get("is_ok", True):
+        _add(InspectionReason.COLOR_MISMATCH.value)
+
+    if isinstance(sequence_check, dict) and not sequence_check.get("is_ok", True):
+        _add(InspectionReason.SEQUENCE_MISMATCH.value)
+
+    detector_lower = str(detector or "").lower()
+    if normalized_status not in {"INFERENCE_ERROR", "ERROR", "CANCELED"}:
+        if detector_lower == "anomalib":
+            _add(InspectionReason.ANOMALY_DETECTED.value)
+        elif (
+            detector_lower == "fusion"
+            and anomaly_score is not None
+            and not reasons
+        ):
+            # Fusion merges YOLO and anomalib verdicts without keeping the
+            # per-branch status, so anomaly is only attributed when no other
+            # failure signal explains the FAIL.
+            _add(InspectionReason.ANOMALY_DETECTED.value)
+
+    return reasons
 
 
 @dataclass(frozen=True)
