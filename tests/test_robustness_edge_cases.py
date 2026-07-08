@@ -154,3 +154,47 @@ def test_acquire_frame_no_camera_no_frame():
     ds.camera = None
     with pytest.raises(RuntimeError, match="No camera available"):
         ds._acquire_frame(None, _FakeLogger())
+
+
+def test_set_exposure_delegates_to_camera(mock_config):
+    controller = CameraController(mock_config)
+    camera = MagicMock()
+    camera.set_exposure_time.return_value = True
+    controller.camera = camera
+    controller.is_initialized = True
+
+    assert controller.set_exposure(51170.0) is True
+    camera.set_exposure_time.assert_called_once_with(51170.0)
+
+
+def test_get_exposure_and_range_delegate(mock_config):
+    controller = CameraController(mock_config)
+    camera = MagicMock()
+    camera.get_exposure_time.return_value = 51170.0
+    camera.get_parameter_range.return_value = {"current": 51170.0, "min": 100.0, "max": 1e6}
+    controller.camera = camera
+    controller.is_initialized = True
+
+    assert controller.get_exposure() == 51170.0
+    assert controller.get_exposure_range()["max"] == 1e6
+    camera.get_parameter_range.assert_called_once_with("ExposureTime")
+
+
+def test_set_gain_delegates_and_reports_failure(mock_config):
+    controller = CameraController(mock_config)
+    camera = MagicMock()
+    camera.set_gain.return_value = False
+    controller.camera = camera
+    controller.is_initialized = True
+
+    assert controller.set_gain(23.0) is False
+    camera.set_gain.assert_called_once_with(23.0)
+
+
+def test_camera_setters_return_false_when_uninitialized(mock_config):
+    controller = CameraController(mock_config)
+    assert controller.set_exposure(1000.0) is False
+    assert controller.set_gain(1.0) is False
+    assert controller.get_exposure() is None
+    assert controller.get_gain() is None
+    assert controller.get_exposure_range() is None

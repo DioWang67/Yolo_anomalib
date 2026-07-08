@@ -113,24 +113,58 @@ class CameraController:
             return {"status": "錯誤", "error": str(e)}
 
     def set_exposure(self, exposure_time: float) -> bool:
-        if not self.is_initialized:
+        if not self.is_initialized or self.camera is None:
             return False
         try:
-            self.logger.logger.info(f"設置曝光時間: {exposure_time}")
-            return True
+            ok = bool(self.camera.set_exposure_time(float(exposure_time)))
+            if ok:
+                self.logger.logger.info(f"設置曝光時間: {exposure_time}")
+            return ok
         except Exception as e:
             self.logger.logger.error(f"設置曝光時間失敗: {str(e)}")
             return False
 
+    def get_exposure(self) -> float | None:
+        """Return the camera's current exposure time, or None if unavailable."""
+        if not self.is_initialized or self.camera is None:
+            return None
+        try:
+            return self.camera.get_exposure_time()
+        except Exception as e:
+            self.logger.logger.error(f"獲取曝光時間失敗: {str(e)}")
+            return None
+
+    def get_exposure_range(self) -> dict | None:
+        """Return ``{current, min, max}`` for exposure, or None if unavailable."""
+        if not self.is_initialized or self.camera is None:
+            return None
+        try:
+            return self.camera.get_parameter_range("ExposureTime")
+        except Exception as e:
+            self.logger.logger.error(f"獲取曝光範圍失敗: {str(e)}")
+            return None
+
     def set_gain(self, gain: float) -> bool:
-        if not self.is_initialized:
+        if not self.is_initialized or self.camera is None:
             return False
         try:
-            self.logger.logger.info(f"設置增益: {gain}")
-            return True
+            ok = bool(self.camera.set_gain(float(gain)))
+            if ok:
+                self.logger.logger.info(f"設置增益: {gain}")
+            return ok
         except Exception as e:
             self.logger.logger.error(f"設置增益失敗: {str(e)}")
             return False
+
+    def get_gain(self) -> float | None:
+        """Return the camera's current gain, or None if unavailable."""
+        if not self.is_initialized or self.camera is None:
+            return None
+        try:
+            return self.camera.get_gain()
+        except Exception as e:
+            self.logger.logger.error(f"獲取增益失敗: {str(e)}")
+            return None
 
     def test_camera(self) -> bool:
         if not self.is_initialized:
