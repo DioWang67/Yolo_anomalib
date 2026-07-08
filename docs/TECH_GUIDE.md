@@ -266,8 +266,11 @@
 
 *效能檢核清單*
 
-* [ ] 首張延遲 < 300ms（GPU）
-* [ ] 穩態 throughput ≥ 15 FPS（640）
+> 註：本專案為觸發式單張檢測（3072×2048 相機源），非串流場景；
+> 「穩態 FPS」僅適用於批次離線評估，產線關注的是單張端到端延遲。
+
+* [ ] 首張延遲 < 300ms（GPU，warmup 後）
+* [ ] 單張端到端延遲穩定（以 `*_config_snapshot.json` 的 `inference_time` 追蹤）
 * [ ] VRAM 峰值 < 60% 裝置上限
 
 ---
@@ -285,6 +288,10 @@
 * 執行緒：推論執行緒 + UI 執行緒分離，避免 GUI 卡死。
 
 ### 9.3 Docker
+
+> ⚠️ **本專案未採用**：實際部署為 Windows 工控機 + PyInstaller 可攜包
+> （見 `docs/WINDOWS_DEPLOYMENT_SOP.md`）。Hikrobot 相機 SDK 與 COM 燈控
+> 不適合容器化，本節僅為通識參考。
 
 * 基礎映像 `python:3.10`；
 * 建議把模型與結果掛載 volume；
@@ -364,7 +371,7 @@ path_validator = PathValidator(
 2. **符號連結檢查**: 解析符號連結並檢查最終路徑
 3. **白名單機制**: 只允許訪問預先定義的目錄
 
-**測試覆蓋**: `tests/test_security.py` (12/13 測試通過)
+**測試覆蓋**: `tests/test_security.py`（以 CI 實際結果為準）
 
 **詳細文檔**: 參見 `docs/SECURITY.md`
 
@@ -550,6 +557,11 @@ best_thr = thr[J.argmax()]
 
 ## 17. 相機/光源 SOP＋校正全攻略（可移植版）
 
+> ⚠️ **本專案未實作**：以下 `calibration:` 設定區塊與校正流水線目前
+> **不存在**於本專案的 config schema 與程式碼中（曝光/增益固定值除外，
+> 見 `config.yaml`）。本章為建站時的方法論參考；若要落地，需先在
+> `core/config_schema.py` 增加對應欄位並實作前處理掛載點。
+
 > 目的：把「影像來源」標準化，降低資料漂移與誤檢/漏檢；可跨專案複用。
 
 ### 17.1 何時需要校正
@@ -647,6 +659,10 @@ calibration:
 ---
 
 ## 18. TensorRT / INT8 量化與校準實務
+
+> ⚠️ **本專案未採用，且短期不建議採用**：目前為觸發式單張檢測
+> （3072×2048），無串流延遲壓力；YOLO 已以 ONNX 權重推論。INT8 校準集
+> 的維護成本高於收益。本章保留為未來確有延遲瓶頸時的參考。
 
 > 目的：在不犧牲精度的前提下，將延遲與資源壓到最佳化，形成可複用的加速流水線。
 
@@ -936,7 +952,7 @@ def apply_flatfield_color(img_bgr, ff_npz):
 
 ### 19.6 簡易色彩校正（3×3 CCM 最小平方法）
 
-````python
+```python
 # color_ccm.py
 import numpy as np
 # src: n×3（相機量測 RGB），tgt: n×3（目標 sRGB 線性空間）
@@ -966,24 +982,7 @@ def apply_ccm(img_bgr, M, b):
     y_lin = x @ M + b
     y = linear_to_srgb(np.clip(y_lin,0,1)).reshape(h,w,3)
     return (y[...,::-1]*255).astype(np.uint8)  # 回到 BGR
-```python
-# color_ccm.py
-import numpy as np
-# src: n×3（相機量測 RGB），tgt: n×3（目標 sRGB）
-
-def solve_ccm(src: np.ndarray, tgt: np.ndarray):
-    A = np.hstack([src, np.ones((src.shape[0],1))])  # 加偏置
-    X, _, _, _ = np.linalg.lstsq(A, tgt, rcond=None) # 4×3，前三列是 3×3，最後一列是偏置
-    M = X[:3,:]; b = X[3,:]
-    return M, b
-
-def apply_ccm(img, M, b):
-    h,w,_ = img.shape
-    x = img.reshape(-1,3).astype(np.float32)/255.0
-    y = x @ M + b
-    y = np.clip(y, 0, 1)
-    return (y.reshape(h,w,3)*255).astype(np.uint8)
-````
+```
 
 ### 19.7 ROC 找最佳閾值（Youden’s J）
 
@@ -1155,8 +1154,7 @@ def validate(root='datasets/projectX'):
                             if not (0.0<=v<=1.0): issues.append(f'out of range {q}:{i+1}')
                     except Exception:
                         issues.append(f'parse error {q}:{i+1}')
-    print('
-'.join(issues) if issues else 'OK')
+    print('\n'.join(issues) if issues else 'OK')
 
 if __name__=='__main__':
     validate()
@@ -1196,6 +1194,8 @@ except Exception:
 
 ### 21.2 Dockerfile（最小可用，CUDA 版）
 
+> ⚠️ **本專案未採用**（理由同 9.3）。範例僅供通識參考。
+
 ```dockerfile
 # Dockerfile
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
@@ -1207,6 +1207,9 @@ CMD ["python3","batch_infer.py","--help"]
 ```
 
 ### 21.3 GitHub Actions（pytest + flake8）
+
+> ℹ️ 本專案實際的 CI 定義在 `.github/workflows/ci.yml`，以該檔為準；
+> 以下為通用範例。
 
 ```yaml
 # .github/workflows/ci.yml
@@ -1226,6 +1229,8 @@ jobs:
 ```
 
 ### 21.4 Jenkins（Pipeline 範例，簡版）
+
+> ⚠️ **本專案未採用**。範例僅供通識參考。
 
 ```groovy
 // Jenkinsfile（簡版）
