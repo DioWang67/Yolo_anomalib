@@ -27,7 +27,7 @@ class CalibrationHandlerMixin:
         """Validate preconditions and open the calibration dialog."""
         if self.is_detection_running():
             QMessageBox.warning(
-                self, self._t("calib_title"), self._t("calib_no_camera")
+                self, self._t("calib_title"), self._t("calib_detection_running")
             )
             return
 
@@ -35,7 +35,7 @@ class CalibrationHandlerMixin:
         area = self.area_combo.currentText().strip()
         inference_type = self.inference_combo.currentText().strip()
         if not all([product, area, inference_type]):
-            QMessageBox.warning(self, self._t("calib_title"), self._t("calib_no_camera"))
+            QMessageBox.warning(self, self._t("calib_title"), self._t("calib_no_selection"))
             return
         if inference_type.lower() == "fusion":
             inference_type = "yolo"
@@ -52,6 +52,13 @@ class CalibrationHandlerMixin:
         session = CalibrationSession(
             camera, light if (light and light.is_open) else None
         )
+
+        # The keepalive timer would otherwise fire mid-dialog and overwrite
+        # whatever brightness the calibration session just set on the same
+        # light controller; suspend it for the duration of the dialog.
+        stop_keepalive = getattr(self, "_stop_light_keepalive", None)
+        if callable(stop_keepalive):
+            stop_keepalive()
 
         target, tolerance = self._existing_calibration(product, area, inference_type)
         dialog = CalibrationDialog(

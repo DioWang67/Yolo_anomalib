@@ -362,6 +362,7 @@ def drive_calibration(
     apply_fn: Callable[[float, int], None],
     settle_fn: Callable[[], None] = lambda: None,
     max_iterations: int = 20,
+    on_step: Callable[[int, CalibrationPhase, float, float], None] | None = None,
 ) -> CalibrationOutcome:
     """Run the calibration loop against injected hardware callables.
 
@@ -373,6 +374,9 @@ def drive_calibration(
         settle_fn: Block briefly so the applied change takes effect before the
             next measurement (e.g. sleep + discard a frame). Default: no-op.
         max_iterations: Hard cap on adjustment steps (prevents oscillation).
+        on_step: Optional progress hook called once per adjustment step with
+            ``(iteration, phase, luma, error)`` before the move is applied, so a
+            UI can show convergence. Shrinking ``error`` means it is converging.
 
     Returns:
         A ``CalibrationOutcome`` summarizing convergence and final settings.
@@ -380,6 +384,7 @@ def drive_calibration(
     if max_iterations < 1:
         raise ValueError("max_iterations must be >= 1")
 
+    target_luma = calibrator.target.target_luma
     state = read_state_fn()
     luma = measure_fn()
 
@@ -394,6 +399,9 @@ def drive_calibration(
                 final_exposure=state.exposure,
                 final_led_brightness=state.led_brightness,
             )
+
+        if on_step is not None:
+            on_step(iteration, proposal.phase, luma, abs(luma - target_luma))
 
         apply_fn(proposal.exposure, proposal.led_brightness)
         settle_fn()

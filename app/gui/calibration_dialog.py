@@ -11,7 +11,10 @@ the per-model ``config.yaml`` via an injected save function.
 from pathlib import Path
 from typing import Callable
 
-from PyQt5.QtCore import QThread, QTimer, pyqtSignal
+import cv2
+import numpy as np
+from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -20,17 +23,49 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
 )
 
 from app.gui.i18n import normalize_language, tr
-from core.services.auto_calibrator import CalibrationOutcome, CalibrationTarget
+from core.services.auto_calibrator import (
+    CalibrationOutcome,
+    CalibrationPhase,
+    CalibrationTarget,
+)
 from core.services.calibration_session import CalibrationSession
 
 _LIVE_LUMA_INTERVAL_MS = 500
 _DEFAULT_TARGET_LUMA = 128.0
 _DEFAULT_TOLERANCE = 4.0
+_PREVIEW_MIN_WIDTH = 360
+_PREVIEW_MIN_HEIGHT = 240
+
+
+def _frame_to_pixmap(frame: np.ndarray, target_size) -> QPixmap | None:
+    """Convert a BGR (or grayscale) uint8 frame to a scaled QPixmap.
+
+    Returns ``None`` on an empty/malformed frame so the caller can keep the
+    previous preview instead of blanking it.
+    """
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return None
+    try:
+        if frame.ndim == 2:
+            gray = np.ascontiguousarray(frame)
+            h, w = gray.shape
+            qt_image = QImage(gray.data, w, h, w, QImage.Format_Grayscale8)
+        else:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb.shape
+            qt_image = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
+        # QPixmap.fromImage copies the buffer, so the source array may be freed.
+        return QPixmap.fromImage(qt_image).scaled(
+            target_size, Qt.KeepAspectRatio, Qt.FastTransformation
+        )
+    except Exception:  # noqa: BLE001 - preview must never crash the dialog
+        return None
 
 
 class _AutoCalibrateWorker(QThread):
@@ -38,6 +73,7 @@ class _AutoCalibrateWorker(QThread):
 
     finished_ok = pyqtSignal(object)   # CalibrationOutcome
     failed = pyqtSignal(str)
+    progress = pyqtSignal(int, str, float, float)  # iteration, phase, luma, error
 
     def __init__(
         self,
@@ -49,9 +85,14 @@ class _AutoCalibrateWorker(QThread):
         self._session = session
         self._target = target
 
+    def _emit_step(
+        self, iteration: int, phase: CalibrationPhase, luma: float, error: float
+    ) -> None:
+        self.progress.emit(iteration, phase.value, luma, error)
+
     def run(self) -> None:  # pragma: no cover - exercised only with hardware
         try:
-            outcome = self._session.run_auto(self._target)
+            outcome = self._session.run_auto(self._target, on_step=self._emit_step)
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
             self.failed.emit(str(exc))
             return
@@ -112,6 +153,20 @@ class CalibrationDialog(QDialog):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
+        self._preview_label = QLabel()
+        self._preview_label.setMinimumSize(_PREVIEW_MIN_WIDTH, _PREVIEW_MIN_HEIGHT)
+        self._preview_label.setAlignment(Qt.AlignCenter)
+        self._preview_label.setStyleSheet(
+            "background-color: #111827; color: #9ca3af; border: 1px solid #374151;"
+        )
+        self._preview_label.setText(self._t("calib_preview_waiting"))
+        layout.addWidget(self._preview_label)
+
+        self._sample_hint = QLabel(self._t("calib_sample_hint"))
+        self._sample_hint.setWordWrap(True)
+        self._sample_hint.setStyleSheet("color: #6b7280; font-size: 8pt;")
+        layout.addWidget(self._sample_hint)
+
         form = QFormLayout()
         self._luma_label = QLabel("--")
         form.addRow(self._t("calib_current_luma"), self._luma_label)
@@ -132,6 +187,13 @@ class CalibrationDialog(QDialog):
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
         layout.addWidget(self._status_label)
+
+        # Per-step convergence log, shown only while auto-calibrating.
+        self._progress_log = QPlainTextEdit()
+        self._progress_log.setReadOnly(True)
+        self._progress_log.setMaximumHeight(96)
+        self._progress_log.setVisible(False)
+        layout.addWidget(self._progress_log)
 
         buttons = QHBoxLayout()
         self._record_btn = QPushButton(self._t("calib_record_btn"))
@@ -156,10 +218,18 @@ class CalibrationDialog(QDialog):
 
     def _refresh_luma(self) -> None:
         try:
-            luma = self._session.measure()
+            frame, luma = self._session.capture_and_measure()
         except Exception:  # noqa: BLE001 - live poll must never crash the dialog
-            luma = None
+            frame, luma = None, None
         self._luma_label.setText("--" if luma is None else f"{luma:.1f}")
+        self._update_preview(frame)
+
+    def _update_preview(self, frame: np.ndarray | None) -> None:
+        if frame is None:
+            return
+        pixmap = _frame_to_pixmap(frame, self._preview_label.size())
+        if pixmap is not None:
+            self._preview_label.setPixmap(pixmap)
 
     def _set_busy(self, busy: bool) -> None:
         self._record_btn.setEnabled(not busy)
@@ -206,22 +276,41 @@ class CalibrationDialog(QDialog):
     def _on_auto(self) -> None:
         self._set_busy(True)
         self._status_label.setText(self._t("calib_running"))
+        self._progress_log.clear()
+        self._progress_log.setVisible(True)
         worker = _AutoCalibrateWorker(self._session, self._current_target(), self)
         worker.finished_ok.connect(self._on_auto_finished)
         worker.failed.connect(self._on_auto_failed)
+        worker.progress.connect(self._on_auto_progress)
         worker.finished.connect(lambda: self._set_busy(False))
         self._worker = worker
         worker.start()
 
+    def _on_auto_progress(
+        self, iteration: int, phase: str, luma: float, error: float
+    ) -> None:
+        """Append one convergence step; shrinking error means it is converging."""
+        phase_label = self._t(f"calib_phase_{phase}")
+        self._progress_log.appendPlainText(
+            self._t(
+                "calib_step",
+                step=iteration,
+                phase=phase_label,
+                luma=f"{luma:.1f}",
+                target=f"{self._target_spin.value():.0f}",
+                error=f"{error:.1f}",
+            )
+        )
+
     def _on_auto_finished(self, outcome: CalibrationOutcome) -> None:
         if not outcome.success:
-            self._status_label.setText(
-                self._t(
-                    "calib_failed",
-                    reason=outcome.reason.value,
-                    luma=f"{outcome.final_luma:.1f}",
-                )
+            message = self._t(
+                "calib_failed",
+                reason=outcome.reason.value,
+                luma=f"{outcome.final_luma:.1f}",
             )
+            self._status_label.setText(message)
+            QMessageBox.warning(self, self._t("calib_title"), message)
             return
         try:
             snapshot = self._session.snapshot_after_run()
@@ -234,9 +323,11 @@ class CalibrationDialog(QDialog):
                 tolerance=float(self._tolerance_spin.value()),
             )
         except Exception as exc:  # noqa: BLE001
-            self._status_label.setText(self._t("calib_error", error=exc))
+            message = self._t("calib_error", error=exc)
+            self._status_label.setText(message)
+            QMessageBox.critical(self, self._t("calib_title"), message)
             return
-        self._status_label.setText(
+        message = (
             self._t(
                 "calib_success",
                 luma=f"{outcome.final_luma:.1f}",
@@ -245,9 +336,13 @@ class CalibrationDialog(QDialog):
             + "\n"
             + self._t("calib_saved", backup=getattr(result, "backup_path", ""))
         )
+        self._status_label.setText(message)
+        QMessageBox.information(self, self._t("calib_title"), message)
 
     def _on_auto_failed(self, message: str) -> None:
-        self._status_label.setText(self._t("calib_error", error=message))
+        text = self._t("calib_error", error=message)
+        self._status_label.setText(text)
+        QMessageBox.critical(self, self._t("calib_title"), text)
 
     def reject(self) -> None:  # noqa: D102 - ensure timer/worker cleanup
         self._timer.stop()

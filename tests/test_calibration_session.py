@@ -80,6 +80,27 @@ def test_measure_returns_none_on_capture_failure():
     assert session.measure() is None
 
 
+def test_capture_and_measure_returns_frame_and_luma_in_one_capture():
+    light = FakeLight(value=204)
+    cam = FakeCamera(light=light, exposure=51170.0)
+    session = CalibrationSession(cam, light, sleep_fn=lambda _s: None)
+
+    frame, luma = session.capture_and_measure()
+
+    assert frame is not None
+    assert frame.shape == (8, 8, 3)
+    assert luma == pytest.approx(cam._luma(), abs=0.5)
+
+
+def test_capture_and_measure_returns_none_pair_on_capture_failure():
+    class DeadCam(FakeCamera):
+        def capture_frame(self):
+            return None
+
+    session = CalibrationSession(DeadCam(), None, sleep_fn=lambda _s: None)
+    assert session.capture_and_measure() == (None, None)
+
+
 def test_record_current_captures_hardware_and_target():
     light = FakeLight(value=204)  # 80%
     cam = FakeCamera(light=light, exposure=51170.0)
@@ -117,6 +138,24 @@ def test_run_auto_converges_and_applies_to_hardware():
     assert abs(cam._luma() - 150.0) <= 3.0
     # Exposure must stay within device bounds
     assert cam.exposure_min <= cam.exposure <= cam.exposure_max
+
+
+def test_run_auto_reports_progress_with_shrinking_error():
+    light = FakeLight(value=80)
+    cam = FakeCamera(light=light, exposure=3000.0)  # starts dark
+    session = CalibrationSession(cam, light, sleep_fn=lambda _s: None)
+    target = CalibrationTarget(target_luma=150.0, tolerance=3.0)
+
+    steps: list[tuple[int, str, float, float]] = []
+    session.run_auto(
+        target,
+        max_iterations=40,
+        on_step=lambda i, phase, luma, err: steps.append((i, phase.value, luma, err)),
+    )
+
+    assert steps, "expected at least one progress step"
+    assert [s[0] for s in steps] == list(range(1, len(steps) + 1))  # 1-based, contiguous
+    assert steps[-1][3] < steps[0][3]  # error shrinks overall
 
 
 def test_run_auto_without_light_uses_exposure_only():

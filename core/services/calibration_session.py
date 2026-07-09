@@ -22,6 +22,7 @@ import numpy as np
 from core.services.auto_calibrator import (
     AutoCalibrator,
     CalibrationOutcome,
+    CalibrationPhase,
     CalibrationTarget,
     HardwareState,
     drive_calibration,
@@ -91,10 +92,22 @@ class CalibrationSession:
     # ------------------------------------------------------------------
     def measure(self, roi: tuple[int, int, int, int] | None = None) -> float | None:
         """Capture one frame and return its mean luma, or None on capture fail."""
+        _, luma = self.capture_and_measure(roi)
+        return luma
+
+    def capture_and_measure(
+        self, roi: tuple[int, int, int, int] | None = None
+    ) -> tuple[np.ndarray | None, float | None]:
+        """Capture one frame; return ``(frame, mean luma)``.
+
+        A single capture serves both the live preview and the luma readout so
+        the UI never double-captures. Both elements are ``None`` when the
+        camera fails to deliver a frame.
+        """
         frame = self._camera.capture_frame()
         if frame is None:
-            return None
-        return measure_luma(frame, roi)
+            return None, None
+        return frame, measure_luma(frame, roi)
 
     def _led_available(self) -> bool:
         return bool(self._light is not None and getattr(self._light, "is_open", False))
@@ -164,12 +177,14 @@ class CalibrationSession:
         target: CalibrationTarget,
         *,
         max_iterations: int = 20,
+        on_step: Callable[[int, CalibrationPhase, float, float], None] | None = None,
     ) -> CalibrationOutcome:
         """Run the closed-loop calibration against the live hardware.
 
         Applies exposure to the camera and brightness to the LED (when
         available) until measured luma reaches ``target`` or the loop is
-        exhausted / capped.
+        exhausted / capped. ``on_step`` is forwarded to ``drive_calibration``
+        for per-step progress reporting.
         """
 
         def measure_fn() -> float:
@@ -196,6 +211,7 @@ class CalibrationSession:
             apply_fn=apply_fn,
             settle_fn=settle_fn,
             max_iterations=max_iterations,
+            on_step=on_step,
         )
 
     def snapshot_after_run(self) -> dict:
