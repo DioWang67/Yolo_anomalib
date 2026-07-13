@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from PyQt5.QtCore import QByteArray, QSettings
 
+from app.gui.i18n import DEFAULT_LANGUAGE, normalize_language
+
 
 class PreferencesManager:
     """Wrapper around QSettings for persisting GUI preferences."""
@@ -71,12 +73,12 @@ class PreferencesManager:
 
     def restore_language(self) -> str:
         """Return the persisted GUI language code."""
-        value = str(self._settings.value("language", "en"))
-        return value if value in {"en", "zh"} else "en"
+        value = self._settings.value("language", DEFAULT_LANGUAGE)
+        return normalize_language(value)
 
     def save_language(self, language: str) -> None:
         """Persist the GUI language code."""
-        self._settings.setValue("language", language if language in {"en", "zh"} else "en")
+        self._settings.setValue("language", normalize_language(language))
 
     def restore_light_port(self) -> str:
         """Return the last serial port used for the LED light ('' if none)."""

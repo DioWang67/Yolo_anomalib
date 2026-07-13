@@ -228,6 +228,21 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         self.system._apply_camera_settings_from_config()
         self.assertEqual(self.system.camera.set_exposure.call_count, 2)
 
+    def test_prepare_auto_inspection_settles_camera_before_preview_frames(self):
+        """Auto preview must start only after per-model camera settings are ready."""
+        self.system.load_model_configs = MagicMock()
+        self.system._validate_runtime_for_current_model = MagicMock()
+        self.system._prepare_resources = MagicMock()
+        self.system._ensure_camera_settings_ready_for_capture = MagicMock()
+
+        self.system.prepare_auto_inspection("Cable1", "A", "yolo")
+
+        self.system.load_model_configs.assert_called_once_with("Cable1", "A", "yolo")
+        self.system._validate_runtime_for_current_model.assert_called_once()
+        self.system._prepare_resources.assert_called_once()
+        self.assertFalse(self.system._prepare_resources.call_args.kwargs["load_model_config"])
+        self.system._ensure_camera_settings_ready_for_capture.assert_called_once()
+
     def test_apply_camera_settings_noop_when_camera_uninitialized(self):
         self.system.camera = MagicMock()
         self.system.camera.is_initialized = False
@@ -237,6 +252,64 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         self.system._apply_camera_settings_from_config()
         self.system.camera.set_exposure.assert_not_called()
         self.system.camera.set_gain.assert_not_called()
+
+    def test_apply_camera_settings_retries_after_hardware_rejection(self):
+        """A transient hardware rejection is retried before acquisition starts."""
+        self.system.camera = MagicMock()
+        self.system.camera.is_initialized = True
+        self.system.camera.set_exposure.side_effect = [False, True]
+        self.system.camera.set_gain.return_value = True
+        self.system.config.exposure_time = "22380.0000"
+        self.system.config.gain = "23.0"
+
+        with patch("core.detection_system.time.sleep"):
+            self.system._apply_camera_settings_from_config()
+
+        self.assertEqual(self.system.camera.set_exposure.call_count, 2)
+        self.assertEqual(self.system.camera.set_gain.call_count, 2)
+        self.assertEqual(
+            self.system._applied_camera_settings,
+            ("22380.0000", "23.0"),
+        )
+
+    def test_camera_settings_discard_stale_frames_before_first_inspection(self):
+        """Frames queued before a model exposure update must not reach inference."""
+        self.system.camera = MagicMock()
+        self.system.camera.is_initialized = True
+        self.system.camera.set_exposure.return_value = True
+        self.system.camera.set_gain.return_value = True
+        self.system.camera.clear_image_buffer.return_value = True
+        self.system.config.exposure_time = "22380.0000"
+        self.system.config.gain = "23.0"
+
+        with patch("core.detection_system.time.sleep"):
+            self.system._ensure_camera_settings_ready_for_capture()
+
+        self.system.camera.set_exposure.assert_called_once_with(22380.0)
+        self.system.camera.set_gain.assert_called_once_with(23.0)
+        self.system.camera.clear_image_buffer.assert_called_once()
+        self.system.camera.capture_frame.assert_not_called()
+        self.assertFalse(self.system._camera_settings_need_settle)
+
+    def test_camera_settings_continue_when_transition_frames_are_unavailable(self):
+        """An empty transition buffer must not abort an otherwise retryable inspection."""
+        self.system.camera = MagicMock()
+        self.system.camera.is_initialized = True
+        self.system.camera.set_exposure.return_value = True
+        self.system.camera.set_gain.return_value = True
+        self.system.camera.clear_image_buffer.return_value = False
+        self.system.camera.capture_frame.return_value = None
+        self.system.config.exposure_time = "22380.0000"
+        self.system.config.gain = "23.0"
+
+        with patch("core.detection_system.time.sleep"):
+            self.system._ensure_camera_settings_ready_for_capture()
+
+        self.assertEqual(
+            self.system.camera.capture_frame.call_count,
+            self.system._CAMERA_SETTINGS_SETTLE_FRAMES,
+        )
+        self.assertFalse(self.system._camera_settings_need_settle)
 
     def test_resolve_output_dir_rejects_project_escape(self):
         from core.security import SecurityError

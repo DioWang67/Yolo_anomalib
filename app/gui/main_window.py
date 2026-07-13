@@ -1866,6 +1866,19 @@ class DetectionSystemGUI(
         if self.is_detection_running():
             self.stop_detection()
 
+        # Auto mode supplies preview frames directly to detect(). Prepare the
+        # model-specific camera settings before the preview worker can capture
+        # its first frame, otherwise that first inspection can use old exposure.
+        try:
+            self.controller.detection_system.prepare_auto_inspection(
+                product, area, inference_type
+            )
+        except Exception as exc:
+            self._logger.exception("Auto-mode preflight failed: %s", exc)
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Auto Mode", f"無法套用檢測參數：{exc}")
+            return
+
         config = self._build_auto_trigger_config()
         if self._auto_controller is None:
             self._auto_controller = AutoInspectionController(

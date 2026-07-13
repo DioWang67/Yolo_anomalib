@@ -55,7 +55,7 @@ def summarize_position_records(records: list[dict[str, Any]]) -> PositionSummary
             dx, dy = _extract_offset(record)
             error = _coerce_float(record.get("position_error"))
             issue = PositionIssue(
-                label=str(record.get("class") or record.get("label") or "?"),
+                label=str(record.get("class") or record.get("label") or "unknown item"),
                 status=status,
                 error=error,
                 dx=dx,

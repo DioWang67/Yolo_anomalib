@@ -35,7 +35,9 @@ class ColorCheckItemResult:
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
-        d["class"] = d.pop("class_name")
+        # Keep the explicit field for typed/UI consumers and expose the
+        # legacy alias for persisted-result compatibility.
+        d["class"] = d["class_name"]
         return d
 
 

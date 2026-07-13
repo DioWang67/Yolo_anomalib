@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 LanguageCode = str
+DEFAULT_LANGUAGE: LanguageCode = "zh"
 
 LANGUAGE_LABELS: dict[LanguageCode, str] = {
     "en": "English",
@@ -249,6 +250,9 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "yield": "Yield",
         "consecutive_ng": "Consecutive NG",
         "unknown_reason": "Unknown reason. See details.",
+        "unknown_item": "Unknown item",
+        "unknown_color": "Unknown color",
+        "full_frame": "No detected component (full-frame check)",
         "missing": "Missing",
         "color_error": "Color error",
         "sequence_order_error": "Sequence order error",
@@ -496,6 +500,9 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "yield": "良率",
         "consecutive_ng": "連續NG",
         "unknown_reason": "原因不明，請查看詳細結果",
+        "unknown_item": "未知項目",
+        "unknown_color": "未知顏色",
+        "full_frame": "未偵測到元件（全畫面檢查）",
         "missing": "缺件",
         "color_error": "顏色錯誤",
         "sequence_order_error": "排列順序錯誤",
@@ -507,8 +514,8 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
 
 def normalize_language(value: object) -> LanguageCode:
     """Return a supported language code."""
-    code = str(value or "en").strip().lower()
-    return code if code in TRANSLATIONS else "en"
+    code = str(value or DEFAULT_LANGUAGE).strip().lower()
+    return code if code in TRANSLATIONS else DEFAULT_LANGUAGE
 
 
 def tr(language: LanguageCode, key: str) -> str:

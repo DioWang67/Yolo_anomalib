@@ -417,7 +417,7 @@ def _format_color_lines(
         ranked.sort(key=lambda entry: (entry[0], entry[1]))
         limit = max_items if max_items is not None else COLOR_PANEL_MAX_ITEMS
         for _, _, item in ranked[:limit]:
-            idx = item.get("index", "?")
+            idx = item.get("index", "-")
             cls_name = item.get("class_name") or "-"
             best = item.get("best_color") or "-"
             diff = item.get("diff")

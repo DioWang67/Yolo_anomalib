@@ -64,6 +64,34 @@ class CameraController:
             self.logger.logger.error(f"拍攝失敗: {str(e)}")
             return None
 
+    def clear_image_buffer(self) -> bool:
+        """Best-effort clear of frames queued in the camera SDK.
+
+        This is used after changing exposure or gain so a later inspection is
+        less likely to consume a frame captured with the previous settings.
+        It deliberately does not reconnect or stop grabbing: an SDK buffer
+        clear is safe to skip when a camera/SDK revision does not support it.
+        """
+        if not self.is_initialized or self.camera is None:
+            return False
+
+        sdk_camera = getattr(self.camera, "cam", None)
+        clear_buffer = getattr(sdk_camera, "MV_CC_ClearImageBuffer", None)
+        if not callable(clear_buffer):
+            self.logger.logger.warning("Camera SDK does not support image-buffer clearing")
+            return False
+
+        try:
+            result = clear_buffer()
+        except Exception as exc:
+            self.logger.logger.warning("Unable to clear camera image buffer: %s", exc)
+            return False
+
+        if result != 0:
+            self.logger.logger.warning("Camera image-buffer clear failed: code=%s", result)
+            return False
+        return True
+
     def capture_multiple_frames(self, count: int = 3) -> np.ndarray | None:
         if not self.is_initialized:
             raise RuntimeError("相機未初始化")

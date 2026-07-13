@@ -38,6 +38,27 @@ def test_camera_capture_without_init(mock_config):
         controller.capture_frame()
 
 
+def test_camera_clear_image_buffer_uses_sdk_when_available(mock_config):
+    """The controller should use the SDK buffer-clear operation without reconnecting."""
+    controller = CameraController(mock_config)
+    controller.camera = MagicMock()
+    controller.camera.cam.MV_CC_ClearImageBuffer.return_value = 0
+    controller.is_initialized = True
+
+    assert controller.clear_image_buffer() is True
+    controller.camera.cam.MV_CC_ClearImageBuffer.assert_called_once()
+
+
+def test_camera_clear_image_buffer_failure_is_non_fatal(mock_config):
+    """An SDK buffer-clear failure must fall back to normal frame acquisition."""
+    controller = CameraController(mock_config)
+    controller.camera = MagicMock()
+    controller.camera.cam.MV_CC_ClearImageBuffer.return_value = 1
+    controller.is_initialized = True
+
+    assert controller.clear_image_buffer() is False
+
+
 def test_camera_shutdown_is_idempotent(mock_config):
     controller = CameraController(mock_config)
     camera = MagicMock()

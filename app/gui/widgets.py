@@ -282,7 +282,7 @@ class FailReasonLabel(QLabel):
         color_check = result.color_check or {}
         if color_check and not color_check.get("is_ok", True):
             bad = [
-                c.get("class_name", "?")
+                _color_item_label(c, self._language)
                 for c in (color_check.get("items") or [])
                 if not c.get("is_ok", True)
             ]
@@ -809,8 +809,10 @@ class ResultDisplayWidget(QWidget):
         color_items = color_info.get("items") or []
         for color_item in color_items:
             item_status = "OK" if color_item.get("is_ok", True) else "NG"
-            cls_name = color_item.get("class_name", "?")
-            pred = color_item.get("best_color", "?")
+            cls_name = _color_item_label(color_item, self._language)
+            pred = color_item.get("best_color") or tr(
+                self._language, "unknown_color"
+            )
             diff = color_item.get("diff", 0)
             threshold = color_item.get("threshold", 0)
             lines.append(
@@ -927,3 +929,12 @@ def _alignment_issue_label(issue: str, language: str = "en") -> str:
     }
     lang = normalize_language(language)
     return labels.get(lang, labels["en"]).get(issue, issue)
+
+
+def _color_item_label(item: dict[str, object], language: str) -> str:
+    """Return a localized label for a serialized color-check item."""
+    label = item.get("class_name") or item.get("class")
+    if label:
+        return str(label)
+    key = "full_frame" if item.get("index") == -1 else "unknown_item"
+    return tr(normalize_language(language), key)

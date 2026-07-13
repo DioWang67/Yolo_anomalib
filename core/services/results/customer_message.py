@@ -103,7 +103,7 @@ def build_customer_message(result: "DetectionResult") -> CustomerMessage:
     color_check = result.color_check or {}
     if color_check and not color_check.get("is_ok", True):
         bad = [
-            str(item.get("class_name") or "?")
+            _color_item_label(item)
             for item in (color_check.get("items") or [])
             if not item.get("is_ok", True)
         ]
@@ -153,6 +153,16 @@ def build_customer_message(result: "DetectionResult") -> CustomerMessage:
 
 def _limit_items(items: list[str], limit: int = 3) -> list[str]:
     return [str(item) for item in items[:limit]]
+
+
+def _color_item_label(item: dict[str, Any]) -> str:
+    """Return a meaningful Chinese label for one color-check item."""
+    label = item.get("class_name") or item.get("class")
+    if label:
+        return str(label)
+    if item.get("index") == -1:
+        return "未偵測到元件（全畫面檢查）"
+    return "未知項目"
 
 
 def _nonempty(values: list[str | None]) -> list[str]:

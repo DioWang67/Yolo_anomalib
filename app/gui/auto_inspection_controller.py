@@ -52,9 +52,9 @@ _PREVIEW_MAX_WIDTH = 960  # pixels; preview frames are resized to this before em
 DEFAULT_AUTO_TRIGGER_CONFIG: dict = {
     "enabled": True,
     "roi": [0, 0, 0, 0],           # full frame; change to [x, y, w, h]
-    "frame_buffer_size": 15,
-    "appear_frames": 5,
-    "stable_frames": 12,
+    "frame_buffer_size": 8,
+    "appear_frames": 3,
+    "stable_frames": 6,
     "remove_frames": 8,
     "motion_threshold": 3.0,
     "sharpness_threshold": 100.0,
@@ -415,7 +415,7 @@ class AutoInspectionController(QObject):
             elapsed = time.monotonic() - t_start
             logger.info(
                 "Auto-trigger inspection done: status=%s elapsed=%.2fs",
-                getattr(result, "status", "?"), elapsed,
+                getattr(result, "status", "UNKNOWN"), elapsed,
             )
 
             if self._cancel_event.is_set():

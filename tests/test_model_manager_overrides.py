@@ -18,6 +18,10 @@ def _write_global_config(tmp_path: Path, weights_path: Path) -> Path:
         "enable_yolo": True,
         "enable_anomalib": False,
         "output_dir": "Result",
+        "exposure_time": "51170.0000",
+        "gain": "1.0",
+        "light_brightness": 80,
+        "calibration": {"target_luma": 100.0, "tolerance": 4.0},
         "expected_items": {"Cable1": {"A": ["Item1"]}},
     }
     path = tmp_path / "config.yaml"
@@ -31,6 +35,10 @@ def _write_model_config(model_dir: Path, weights_path: Path) -> Path:
         "enable_yolo": True,
         "color_model_path": "color.json",
         "output_dir": "outputs",
+        "exposure_time": "22380.0000",
+        "gain": "23.0",
+        "light_brightness": 0,
+        "calibration": {"target_luma": 60.3, "tolerance": 2.0},
     }
     path = model_dir / "config.yaml"
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -94,6 +102,12 @@ def test_model_overrides_resolve_relative_paths_and_keep_globals(tmp_path, monke
     # Global-only fields should stay when not overridden
     assert cfg_snapshot.expected_items == {"Cable1": {"A": ["Item1"]}}
 
+    # Per-model camera/calibration values must override global startup values.
+    assert cfg_snapshot.exposure_time == "22380.0000"
+    assert cfg_snapshot.gain == "23.0"
+    assert cfg_snapshot.light_brightness == 0
+    assert cfg_snapshot.calibration == {"target_luma": 60.3, "tolerance": 2.0}
+
     # Engine initialized lazily
     assert engine is not None
 
@@ -114,6 +128,60 @@ def test_model_overrides_apply_expected_items_from_model_config(tmp_path, monkey
     )
 
     assert cfg_snapshot.get_items_by_area("PCBA1", "A") == ["J5-1", "J5-2"]
+
+
+def test_model_camera_and_calibration_settings_override_global_values():
+    """Saved per-model hardware settings must survive restart-time merging."""
+    base_config = DetectionConfig(
+        weights="global.onnx",
+        exposure_time="51170.0000",
+        gain="1.0",
+        light_brightness=80,
+        calibration={"target_luma": 100.0, "tolerance": 4.0},
+    )
+    manager = ModelManager(DetectionLogger())
+
+    manager._apply_model_config(
+        base_config,
+        {
+            "exposure_time": "22380.0000",
+            "gain": "23.0",
+            "light_brightness": 0,
+            "calibration": {"target_luma": 60.3, "tolerance": 2.0},
+        },
+    )
+
+    assert base_config.exposure_time == "22380.0000"
+    assert base_config.gain == "23.0"
+    assert base_config.light_brightness == 0
+    assert base_config.calibration == {"target_luma": 60.3, "tolerance": 2.0}
+
+
+def test_missing_model_camera_settings_preserve_global_values():
+    """Schema-produced None values must not erase global hardware defaults."""
+    base_config = DetectionConfig(
+        weights="global.onnx",
+        exposure_time="51170.0000",
+        gain="1.0",
+        light_brightness=80,
+        calibration={"target_luma": 100.0, "tolerance": 4.0},
+    )
+    manager = ModelManager(DetectionLogger())
+
+    manager._apply_model_config(
+        base_config,
+        {
+            "exposure_time": None,
+            "gain": None,
+            "light_brightness": None,
+            "calibration": None,
+        },
+    )
+
+    assert base_config.exposure_time == "51170.0000"
+    assert base_config.gain == "1.0"
+    assert base_config.light_brightness == 80
+    assert base_config.calibration == {"target_luma": 100.0, "tolerance": 4.0}
 
 
 def test_switch_never_mutates_base_config(tmp_path, monkeypatch):

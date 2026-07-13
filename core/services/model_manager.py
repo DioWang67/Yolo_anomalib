@@ -101,6 +101,7 @@ class ModelManager:
 
         # --- Fields that only apply when present and non-None ---
         _OPTIONAL_FIELDS = [
+            "exposure_time", "gain", "light_brightness", "calibration",
             "expected_items", "position_config", "anomalib_config",
             "color_threshold_overrides", "color_rules_overrides",
             "backends", "pipeline", "defect_coverage",

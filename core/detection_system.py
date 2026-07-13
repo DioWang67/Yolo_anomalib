@@ -17,6 +17,7 @@ import copy
 import logging
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,11 @@ PROJECT_ROOT = project_root()
 
 
 class DetectionSystem:
+    _CAMERA_SETTINGS_RETRY_ATTEMPTS = 3
+    _CAMERA_SETTINGS_RETRY_DELAY_SECONDS = 0.05
+    _CAMERA_SETTINGS_SETTLE_DELAY_SECONDS = 0.10
+    _CAMERA_SETTINGS_SETTLE_FRAMES = 2
+
     def __init__(self, config_path: str = "config.yaml"):
         """Initializes the DetectionSystem with project settings.
 
@@ -76,6 +82,7 @@ class DetectionSystem:
         # Last (exposure, gain) pushed to the camera, so per-model settings are
         # only re-applied on change (never on the per-frame hot path).
         self._applied_camera_settings: tuple[str, str] | None = None
+        self._camera_settings_need_settle = False
         self.result_sink: ExcelImageResultSink | None = None
         self._sink_base_dir: Path | None = None
         self._refresh_result_sink()
@@ -225,6 +232,7 @@ class DetectionSystem:
             # Pre-load model configs and validate runtime before acquisition starts.
             self.load_model_configs(product, area, inference_type)
             self._validate_runtime_for_current_model(product, area, inference_type, _logger)
+            self._ensure_camera_settings_ready_for_capture()
             if self._is_canceled(cancel_cb):
                 return
             self._prepare_resources(
@@ -289,6 +297,8 @@ class DetectionSystem:
         try:
             self.camera = CameraController(self.config)
             self.camera.initialize()
+            self._applied_camera_settings = None
+            self._camera_settings_need_settle = False
             self.logger.logger.info("Camera is ready")
         except Exception as e:
             self.logger.logger.error(f"Camera init failed: {str(e)}")
@@ -355,7 +365,37 @@ class DetectionSystem:
         self._refresh_result_sink()
         self._apply_camera_settings_from_config()
 
-    def _apply_camera_settings_from_config(self) -> None:
+    def prepare_auto_inspection(
+        self, product: str, area: str, inference_type: str
+    ) -> None:
+        """Prepare the selected model and camera before auto-preview starts.
+
+        Auto inspection passes a frame captured by the preview worker directly
+        to :meth:`detect`. Therefore the model-specific exposure/gain must be
+        applied, settled, and its stale SDK frames cleared *before* that worker
+        reads its first frame.
+
+        Raises:
+            RuntimeError: If the model runtime or camera settings cannot be
+                prepared safely.
+        """
+        run_logger = context_adapter(
+            self.logger.logger, product, area, inference_type
+        )
+        self.load_model_configs(product, area, inference_type)
+        self._validate_runtime_for_current_model(
+            product, area, inference_type, run_logger
+        )
+        self._prepare_resources(
+            product,
+            area,
+            inference_type,
+            run_logger,
+            load_model_config=False,
+        )
+        self._ensure_camera_settings_ready_for_capture()
+
+    def _apply_camera_settings_from_config(self) -> bool:
         """Push the active config's exposure/gain to the camera when changed.
 
         Models calibrated via the calibration dialog carry their own
@@ -366,20 +406,77 @@ class DetectionSystem:
         """
         camera = self.camera
         if camera is None or not getattr(camera, "is_initialized", False):
-            return
+            return False
         exposure = getattr(self.config, "exposure_time", None)
         gain = getattr(self.config, "gain", None)
         desired = (str(exposure), str(gain))
         if desired == self._applied_camera_settings:
+            return True
+
+        for attempt in range(1, self._CAMERA_SETTINGS_RETRY_ATTEMPTS + 1):
+            try:
+                applied = True
+                if exposure is not None:
+                    applied = bool(camera.set_exposure(float(exposure))) and applied
+                if gain is not None:
+                    applied = bool(camera.set_gain(float(gain))) and applied
+            except (ValueError, TypeError) as exc:
+                self.logger.logger.warning("套用相機曝光/增益失敗: %s", exc)
+                return False
+
+            if applied:
+                self._applied_camera_settings = desired
+                self._camera_settings_need_settle = True
+                return True
+
+            self.logger.logger.warning(
+                "相機拒絕曝光/增益設定（第 %d/%d 次）: exposure=%s gain=%s",
+                attempt,
+                self._CAMERA_SETTINGS_RETRY_ATTEMPTS,
+                exposure,
+                gain,
+            )
+            if attempt < self._CAMERA_SETTINGS_RETRY_ATTEMPTS:
+                time.sleep(self._CAMERA_SETTINGS_RETRY_DELAY_SECONDS)
+
+        return False
+
+    def _ensure_camera_settings_ready_for_capture(self) -> None:
+        """Apply active camera settings and best-effort discard stale frames.
+
+        Raises:
+            RuntimeError: If the camera is unavailable or rejects the settings.
+        """
+        camera = self.camera
+        if camera is None or not getattr(camera, "is_initialized", False):
+            raise RuntimeError("Camera is unavailable before inspection startup")
+        if not self._apply_camera_settings_from_config():
+            raise RuntimeError("Unable to apply model camera exposure/gain settings")
+        if not self._camera_settings_need_settle:
             return
-        try:
-            if exposure is not None:
-                camera.set_exposure(float(exposure))
-            if gain is not None:
-                camera.set_gain(float(gain))
-            self._applied_camera_settings = desired
-        except (ValueError, TypeError) as exc:
-            self.logger.logger.warning("套用相機曝光/增益失敗: %s", exc)
+
+        # Allow the hardware to finish its current exposure before flushing its
+        # queue. A transient empty buffer is normal on some cameras, so this
+        # transition must not turn an otherwise retryable acquisition failure
+        # into a failed inspection.
+        time.sleep(self._CAMERA_SETTINGS_SETTLE_DELAY_SECONDS)
+        clear_buffer = getattr(camera, "clear_image_buffer", None)
+        if callable(clear_buffer) and clear_buffer():
+            self._camera_settings_need_settle = False
+            return
+
+        discarded_frames = 0
+        for _ in range(self._CAMERA_SETTINGS_SETTLE_FRAMES):
+            if camera.capture_frame() is not None:
+                discarded_frames += 1
+        if discarded_frames < self._CAMERA_SETTINGS_SETTLE_FRAMES:
+            self.logger.logger.warning(
+                "Camera setting transition discarded only %d/%d stale frames; "
+                "continuing with normal acquisition retries",
+                discarded_frames,
+                self._CAMERA_SETTINGS_SETTLE_FRAMES,
+            )
+        self._camera_settings_need_settle = False
 
     def _validate_runtime_for_current_model(
         self, product: str, area: str, inference_type: str, run_logger
@@ -705,6 +802,8 @@ class DetectionSystem:
                 )
 
             self._prepare_resources(product, area, inference_type, run_logger)
+            if frame is None:
+                self._ensure_camera_settings_ready_for_capture()
             frame = self._acquire_frame(frame, run_logger)
 
             if self._is_canceled(cancel_cb):
