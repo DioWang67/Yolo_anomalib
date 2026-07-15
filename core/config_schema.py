@@ -47,7 +47,7 @@ def _normalize_sequence(value: Any, *, expect_len: int | None = None) -> Any:
             if any(item <= 0 for item in items):
                 raise ValueError("imgsz values must be positive")
             return items
-        return [v for v in value]
+        return list(value)
     raise ValueError("expected list/tuple")
 
 
@@ -65,7 +65,7 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
 
     class GlobalConfigSchema(BaseModel):
         weights: str
-        device: str | None = "cpu"
+        device: str | None = "auto"
         conf_thres: float | None = Field(default=0.25, ge=0.0, le=1.0)
         iou_thres: float | None = Field(default=0.45, ge=0.0, le=1.0)
         imgsz: list[int] | None = Field(default_factory=lambda: [640, 640])

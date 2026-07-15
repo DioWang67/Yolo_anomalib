@@ -41,107 +41,107 @@ def migrate_model(
     product: str, area: str, old_filename: str, new_base_name: str, dry_run: bool = False
 ) -> bool:
     """Migrate a single model file.
-    
+
     Args:
         product: Product name
         area: Area name
         old_filename: Current filename
         new_base_name: New base name (without version/extension)
         dry_run: If True, only print actions without executing
-    
+
     Returns:
         True if migration successful
     """
     models_dir = Path("models")
     yolo_dir = models_dir / product / area / "yolo"
-    
+
     old_path = yolo_dir / old_filename
     if not old_path.exists():
         print(f"SKIP: {old_path} not found")
         return False
-    
+
     # Create weights/ subdirectory
     weights_dir = yolo_dir / "weights"
     if not dry_run:
         weights_dir.mkdir(exist_ok=True)
-    
+
     # Generate new filename
     new_filename = f"{new_base_name}_v{INITIAL_VERSION}_{MIGRATION_DATE}.pt"
     new_path = weights_dir / new_filename
-    
+
     print(f"[{product}/{area}/yolo]")
     print(f"   {old_filename} -> weights/{new_filename}")
-    
+
     if not dry_run:
         shutil.move(str(old_path), str(new_path))
-        print(f"   OK: Moved")
+        print("   OK: Moved")
     else:
-        print(f"   DRY RUN - would move")
-    
+        print("   DRY RUN - would move")
+
     return True
 
 
 def update_config(product: str, area: str, dry_run: bool = False) -> bool:
     """Update config.yaml with model_version field.
-    
+
     Args:
         product: Product name
         area: Area name
         dry_run: If True, only print actions
-    
+
     Returns:
         True if update successful
     """
     config_path = Path("models") / product / area / "yolo" / "config.yaml"
-    
+
     if not config_path.exists():
         print(f"WARNING: Config not found: {config_path}")
         return False
-    
+
     # Read existing config
     with open(config_path, encoding="utf-8") as f:
         content = f.read()
-    
+
     # Check if already has model_version
     if "model_version:" in content:
         print(f"   INFO: {product}/{area} config already has model_version")
         return True
-    
+
     # Add model_version at the end
     new_content = content.rstrip() + f"\n\n# Model version (added by migration)\nmodel_version: \"{INITIAL_VERSION}\"\n"
-    
+
     print(f"   Updating {product}/{area}/yolo/config.yaml")
-    
+
     if not dry_run:
         with open(config_path, "w", encoding="utf-8") as f:
             f.write(new_content)
         print(f"   OK: Added model_version: {INITIAL_VERSION}")
     else:
-        print(f"   DRY RUN - would add model_version")
-    
+        print("   DRY RUN - would add model_version")
+
     return True
 
 
 def create_backup(dry_run: bool = False) -> None:
     """Create backup of models/ directory."""
     backup_dir = Path("models_backup")
-    
+
     if backup_dir.exists():
         print(f"WARNING: Backup already exists: {backup_dir}")
         return
-    
-    print(f"Creating backup: models/ -> models_backup/")
-    
+
+    print("Creating backup: models/ -> models_backup/")
+
     if not dry_run:
         shutil.copytree("models", "models_backup")
-        print(f"OK: Backup created")
+        print("OK: Backup created")
     else:
-        print(f"DRY RUN - would create backup")
+        print("DRY RUN - would create backup")
 
 
 def main(dry_run: bool = False) -> None:
     """Main migration function.
-    
+
     Args:
         dry_run: If True, simulate migration without making changes
     """
@@ -155,12 +155,12 @@ def main(dry_run: bool = False) -> None:
         print("DRY RUN MODE - No changes will be made")
     print("=" * 70)
     print()
-    
+
     # Step 1: Create backup
     print("Step 1: Creating backup...")
     create_backup(dry_run)
     print()
-    
+
     # Step 2: Migrate models
     print("Step 2: Migrating models...")
     success_count = 0
@@ -169,23 +169,23 @@ def main(dry_run: bool = False) -> None:
             success_count += 1
     print(f"\nMigrated {success_count}/{len(MODEL_MIGRATIONS)} models")
     print()
-    
+
     # Step 3: Update configs
     print("Step 3: Updating config files...")
-    unique_products = set((p, a) for p, a, _, _ in MODEL_MIGRATIONS)
+    unique_products = {(p, a) for p, a, _, _ in MODEL_MIGRATIONS}
     config_count = 0
     for product, area in unique_products:
         if update_config(product, area, dry_run):
             config_count += 1
     print(f"\nUpdated {config_count}/{len(unique_products)} configs")
     print()
-    
+
     # Summary
     print("=" * 70)
     if dry_run:
         print("DRY RUN COMPLETE - No changes were made")
-        print("Run without --dry-run to apply changes:")
-        print("   python tools/migrate_models.py")
+        print("Run with --apply to apply changes:")
+        print("   python tools/migrate_models.py --apply")
     else:
         print("MIGRATION COMPLETE!")
         print()
@@ -201,13 +201,25 @@ def main(dry_run: bool = False) -> None:
 
 
 if __name__ == "__main__":
+    import argparse
     import sys
-    
-    # Check for dry-run flag
-    is_dry_run = "--dry-run" in sys.argv
-    
+
+    parser = argparse.ArgumentParser(
+        description="Migrate legacy model filenames to versioned layout."
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply filesystem changes. Without this flag the command is dry-run.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Deprecated explicit dry-run flag; dry-run is already the default.",
+    )
+    cli_args = parser.parse_args()
     try:
-        main(dry_run=is_dry_run)
+        main(dry_run=not cli_args.apply)
     except Exception as e:
         print(f"\nERROR: {e}")
         import traceback

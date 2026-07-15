@@ -7,7 +7,6 @@ from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -148,6 +147,8 @@ class ControlPanel(QGroupBox):
     stop_requested = pyqtSignal()
     save_requested = pyqtSignal()
     edit_model_config_requested = pyqtSignal()
+    model_versions_requested = pyqtSignal()
+    model_update_status_requested = pyqtSignal()
     auto_mode_toggled = pyqtSignal(bool)
 
     use_camera_toggled = pyqtSignal(bool)
@@ -278,6 +279,13 @@ class ControlPanel(QGroupBox):
         self.model_group.setLayout(model_layout)
         layout.addWidget(self.model_group)
 
+        self.model_update_status_btn = QPushButton("Retraining Progress")
+        self.model_update_status_btn.setObjectName("secondaryAction")
+        self.model_update_status_btn.clicked.connect(
+            self.model_update_status_requested.emit
+        )
+        layout.addWidget(self.model_update_status_btn)
+
         # Auto Mode
         self.auto_mode_chk = QCheckBox("Auto Mode")
         self.auto_mode_chk.setToolTip(
@@ -382,6 +390,11 @@ class ControlPanel(QGroupBox):
         self.edit_model_config_btn.setObjectName("secondaryAction")
         self.edit_model_config_btn.clicked.connect(self.edit_model_config_requested.emit)
         debug_layout.addWidget(self.edit_model_config_btn)
+
+        self.model_versions_btn = QPushButton("Model Versions / Restore")
+        self.model_versions_btn.setObjectName("secondaryAction")
+        self.model_versions_btn.clicked.connect(self.model_versions_requested.emit)
+        debug_layout.addWidget(self.model_versions_btn)
 
         self.output_path_label = QLabel("Output: --")
         self.output_path_label.setStyleSheet(
@@ -617,6 +630,16 @@ class ControlPanel(QGroupBox):
         self.product_label.setText(tr(self._language, "product"))
         self.area_label.setText(tr(self._language, "area"))
         self.model_label.setText(tr(self._language, "model"))
+        self.model_versions_btn.setText(
+            "模型版本與回復"
+            if self._language.lower().startswith("zh")
+            else "Model Versions / Restore"
+        )
+        self.model_update_status_btn.setText(
+            "模型補訓進度"
+            if self._language.lower().startswith("zh")
+            else "Retraining Progress"
+        )
 
         # Engineer section labels (update even when hidden so they're correct on reveal)
         self.camera_group.setTitle(tr(self._language, "camera_group"))

@@ -3,21 +3,21 @@ from __future__ import annotations
 import copy
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml  # type: ignore[import]
 
 from core.config import DetectionConfig
-from core.exceptions import ModelConfigError
 from core.config_validation import validate_model_cfg
+from core.exceptions import ModelConfigError
 from core.logging_config import DetectionLogger
 from core.path_utils import project_root, resolve_path
 from core.security import resolve_output_dir, safe_segment
 from core.version_utils import (
     ModelVersionError,
     check_compatibility,
-    find_latest_version,
     parse_model_version,
     parse_version_string,
     version_to_string,
@@ -26,26 +26,49 @@ from core.version_utils import (
 if TYPE_CHECKING:  # pragma: no cover
     from core.inference_engine import InferenceEngine
 
+EngineFactory = Callable[[DetectionConfig], "InferenceEngine"]
+
 # Repository root (two levels up from core/services)
 # Determine repository root (can be overridden by YOLO11_ROOT env var)
 PROJECT_ROOT = project_root()
 
 
 class ModelManager:
-    def __init__(self, logger: DetectionLogger, max_cache_size: int = 3) -> None:
+    def __init__(
+        self,
+        logger: DetectionLogger,
+        max_cache_size: int = 3,
+        engine_factory: EngineFactory | None = None,
+    ) -> None:
         """Create a model manager.
 
         Args:
             logger: DetectionLogger wrapper
             max_cache_size: Max number of (product, area) entries to keep
+            engine_factory: Optional inference-engine constructor. Production
+                uses the real engine lazily; tests can inject a lightweight
+                implementation without importing native ML runtimes.
         """
         self.logger = logger
         self.max_cache_size = max_cache_size
+        self._engine_factory = engine_factory
         self._cache_lock = threading.Lock()
         # cache key: (product, area) -> { type: (engine, config_snapshot) }
         self._cache: OrderedDict[
             tuple[str, str], dict[str, tuple[InferenceEngine, DetectionConfig]]
         ] = OrderedDict()
+        self._cache_signatures: dict[
+            tuple[str, str, str], tuple[int, int, int]
+        ] = {}
+
+    def _create_engine(self, config: DetectionConfig) -> InferenceEngine:
+        """Construct an engine without importing native runtimes at module load."""
+        if self._engine_factory is not None:
+            return self._engine_factory(config)
+
+        from core.inference_engine import InferenceEngine
+
+        return InferenceEngine(config)
 
     def _initialize_product_models(self, config: DetectionConfig, product: str) -> None:
         """Preload anomalib models for all areas of a product (optional)."""
@@ -96,8 +119,8 @@ class ModelManager:
             "enable_color_check", "color_fail_closed", "enable_custom_backends",
         ]
         for field in _SCALAR_FIELDS:
-            if field in cfg:
-                setattr(base_config, field, cfg.get(field, getattr(base_config, field)))
+            if field in cfg and cfg.get(field) is not None:
+                setattr(base_config, field, cfg[field])
 
         # --- Fields that only apply when present and non-None ---
         _OPTIONAL_FIELDS = [
@@ -208,19 +231,42 @@ class ModelManager:
             inference_type.lower(), field_name="inference_type"
         )
         key = (safe_product, safe_area)
-        with self._cache_lock:
-            if key in self._cache and safe_inference_type in self._cache[key]:
-                self.logger.logger.info(
-                    f"Using cached model: product={safe_product}, "
-                    f"area={safe_area}, type={safe_inference_type}"
-                )
-                engine, cfg_snapshot = self._cache[key][safe_inference_type]
-                self._cache.move_to_end(key)
-                return engine, copy.deepcopy(cfg_snapshot)
-
         model_config_path = self._locate_model_config(
             safe_product, safe_area, safe_inference_type
         )
+        config_stat = Path(model_config_path).stat()
+        config_signature = (
+            config_stat.st_mtime_ns,
+            config_stat.st_size,
+            config_stat.st_ino,
+        )
+        signature_key = (safe_product, safe_area, safe_inference_type)
+        stale_engine = None
+        with self._cache_lock:
+            if key in self._cache and safe_inference_type in self._cache[key]:
+                engine, cfg_snapshot = self._cache[key][safe_inference_type]
+                if self._cache_signatures.get(signature_key) == config_signature:
+                    self.logger.logger.info(
+                        f"Using cached model: product={safe_product}, "
+                        f"area={safe_area}, type={safe_inference_type}"
+                    )
+                    self._cache.move_to_end(key)
+                    return engine, copy.deepcopy(cfg_snapshot)
+                stale_engine, _ = self._cache[key].pop(safe_inference_type)
+                self._cache_signatures.pop(signature_key, None)
+                if not self._cache[key]:
+                    self._cache.pop(key, None)
+        if stale_engine is not None:
+            try:
+                stale_engine.shutdown()
+            except Exception:
+                pass
+            self.logger.logger.info(
+                "Model config changed; reloading %s/%s/%s",
+                safe_product,
+                safe_area,
+                safe_inference_type,
+            )
 
         with open(model_config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
@@ -268,12 +314,10 @@ class ModelManager:
             merged, cfg, safe_product, safe_area, safe_inference_type
         )
 
-        from core.inference_engine import InferenceEngine
-
         # The engine owns this merged config for its whole lifetime; later
         # switches build new copies, so a cached engine never sees another
         # product's values.
-        engine = InferenceEngine(merged)
+        engine = self._create_engine(merged)
         if not engine.initialize():
             raise RuntimeError("Inference engine init failed")
 
@@ -284,10 +328,14 @@ class ModelManager:
             if key not in self._cache:
                 self._cache[key] = {}
             self._cache[key][safe_inference_type] = (engine, copy.deepcopy(merged))
+            self._cache_signatures[signature_key] = config_signature
             self._cache.move_to_end(key)
             if len(self._cache) > self.max_cache_size:
                 old_key, engines = self._cache.popitem(last=False)
-                for eng, _ in engines.values():
+                for backend, (eng, _) in engines.items():
+                    self._cache_signatures.pop(
+                        (old_key[0], old_key[1], backend), None
+                    )
                     try:
                         eng.shutdown()
                     except Exception:
@@ -373,6 +421,9 @@ class ModelManager:
                     if target_type is not None and backend.lower() != target_type:
                         continue
                     engine, _ = engines.pop(backend)
+                    self._cache_signatures.pop(
+                        (key_product, key_area, backend), None
+                    )
                     try:
                         engine.shutdown()
                     except Exception:

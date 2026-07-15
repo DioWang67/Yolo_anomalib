@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import importlib
 import logging
 import os
@@ -70,7 +69,11 @@ from app.gui.panels.image_panel import ImagePanel
 from app.gui.panels.info_panel import InfoPanel
 from app.gui.preferences import PreferencesManager
 from app.gui.utils import load_image_with_retry
-from app.gui.view_builder import build_menu_bar
+from app.gui.view_builder import (
+    _open_model_update_status,
+    _open_model_versions,
+    build_menu_bar,
+)
 from core.auto_trigger import AutoTriggerConfig
 from core.services.model_catalog import ModelCatalog
 from core.services.model_config_editor import ModelConfigEditError, update_model_config
@@ -310,6 +313,12 @@ class DetectionSystemGUI(
         self.control_panel.stop_requested.connect(self.stop_detection)
         self.control_panel.save_requested.connect(self.save_results)
         self.control_panel.edit_model_config_requested.connect(self.edit_current_model_config)
+        self.control_panel.model_versions_requested.connect(
+            lambda: _open_model_versions(self)
+        )
+        self.control_panel.model_update_status_requested.connect(
+            lambda: _open_model_update_status(self)
+        )
 
         self.control_panel.use_camera_toggled.connect(self.on_use_camera_toggled)
         self.control_panel.reconnect_camera_requested.connect(self.handle_reconnect_camera)

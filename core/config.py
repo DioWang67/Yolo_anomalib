@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """負責載入並驗證偵測流程與後端設定的配置管理器。"""
+
+from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
@@ -11,14 +11,6 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-
-def _default_device() -> str:
-    """Return 'cuda:0' when a CUDA GPU is available, else 'cpu'."""
-    try:
-        import torch
-        return "cuda:0" if torch.cuda.is_available() else "cpu"
-    except (ImportError, RuntimeError, OSError):
-        return "cpu"
 
 try:  # pragma: no cover - runtime optional depending on pydantic version
     from pydantic import ValidationError as _ValidationError  # type: ignore
@@ -114,7 +106,7 @@ class DetectionConfig:
     """Unified configuration registry for the detection system.
 
     This dataclass holds global defaults (from config.yaml) and per-model
-    overrides. It governs model parameters (weights, conf_thres), hardware 
+    overrides. It governs model parameters (weights, conf_thres), hardware
     settings (device, camera exposure), and pipeline behavior (position check).
 
     Attributes:
@@ -131,7 +123,10 @@ class DetectionConfig:
     """
 
     weights: str
-    device: str = field(default_factory=_default_device)
+    # Resolve "auto" only when the inference runtime is initialized. Config
+    # construction is used by GUI and validation paths and must not import
+    # heavyweight native ML libraries such as Torch.
+    device: str = "auto"
     conf_thres: float = 0.25
     iou_thres: float = 0.45
     imgsz: tuple[int, int] = (640, 640)
@@ -279,7 +274,7 @@ class DetectionConfig:
 
         kwargs: dict[str, Any] = {
             "weights": str(weights),
-            "device": normalized.get("device") or _default_device(),
+            "device": normalized.get("device") or "auto",
             "conf_thres": float(normalized.get("conf_thres", 0.25)),
             "iou_thres": float(normalized.get("iou_thres", 0.45)),
             "imgsz": _coerce_imgsz(normalized.get("imgsz"), default=(640, 640))

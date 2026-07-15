@@ -1,12 +1,11 @@
-from __future__ import annotations
-
 """高階 YOLO 推論封裝，提供快取、前處理與驗證工具。"""
+
+from __future__ import annotations
 
 import os
 import threading
 import time
-from collections import Counter
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from contextlib import nullcontext
 from typing import Any
 
@@ -24,6 +23,8 @@ from core.exceptions import (
     ModelInitializationError,
     ResourceExhaustionError,
 )
+from core.position_validator import PositionValidator
+from core.runtime_preflight import validate_runtime_for_model
 from core.services.alignment import (
     ExpectedLayoutAlignment,
     base_class_name,
@@ -32,8 +33,6 @@ from core.services.alignment import (
 )
 from core.services.decision_engine import InspectionDecisionEngine
 from core.services.missing_slot_checker import MissingSlotChecker
-from core.runtime_preflight import validate_runtime_for_model
-from core.position_validator import PositionValidator
 from core.utils import ImageUtils
 from core.version_utils import parse_model_version, version_to_string
 from core.yolo_runtime import YoloRuntimeInfo, detect_yolo_runtime
@@ -414,6 +413,17 @@ class YOLOInferenceModel(BaseInferenceModel):
         """Build traceable model/runtime metadata for inspection outputs."""
         weights = str(getattr(self.config, "weights", "") or "")
         parsed_version = parse_model_version(weights)
+        raw_names = getattr(self.model, "names", None)
+        if isinstance(raw_names, dict):
+            class_names = [
+                str(raw_names[index])
+                for index in sorted(raw_names)
+                if isinstance(index, int) and index in raw_names
+            ]
+        elif isinstance(raw_names, (list, tuple)):
+            class_names = [str(name) for name in raw_names]
+        else:
+            class_names = []
         return {
             "weights": weights,
             "model_version": (
@@ -425,6 +435,10 @@ class YOLOInferenceModel(BaseInferenceModel):
             "device": str(getattr(self.config, "device", "")),
             "runtime": runtime_info.runtime,
             "predict_device": runtime_info.predict_device,
+            # The ordered names are part of the training-data contract.  A
+            # class ID is unsafe to reuse when the training project has a
+            # different name order.
+            "class_names": class_names,
         }
 
     def _refine_missing_items(

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Validate whether an inference config is ready for controlled production use."""
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -37,16 +37,22 @@ def run_readiness_checks(
         Ordered readiness check results.
     """
     path = Path(config_path)
-    config = _load_yaml(path)
+    config, effective_path = _load_effective_config(path, product, area)
     product_name = product or str(config.get("current_product") or "")
     area_name = area or str(config.get("current_area") or "")
     checks: list[ReadinessCheck] = []
 
     _add(checks, "config_exists", path.exists(), f"config={path}")
+    _add(
+        checks,
+        "model_config_loaded",
+        effective_path.exists(),
+        f"effective_config={effective_path}",
+    )
     _add(checks, "product_area", bool(product_name and area_name), f"product={product_name or '-'}, area={area_name or '-'}")
 
     weights = str(config.get("weights") or "")
-    weights_path = _resolve_existing_path(path.parent, weights) if weights else None
+    weights_path = _resolve_existing_path(effective_path.parent, weights) if weights else None
     _add(checks, "weights_configured", bool(weights), "weights path is configured")
     _add(
         checks,
@@ -59,20 +65,28 @@ def run_readiness_checks(
     _add(checks, "expected_items", bool(expected_items), f"expected item count={len(expected_items)}")
 
     position_cfg = _position_config(config, product_name, area_name)
+    position_required = _position_required(config, position_cfg)
     _add(
         checks,
         "position_check_enabled",
-        bool(position_cfg.get("enabled")),
-        "position_config must be enabled for production PCBA missing/shift checks",
+        not position_required or bool(position_cfg.get("enabled")),
+        "position validation enabled"
+        if position_required
+        else "position validation is not declared in defect coverage",
     )
     expected_boxes = position_cfg.get("expected_boxes") if isinstance(position_cfg, dict) else {}
     expected_boxes = expected_boxes if isinstance(expected_boxes, dict) else {}
-    _add(checks, "expected_boxes", bool(expected_boxes), f"expected box count={len(expected_boxes)}")
+    _add(
+        checks,
+        "expected_boxes",
+        not position_required or bool(expected_boxes),
+        f"expected box count={len(expected_boxes)}",
+    )
     missing_box_classes = _missing_expected_box_classes(expected_items, expected_boxes)
     _add(
         checks,
         "expected_box_coverage",
-        not missing_box_classes,
+        not position_required or not missing_box_classes,
         "all expected item classes have at least one expected box"
         if not missing_box_classes
         else f"missing expected boxes for: {', '.join(missing_box_classes)}",
@@ -91,7 +105,7 @@ def run_readiness_checks(
     _add(checks, "save_crops", bool(config.get("save_crops", True)), "NG crop evidence should be saved")
     _add(checks, "output_dir", bool(str(config.get("output_dir") or "").strip()), f"output_dir={config.get('output_dir') or '-'}")
     _add(checks, "fail_on_unexpected", bool(config.get("fail_on_unexpected", True)), "unexpected classes should fail in production")
-    _add_color_readiness_checks(checks, path.parent, config)
+    _add_color_readiness_checks(checks, effective_path.parent, config)
 
     missing_slot = position_cfg.get("missing_slot_check") if isinstance(position_cfg, dict) else {}
     if isinstance(missing_slot, dict):
@@ -129,6 +143,45 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     return data if isinstance(data, dict) else {}
+
+
+def _load_effective_config(
+    path: Path, product: str | None, area: str | None
+) -> tuple[dict[str, Any], Path]:
+    """Merge the selected model config when a global config is supplied."""
+    base = _load_yaml(path)
+    product_name = product or str(base.get("current_product") or "")
+    area_name = area or str(base.get("current_area") or "")
+    if not product_name or not area_name or "models" in path.parts:
+        return base, path
+
+    relative = Path("models") / product_name / area_name / "yolo" / "config.yaml"
+    candidates: list[Path] = []
+    if (path.parent / "models").is_dir():
+        candidates.append(path.parent / relative)
+    if path.parent.resolve() == Path.cwd().resolve():
+        candidates.append(Path.cwd() / relative)
+    if not candidates:
+        return base, path
+    model_path = next((candidate for candidate in candidates if candidate.exists()), None)
+    if model_path is None:
+        return base, candidates[0]
+    model = _load_yaml(model_path)
+    effective = dict(base)
+    effective.update(model)
+    if isinstance(base.get("steps"), dict) and isinstance(model.get("steps"), dict):
+        effective["steps"] = {**base["steps"], **model["steps"]}
+    return effective, model_path
+
+
+def _position_required(config: dict[str, Any], position_cfg: dict[str, Any]) -> bool:
+    """Return whether declared inspection scope requires positional checks."""
+    coverage = config.get("defect_coverage") or {}
+    covered = coverage.get("covered", []) if isinstance(coverage, dict) else []
+    required_defects = {"missing_component", "position_shift", "wrong_position"}
+    if covered:
+        return bool(required_defects.intersection(_normalize_string_list(covered)))
+    return bool(position_cfg.get("enabled"))
 
 
 def _resolve_existing_path(base_dir: Path, value: str) -> Path:

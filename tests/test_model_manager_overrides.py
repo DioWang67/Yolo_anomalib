@@ -1,4 +1,6 @@
 import copy
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,25 @@ from core.logging_config import DetectionLogger
 from core.path_utils import project_root
 from core.security import SecurityError
 from core.services.model_manager import ModelManager
+
+
+class _FakeInferenceEngine:
+    """Config-only test double that avoids importing Torch native DLLs."""
+
+    def __init__(self, config):
+        self.config = config
+
+    def initialize(self):
+        return True
+
+    def shutdown(self):
+        return None
+
+
+def test_detection_config_defers_device_resolution():
+    config = DetectionConfig(weights="model.onnx")
+
+    assert config.device == "auto"
 
 
 def _write_global_config(tmp_path: Path, weights_path: Path) -> Path:
@@ -85,7 +106,7 @@ def test_model_overrides_resolve_relative_paths_and_keep_globals(tmp_path, monke
 
     base_config = DetectionConfig.from_yaml(str(global_cfg_path))
     logger = DetectionLogger()
-    manager = ModelManager(logger)
+    manager = ModelManager(logger, engine_factory=_FakeInferenceEngine)
 
     # Act
     engine, cfg_snapshot = manager.switch(
@@ -121,7 +142,9 @@ def test_model_overrides_apply_expected_items_from_model_config(tmp_path, monkey
     monkeypatch.chdir(tmp_path)
 
     base_config = DetectionConfig.from_yaml(str(global_cfg_path))
-    manager = ModelManager(DetectionLogger())
+    manager = ModelManager(
+        DetectionLogger(), engine_factory=_FakeInferenceEngine
+    )
 
     _, cfg_snapshot = manager.switch(
         base_config, product="PCBA1", area="A", inference_type="yolo"
@@ -139,7 +162,9 @@ def test_model_camera_and_calibration_settings_override_global_values():
         light_brightness=80,
         calibration={"target_luma": 100.0, "tolerance": 4.0},
     )
-    manager = ModelManager(DetectionLogger())
+    manager = ModelManager(
+        DetectionLogger(), engine_factory=_FakeInferenceEngine
+    )
 
     manager._apply_model_config(
         base_config,
@@ -166,7 +191,9 @@ def test_missing_model_camera_settings_preserve_global_values():
         light_brightness=80,
         calibration={"target_luma": 100.0, "tolerance": 4.0},
     )
-    manager = ModelManager(DetectionLogger())
+    manager = ModelManager(
+        DetectionLogger(), engine_factory=_FakeInferenceEngine
+    )
 
     manager._apply_model_config(
         base_config,
@@ -182,6 +209,38 @@ def test_missing_model_camera_settings_preserve_global_values():
     assert base_config.gain == "1.0"
     assert base_config.light_brightness == 80
     assert base_config.calibration == {"target_luma": 100.0, "tolerance": 4.0}
+
+
+def test_schema_none_values_preserve_global_scalar_settings():
+    """Schema defaults must not silently disable or corrupt global settings."""
+    base_config = DetectionConfig(
+        weights="global.onnx",
+        device="cpu",
+        conf_thres=0.61,
+        iou_thres=0.37,
+        enable_yolo=True,
+        enable_color_check=True,
+    )
+    manager = ModelManager(
+        DetectionLogger(), engine_factory=_FakeInferenceEngine
+    )
+
+    manager._apply_model_config(
+        base_config,
+        {
+            "device": None,
+            "conf_thres": None,
+            "iou_thres": None,
+            "enable_yolo": None,
+            "enable_color_check": None,
+        },
+    )
+
+    assert base_config.device == "cpu"
+    assert base_config.conf_thres == pytest.approx(0.61)
+    assert base_config.iou_thres == pytest.approx(0.37)
+    assert base_config.enable_yolo is True
+    assert base_config.enable_color_check is True
 
 
 def test_switch_never_mutates_base_config(tmp_path, monkeypatch):
@@ -200,7 +259,9 @@ def test_switch_never_mutates_base_config(tmp_path, monkeypatch):
 
     base_config = DetectionConfig.from_yaml(str(global_cfg_path))
     snapshot_before = copy.deepcopy(base_config.__dict__)
-    manager = ModelManager(DetectionLogger())
+    manager = ModelManager(
+        DetectionLogger(), engine_factory=_FakeInferenceEngine
+    )
 
     _, merged = manager.switch(
         base_config, product="Cable1", area="A", inference_type="yolo"
@@ -216,6 +277,53 @@ def test_switch_never_mutates_base_config(tmp_path, monkeypatch):
     assert merged_again is not merged, "cache hit must return a fresh copy"
     assert base_config.__dict__ == snapshot_before, "cache-hit switch mutated base"
     assert merged_again.output_dir == merged.output_dir
+
+
+def test_switch_reloads_engine_after_deployed_config_changes(tmp_path, monkeypatch):
+    """Atomic deployment updates config last; the next switch must reload it."""
+    weights_path = tmp_path / "best.onnx"
+    weights_path.write_bytes(b"model")
+    global_cfg_path = _write_global_config(tmp_path, weights_path)
+    model_dir = tmp_path / "models" / "Cable1" / "A" / "yolo"
+    model_config = _write_model_config(model_dir, weights_path)
+    monkeypatch.chdir(tmp_path)
+
+    class FakeEngine:
+        instances = []
+
+        def __init__(self, config):
+            self.config = config
+            self.shutdown_count = 0
+            self.instances.append(self)
+
+        def initialize(self):
+            return True
+
+        def shutdown(self):
+            self.shutdown_count += 1
+
+    engine_module = types.ModuleType("core.inference_engine")
+    engine_module.InferenceEngine = FakeEngine
+    monkeypatch.setitem(sys.modules, "core.inference_engine", engine_module)
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: False)),
+    )
+    base_config = DetectionConfig.from_yaml(str(global_cfg_path))
+    manager = ModelManager(DetectionLogger())
+
+    first, _ = manager.switch(base_config, "Cable1", "A", "yolo")
+    unchanged, _ = manager.switch(base_config, "Cable1", "A", "yolo")
+    config = yaml.safe_load(model_config.read_text(encoding="utf-8"))
+    config["conf_thres"] = 0.412345
+    model_config.write_text(yaml.safe_dump(config), encoding="utf-8")
+    reloaded, merged = manager.switch(base_config, "Cable1", "A", "yolo")
+
+    assert unchanged is first
+    assert reloaded is not first
+    assert first.shutdown_count == 1
+    assert merged.conf_thres == pytest.approx(0.412345)
 
 
 def test_switch_has_no_cross_model_contamination(tmp_path, monkeypatch):
@@ -243,7 +351,9 @@ def test_switch_has_no_cross_model_contamination(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     base_config = DetectionConfig.from_yaml(str(global_cfg_path))
-    manager = ModelManager(DetectionLogger())
+    manager = ModelManager(
+        DetectionLogger(), engine_factory=_FakeInferenceEngine
+    )
 
     _, merged_a = manager.switch(
         base_config, product="Cable1", area="A", inference_type="yolo"
@@ -298,7 +408,9 @@ def test_model_config_found_via_project_root_when_cwd_differs(
     monkeypatch.setattr(mm, "PROJECT_ROOT", tmp_path)
 
     base_config = DetectionConfig.from_yaml(str(global_cfg_path))
-    manager = ModelManager(DetectionLogger())
+    manager = ModelManager(
+        DetectionLogger(), engine_factory=_FakeInferenceEngine
+    )
 
     _, cfg_snapshot = manager.switch(
         base_config, product="PCBA1", area="A", inference_type="yolo"

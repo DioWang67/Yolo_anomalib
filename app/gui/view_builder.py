@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PyQt5.QtGui import QFont
@@ -8,9 +10,9 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QMenuBar,
+    QMessageBox,
     QPushButton,
     QTabWidget,
     QTextEdit,
@@ -27,6 +29,133 @@ if TYPE_CHECKING:
 
 def _lang(gui: DetectionSystemGUI) -> str:
     return getattr(gui, "current_language", "en")
+
+
+def _reload_models(gui: DetectionSystemGUI) -> None:
+    """Clear runtime model caches, then refresh the filesystem catalog."""
+    if gui.is_detection_running():
+        message = "Stop inspection before reloading models."
+        gui.log_message(message)
+        QMessageBox.warning(gui, "Model reload", message)
+        return
+    try:
+        product = gui.product_combo.currentText().strip() or None
+        area = gui.area_combo.currentText().strip() or None
+        inference_type = gui.inference_combo.currentText().strip() or None
+        gui.controller.reload_model_settings(product, area, inference_type)
+        gui.load_available_models()
+        gui.log_message("Model cache cleared; the next inspection will load deployed files.")
+    except Exception as exc:
+        gui.log_message(f"Model reload failed: {exc}")
+
+
+def _open_training_review(gui: DetectionSystemGUI) -> None:
+    """Open the button-based data review without interrupting inference state."""
+    if gui.is_detection_running():
+        language = _lang(gui)
+        message = (
+            "請先停止檢測，再複核訓練資料。"
+            if language.lower().startswith("zh")
+            else "Stop inspection before reviewing training data."
+        )
+        gui.log_message(message)
+        QMessageBox.warning(
+            gui,
+            "訓練資料" if language.lower().startswith("zh") else "Training Data",
+            message,
+        )
+        return
+    try:
+        project_root = getattr(gui, "_project_root", None)
+        if project_root is None:
+            project_root = Path.cwd()
+        _run_review_dialog(
+            result_root=project_root / "Result",
+            manifest_path=project_root / "review_manifest.csv",
+            training_data_dir=project_root.parent / "Yolo11_auto_train" / "data",
+            language=_lang(gui),
+            product=gui.product_combo.currentText().strip() or None,
+            area=gui.area_combo.currentText().strip() or None,
+            parent=gui,
+        )
+        gui.log_message("Training data review closed; decisions were saved immediately.")
+    except (OSError, RuntimeError, ValueError, csv.Error) as exc:
+        gui.log_message(f"Training data review failed: {exc}")
+
+
+def _run_review_dialog(**kwargs) -> int:
+    """Import the dialog lazily to keep standalone GUI startup acyclic."""
+    from app.gui.review_cases_dialog import run_review_dialog
+
+    return run_review_dialog(**kwargs)
+
+
+def _open_model_versions(gui: DetectionSystemGUI) -> None:
+    """Open the model inventory and safely refresh a newly activated model."""
+    try:
+        from core.services.model_version_registry import ModelVersionRegistry
+
+        registry = ModelVersionRegistry(gui._models_base)
+
+        def on_activated(record) -> None:
+            gui.controller.reload_model_settings(
+                record.product, record.area, record.model_type
+            )
+            gui._catalog.refresh()
+            gui.load_available_models()
+            gui.log_message(
+                "模型版本已切換："
+                f"{record.product}/{record.area}/{record.model_type} v{record.version}"
+            )
+
+        _run_model_versions_dialog(
+            registry=registry,
+            language=_lang(gui),
+            selected_product=gui.product_combo.currentText().strip() or None,
+            selected_area=gui.area_combo.currentText().strip() or None,
+            selected_model_type=gui.inference_combo.currentText().strip() or None,
+            is_inspection_running=gui.is_detection_running,
+            on_activated=on_activated,
+            parent=gui,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        gui.log_message(f"模型版本管理開啟失敗：{exc}")
+        QMessageBox.critical(
+            gui,
+            "模型版本管理",
+            f"無法載入模型版本資料：\n{exc}",
+        )
+
+
+def _run_model_versions_dialog(**kwargs) -> int:
+    """Import the version dialog lazily to keep GUI startup lightweight."""
+    from app.gui.model_versions_dialog import ModelVersionsDialog
+
+    return ModelVersionsDialog(**kwargs).exec_()
+
+
+def _open_model_update_status(gui: DetectionSystemGUI) -> None:
+    """Open the read-only cross-project model update status screen."""
+    project_root = getattr(gui, "_project_root", Path.cwd())
+    data_root = project_root.parent / "Yolo11_auto_train" / "data"
+    try:
+        _run_model_update_status_dialog(
+            data_root=data_root,
+            language=_lang(gui),
+            selected_product=gui.product_combo.currentText().strip() or None,
+            selected_area=gui.area_combo.currentText().strip() or None,
+            parent=gui,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        gui.log_message(f"模型更新狀態載入失敗：{exc}")
+        QMessageBox.critical(gui, "模型更新狀態", str(exc))
+
+
+def _run_model_update_status_dialog(**kwargs) -> int:
+    """Import the status dialog lazily to keep normal inference startup fast."""
+    from app.gui.model_update_status_dialog import ModelUpdateStatusDialog
+
+    return ModelUpdateStatusDialog(**kwargs).exec_()
 
 
 def build_control_panel(gui: DetectionSystemGUI) -> QGroupBox:
@@ -184,6 +313,10 @@ def build_menu_bar(gui: DetectionSystemGUI) -> QMenuBar:
     save_action.triggered.connect(gui.save_config)
     file_menu.addAction(save_action)
 
+    review_action = QAction(tr(language, "review_training_data"), gui)
+    review_action.triggered.connect(lambda: _open_training_review(gui))
+    file_menu.addAction(review_action)
+
     file_menu.addSeparator()
 
     exit_action = QAction(tr(language, "exit"), gui)
@@ -192,12 +325,8 @@ def build_menu_bar(gui: DetectionSystemGUI) -> QMenuBar:
 
     view_menu = menubar.addMenu(tr(language, "view_menu"))
     refresh_action = QAction(tr(language, "reload_models"), gui)
-    refresh_action.triggered.connect(gui.load_available_models)
+    refresh_action.triggered.connect(lambda: _reload_models(gui))
     view_menu.addAction(refresh_action)
-
-    edit_model_action = QAction(tr(language, "edit_current_model"), gui)
-    edit_model_action.triggered.connect(gui.edit_current_model_config)
-    view_menu.addAction(edit_model_action)
 
     view_menu.addSeparator()
     reset_stats_action = QAction(tr(language, "reset_shift_stats"), gui)

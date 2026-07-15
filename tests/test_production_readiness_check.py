@@ -254,3 +254,33 @@ def test_write_report_outputs_json(tmp_path):
 
     data = json.loads(report_path.read_text(encoding="utf-8"))
     assert data[0]["name"] == "config_exists"
+
+
+def test_global_config_loads_selected_model_config(tmp_path, monkeypatch):
+    model_dir = tmp_path / "models" / "Cable1" / "A" / "yolo"
+    weights_dir = model_dir / "weights"
+    weights_dir.mkdir(parents=True)
+    (weights_dir / "best.onnx").write_bytes(b"model")
+    (model_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "weights": "models/Cable1/A/yolo/weights/best.onnx",
+                "current_product": "Cable1",
+                "current_area": "A",
+                "expected_items": {"Cable1": {"A": ["Red"]}},
+                "position_config": {"Cable1": {"A": {"enabled": False}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    global_config = tmp_path / "config.yaml"
+    global_config.write_text("weights: missing.onnx\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    checks = run_readiness_checks(global_config, product="Cable1", area="A")
+
+    by_name = {check.name: check for check in checks}
+    assert by_name["model_config_loaded"].status == "PASS"
+    assert by_name["weights_exists"].status == "PASS"
+    assert by_name["expected_items"].status == "PASS"
+    assert by_name["position_check_enabled"].status == "PASS"
