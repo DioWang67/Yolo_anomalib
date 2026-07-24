@@ -1,9 +1,10 @@
-from __future__ import annotations
-
 """Runtime checks that must pass before model inference starts."""
+
+from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -11,6 +12,26 @@ from pathlib import Path
 from core.exceptions import BackendInitializationError
 
 _DLL_DIRECTORY_HANDLES: list[object] = []
+
+
+def preload_onnxruntime_before_gui() -> None:
+    """Best-effort preload of ONNX Runtime before Qt changes DLL resolution.
+
+    On Windows, some PyQt5 and ONNX Runtime version combinations load
+    incompatible native DLLs when Qt is imported first. Importing ONNX Runtime
+    at the GUI boundary gives its native dependencies a deterministic load
+    order. A failure is intentionally deferred to ``validate_runtime_for_model``
+    so installations using only ``.pt`` models can still open the application
+    and the model-specific preflight can report full diagnostics.
+    """
+    if os.name != "nt":
+        return
+
+    try:
+        _prepare_packaged_onnxruntime_dll_path()
+        importlib.import_module("onnxruntime")
+    except (ImportError, OSError):
+        return
 
 
 def _onnxruntime_diagnostics() -> str:
@@ -95,9 +116,9 @@ def validate_runtime_for_model(model_path: str | Path) -> None:
             f"version={sys.version}, "
             f"{_onnxruntime_diagnostics()}, "
             f"onnxruntime_import_error={exc!r}. "
-            "Reinstall onnxruntime, install the Microsoft Visual C++ "
-            "Redistributable 2015-2022 x64, or switch this model to .pt "
-            "weights."
+            "Launch with start_inference.bat, ensure onnxruntime matches the "
+            "version pinned in requirements.txt, and install the Microsoft "
+            "Visual C++ Redistributable 2015-2022 x64."
         ) from exc
 
     if "CPUExecutionProvider" not in providers:
@@ -108,5 +129,5 @@ def validate_runtime_for_model(model_path: str | Path) -> None:
             f"python={sys.executable}, "
             f"version={sys.version}, "
             f"providers={providers}. "
-            "Reinstall onnxruntime or switch this model to .pt weights."
+            "Reinstall the onnxruntime version pinned in requirements.txt."
         )

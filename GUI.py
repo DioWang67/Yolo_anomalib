@@ -238,6 +238,10 @@ if "--help" in sys.argv:
     )
     sys.exit(0)
 
+from core.runtime_preflight import preload_onnxruntime_before_gui  # noqa: E402
+
+preload_onnxruntime_before_gui()
+
 from app.gui import DetectionSystemGUI, main  # noqa: E402
 
 # Expose DetectionSystem for tests that patch GUI.DetectionSystem
