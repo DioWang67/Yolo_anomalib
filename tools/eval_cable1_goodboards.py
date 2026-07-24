@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from core.detection_system import DetectionSystem  # noqa: E402
+from core.workspace import load_workspace_paths  # noqa: E402
 
 
 def main(image_dir: str) -> int:
@@ -62,6 +63,9 @@ def main(image_dir: str) -> int:
 
 if __name__ == "__main__":
     image_dir = sys.argv[1] if len(sys.argv) > 1 else str(
-        REPO_ROOT.parent / "Yolo11_auto_train" / "data" / "Cable1" / "raw" / "images"
+        load_workspace_paths(REPO_ROOT).training_data
+        / "Cable1"
+        / "raw"
+        / "images"
     )
     raise SystemExit(main(image_dir))
