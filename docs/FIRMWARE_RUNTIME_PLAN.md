@@ -38,7 +38,7 @@ deployment validation.
 Export YOLO from the training project:
 
 ```powershell
-cd D:\Git\robotlearning\Yolo11_auto_train
+cd D:\Git\robotlearning\yolo11_workspace\Yolo11_auto_train
 picture-tool-pipeline --config configs\<product>.yaml --tasks yolo_train,deploy
 ```
 

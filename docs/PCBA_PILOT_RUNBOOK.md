@@ -110,7 +110,7 @@ D:\miniconda\envs\yolo_anomalib\python.exe tools\collect_review_cases.py --resul
 9. Export reviewed cases to the training repo:
 
 ```powershell
-D:\miniconda\envs\yolo_anomalib\python.exe tools\export_review_dataset.py --manifest-csv review_manifest.csv --output-dir D:\Git\robotlearning\Yolo11_auto_train\data\pcba_review
+D:\miniconda\envs\yolo_anomalib\python.exe tools\export_review_dataset.py --manifest-csv review_manifest.csv --output-dir D:\Git\robotlearning\yolo11_workspace\Yolo11_auto_train\data\pcba_review
 ```
 
 10. Annotate exported images before retraining.

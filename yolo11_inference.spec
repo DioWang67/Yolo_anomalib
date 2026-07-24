@@ -8,7 +8,7 @@ from PyInstaller.utils.hooks import copy_metadata
 # Resolve all bundled paths relative to this spec file so the build works no
 # matter where the repo is checked out. PyInstaller injects ``SPECPATH`` as the
 # directory containing the spec; previously these were hardcoded to
-# ``D:\Git\robotlearning\yolo11_inference`` and broke on any other machine/path.
+# an absolute checkout path and broke on any other machine/path.
 project_root = os.path.abspath(SPECPATH)
 
 datas = [

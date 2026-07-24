@@ -24,6 +24,7 @@ env.bak/
 htmlcov/
 .tox/
 .nox/
+.test-tmp/
 
 # ===================== 專案特定 =====================
 # 敏感設定檔（請改用 config.example.yaml 當範本）
@@ -128,3 +129,16 @@ models/**/args.yaml
 models/**/results.csv
 readiness_report_*.json
 review_manifest.*
+
+# Operator review and processing runtime state. These records stay local and
+# are exported through the audited package/report flows when needed.
+.processing_runs/
+.review_repairs/
+.review_manifest_*_filter.json
+/review_manifest_*.csv
+
+# Deployment and rollback metadata is paired with ignored model binaries and
+# belongs to the station artifact store, not source control.
+models/**/deployment_manifest.yaml
+models/**/versions/
+models/**/weights/*.manifest.yaml

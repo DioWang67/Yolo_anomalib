@@ -1,6 +1,6 @@
 # yolo11_inference
 
-訓練資料回收不需要使用指令：在 GUI 選好產品／站別後點「檔案 → 訓練資料複核與提交」，或雙擊根目錄的 `一鍵蒐集訓練資料.bat`。可選擇預設或自訂時間範圍；系統另提供 PASS 抽樣與「從已保存結果回報漏檢」。外部圖片必須先用目前產線模型檢測一次，避免錯誤產品、站別或類別進入補訓。逐張判定後可開啟「補訓清單」排除誤入資料；誤檢、漏檢及錯類案件會先進入內建 LabelImg，組長只需框選、選類別、按 `Ctrl+S` 並關閉工具。空白的漏檢標註不會被接受；全部驗證完成後才依序執行資料切分、訓練、同 test set 新舊模型品質比較與部署。資料不足或品質不合格時保留舊模型；部署成功後，下一次推理會自動載入新模型。
+訓練資料回收不需要使用指令：在 GUI 選好產品／站別後點「檔案 → 訓練資料複核與提交」，或雙擊根目錄的 `一鍵蒐集訓練資料.bat`。可選擇預設或自訂時間範圍；畫面先以多圖總覽列出候選失敗案例，勾選後會進入只包含已選圖片的獨立畫面，未選圖片不會混入。選取會立即保存，可關閉後稍後再決定是否逐張分類。逐張分類可另記錄「閾值未達標」及來源（目前為 YOLO／顏色；未來 detector 可使用新的來源代碼），此失敗原因不會取代人工 OK／NG 判定或自行改變送訓路由。系統另提供 PASS 抽樣與「從已保存結果回報漏檢」。外部圖片必須先用目前產線模型檢測一次，避免錯誤產品、站別或類別進入補訓。逐張判定後可開啟「補訓清單」排除誤入資料；誤檢、漏檢及錯類案件會先進入內建 LabelImg，組長只需框選、選類別、按 `Ctrl+S` 並關閉工具。空白的漏檢標註不會被接受；全部驗證完成後才依序執行資料切分、訓練、同 test set 新舊模型品質比較與部署。資料不足或品質不合格時保留舊模型；部署成功後，下一次推理會自動載入新模型。
 
 影像過曝、失焦、遮擋或取像失敗請選「影像過曝／模糊／遮擋」。此類資料會保留稽核紀錄但暫不送訓，也不會被當成需要補標的資料。
 
@@ -19,6 +19,7 @@
 - ⚡ **Fusion 融合檢測**: YOLO 與 Anomalib 聯合推理，支援特徵熱圖與結果雙重疊加 (GUI 限定功能)
 - 📷 **工業相機整合**: 支援海康威視 MVS SDK
 - 🎨 **LED 顏色檢測**: 統計式顏色驗證
+- 🧭 **顏色誤殺閉環**: 顏色專用覆核、校正資料分流及具名批准門檻發布（見 [操作說明](docs/COLOR_REVIEW_CALIBRATION.md)）
 - 🖥️ **雙介面支援**: CLI 命令列 + PyQt5 GUI
 - 📊 **結果管理**: Excel 報表輸出、影像標註保存
 - 🔄 **多產品支援**: 靈活的產品/區域/類型配置體系
@@ -602,10 +603,10 @@ configs. This GUI/runtime project should only consume and measure those
 artifacts:
 
 ```powershell
-cd D:\Git\robotlearning\Yolo11_auto_train
+cd D:\Git\robotlearning\yolo11_workspace\Yolo11_auto_train
 picture-tool-pipeline --config configs\<product>.yaml --tasks yolo_train,deploy
 
-cd D:\Git\robotlearning\yolo11_inference
+cd D:\Git\robotlearning\yolo11_workspace\yolo11_inference
 python tools\runtime_benchmark.py `
   --backend yolo `
   --model models\Cable1\A\yolo\weights\best.pt `

@@ -50,6 +50,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      QT_QPA_PLATFORM: "offscreen"
     strategy:
       fail-fast: false
       matrix:
@@ -78,17 +79,17 @@ jobs:
     
     - name: Run fast tests (skip GUI)
       run: |
-        pytest -v -m "not gui" -p no:pytestqt --ignore=core/performance_test.py
+        pytest -v -m "not gui" -p pytestqt.plugin --ignore=core/performance_test.py
       continue-on-error: ${{ runner.os == 'Linux' }}
 
     - name: Run all tests with coverage
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
       run: |
-        pytest -p pytest_cov -m "not gui" --cov=core --cov=app --cov-report=xml --cov-report=term
+        pytest -p pytest_cov -p pytestqt.plugin -m "not gui" --cov=core --cov=app --cov-report=xml --cov-report=term
       continue-on-error: true
     
     - name: Upload coverage to Codecov
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
       uses: codecov/codecov-action@v3
       with:
         file: ./coverage.xml
@@ -99,8 +100,8 @@ jobs:
   build:
     name: Build Package
     runs-on: ubuntu-latest
-    needs: [lint]
-    if: ${{ always() && needs.lint.result == 'success' }}
+    needs: [lint, test]
+    if: ${{ always() && needs.lint.result == 'success' && needs.test.result == 'success' }}
     
     steps:
     - uses: actions/checkout@v3
