@@ -381,6 +381,8 @@ class ReviewThumbnailPanel(QWidget):
             )
 
     def _request_thumbnail_at(self, position: int, *, priority: int) -> None:
+        if sip.isdeleted(self) or sip.isdeleted(self.list_widget):
+            return
         item = self.list_widget.item(position)
         if item is None or bool(item.data(THUMBNAIL_REQUESTED_ROLE)):
             return

@@ -1,3 +1,4 @@
+from PyQt5 import sip
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage
 from PyQt5.QtWidgets import QComboBox, QLineEdit, QWidget
@@ -72,7 +73,8 @@ def test_thumbnail_panel_ignores_queued_timer_after_list_is_deleted(qtbot):
         current_index=0,
     )
 
-    panel.list_widget.deleteLater()
+    sip.delete(panel.list_widget)
+    panel._request_thumbnail_at(0, priority=0)
     qtbot.wait(10)
 
 
