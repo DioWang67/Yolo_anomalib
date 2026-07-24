@@ -11,11 +11,14 @@ import argparse
 import csv
 import hashlib
 import json
+import logging
 import math
 import os
 import shutil
+import tempfile
 import time
 import uuid
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -24,19 +27,29 @@ from typing import Any
 
 from PIL import Image
 
+from core.retraining_options import RetrainingOptions
+from tools.color_feedback import export_color_feedback
 from tools.process_liveness import is_process_active
+from tools.review_routing import action_route
+from tools.review_workflow import (
+    blocking_violations,
+    record_identity,
+    validate_record_consistency,
+)
 
 DEFAULT_LABELS = {
     "confirmed_ng",
     "verified_empty",
     "false_positive",
     "false_negative",
+    "wrong_box",
     "wrong_class",
 }
 
-HOLD_LABELS = {"uncertain", "image_quality_issue"}
+HOLD_LABELS = {"confirmed_ok", "uncertain", "image_quality_issue"}
 MISSING_LABEL_BASELINE = "missing"
 SNAPSHOT_DUPLICATE_IOU_THRESHOLD = 0.90
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -64,6 +77,68 @@ class ExportedReviewItem:
 
 
 @dataclass(frozen=True)
+class DeduplicationAuditRecord:
+    """One explicit canonical selection for byte-identical image content."""
+
+    image_sha256: str
+    kept_sample: str
+    excluded_sample: str
+    reason: str
+    kept_label_sha256: str
+    excluded_label_sha256: str
+    kept_source_type: str
+    excluded_source_type: str
+
+
+class CanonicalLabelConflictError(ValueError):
+    """Raised when duplicate labels have no auditable canonical winner."""
+
+    def __init__(self, first: ExportedReviewItem, second: ExportedReviewItem) -> None:
+        reason = (
+            "conflicting_equally_authoritative_labels"
+            if _ready_item_priority(first) == _ready_item_priority(second)
+            else "conflicting_labels_without_canonical_rule"
+        )
+        first_label_sha = _label_sha256(first.output_label)
+        second_label_sha = _label_sha256(second.output_label)
+        original_sample_ids = [first.sample_id, second.sample_id]
+        sample_ids = original_sample_ids
+        if first.sample_id == second.sample_id:
+            sample_ids = [
+                f"{first.sample_id}@label-{first_label_sha[:12]}",
+                f"{second.sample_id}@label-{second_label_sha[:12]}",
+            ]
+        self.conflict = {
+            "image_sha256": first.image_sha256,
+            "sample_ids": sample_ids,
+            "original_sample_ids": original_sample_ids,
+            "label_sha256s": [
+                first_label_sha,
+                second_label_sha,
+            ],
+            "normalized_labels": [
+                list(_label_signature(first.output_label)),
+                list(_label_signature(second.output_label)),
+            ],
+            "source_types": [
+                _ready_source_type(first),
+                _ready_source_type(second),
+            ],
+            "label_paths": [first.output_label, second.output_label],
+            "reason": reason,
+        }
+        super().__init__(
+            "Identical image content has conflicting labels without an applicable "
+            "canonical rule; "
+            "automatic canonical selection is forbidden: "
+            f"image_sha={first.image_sha256}, "
+            f"samples={','.join(sample_ids)}, "
+            f"label_sha={','.join(self.conflict['label_sha256s'])}, "
+            f"source_type={','.join(self.conflict['source_types'])}"
+        )
+
+
+@dataclass(frozen=True)
 class OperatorHandoffReport:
     """Summary returned after an OP sends reviewed cases to training."""
 
@@ -77,6 +152,9 @@ class OperatorHandoffReport:
     job_id: str = ""
     status_path: Path | None = None
     reused_existing: bool = False
+    color_feedback_count: int = 0
+    color_case_count: int = 0
+    color_manifest_paths: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -89,6 +167,15 @@ class _SnapshotDetection:
     bbox: tuple[float, float, float, float]
     image_width: float
     image_height: float
+
+
+@dataclass(frozen=True)
+class _TrainingImageSource:
+    """Image selected for YOLO training and the canvas that owns its boxes."""
+
+    path: Path
+    image_size: tuple[int, int]
+    detection_image_size: tuple[int, int]
 
 
 def export_review_dataset(
@@ -191,6 +278,7 @@ def export_operator_handoff(
     output_dir: str | Path,
     *,
     inference_models_dir: str | Path | None = None,
+    training_options: dict[str, Any] | None = None,
 ) -> OperatorHandoffReport:
     """Export OP-confirmed boxes and route unsafe cases to an annotation queue.
 
@@ -202,14 +290,32 @@ def export_operator_handoff(
     manifest_path = Path(manifest_csv)
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
+    selected_training_options = RetrainingOptions.from_mapping(training_options)
     updates: list[tuple[str, ExportedReviewItem | dict[str, str]]] = []
     skipped_count = 0
 
     with _handoff_export_lock(output_root):
+        approved_annotation_selections = _load_approved_annotation_selections(
+            manifest_path
+        )
         with manifest_path.open("r", encoding="utf-8-sig", newline="") as handle:
             review_rows = list(csv.DictReader(handle))
         review_rows = _enrich_legacy_class_contracts(review_rows, output_root)
+        _preflight_review_workflow(review_rows)
         _preflight_operator_class_contracts(review_rows)
+        allowed_ready_rows, deduplication_records = (
+            _preflight_ready_canonical_selection(
+                review_rows,
+                manifest_path=manifest_path,
+                output_root=output_root,
+                approved_selections=approved_annotation_selections,
+            )
+        )
+        color_feedback = export_color_feedback(
+            review_rows,
+            source_manifest=manifest_path,
+            output_root=output_root,
+        )
         for row_index, row in enumerate(review_rows, start=1):
             review_label = str(row.get("review_label") or "").strip()
             if not review_label:
@@ -220,7 +326,14 @@ def export_operator_handoff(
             ) == "0":
                 updates.append(("excluded", _excluded_state_row(row)))
                 continue
+            route = action_route(row)
+            if route == "color":
+                continue
+            if route == "both":
+                review_label = str(row.get("detection_verdict") or "").strip()
             if review_label == "confirmed_ng":
+                if row_index not in allowed_ready_rows:
+                    continue
                 item, reason = _export_snapshot_verified_row(
                     row, row_index, manifest_path, output_root
                 )
@@ -232,6 +345,8 @@ def export_operator_handoff(
                     )
                 continue
             if review_label == "verified_empty":
+                if row_index not in allowed_ready_rows:
+                    continue
                 item, reason = _export_verified_empty_row(
                     row, manifest_path, output_root
                 )
@@ -245,11 +360,13 @@ def export_operator_handoff(
             if review_label in {
                 "false_positive",
                 "false_negative",
+                "wrong_box",
                 "wrong_class",
             }:
                 pending_reason = {
                     "false_positive": "false_detection_requires_correction",
                     "false_negative": "missed_detection_requires_box_annotation",
+                    "wrong_box": "box_geometry_requires_correction",
                     "wrong_class": "wrong_class_requires_correction",
                 }[review_label]
                 updates.append(
@@ -272,6 +389,18 @@ def export_operator_handoff(
             key = _state_key(payload)
             latest_updates[key] = (state, payload)
         final_updates = list(latest_updates.values())
+
+        if not final_updates and color_feedback.item_count:
+            return OperatorHandoffReport(
+                handoff_path=color_feedback.manifest_paths[0],
+                ready_count=0,
+                pending_count=0,
+                skipped_count=skipped_count,
+                targets=color_feedback.targets,
+                color_feedback_count=color_feedback.item_count,
+                color_case_count=color_feedback.case_count,
+                color_manifest_paths=color_feedback.manifest_paths,
+            )
 
         ready_items = [
             payload
@@ -304,7 +433,16 @@ def export_operator_handoff(
                     f"請先用目前模型重新檢測影像：{product}/{area}"
                 )
         _materialize_pending_rows(pending_rows)
-        _apply_operator_state_updates(final_updates, output_root)
+        _apply_operator_state_updates(
+            final_updates,
+            output_root,
+            approved_selections=approved_annotation_selections,
+        )
+        deduplication_audit_path = _write_deduplication_audit(
+            output_root,
+            source_manifest=manifest_path,
+            records=deduplication_records,
+        )
         total_ready_by_target = {
             target: len(_read_export_manifest(_target_manifest(output_root, *target)))
             for target in targets
@@ -315,7 +453,10 @@ def export_operator_handoff(
         }
         total_ready_count = sum(total_ready_by_target.values())
         total_pending_count = sum(total_pending_by_target.values())
-        submission_hash = _operator_submission_hash(final_updates)
+        submission_hash = _operator_submission_hash(
+            final_updates,
+            selected_training_options,
+        )
         existing_handoff = _find_active_operator_job(output_root, submission_hash)
         if existing_handoff is not None:
             existing_payload = _read_json_mapping(existing_handoff)
@@ -333,6 +474,9 @@ def export_operator_handoff(
                 job_id=str(existing_payload.get("job_id") or ""),
                 status_path=existing_status_path,
                 reused_existing=True,
+                color_feedback_count=color_feedback.item_count,
+                color_case_count=color_feedback.case_count,
+                color_manifest_paths=color_feedback.manifest_paths,
             )
 
         job_id = _new_operator_job_id()
@@ -340,7 +484,7 @@ def export_operator_handoff(
         handoff_path = job_dir / "handoff.json"
         status_path = job_dir / "status.json"
         handoff_payload = {
-            "schema_version": 3,
+            "schema_version": 4,
             "job_id": job_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "submission_hash": submission_hash,
@@ -356,6 +500,8 @@ def export_operator_handoff(
             "total_ready_count": total_ready_count,
             "pending_count": len(pending_rows),
             "skipped_count": skipped_count,
+            "training_options": selected_training_options.to_dict(),
+            "deduplication_audit_path": str(deduplication_audit_path or ""),
             "targets": [
                 {
                     "product": product,
@@ -424,7 +570,69 @@ def export_operator_handoff(
         total_pending_count=total_pending_count,
         job_id=job_id,
         status_path=status_path,
+        color_feedback_count=color_feedback.item_count,
+        color_case_count=color_feedback.case_count,
+        color_manifest_paths=color_feedback.manifest_paths,
     )
+
+
+def _original_first_path(row: dict[str, str]) -> Path:
+    """Return the camera frame when available, otherwise the inference canvas."""
+    original = Path(str(row.get("original_path") or ""))
+    if original.is_file():
+        return original
+    return Path(str(row.get("preprocessed_path") or ""))
+
+
+def _select_training_image(
+    row: dict[str, str], *, require_detection_canvas: bool
+) -> _TrainingImageSource | None:
+    """Select an original-first training image with an explicit box canvas."""
+    source_path = _original_first_path(row)
+    source_size = _read_image_size(source_path) if source_path.is_file() else None
+    if source_size is None:
+        return None
+
+    processed_path = Path(str(row.get("preprocessed_path") or ""))
+    processed_size = (
+        _read_image_size(processed_path) if processed_path.is_file() else None
+    )
+    if source_path == processed_path:
+        processed_size = source_size
+    if require_detection_canvas and processed_size is None:
+        return None
+    return _TrainingImageSource(
+        path=source_path,
+        image_size=source_size,
+        detection_image_size=processed_size or source_size,
+    )
+
+
+def prepare_annotation_draft(row: Mapping[str, Any]) -> tuple[Path, str]:
+    """Return the original-first image and current YOLO evidence without writes.
+
+    Phase 3C2 uses this narrow adapter so annotation packaging retains the same
+    snapshot-to-original coordinate conversion as the Phase 1A exporter.
+    An existing verified operator label is preferred over the AI snapshot.
+    """
+    values = {str(key): str(value or "") for key, value in row.items()}
+    source = _select_training_image(values, require_detection_canvas=True)
+    if source is None:
+        raise ValueError("training_image_or_detection_canvas_missing")
+    output_label = Path(values.get("output_label") or "")
+    if (
+        values.get("annotation_status", "").strip() == "verified_annotation"
+        and output_label.is_file()
+    ):
+        return source.path, output_label.read_text(encoding="utf-8")
+    class_names = _json_string_list(values.get("class_names_json"))
+    lines = _snapshot_yolo_label_lines(
+        values.get("detections_json") or "",
+        image_size=source.image_size,
+        detection_image_size=source.detection_image_size,
+        class_names=class_names,
+    )
+    return source.path, ("\n".join(lines) + "\n" if lines else "")
 
 
 def _export_snapshot_verified_row(
@@ -432,14 +640,19 @@ def _export_snapshot_verified_row(
     row_index: int,
     manifest_path: Path,
     output_root: Path,
+    *,
+    materialize: bool = True,
+    copy_image: bool = True,
 ) -> tuple[ExportedReviewItem | None, str]:
-    source_path = Path(str(row.get("preprocessed_path") or ""))
-    if not source_path.is_file():
-        return None, "preprocessed_image_missing"
+    source = _select_training_image(row, require_detection_canvas=True)
+    if source is None:
+        return None, "training_image_or_detection_canvas_missing"
+    source_path = source.path
     class_names = _json_string_list(row.get("class_names_json"))
     label_lines = _snapshot_yolo_label_lines(
         row.get("detections_json") or "",
-        image_size=_read_image_size(source_path),
+        image_size=source.image_size,
+        detection_image_size=source.detection_image_size,
         class_names=class_names,
     )
     if not label_lines:
@@ -453,14 +666,15 @@ def _export_snapshot_verified_row(
     target_root = output_root / _safe_name(product) / _safe_name(area)
     images_dir = target_root / "raw" / "images"
     labels_dir = target_root / "raw" / "labels"
-    images_dir.mkdir(parents=True, exist_ok=True)
-    labels_dir.mkdir(parents=True, exist_ok=True)
     output_name = _stable_output_name(sample_id, source_path)
     output_image = images_dir / output_name
     output_label = labels_dir / f"{output_image.stem}.txt"
-    if not output_image.exists():
-        shutil.copy2(source_path, output_image)
-    _write_text_atomic(output_label, "\n".join(label_lines) + "\n")
+    if materialize:
+        images_dir.mkdir(parents=True, exist_ok=True)
+        labels_dir.mkdir(parents=True, exist_ok=True)
+        if copy_image and not output_image.exists():
+            shutil.copy2(source_path, output_image)
+        _write_text_atomic(output_label, "\n".join(label_lines) + "\n")
     return (
         ExportedReviewItem(
             source_manifest=str(manifest_path),
@@ -492,13 +706,15 @@ def _snapshot_yolo_label_lines(
     detections_json: str,
     *,
     image_size: tuple[int, int] | None = None,
+    detection_image_size: tuple[int, int] | None = None,
     class_names: list[str] | None = None,
 ) -> list[str]:
-    """Convert snapshot boxes using the dimensions of the stored review image.
+    """Convert snapshot boxes into labels for the selected training image.
 
-    Detection metadata can describe the camera frame even when ``bbox`` values
-    belong to a resized, letterboxed review image.  ``image_size`` therefore
-    takes precedence whenever the stored image can be inspected.
+    ``bbox`` values are produced on the resized/letterboxed inference canvas.
+    When the selected training image is the original camera frame,
+    ``detection_image_size`` is used to reverse that letterbox transform before
+    YOLO normalization.  Legacy callers that omit it keep same-canvas behavior.
     """
     try:
         detections = json.loads(detections_json)
@@ -512,6 +728,12 @@ def _snapshot_yolo_label_lines(
     if image_size is not None:
         actual_width, actual_height = map(float, image_size)
         if actual_width <= 0 or actual_height <= 0:
+            return []
+    detection_width: float | None = None
+    detection_height: float | None = None
+    if detection_image_size is not None:
+        detection_width, detection_height = map(float, detection_image_size)
+        if detection_width <= 0 or detection_height <= 0:
             return []
 
     ordered_class_names = [str(name).strip() for name in class_names or []]
@@ -529,16 +751,8 @@ def _snapshot_yolo_label_lines(
             class_id = int(raw["class_id"])
             x1, y1, x2, y2 = [float(value) for value in bbox]
             confidence = float(raw.get("confidence", 0.0))
-            width = (
-                actual_width
-                if actual_width is not None
-                else float(raw["image_width"])
-            )
-            height = (
-                actual_height
-                if actual_height is not None
-                else float(raw["image_height"])
-            )
+            width = detection_width or actual_width or float(raw["image_width"])
+            height = detection_height or actual_height or float(raw["image_height"])
         except (KeyError, TypeError, ValueError):
             continue
         numeric_values = (x1, y1, x2, y2, confidence, width, height)
@@ -551,6 +765,22 @@ def _snapshot_yolo_label_lines(
             class_id = class_id_by_name[verified_class]
         if ordered_class_names and class_id >= len(ordered_class_names):
             continue
+        if (
+            actual_width is not None
+            and actual_height is not None
+            and detection_width is not None
+            and detection_height is not None
+            and (actual_width, actual_height) != (detection_width, detection_height)
+        ):
+            projected = _reverse_letterbox_bbox(
+                (x1, y1, x2, y2),
+                original_size=(actual_width, actual_height),
+                letterbox_size=(detection_width, detection_height),
+            )
+            if projected is None:
+                continue
+            x1, y1, x2, y2 = projected
+            width, height = actual_width, actual_height
         x1, x2 = max(0.0, x1), min(width, x2)
         y1, y2 = max(0.0, y1), min(height, y2)
         if x2 <= x1 or y2 <= y1:
@@ -592,6 +822,41 @@ def _snapshot_yolo_label_lines(
     return lines
 
 
+def _reverse_letterbox_bbox(
+    bbox: tuple[float, float, float, float],
+    *,
+    original_size: tuple[float, float],
+    letterbox_size: tuple[float, float],
+) -> tuple[float, float, float, float] | None:
+    """Project one XYXY box from ``ImageUtils.letterbox`` back to the source."""
+    original_width, original_height = original_size
+    canvas_width, canvas_height = letterbox_size
+    if min(original_width, original_height, canvas_width, canvas_height) <= 0:
+        return None
+    ratio = min(canvas_width / original_width, canvas_height / original_height)
+    resized_width = int(original_width * ratio)
+    resized_height = int(original_height * ratio)
+    if resized_width <= 0 or resized_height <= 0:
+        return None
+    left = int((canvas_width - resized_width) // 2)
+    top = int((canvas_height - resized_height) // 2)
+    scale_x = resized_width / original_width
+    scale_y = resized_height / original_height
+    x1, y1, x2, y2 = bbox
+    projected = (
+        (x1 - left) / scale_x,
+        (y1 - top) / scale_y,
+        (x2 - left) / scale_x,
+        (y2 - top) / scale_y,
+    )
+    px1, py1, px2, py2 = projected
+    px1, px2 = max(0.0, px1), min(original_width, px2)
+    py1, py2 = max(0.0, py1), min(original_height, py2)
+    if px2 <= px1 or py2 <= py1:
+        return None
+    return px1, py1, px2, py2
+
+
 def _bbox_iou(
     first: tuple[float, float, float, float],
     second: tuple[float, float, float, float],
@@ -607,12 +872,15 @@ def _bbox_iou(
 
 
 def _export_verified_empty_row(
-    row: dict[str, str], manifest_path: Path, output_root: Path
+    row: dict[str, str],
+    manifest_path: Path,
+    output_root: Path,
+    *,
+    materialize: bool = True,
+    copy_image: bool = True,
 ) -> tuple[ExportedReviewItem | None, str]:
     """Export an explicitly verified background image with an empty label."""
-    source_path = Path(
-        str(row.get("preprocessed_path") or row.get("original_path") or "")
-    )
+    source_path = _original_first_path(row)
     if not source_path.is_file():
         return None, "verified_empty_image_missing"
     product = str(row.get("product") or "unknown")
@@ -624,11 +892,12 @@ def _export_verified_empty_row(
         sample_id, source_path
     )
     output_label = target_root / "raw" / "labels" / f"review_{sample_id}.txt"
-    output_image.parent.mkdir(parents=True, exist_ok=True)
-    output_label.parent.mkdir(parents=True, exist_ok=True)
-    if not output_image.exists():
-        shutil.copy2(source_path, output_image)
-    _write_text_atomic(output_label, "")
+    if materialize:
+        output_image.parent.mkdir(parents=True, exist_ok=True)
+        output_label.parent.mkdir(parents=True, exist_ok=True)
+        if copy_image and not output_image.exists():
+            shutil.copy2(source_path, output_image)
+        _write_text_atomic(output_label, "")
     class_names = _json_string_list(row.get("class_names_json"))
     return (
         ExportedReviewItem(
@@ -657,14 +926,51 @@ def _export_verified_empty_row(
     )
 
 
+def prepare_ready_review_item(
+    row: dict[str, str],
+    *,
+    row_index: int,
+    manifest_path: str | Path,
+    workspace: str | Path,
+    copy_image: bool = False,
+) -> tuple[ExportedReviewItem | None, str]:
+    """Build one READY item using the legacy handoff conversion rules.
+
+    The workspace receives only the normalized label when ``copy_image`` is
+    false. This lets dry-run callers exercise the exact Phase 1A label and
+    canonical logic without creating a dataset or handoff job.
+    """
+    values = {str(key): str(value or "") for key, value in row.items()}
+    review_label = str(values.get("review_label") or "").strip()
+    if review_label == "confirmed_ng":
+        return _export_snapshot_verified_row(
+            values,
+            row_index,
+            Path(manifest_path),
+            Path(workspace),
+            materialize=True,
+            copy_image=copy_image,
+        )
+    if review_label == "verified_empty":
+        return _export_verified_empty_row(
+            values,
+            Path(manifest_path),
+            Path(workspace),
+            materialize=True,
+            copy_image=copy_image,
+        )
+    return None, "review_label_is_not_dataset_ready"
+
+
 def _export_pending_row(
     row: dict[str, str], output_root: Path, reason: str
 ) -> dict[str, str]:
     product = str(row.get("product") or "unknown")
     area = str(row.get("area") or "unknown")
-    processed_source = Path(str(row.get("preprocessed_path") or ""))
-    original_source = Path(str(row.get("original_path") or ""))
-    source = processed_source if processed_source.is_file() else original_source
+    source = _original_first_path(row)
+    detection_source = Path(str(row.get("preprocessed_path") or ""))
+    if not detection_source.is_file():
+        detection_source = source
     output_image = ""
     output_label = ""
     image_sha256 = ""
@@ -715,6 +1021,7 @@ def _export_pending_row(
         ),
         "detections_json": str(row.get("detections_json") or "[]"),
         "source_image": str(source),
+        "detection_source_image": str(detection_source),
         "output_image": output_image,
         "output_label": output_label,
         "label_baseline_sha256": label_baseline_sha256,
@@ -751,12 +1058,16 @@ def _materialize_pending_rows(pending_rows: list[dict[str, str]]) -> None:
             reason = str(row.get("reason") or "")
             if reason in {
                 "false_detection_requires_correction",
+                "box_geometry_requires_correction",
                 "wrong_class_requires_correction",
                 "operator_uncertain_requires_review",
             } and not output_label.exists():
                 draft_lines = _snapshot_yolo_label_lines(
                     str(row.get("detections_json") or ""),
                     image_size=_read_image_size(output_image),
+                    detection_image_size=_read_image_size(
+                        Path(str(row.get("detection_source_image") or output_image))
+                    ),
                     class_names=_json_string_list(row.get("class_names_json")),
                 )
                 if draft_lines:
@@ -788,16 +1099,22 @@ def _preflight_operator_class_contracts(
             or str(row.get("training_selected") or "1") == "0"
         ):
             continue
+        route = action_route(row)
+        if route == "color":
+            continue
+        if route == "both":
+            review_label = str(row.get("detection_verdict") or "").strip()
         if review_label not in {
             "confirmed_ng",
             "verified_empty",
             "false_positive",
             "false_negative",
+            "wrong_box",
             "wrong_class",
         }:
             continue
         contract_rows.append(("pending", row))
-        if review_label in {"false_positive", "false_negative", "wrong_class"}:
+        if review_label in {"false_positive", "false_negative", "wrong_box", "wrong_class"}:
             pending_targets.add(
                 (
                     str(row.get("product") or "unknown"),
@@ -827,6 +1144,11 @@ def _enrich_legacy_class_contracts(
     selected_by_target: dict[tuple[str, str], list[dict[str, str]]] = {}
     for row in rows:
         review_label = str(row.get("review_label") or "").strip()
+        route = action_route(row)
+        if route == "color":
+            continue
+        if route == "both":
+            review_label = str(row.get("detection_verdict") or "").strip()
         if (
             review_label not in DEFAULT_LABELS
             or str(row.get("training_selected") or "1") == "0"
@@ -943,9 +1265,7 @@ def _excluded_state_row(row: dict[str, str]) -> dict[str, str]:
     """Build a non-copying state update that revokes a prior exported sample."""
     product = str(row.get("product") or "unknown")
     area = str(row.get("area") or "unknown")
-    source = Path(
-        str(row.get("preprocessed_path") or row.get("original_path") or "")
-    )
+    source = _original_first_path(row)
     if source.is_file():
         image_sha256 = _sha256_file(source)
     else:
@@ -1088,18 +1408,27 @@ def _safe_name(value: str) -> str:
 def _write_export_manifest(items: list[ExportedReviewItem], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = list(ExportedReviewItem.__dataclass_fields__.keys())
-    temporary = path.with_name(f".{path.name}.tmp")
+    temporary: Path | None = None
     try:
-        with temporary.open("w", encoding="utf-8", newline="") as handle:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows([asdict(item) for item in items])
-        temporary.replace(path)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
     finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _state_key(
@@ -1107,12 +1436,569 @@ def _state_key(
 ) -> tuple[str, str, str]:
     """Return the target-local identity used for reversible state updates."""
     if isinstance(payload, ExportedReviewItem):
-        return payload.product, payload.area, payload.sample_id
-    return (
-        str(payload.get("product") or "unknown"),
-        str(payload.get("area") or "unknown"),
-        str(payload.get("sample_id") or payload.get("config_snapshot_path") or ""),
+        product = payload.product
+        area = payload.area
+        image_sha256 = payload.image_sha256
+        fallback = payload.sample_id
+    else:
+        product = str(payload.get("product") or "unknown")
+        area = str(payload.get("area") or "unknown")
+        image_sha256 = str(payload.get("image_sha256") or "")
+        fallback = str(
+            payload.get("sample_id") or payload.get("config_snapshot_path") or ""
+        )
+    identity = (
+        _sample_id(product, area, image_sha256)
+        if image_sha256
+        else fallback
     )
+    return product, area, identity
+
+
+def _index_ready_items_by_content(
+    items: list[ExportedReviewItem],
+    *,
+    audit_records: list[DeduplicationAuditRecord] | None = None,
+    approved_selections: dict[str, dict[str, Any]] | None = None,
+) -> tuple[dict[str, ExportedReviewItem], list[ExportedReviewItem]]:
+    """Collapse legacy sample IDs that point to identical target-local pixels."""
+    indexed: dict[str, ExportedReviewItem] = {}
+    superseded: list[ExportedReviewItem] = []
+    for item in items:
+        identity = _state_key(item)[2]
+        existing = indexed.get(identity)
+        if existing is None:
+            indexed[identity] = item
+            continue
+        if (
+            existing.sample_id == item.sample_id
+            and existing.annotation_status == item.annotation_status
+            and _label_signature(existing.output_label)
+            == _label_signature(item.output_label)
+        ):
+            # Idempotent refresh of the same canonical record is not a
+            # deduplication event and must remain part of the submission.
+            indexed[identity] = item
+            continue
+        approved_preferred = _approved_annotation_preference(
+            existing,
+            item,
+            approved_selections or {},
+        )
+        preferred = approved_preferred or _preferred_ready_item(existing, item)
+        excluded = item if preferred is existing else existing
+        superseded.append(excluded)
+        if audit_records is not None:
+            audit_records.append(
+                _deduplication_audit_record(
+                    preferred,
+                    excluded,
+                    reason_override=(
+                        "approved_human_canonical_selection"
+                        if approved_preferred is not None
+                        else ""
+                    ),
+                )
+            )
+        indexed[identity] = preferred
+    return indexed, superseded
+
+
+def select_canonical_ready_items(
+    items: list[ExportedReviewItem],
+    *,
+    audit_records: list[DeduplicationAuditRecord] | None = None,
+    approved_selections: dict[str, dict[str, Any]] | None = None,
+) -> tuple[dict[str, ExportedReviewItem], list[ExportedReviewItem]]:
+    """Public, side-effect-free Phase 1A canonical-selection service.
+
+    Dataset preparation and the legacy handoff must share this exact rule set.
+    Callers own any temporary label files referenced by ``items``.
+    """
+    return _index_ready_items_by_content(
+        items,
+        audit_records=audit_records,
+        approved_selections=approved_selections,
+    )
+
+
+def _preferred_ready_item(
+    first: ExportedReviewItem,
+    second: ExportedReviewItem,
+) -> ExportedReviewItem:
+    """Apply only explicit, auditable canonical selection rules."""
+    first_rank = _ready_item_priority(first)
+    second_rank = _ready_item_priority(second)
+    labels_match = _label_signature(first.output_label) == _label_signature(
+        second.output_label
+    )
+    if labels_match:
+        if first_rank != second_rank:
+            return first if first_rank > second_rank else second
+        first_canonical = _is_canonical_ready_item(first)
+        second_canonical = _is_canonical_ready_item(second)
+        if first_canonical != second_canonical:
+            return first if first_canonical else second
+        return min((first, second), key=lambda item: item.sample_id)
+    first_source = _ready_source_type(first)
+    second_source = _ready_source_type(second)
+    if first_source.startswith("human_") and second_source == "ai_snapshot":
+        return first
+    if second_source.startswith("human_") and first_source == "ai_snapshot":
+        return second
+    raise CanonicalLabelConflictError(first, second)
+
+
+def _ready_item_priority(item: ExportedReviewItem) -> int:
+    return {
+        "verified_annotation": 3,
+        "verified_empty": 3,
+        "verified_snapshot": 2,
+    }.get(item.annotation_status, 1)
+
+
+def _is_canonical_ready_item(item: ExportedReviewItem) -> bool:
+    canonical_id = _sample_id(item.product, item.area, item.image_sha256)
+    return bool(item.image_sha256) and item.sample_id == canonical_id
+
+
+def _ready_source_type(item: ExportedReviewItem) -> str:
+    return {
+        "verified_annotation": "human_annotation",
+        "verified_empty": "human_empty",
+        "verified_snapshot": "ai_snapshot",
+    }.get(item.annotation_status, "legacy_unknown")
+
+
+def _deduplication_audit_record(
+    kept: ExportedReviewItem,
+    excluded: ExportedReviewItem,
+    *,
+    reason_override: str = "",
+) -> DeduplicationAuditRecord:
+    kept_label_sha = _label_sha256(kept.output_label)
+    excluded_label_sha = _label_sha256(excluded.output_label)
+    kept_source = _ready_source_type(kept)
+    excluded_source = _ready_source_type(excluded)
+    if reason_override:
+        reason = reason_override
+    elif kept_source.startswith("human_") and excluded_source == "ai_snapshot":
+        reason = (
+            "identical_label_prefer_human_over_ai"
+            if kept_label_sha == excluded_label_sha
+            else "human_annotation_over_ai_snapshot"
+        )
+    elif kept_label_sha == excluded_label_sha:
+        reason = (
+            "identical_label_prefer_canonical_sample"
+            if _is_canonical_ready_item(kept)
+            else "identical_label_deterministic_sample"
+        )
+    else:
+        reason = "higher_authority_source"
+    return DeduplicationAuditRecord(
+        image_sha256=kept.image_sha256,
+        kept_sample=kept.sample_id,
+        excluded_sample=excluded.sample_id,
+        reason=reason,
+        kept_label_sha256=kept_label_sha,
+        excluded_label_sha256=excluded_label_sha,
+        kept_source_type=kept_source,
+        excluded_source_type=excluded_source,
+    )
+
+
+def _label_sha256(value: str) -> str:
+    signature = _label_signature(value)
+    serialized = "\n".join(signature).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def normalized_label_sha256(value: str | Path) -> str:
+    """Return the normalized label SHA used by Phase 1A conflict checks."""
+    return _label_sha256(str(value))
+
+
+def _load_approved_annotation_selections(
+    manifest_path: Path,
+) -> dict[str, dict[str, Any]]:
+    """Load active Phase 1C canonical selections without mutating repair data."""
+    root = manifest_path.resolve().parent / ".review_repairs" / "annotation_resolutions"
+    if not root.is_dir():
+        return {}
+    selected_by_image: dict[str, dict[str, Any]] = {}
+    resolution_documents: list[tuple[Path, dict[str, Any]]] = []
+    for path in sorted(root.glob("*.json")):
+        if path.name.endswith(".rollback.json"):
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Approved annotation resolution is unreadable: {path}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"Approved annotation resolution is invalid: {path}")
+        resolution_documents.append((path, payload))
+    superseded_ids = {
+        str(resolution.get("supersedes_revision_id") or "")
+        for _path, payload in resolution_documents
+        if isinstance((resolution := payload.get("resolution")), dict)
+    }
+    for path, payload in resolution_documents:
+        resolution = payload.get("resolution")
+        if not isinstance(resolution, dict) or resolution.get("mode") not in {
+            "selected_sample", "new_annotation_revision"
+        }:
+            continue
+        resolution_id = str(payload.get("resolution_id") or payload.get("proposal_id") or "")
+        if resolution_id and resolution_id in superseded_ids:
+            continue
+        if resolution_id and any(
+            str(revocation.get("resolution_id") or "") == resolution_id
+            for revocation in (
+                _read_json_mapping(candidate)
+                for candidate in sorted((root / "revocations").glob("*.json"))
+            )
+        ):
+            continue
+        revocation_path = path.with_suffix(f"{path.suffix}.rollback.json")
+        if revocation_path.exists():
+            revocation = _read_json_mapping(revocation_path)
+            expected_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+            if (
+                revocation.get("event") != "annotation_resolution_revoked"
+                or revocation.get("resolution_sha256") != expected_sha
+            ):
+                raise ValueError(
+                    f"Annotation resolution rollback record is invalid: {revocation_path}"
+                )
+            continue
+        image_sha = str(payload.get("image_sha256") or "")
+        selected_sample = str(resolution.get("selected_sample_id") or "")
+        if resolution.get("mode") == "new_annotation_revision":
+            new_path = Path(str(resolution.get("new_annotation_path") or ""))
+            new_sha = str(resolution.get("new_annotation_sha256") or "")
+            if (
+                not image_sha or not selected_sample or not new_path.is_file()
+                or _label_sha256(str(new_path)) != new_sha
+            ):
+                raise ValueError(f"Approved annotation revision is stale: {path}")
+            candidate = {
+                "mode": "new_annotation_revision",
+                "selected_sample_id": selected_sample,
+                "label_sha256_by_sample": {selected_sample: new_sha},
+                "resolution_path": str(path),
+                "revision_path": str(new_path),
+            }
+            existing = selected_by_image.get(image_sha)
+            if existing is not None and existing != candidate:
+                raise ValueError(
+                    "Multiple active annotation resolutions disagree for image SHA "
+                    f"{image_sha}"
+                )
+            selected_by_image[image_sha] = candidate
+            continue
+        sample_ids = [str(value) for value in payload.get("conflicting_sample_ids", [])]
+        label_hashes = [str(value) for value in payload.get("old_label_sha256s", [])]
+        if (
+            not image_sha
+            or selected_sample not in sample_ids
+            or len(sample_ids) != len(label_hashes)
+        ):
+            raise ValueError(f"Approved annotation resolution is incomplete: {path}")
+        candidate = {
+            "mode": "selected_sample",
+            "selected_sample_id": selected_sample,
+            "label_sha256_by_sample": dict(zip(sample_ids, label_hashes, strict=True)),
+            "resolution_path": str(path),
+        }
+        existing = selected_by_image.get(image_sha)
+        if existing is not None and existing != candidate:
+            raise ValueError(
+                "Multiple active annotation resolutions disagree for image SHA "
+                f"{image_sha}"
+            )
+        selected_by_image[image_sha] = candidate
+    return selected_by_image
+
+
+def load_approved_annotation_selections(
+    manifest_path: str | Path,
+) -> dict[str, dict[str, Any]]:
+    """Read active Phase 1C selections without mutating repair artifacts."""
+    return _load_approved_annotation_selections(Path(manifest_path))
+
+
+def _approved_annotation_preference(
+    first: ExportedReviewItem,
+    second: ExportedReviewItem,
+    approved_selections: dict[str, dict[str, Any]],
+) -> ExportedReviewItem | None:
+    """Apply one approved human selection only to its exact conflict evidence."""
+    if _label_signature(first.output_label) == _label_signature(second.output_label):
+        return None
+    selection = approved_selections.get(first.image_sha256)
+    if selection is None or second.image_sha256 != first.image_sha256:
+        return None
+    expected_by_sample = selection["label_sha256_by_sample"]
+    if selection.get("mode") == "new_annotation_revision":
+        for item in (first, second):
+            if (
+                item.sample_id == selection["selected_sample_id"]
+                and _label_sha256(item.output_label)
+                == expected_by_sample[item.sample_id]
+            ):
+                return item
+        return None
+    candidate_by_item: dict[int, str] = {}
+    for item in (first, second):
+        label_sha = _label_sha256(item.output_label)
+        direct = item.sample_id
+        qualified = f"{item.sample_id}@label-{label_sha[:12]}"
+        candidate_id = direct if direct in expected_by_sample else qualified
+        candidate_by_item[id(item)] = candidate_id
+    pair = set(candidate_by_item.values())
+    if not pair.issubset(expected_by_sample):
+        return None
+    for item in (first, second):
+        candidate_id = candidate_by_item[id(item)]
+        if _label_sha256(item.output_label) != expected_by_sample[candidate_id]:
+            raise ValueError(
+                "Approved annotation resolution is stale for sample "
+                f"{item.sample_id}: {selection['resolution_path']}"
+            )
+    selected = selection["selected_sample_id"]
+    if candidate_by_item[id(first)] == selected:
+        return first
+    if candidate_by_item[id(second)] == selected:
+        return second
+    return None
+
+
+def _preflight_ready_canonical_selection(
+    review_rows: list[dict[str, str]],
+    *,
+    manifest_path: Path,
+    output_root: Path,
+    approved_selections: dict[str, dict[str, Any]],
+) -> tuple[set[int], list[DeduplicationAuditRecord]]:
+    """Resolve ready duplicates before any production label is overwritten."""
+    preflight_root = (
+        output_root
+        / ".operator_handoff"
+        / f".canonical-preflight-{os.getpid()}-{uuid.uuid4().hex}"
+    )
+    prospective: dict[
+        tuple[str, str], list[tuple[int, ExportedReviewItem]]
+    ] = {}
+    affected_targets: set[tuple[str, str]] = set()
+    pending_replacements: dict[tuple[str, str], set[str]] = {}
+    try:
+        for row_index, row in enumerate(review_rows, start=1):
+            row_preflight_root = preflight_root / f"row-{row_index}"
+            review_label = str(row.get("review_label") or "").strip()
+            if not review_label or str(row.get("training_selected") or "1") == "0":
+                continue
+            route = action_route(row)
+            if route == "color":
+                continue
+            if route == "both":
+                review_label = str(row.get("detection_verdict") or "").strip()
+            if review_label in {
+                "false_positive",
+                "false_negative",
+                "wrong_box",
+                "wrong_class",
+            }:
+                pending = _export_pending_row(
+                    row,
+                    output_root,
+                    "canonical_preflight_pending_replacement",
+                )
+                identity = _state_key(pending)[2]
+                if identity and str(pending.get("image_sha256") or ""):
+                    target = (
+                        str(pending.get("product") or "unknown"),
+                        str(pending.get("area") or "unknown"),
+                    )
+                    pending_replacements.setdefault(target, set()).add(identity)
+                continue
+            item: ExportedReviewItem | None = None
+            if review_label == "confirmed_ng":
+                item, _reason = _export_snapshot_verified_row(
+                    row,
+                    row_index,
+                    manifest_path,
+                    row_preflight_root,
+                    materialize=True,
+                )
+            elif review_label == "verified_empty":
+                item, _reason = _export_verified_empty_row(
+                    row,
+                    manifest_path,
+                    row_preflight_root,
+                    materialize=True,
+                )
+            if item is not None:
+                affected_targets.add((item.product, item.area))
+                prospective.setdefault((item.product, item.area), []).append(
+                    (row_index, item)
+                )
+
+        allowed_rows: set[int] = set()
+        audit_records: list[DeduplicationAuditRecord] = []
+        for product, area in sorted(affected_targets):
+            candidates = prospective.get((product, area), [])
+            existing = _read_export_manifest(
+                _target_manifest(output_root, product, area)
+            )
+            replaced_identities = pending_replacements.get((product, area), set())
+            existing = [
+                item
+                for item in existing
+                if _state_key(item)[2] not in replaced_identities
+            ]
+            combined = [*existing, *(item for _index, item in candidates)]
+            indexed, _superseded = _index_ready_items_by_content(
+                combined,
+                audit_records=audit_records,
+                approved_selections=approved_selections,
+            )
+            retained_object_ids = {id(item) for item in indexed.values()}
+            allowed_rows.update(
+                row_index
+                for row_index, item in candidates
+                if id(item) in retained_object_ids
+            )
+        return allowed_rows, audit_records
+    except CanonicalLabelConflictError as exc:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        report_path = (
+            output_root
+            / ".operator_handoff"
+            / "conflict_reports"
+            / f"{timestamp}-{uuid.uuid4().hex}.json"
+        )
+        _write_json_atomic(
+            report_path,
+            {
+                "schema_version": 1,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "source_manifest": str(manifest_path.resolve()),
+                "mode": "blocked_before_handoff",
+                "mutation_performed": False,
+                "conflicts": [exc.conflict],
+                "recommended_action": (
+                    "Review the conflicting authoritative labels and create an "
+                    "explicit corrected review revision before resubmitting."
+                ),
+            },
+        )
+        raise ValueError(f"{exc} Conflict report: {report_path}") from exc
+    finally:
+        shutil.rmtree(preflight_root, ignore_errors=True)
+
+
+def _preflight_review_workflow(review_rows: list[dict[str, str]]) -> None:
+    """Block contradictory selected rows before any handoff artifact is written."""
+    invalid: list[tuple[str, tuple[str, ...], dict[str, str]]] = []
+    for row in review_rows:
+        if str(row.get("training_selected") or "1").strip() == "0":
+            continue
+        if not str(row.get("review_label") or "").strip():
+            continue
+        candidate = {**row, "handoff_selected": "1"}
+        violations = blocking_violations(validate_record_consistency(candidate))
+        if not violations:
+            continue
+        sample_id = record_identity(candidate)
+        codes = tuple(violation.code for violation in violations)
+        fields = {
+            field: str(candidate.get(field) or "")
+            for field in (
+                "review_selected",
+                "review_outcome",
+                "review_label",
+                "failure_category",
+                "skip_reason",
+                "product_verdict",
+                "detection_verdict",
+                "color_verdict",
+                "action_route",
+                "training_selected",
+            )
+        }
+        invalid.append((sample_id, codes, fields))
+        logger.error(
+            "Handoff workflow validation rejected sample=%s fields=%s "
+            "violations=%s",
+            sample_id,
+            fields,
+            list(codes),
+        )
+    if invalid:
+        preview = "; ".join(
+            f"sample={sample_id} rules={','.join(codes)}"
+            for sample_id, codes, _fields in invalid[:10]
+        )
+        raise ValueError(
+            "Review workflow validation failed before handoff; no handoff was "
+            f"created: {preview}"
+        )
+
+
+def _write_deduplication_audit(
+    output_root: Path,
+    *,
+    source_manifest: Path,
+    records: list[DeduplicationAuditRecord],
+) -> Path | None:
+    """Persist one append-only audit document for every actual canonicalization."""
+    if not records:
+        return None
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    path = (
+        output_root
+        / ".operator_handoff"
+        / "deduplication_audits"
+        / f"{timestamp}-{uuid.uuid4().hex}.json"
+    )
+    _write_json_atomic(
+        path,
+        {
+            "schema_version": 1,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "source_manifest": str(source_manifest.resolve()),
+            "records": [asdict(record) for record in records],
+        },
+    )
+    for record in records:
+        logger.info(
+            "Canonical duplicate selection image_sha=%s kept=%s excluded=%s "
+            "reason=%s kept_label_sha=%s excluded_label_sha=%s "
+            "kept_source=%s excluded_source=%s",
+            record.image_sha256,
+            record.kept_sample,
+            record.excluded_sample,
+            record.reason,
+            record.kept_label_sha256,
+            record.excluded_label_sha256,
+            record.kept_source_type,
+            record.excluded_source_type,
+        )
+    return path
+
+
+def _label_signature(value: str) -> tuple[str, ...]:
+    if not value:
+        return ()
+    try:
+        return tuple(
+            line.strip()
+            for line in Path(value).read_text(encoding="utf-8-sig").splitlines()
+            if line.strip()
+        )
+    except (OSError, UnicodeDecodeError):
+        return (f"missing:{Path(value)}",)
 
 
 def _target_manifest(output_root: Path, product: str, area: str) -> Path:
@@ -1138,6 +2024,8 @@ def _pending_manifest(output_root: Path, product: str, area: str) -> Path:
 def _apply_operator_state_updates(
     updates: list[tuple[str, ExportedReviewItem | dict[str, str]]],
     output_root: Path,
+    *,
+    approved_selections: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Apply latest ready/pending decisions and remove the superseded state."""
     grouped: dict[
@@ -1151,55 +2039,90 @@ def _apply_operator_state_updates(
         target_root = output_root / _safe_name(product) / _safe_name(area)
         ready_path = _target_manifest(output_root, product, area)
         pending_path = _pending_manifest(output_root, product, area)
-        ready_by_id = {
-            item.sample_id or _sample_id(item.product, item.area, item.image_sha256): item
-            for item in _read_export_manifest(ready_path)
+        replacement_states = {
+            _state_key(payload)[2]: state
+            for state, payload in target_updates
+            if _state_key(payload)[2] and state in {"pending", "excluded"}
         }
-        pending_by_id = {
-            str(row.get("sample_id") or row.get("config_snapshot_path") or ""): row
-            for row in _read_pending_manifest(pending_path)
-            if str(row.get("sample_id") or row.get("config_snapshot_path") or "")
-        }
-
-        for state, payload in target_updates:
-            _product, _area, sample_id = _state_key(payload)
-            if state == "ready" and isinstance(payload, ExportedReviewItem):
-                old_pending = pending_by_id.pop(sample_id, None)
-                if old_pending:
-                    _remove_pending_files(old_pending, target_root)
-                old_ready = ready_by_id.get(sample_id)
-                if old_ready and old_ready.output_image != payload.output_image:
-                    _remove_ready_files(old_ready, target_root)
-                ready_by_id[sample_id] = payload
-                continue
-
-            if state == "pending" and isinstance(payload, dict):
-                old_ready = ready_by_id.pop(sample_id, None)
-                if old_ready:
-                    _remove_ready_files(old_ready, target_root)
-                old_pending = pending_by_id.get(sample_id)
-                if old_pending and old_pending.get("output_image") != payload.get(
-                    "output_image"
-                ):
-                    _remove_pending_files(old_pending, target_root)
-                pending_by_id[sample_id] = payload
-                continue
-
-            if state == "excluded":
-                old_ready = ready_by_id.pop(sample_id, None)
-                if old_ready:
-                    _remove_ready_files(old_ready, target_root)
-                old_pending = pending_by_id.pop(sample_id, None)
-                if old_pending:
-                    _remove_pending_files(old_pending, target_root)
-
-        ready_items = sorted(ready_by_id.values(), key=lambda item: item.sample_id)
-        pending_rows = sorted(
-            pending_by_id.values(), key=lambda row: str(row.get("sample_id") or "")
+        existing_ready = _read_export_manifest(ready_path)
+        replaced_ready = [
+            item
+            for item in existing_ready
+            if _state_key(item)[2] in replacement_states
+        ]
+        retained_ready = [
+            item
+            for item in existing_ready
+            if _state_key(item)[2] not in replacement_states
+        ]
+        archive_path, archived_files = _archive_superseded_ready_items(
+            replaced_ready,
+            target_root,
+            replacement_states=replacement_states,
         )
-        _write_export_manifest(ready_items, ready_path)
-        _write_pending_manifest(pending_path, pending_rows)
-        _cleanup_legacy_review_files(target_root, ready_items)
+        try:
+            for item in replaced_ready:
+                _remove_ready_files(item, target_root)
+            ready_by_id, superseded_ready = _index_ready_items_by_content(
+                retained_ready,
+                approved_selections=approved_selections,
+            )
+            for item in superseded_ready:
+                if all(
+                    item.output_image != retained.output_image
+                    for retained in ready_by_id.values()
+                ):
+                    _remove_ready_files(item, target_root)
+            pending_by_id = {
+                _state_key(row)[2]: row
+                for row in _read_pending_manifest(pending_path)
+                if _state_key(row)[2]
+            }
+
+            for state, payload in target_updates:
+                _product, _area, sample_id = _state_key(payload)
+                if state == "ready" and isinstance(payload, ExportedReviewItem):
+                    old_pending = pending_by_id.pop(sample_id, None)
+                    if old_pending:
+                        _remove_pending_files(old_pending, target_root)
+                    old_ready = ready_by_id.get(sample_id)
+                    if old_ready and old_ready.output_image != payload.output_image:
+                        _remove_ready_files(old_ready, target_root)
+                    ready_by_id[sample_id] = payload
+                    continue
+
+                if state == "pending" and isinstance(payload, dict):
+                    old_ready = ready_by_id.pop(sample_id, None)
+                    if old_ready:
+                        _remove_ready_files(old_ready, target_root)
+                    old_pending = pending_by_id.get(sample_id)
+                    if old_pending and old_pending.get("output_image") != payload.get(
+                        "output_image"
+                    ):
+                        _remove_pending_files(old_pending, target_root)
+                    pending_by_id[sample_id] = payload
+                    continue
+
+                if state == "excluded":
+                    old_ready = ready_by_id.pop(sample_id, None)
+                    if old_ready:
+                        _remove_ready_files(old_ready, target_root)
+                    old_pending = pending_by_id.pop(sample_id, None)
+                    if old_pending:
+                        _remove_pending_files(old_pending, target_root)
+
+            ready_items = sorted(ready_by_id.values(), key=lambda item: item.sample_id)
+            pending_rows = sorted(
+                pending_by_id.values(), key=lambda row: str(row.get("sample_id") or "")
+            )
+            _write_export_manifest(ready_items, ready_path)
+            _write_pending_manifest(pending_path, pending_rows)
+            _cleanup_legacy_review_files(target_root, ready_items)
+        except (OSError, UnicodeError, ValueError, csv.Error):
+            _restore_archived_ready_files(archived_files)
+            _update_supersession_archive_status(archive_path, "rolled_back")
+            raise
+        _update_supersession_archive_status(archive_path, "committed")
 
     all_ready: list[ExportedReviewItem] = []
     all_pending: list[dict[str, str]] = []
@@ -1222,6 +2145,119 @@ def _remove_ready_files(item: ExportedReviewItem, target_root: Path) -> None:
         _unlink_managed_path(value, target_root)
 
 
+def _archive_superseded_ready_items(
+    items: list[ExportedReviewItem],
+    target_root: Path,
+    *,
+    replacement_states: dict[str, str],
+) -> tuple[Path | None, tuple[tuple[Path, Path], ...]]:
+    """Preserve old ready evidence before a current review sends it elsewhere."""
+    if not items:
+        return None, ()
+    event_id = (
+        f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S.%fZ}-"
+        f"{uuid.uuid4().hex}"
+    )
+    archive_parent = target_root / ".operator_handoff" / "superseded_ready"
+    archive_path = archive_parent / event_id
+    staging = archive_parent / f".{event_id}.tmp"
+    archived_files: list[tuple[Path, Path]] = []
+    records: list[dict[str, Any]] = []
+    archive_parent.mkdir(parents=True, exist_ok=True)
+    try:
+        staging.mkdir()
+        for item_index, item in enumerate(items):
+            identity = _state_key(item)[2]
+            archived: dict[str, str] = {}
+            for field, folder in (
+                ("output_image", "images"),
+                ("output_label", "labels"),
+            ):
+                source = Path(str(getattr(item, field) or ""))
+                if not source.is_file() or not _is_managed_path(source, target_root):
+                    continue
+                relative = Path(folder) / f"{item_index:04d}-{source.name}"
+                staged_destination = staging / relative
+                staged_destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, staged_destination)
+                if _sha256_file(source) != _sha256_file(staged_destination):
+                    raise OSError(f"Superseded evidence copy verification failed: {source}")
+                archived[field] = str(relative)
+                archived_files.append((source, archive_path / relative))
+            records.append(
+                {
+                    "sample_id": item.sample_id,
+                    "image_sha256": item.image_sha256,
+                    "label_sha256": _label_sha256(item.output_label),
+                    "source_type": _ready_source_type(item),
+                    "replacement_state": replacement_states.get(identity, ""),
+                    "reason": (
+                        "current_review_requires_reannotation"
+                        if replacement_states.get(identity) == "pending"
+                        else "current_review_excluded"
+                    ),
+                    "original_output_image": item.output_image,
+                    "original_output_label": item.output_label,
+                    "archived_files": archived,
+                }
+            )
+        _write_json_atomic(
+            staging / "archive.json",
+            {
+                "schema_version": 1,
+                "event_id": event_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "status": "prepared",
+                "old_annotations_preserved": True,
+                "records": records,
+            },
+        )
+        os.replace(staging, archive_path)
+        return archive_path, tuple(archived_files)
+    except (OSError, ValueError):
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def _restore_archived_ready_files(
+    archived_files: tuple[tuple[Path, Path], ...],
+) -> None:
+    """Best-effort rollback for evidence removed before manifest replacement."""
+    for original, archived in archived_files:
+        if original.exists() or not archived.is_file():
+            continue
+        try:
+            original.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(archived, original)
+        except OSError:
+            logger.exception(
+                "Failed to restore superseded ready evidence original=%s archive=%s",
+                original,
+                archived,
+            )
+
+
+def _update_supersession_archive_status(
+    archive_path: Path | None,
+    status: str,
+) -> None:
+    """Record whether the surrounding manifest transition committed."""
+    if archive_path is None:
+        return
+    audit_path = archive_path / "archive.json"
+    try:
+        payload = _read_json_mapping(audit_path)
+        payload["status"] = status
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _write_json_atomic(audit_path, payload)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        logger.exception(
+            "Failed to update superseded-ready archive status path=%s status=%s",
+            archive_path,
+            status,
+        )
+
+
 def _remove_pending_files(row: dict[str, str], target_root: Path) -> None:
     for field in ("output_image", "output_label"):
         _unlink_managed_path(str(row.get(field) or ""), target_root)
@@ -1242,6 +2278,13 @@ def _unlink_managed_path(value: str, target_root: Path) -> None:
         resolved.unlink()
     except FileNotFoundError:
         pass
+
+
+def _is_managed_path(path: Path, target_root: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(target_root.resolve())
+    except OSError:
+        return False
 
 
 def _cleanup_legacy_review_files(
@@ -1405,15 +2448,14 @@ def _read_export_manifest(path: Path) -> list[ExportedReviewItem]:
 def _merge_export_items(
     existing: list[ExportedReviewItem], new_items: list[ExportedReviewItem]
 ) -> list[ExportedReviewItem]:
-    merged: dict[tuple[str, str, str], ExportedReviewItem] = {}
+    grouped: dict[tuple[str, str], list[ExportedReviewItem]] = {}
     for item in [*existing, *new_items]:
-        key = (
-            item.product,
-            item.area,
-            item.sample_id or item.image_sha256 or item.output_image,
-        )
-        merged[key] = item
-    return sorted(merged.values(), key=lambda item: item.output_image)
+        grouped.setdefault((item.product, item.area), []).append(item)
+    merged: list[ExportedReviewItem] = []
+    for items in grouped.values():
+        indexed, _superseded = _index_ready_items_by_content(items)
+        merged.extend(indexed.values())
+    return sorted(merged, key=lambda item: item.output_image)
 
 
 def _write_pending_manifests(
@@ -1456,12 +2498,7 @@ def _merge_pending_rows(
 ) -> list[dict[str, str]]:
     merged: dict[str, dict[str, str]] = {}
     for row in [*existing, *new_rows]:
-        key = str(
-            row.get("sample_id")
-            or row.get("config_snapshot_path")
-            or row.get("output_image")
-            or ""
-        )
+        key = _state_key(row)[2] or str(row.get("output_image") or "")
         if key:
             merged[key] = row
     return sorted(merged.values(), key=lambda row: row.get("output_image", ""))
@@ -1487,14 +2524,24 @@ def _write_pending_manifest(path: Path, rows: list[dict[str, str]]) -> None:
         "class_schema_hash",
         "detections_json",
         "source_image",
+        "detection_source_image",
         "output_image",
         "output_label",
         "label_baseline_sha256",
         "config_snapshot_path",
     ]
-    temporary = path.with_name(f".{path.name}.tmp")
+    temporary: Path | None = None
     try:
-        with temporary.open("w", encoding="utf-8", newline="") as handle:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
             writer = csv.DictWriter(handle, fieldnames=fields)
             writer.writeheader()
             writer.writerows(
@@ -1503,12 +2550,12 @@ def _write_pending_manifest(path: Path, rows: list[dict[str, str]]) -> None:
                     for row in rows
                 ]
             )
-        temporary.replace(path)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
     finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _write_text_atomic(path: Path, value: str) -> None:
@@ -1567,6 +2614,7 @@ def _new_operator_job_id() -> str:
 
 def _operator_submission_hash(
     updates: list[tuple[str, ExportedReviewItem | dict[str, str]]],
+    training_options: RetrainingOptions | None = None,
 ) -> str:
     fingerprint: list[dict[str, str]] = []
     for state, payload in updates:
@@ -1585,12 +2633,18 @@ def _operator_submission_hash(
             }
         )
     serialized = json.dumps(
-        sorted(
-            fingerprint,
-            key=lambda item: (
-                item["product"], item["area"], item["sample_id"], item["state"]
+        {
+            "samples": sorted(
+                fingerprint,
+                key=lambda item: (
+                    item["product"],
+                    item["area"],
+                    item["sample_id"],
+                    item["state"],
+                ),
             ),
-        ),
+            "training_options": (training_options or RetrainingOptions()).to_dict(),
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -1659,17 +2713,24 @@ def _read_json_mapping(path: str | Path) -> dict[str, Any]:
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
+    temporary: Path | None = None
     try:
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        temporary.replace(path)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
     finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _write_manifests(

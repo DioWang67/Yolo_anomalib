@@ -3,7 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 import core.services.color_override_loader as color_override_loader
+from core.services.color_checker import ColorCheckerService
 from core.services.color_override_loader import ColorOverrideLoader
 
 
@@ -122,3 +125,20 @@ def test_color_override_loader_falls_back_to_global_decision_tuning(tmp_path):
     overrides, rules, tuning = loader.load(config, "LED", "A", "yolo", MagicMock())
 
     assert tuning == {"yellow_h_min": 25}
+
+
+def test_color_checker_rejects_an_active_override_that_cannot_be_applied():
+    service = ColorCheckerService()
+    service._checker = MagicMock()
+    service._checker.apply_threshold_overrides.side_effect = ValueError(
+        "invalid threshold"
+    )
+    service._model_path = "color-model.json"
+    service._checker_type = "stats"
+
+    with pytest.raises(RuntimeError, match="active color threshold overrides"):
+        service.ensure_loaded(
+            "color-model.json",
+            overrides={"red": 0.4},
+            checker_type="stats",
+        )
