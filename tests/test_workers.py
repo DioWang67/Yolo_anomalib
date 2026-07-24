@@ -43,9 +43,13 @@ class FakeCamera:
 class FakeResultSink:
     def __init__(self):
         self.flush_calls = 0
+        self.flush_async_calls = 0
 
     def flush(self):
         self.flush_calls += 1
+
+    def flush_async(self):
+        self.flush_async_calls += 1
 
 
 class PipelineSystem:
@@ -698,6 +702,8 @@ class TestStorageWorker:
         assert worker.saved_count == 1
         assert inf_q.qsize() == 0
         assert io_q.empty()
+        assert system.result_sink.flush_async_calls == 1
+        assert system.result_sink.flush_calls == 0
 
 
 # =====================================================================

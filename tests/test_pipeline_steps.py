@@ -113,6 +113,8 @@ class TestSaveResultsStep:
 
         # Verify that save was called once
         mock_sink.save.assert_called_once()
+        mock_sink.flush_async.assert_called_once()
+        mock_sink.flush.assert_not_called()
 
         # Verify the context's save_result is populated
         assert base_context.save_result is not None

@@ -860,12 +860,23 @@ class StorageWorker(BaseWorker):
         try:
             super().run()
         finally:
-            # Ensure any buffered writes (Excel rows, pending images)
-            # are flushed to disk before the thread exits.
+            # Image receipts are confirmed by ResultHandler.save_results().
+            # Schedule the derived Excel export without holding pipeline
+            # shutdown; DetectionSystem.shutdown() performs the final blocking
+            # close/flush for durability.
             try:
                 if self._system.result_sink:
-                    self._system.result_sink.flush()
-                    self._logger.info("Result sink flushed on shutdown")
+                    flush_async = getattr(
+                        self._system.result_sink, "flush_async", None
+                    )
+                    if callable(flush_async):
+                        flush_async()
+                        self._logger.info(
+                            "Result sink background flush scheduled on shutdown"
+                        )
+                    else:
+                        self._system.result_sink.flush()
+                        self._logger.info("Result sink flushed on shutdown")
             except Exception:
                 self._logger.error(
                     "Failed to flush result sink on shutdown", exc_info=True,

@@ -40,7 +40,10 @@ class ExcelWorkbookBuffer:
 
     def __post_init__(self) -> None:
         self.buffer: list[list[Any]] = []
-        self._lock = threading.Lock()
+        self._buffer_lock = threading.Lock()
+        self._write_lock = threading.Lock()
+        self._async_threads_lock = threading.Lock()
+        self._async_threads: set[threading.Thread] = set()
         if self.allowed_root:
             ensure_subpath(self.path, self.allowed_root, must_exist=False)
         self.backup_path = self.path + ".bak"
@@ -51,6 +54,8 @@ class ExcelWorkbookBuffer:
             self._initialize_excel()
         self.wb = self._load_or_rebuild_workbook()
         self.ws = self.wb.active
+        self._committed_max_row = int(self.ws.max_row)
+        self._inflight_rows = 0
         self._closed = False
         self._timer: threading.Timer | None = None
         if self.flush_interval:
@@ -66,11 +71,16 @@ class ExcelWorkbookBuffer:
 
     def append(self, row: Iterable[Any]) -> ExcelFlushResult | None:
         row_list = list(row)
-        with self._lock:
+        with self._buffer_lock:
+            if self._closed:
+                return ExcelFlushResult(
+                    success=False,
+                    error="Excel buffer is closed",
+                )
             self.buffer.append(row_list)
             should_flush = len(self.buffer) >= max(1, self.buffer_limit)
         if should_flush:
-            return self.flush()
+            self.flush_async()
         return None
 
     def flush(self) -> ExcelFlushResult:
@@ -78,17 +88,54 @@ class ExcelWorkbookBuffer:
         # under the lock: the periodic timer thread, StorageWorker, and
         # close() can flush concurrently, and openpyxl workbooks are not
         # thread-safe — interleaved append/save corrupts the file.
-        with self._lock:
-            if not self.buffer:
-                return ExcelFlushResult(success=True, rows_written=0)
-            rows = list(self.buffer)
-            result = self._write_rows_locked(rows)
-            if result.success:
+        with self._write_lock:
+            with self._buffer_lock:
+                if not self.buffer:
+                    return ExcelFlushResult(success=True, rows_written=0)
+                rows = list(self.buffer)
                 del self.buffer[: len(rows)]
+                self._inflight_rows += len(rows)
+
+            result = self._write_rows(rows)
+            with self._buffer_lock:
+                self._inflight_rows -= len(rows)
+                if result.success:
+                    self._committed_max_row += len(rows)
+                else:
+                    self.buffer[0:0] = rows
             return result
 
-    def _write_rows_locked(self, rows: list[list[Any]]) -> ExcelFlushResult:
-        """Append rows and save the workbook. Caller must hold ``_lock``."""
+    def flush_async(self) -> None:
+        """Flush buffered rows on a daemon thread without blocking detection."""
+        with self._buffer_lock:
+            if self._closed or not self.buffer:
+                return
+
+        thread = threading.Thread(
+            target=self._async_flush_worker,
+            daemon=True,
+            name="excel-flush",
+        )
+        with self._async_threads_lock:
+            self._async_threads.add(thread)
+        thread.start()
+
+    def _async_flush_worker(self) -> None:
+        current = threading.current_thread()
+        try:
+            result = self.flush()
+            if not result.success:
+                self.logger.error(
+                    "Background Excel flush failed; %d rows remain buffered: %s",
+                    self.pending_rows(),
+                    result.error,
+                )
+        finally:
+            with self._async_threads_lock:
+                self._async_threads.discard(current)
+
+    def _write_rows(self, rows: list[list[Any]]) -> ExcelFlushResult:
+        """Append one serialized batch to the workbook."""
         last_error = "flush_failed"
         for attempt in range(3):
             temporary_path = (
@@ -143,24 +190,39 @@ class ExcelWorkbookBuffer:
         )
 
     def next_test_id(self, pending_count: int | None = None) -> int:
-        with self._lock:
-            pending = len(self.buffer) if pending_count is None else pending_count
-            return self.ws.max_row + pending
+        with self._buffer_lock:
+            pending = (
+                self._inflight_rows + len(self.buffer)
+                if pending_count is None
+                else pending_count
+            )
+            return self._committed_max_row + pending
 
     def pending_rows(self) -> int:
-        with self._lock:
-            return len(self.buffer)
+        with self._buffer_lock:
+            return self._inflight_rows + len(self.buffer)
 
     def close(self) -> None:
-        with self._lock:
+        with self._buffer_lock:
             if self._closed:
                 return
             self._closed = True
             timer = self._timer
         if timer:
             timer.cancel()
+        self._wait_for_async_flushes()
         self.flush()
         self.wb.close()
+
+    def _wait_for_async_flushes(self) -> None:
+        """Wait for already-scheduled writers before closing the workbook."""
+        while True:
+            with self._async_threads_lock:
+                threads = list(self._async_threads)
+            if not threads:
+                return
+            for thread in threads:
+                thread.join()
 
     # ------------------------------------------------------------------
     # Internals
@@ -198,7 +260,7 @@ class ExcelWorkbookBuffer:
                 self.flush()
         finally:
             next_timer = None
-            with self._lock:
+            with self._buffer_lock:
                 if self.flush_interval and not self._closed:
                     next_timer = threading.Timer(
                         self.flush_interval, self._periodic_flush

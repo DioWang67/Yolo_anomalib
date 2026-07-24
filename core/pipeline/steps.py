@@ -326,7 +326,7 @@ class SaveResultsStep(Step):
             ctx.status = "ERROR"
             ctx.save_result = {"status": "ERROR", "error": str(exc)}
             return
-        flush_mode = str(self.options.get("flush", "always")).lower()
+        flush_mode = str(self.options.get("flush", "background")).lower()
         should_flush = flush_mode == "always" or (
             flush_mode == "fail" and str(ctx.status).upper() != "PASS"
         )
@@ -335,6 +335,10 @@ class SaveResultsStep(Step):
                 self.sink.flush()
             except Exception as _e:
                 self.logger.warning(f"Excel flush failed: {_e}")
+        elif flush_mode in {"background", "buffered", "async"}:
+            flush_async = getattr(self.sink, "flush_async", None)
+            if callable(flush_async):
+                flush_async()
 
 
 class PositionCheckStep(Step):

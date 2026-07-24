@@ -85,6 +85,9 @@ def test_yolo_and_anomalib_end_to_end(monkeypatch, tmp_path):
         def flush(self):
             self.flush_calls += 1
 
+        def flush_async(self):
+            self.flush_calls += 1
+
         def close(self):
             pass
 

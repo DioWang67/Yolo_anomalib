@@ -461,6 +461,10 @@ class ResultHandler:
             raise ResultExcelWriteError(excel_result.error or "Excel flush failed")
         self._img_queue.flush()
 
+    def flush_async(self) -> None:
+        """Schedule the Excel export without blocking the detection path."""
+        self._excel.flush_async()
+
     def close(self) -> None:
         def _warn(action: str, exc: Exception) -> None:
             import sys
