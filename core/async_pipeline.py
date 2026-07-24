@@ -17,7 +17,8 @@ import logging
 import queue
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from core.queues import OverwriteQueue
 from core.types import DetectionTask
@@ -46,11 +47,11 @@ class AsyncPipelineManager:
         self._lock = threading.Lock()
         self._active: bool = False
 
-        self._inference_queue: Optional[OverwriteQueue[DetectionTask]] = None
-        self._io_queue: Optional[queue.Queue[DetectionTask]] = None
-        self._acq_worker: Optional[AcquisitionWorker] = None
-        self._inf_worker: Optional[InferenceWorker] = None
-        self._sto_worker: Optional[StorageWorker] = None
+        self._inference_queue: OverwriteQueue[DetectionTask] | None = None
+        self._io_queue: queue.Queue[DetectionTask] | None = None
+        self._acq_worker: AcquisitionWorker | None = None
+        self._inf_worker: InferenceWorker | None = None
+        self._sto_worker: StorageWorker | None = None
         self._stop_event = threading.Event()
         self._last_stats = self._empty_counter_snapshot()
 
@@ -105,9 +106,9 @@ class AsyncPipelineManager:
         storage_queue_limit: int | None = 8,
         capture_interval: float = 0.0,
         mode: str = "continuous",
-        on_task_captured: Optional[Callable[[DetectionTask], None]] = None,
-        on_task_processed: Optional[Callable[[DetectionTask], None]] = None,
-        on_camera_lost: Optional[Callable[[], None]] = None,
+        on_task_captured: Callable[[DetectionTask], None] | None = None,
+        on_task_processed: Callable[[DetectionTask], None] | None = None,
+        on_camera_lost: Callable[[], None] | None = None,
         camera_lost_threshold: int = 5,
         camera_reconnect_attempts: int = 0,
         camera_reconnect_backoff: float = 2.0,
