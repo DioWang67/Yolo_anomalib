@@ -25,14 +25,18 @@ def load_image_with_retry(
     on_fail: Callable[[], None] | None = None,
 ) -> None:
     """Attempt to display an image with retries to handle async file writes."""
+    # Every request owns a new token, including requests whose path is not
+    # available yet.  This prevents an older deferred retry from replacing a
+    # newer inspection image.
+    viewer._load_token = getattr(viewer, "_load_token", 0) + 1
+    token: int = viewer._load_token
+
     if not path:
         if on_fail:
             on_fail()
         else:
             viewer.setText(_image_error(viewer, "display"))
         return
-
-    token: int = getattr(viewer, "_load_token", 0)
 
     def _attempt(remaining: int) -> None:
         from pathlib import Path

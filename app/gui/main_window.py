@@ -1008,6 +1008,7 @@ class DetectionSystemGUI(
             result_frame=res.get("result_frame"),
             metadata={
                 "task_id": task.task_id,
+                "storage_completed": False,
                 "decision": res.get("decision"),
                 "slot_check": res.get("slot_check"),
                 "slot_mismatches": res.get("slot_mismatches", []),
@@ -1035,6 +1036,8 @@ class DetectionSystemGUI(
         current.annotated_path = result.get("annotated_path", "")
         current.heatmap_path = result.get("heatmap_path", "")
         current.cropped_paths = result.get("cropped_paths", [])
+        current.metadata["storage_completed"] = True
+        self._refresh_detection_images()
 
     def _on_worker_finished(self) -> None:
         """Restore UI when worker finishes for any reason."""
@@ -1089,9 +1092,17 @@ class DetectionSystemGUI(
         )
 
     def _refresh_result_image(self) -> None:
-        """Render the result tab using either annotated or clean imagery."""
+        """Render the result tab from the current inspection artifacts."""
         result = self.current_result
         if result is None:
+            return
+
+        if result.metadata.get("storage_completed") is False:
+            load_image_with_retry(
+                self.result_image,
+                None,
+                on_fail=lambda: self.result_image.setText("Saving result image..."),
+            )
             return
 
         show_boxes = (
@@ -1144,10 +1155,41 @@ class DetectionSystemGUI(
                 annotated_path,
                 attempts=2,
                 delay_ms=150,
-                on_fail=load_heatmap,
+                on_fail=lambda: self.result_image.setText(
+                    "Unable to load saved result image"
+                ),
             )
-        else:
+        elif heatmap_path:
             load_heatmap()
+        else:
+            show_result_frame_data()
+
+    def _refresh_detection_images(self) -> None:
+        """Apply all image tabs from one current result snapshot."""
+        result = self.current_result
+        if result is None:
+            return
+
+        if result.metadata.get("storage_completed") is False:
+            self._refresh_result_image()
+            return
+
+        original_path = result.original_image_path or result.image_path
+        load_image_with_retry(
+            self.original_image,
+            original_path,
+            on_fail=lambda: self.original_image.setText(
+                "No original image available"
+            ),
+        )
+        load_image_with_retry(
+            self.processed_image,
+            result.preprocessed_image_path,
+            on_fail=lambda: self.processed_image.setText(
+                "No processed image available"
+            ),
+        )
+        self._refresh_result_image()
 
     @pyqtSlot(int)
     def _on_consecutive_fail_alert(self, count: int) -> None:
@@ -1639,19 +1681,7 @@ class DetectionSystemGUI(
         self._update_version_label(product, area, inference_type)
         self.info_panel.update_result(result)
 
-        original_path = result.original_image_path or result.image_path
-        preprocessed_path = result.preprocessed_image_path
-        load_image_with_retry(
-            self.original_image,
-            original_path,
-            on_fail=lambda: self.original_image.setText("No original image available"),
-        )
-        load_image_with_retry(
-            self.processed_image,
-            preprocessed_path,
-            on_fail=lambda: self.processed_image.setText("No processed image available"),
-        )
-        self._refresh_result_image()
+        self._refresh_detection_images()
 
         self.log_message(self._t("detect_done_log", status=result.status))
         self.statusBar().showMessage(

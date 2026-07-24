@@ -629,6 +629,9 @@ class ImageViewer(QLabel):
 
     def display_image(self, image: QImage | np.ndarray) -> None:
         """Display a QImage or BGR numpy array."""
+        # A live frame is also a new load request.  Cancel deferred disk loads
+        # from an older inspection before updating the pixmap.
+        self._load_token += 1
         try:
             if isinstance(image, QImage):
                 self.setPixmap(

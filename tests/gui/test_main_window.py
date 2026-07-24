@@ -1,5 +1,6 @@
 import time
 
+import numpy as np
 import pytest
 
 pytest.importorskip("PyQt5", reason="PyQt5 is required for GUI tests")
@@ -8,7 +9,7 @@ pytestmark = pytest.mark.gui
 
 from app.gui.i18n import tr
 from app.gui.main_window import DetectionSystemGUI
-from core.types import DetectionResult
+from core.types import DetectionResult, DetectionTask
 
 
 @pytest.fixture
@@ -173,6 +174,65 @@ def test_result_image_uses_preprocessed_path_when_boxes_hidden(gui, monkeypatch)
     gui.show_detection_boxes_chk.setChecked(False)
 
     assert calls[-1] == "processed.jpg"
+
+
+def test_pipeline_storage_completion_refreshes_all_three_artifact_tabs(
+    gui, monkeypatch
+):
+    """Pipeline UI must wait for persistence and then use its exact paths."""
+    loaded: list[tuple[object, str]] = []
+    live_result_frames: list[np.ndarray] = []
+
+    def fake_load_image_with_retry(widget, image_path, **_kwargs):
+        loaded.append((widget, image_path))
+
+    monkeypatch.setattr(
+        "app.gui.main_window.load_image_with_retry",
+        fake_load_image_with_retry,
+    )
+    monkeypatch.setattr(
+        gui.result_image,
+        "display_image",
+        live_result_frames.append,
+    )
+
+    task = DetectionTask(
+        task_id="inspection-1",
+        timestamp=time.time(),
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        frame=np.zeros((8, 8, 3), dtype=np.uint8),
+        result={
+            "status": "PASS",
+            "detections": [],
+            "result_frame": np.ones((8, 8, 3), dtype=np.uint8),
+        },
+    )
+
+    gui.on_pipeline_result(task)
+
+    assert gui.current_result is not None
+    assert gui.current_result.metadata["storage_completed"] is False
+    assert live_result_frames == []
+
+    loaded.clear()
+    task.result.update(
+        {
+            "original_image_path": "persisted-original.jpg",
+            "preprocessed_image_path": "persisted-processed.jpg",
+            "annotated_path": "persisted-annotated.jpg",
+        }
+    )
+    gui.on_pipeline_storage_completed(task)
+
+    assert gui.current_result.metadata["storage_completed"] is True
+    assert loaded == [
+        (gui.original_image, "persisted-original.jpg"),
+        (gui.processed_image, "persisted-processed.jpg"),
+        (gui.result_image, "persisted-annotated.jpg"),
+    ]
+    assert live_result_frames == []
 
 
 def test_engineer_image_tab_toggles_hide_optional_tabs(gui):
