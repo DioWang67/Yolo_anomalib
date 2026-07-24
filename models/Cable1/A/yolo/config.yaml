@@ -42,7 +42,7 @@ color_model_path: models/Cable1/A/yolo/color_stats.json
 position_config:
   Cable1:
     A:
-      enabled: true
+      enabled: false
       mode: center
       tolerance: 28.27
       expected_boxes:

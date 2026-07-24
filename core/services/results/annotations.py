@@ -11,12 +11,12 @@ from core.services.alignment import (
     resolve_missing_expected_keys,
 )
 from core.services.results.position_summary import (
-    POSITION_FAIL_STATES,
     POSITION_OK_STATES,
     format_fixture_shift_hint,
     summarize_position_records,
 )
 from core.utils import ImageUtils
+from core.visualization import draw_box_tag
 
 COLOR_PANEL_MAX_ITEMS = 8
 POSITION_PANEL_MAX_ITEMS = 4
@@ -75,7 +75,7 @@ def annotate_yolo_frame(
             color_item: dict[str, Any] | None = None
             if idx < len(color_items):
                 color_item = color_items[idx]
-            _draw_detection_box(image_utils, frame, det, color_item)
+            _draw_detection_box(frame, idx, det, color_item)
             if color_item is not None:
                 try:
                     if not color_item.get("is_ok", True):
@@ -94,6 +94,8 @@ def annotate_yolo_frame(
     if color_result:
         panel_lines.extend(_build_color_summary_lines(color_result, detections))
         _highlight_color_failures(frame, detections, color_result)
+    elif detections:
+        panel_lines.extend(_build_detection_summary_lines(detections))
 
     if missing_locations:
         missing_names = [str(item.get("class", "")) for item in missing_locations]
@@ -112,25 +114,26 @@ def annotate_yolo_frame(
 
 
 def _draw_detection_box(
-    image_utils: ImageUtils,
     frame: np.ndarray,
+    index: int,
     detection: dict[str, Any],
     color_item: dict[str, Any] | None = None,
 ) -> None:
     x1, y1, x2, y2 = _coerce_bbox(detection.get("bbox"))
-    label = f"{detection['class']} {detection['confidence']:.2f}"
     color = _position_color(detection)
+    position_status = str(detection.get("position_status") or "").upper()
+    position_is_ok = position_status in POSITION_OK_STATES
 
-    _draw_expected_position(frame, detection)
+    if position_status and not position_is_ok:
+        _draw_expected_position(frame, detection)
+        _draw_position_offset(frame, detection)
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-    _draw_position_offset(frame, detection)
-
-    label_y = max(y1 - 10, 20)
-    status_suffix = _short_position_status(detection.get("position_status"))
-    image_utils.draw_label(frame, f"{label}{status_suffix}", (x1, label_y), color)
-
+    tag_text = f"#{index}"
+    tag_color = color
     if color_item and not color_item.get("is_ok", True):
-        _draw_color_tag(image_utils, frame, x1, label_y, color_item)
+        tag_text += " NG"
+        tag_color = (0, 0, 255)
+    draw_box_tag(frame, (x1, y1, x2, y2), tag_text, tag_color)
 
 
 def _draw_expected_position(frame: np.ndarray, detection: dict[str, Any]) -> None:
@@ -294,7 +297,7 @@ def _build_position_summary_lines(
         return lines
 
     summary = summarize_position_records(detections)
-    if summary.total_with_position <= 0 and summary.skipped_count <= 0:
+    if summary.total_with_position <= 0:
         return lines
 
     summary_color = (0, 255, 0) if summary.fail_count == 0 else (0, 0, 255)
@@ -341,6 +344,25 @@ def _build_color_summary_lines(
     return lines
 
 
+def _build_detection_summary_lines(
+    detections: list[dict[str, Any]],
+) -> list[tuple[str, tuple[int, int, int]]]:
+    lines: list[tuple[str, tuple[int, int, int]]] = []
+    for index, detection in enumerate(detections[:COLOR_PANEL_MAX_ITEMS]):
+        class_name = str(detection.get("class") or "?")
+        try:
+            confidence = float(detection.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        lines.append(
+            (
+                f"#{index} {class_name} confidence={confidence:.2f}",
+                _position_color(detection),
+            )
+        )
+    return lines
+
+
 def _draw_info_panel(
     frame: np.ndarray,
     lines: list[tuple[str, tuple[int, int, int]]],
@@ -369,36 +391,6 @@ def _draw_info_panel(
         for idx, (text, color) in enumerate(lines):
             text_y = y + idx * line_gap
             cv2.putText(frame, text, (x, text_y), font, font_scale, color, thickness)
-    except Exception:
-        pass
-
-
-def _draw_color_tag(
-    image_utils: ImageUtils,
-    frame: np.ndarray,
-    x: int,
-    label_y: int,
-    color_item: dict[str, Any],
-) -> None:
-    try:
-        name = str(color_item.get("best_color") or "-")
-        diff = color_item.get("diff")
-        threshold = color_item.get("threshold")
-        diff_text = ""
-        if isinstance(diff, (int, float)) and isinstance(threshold, (int, float)):
-            diff_text = f" d={float(diff):.2f}/{float(threshold):.2f}"
-        status = "OK" if color_item.get("is_ok", True) else "NG"
-        tag_text = f"{name}{diff_text} {status}".strip()
-        tag_color = (0, 255, 0) if status == "OK" else (0, 0, 255)
-        offset_y = max(label_y - 18, 20)
-        image_utils.draw_label(
-            frame,
-            tag_text,
-            (x, offset_y),
-            tag_color,
-            font_scale=0.55,
-            thickness=1,
-        )
     except Exception:
         pass
 
@@ -470,21 +462,6 @@ def _position_color(detection: dict[str, Any]) -> tuple[int, int, int]:
     if status in {"INVALID", "ERROR"}:
         return (255, 0, 255)
     return colors(detection.get("class_id", 0), True)
-
-
-def _short_position_status(status: Any) -> str:
-    value = str(status or "").upper()
-    if not value:
-        return ""
-    if value == "CORRECT":
-        return " [OK]"
-    if value == "WRONG":
-        return " [NG]"
-    if value == "UNEXPECTED":
-        return " [UNEXP]"
-    if value in {"INVALID", "ERROR", "UNKNOWN"}:
-        return f" [{value}]"
-    return ""
 
 
 def _coerce_bbox(bbox: Any) -> tuple[int, int, int, int]:

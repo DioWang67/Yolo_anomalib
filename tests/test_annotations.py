@@ -58,7 +58,56 @@ def test_annotate_yolo_frame_uses_position_status_color_for_detection_box():
 
     annotate_yolo_frame(FakeImageUtils(), frame, detections, None, "FAIL")
 
-    assert tuple(frame[100, 100]) == (0, 140, 255)
+    assert tuple(frame[130, 100]) == (0, 140, 255)
+
+
+def test_annotate_yolo_frame_hides_position_debug_overlay_when_position_is_correct():
+    frame = np.zeros((220, 220, 3), dtype=np.uint8)
+    detections = [
+        {
+            "bbox": [140, 144, 170, 174],
+            "class": "part_a",
+            "class_id": 0,
+            "confidence": 0.98,
+            "position_status": "CORRECT",
+            "position_error": 80.0,
+            "position_expected_center": {"cx": 195.0, "cy": 195.0},
+            "position_expected_box": {
+                "x1": 185.0,
+                "y1": 185.0,
+                "x2": 205.0,
+                "y2": 205.0,
+            },
+        }
+    ]
+
+    annotate_yolo_frame(FakeImageUtils(), frame, detections, None, "PASS")
+
+    assert tuple(frame[185, 185]) == (0, 0, 0)
+
+
+def test_annotate_yolo_frame_omits_position_summary_when_check_is_disabled(
+    monkeypatch,
+):
+    frame = np.zeros((220, 220, 3), dtype=np.uint8)
+    detections = [
+        {
+            "bbox": [140, 144, 170, 174],
+            "class": "part_a",
+            "class_id": 0,
+            "confidence": 0.98,
+        }
+    ]
+    captured_lines = []
+
+    monkeypatch.setattr(
+        "core.services.results.annotations._draw_info_panel",
+        lambda _frame, lines, origin: captured_lines.extend(lines),
+    )
+
+    annotate_yolo_frame(FakeImageUtils(), frame, detections, None, "PASS")
+
+    assert not any(text.startswith("Pos:") for text, _ in captured_lines)
 
 
 def test_annotate_yolo_frame_draws_missing_expected_box_without_detection():
