@@ -71,7 +71,11 @@ class DetectionPipelineHost(Protocol):
         ...
 
     def persist_detection(self, ctx: Any, run_logger: Any) -> None:
-        """Run the post-processing pipeline and log the result summary."""
+        """Persist an already-finalized result and log the result summary."""
+        ...
+
+    def finalize_detection(self, ctx: Any, run_logger: Any) -> None:
+        """Run non-I/O verdict steps before the result is presented."""
         ...
 
 
@@ -479,11 +483,13 @@ class InferenceWorker(BaseWorker):
         detection_system: DetectionPipelineHost,
         *,
         name: str = "InferenceWorker",
+        on_task_inferred: Optional[Callable[[DetectionTask], None]] = None,
         stop_event: threading.Event | None = None,
     ) -> None:
         super().__init__(in_queue, out_queue, name=name, stop_event=stop_event)
         self._system = detection_system
         self._dropped_count: int = 0
+        self._on_task_inferred = on_task_inferred
 
     @property
     def dropped_count(self) -> int:
@@ -515,6 +521,7 @@ class InferenceWorker(BaseWorker):
             self._stop_event.set()
             task.result = self._build_inference_error_result(task, str(exc))
             task.error = str(exc)
+            self._notify_inferred(task)
             self._forward_to_storage(task)
             dropped = self._drop_pending_inference_tasks()
             if dropped:
@@ -533,6 +540,7 @@ class InferenceWorker(BaseWorker):
                 task, f"Inference exception: {exc}"
             )
             task.error = task.result["error"]
+            self._notify_inferred(task)
             self._forward_to_storage(task)
             dropped = self._drop_pending_inference_tasks()
             if dropped:
@@ -556,6 +564,7 @@ class InferenceWorker(BaseWorker):
             result.setdefault("unexpected_items", [])
             task.result = result
             task.error = str(error)
+            self._notify_inferred(task)
             self._forward_to_storage(task)
             dropped = self._drop_pending_inference_tasks()
             if dropped:
@@ -567,6 +576,21 @@ class InferenceWorker(BaseWorker):
 
         task.result = result
         task.error = result.get("error")
+        try:
+            self._finalize_result(task)
+        except Exception as exc:
+            self._logger.exception(
+                "Post-processing failed, stopping pipeline (task=%s)",
+                task.task_id,
+            )
+            self._stop_event.set()
+            task.result = self._build_inference_error_result(
+                task, f"Post-processing exception: {exc}"
+            )
+            task.error = task.result["error"]
+            self._notify_inferred(task)
+            self._forward_to_storage(task)
+            return False
 
         latency = time.time() - t0
         self._logger.debug(
@@ -574,7 +598,40 @@ class InferenceWorker(BaseWorker):
             task.task_id, latency, result.get("status"),
         )
 
+        self._notify_inferred(task)
         self._forward_to_storage(task)
+
+    def _finalize_result(self, task: DetectionTask) -> None:
+        """Compute the final verdict while keeping durability asynchronous."""
+        if task.result is None or task.frame is None:
+            return
+        finalizer = getattr(self._system, "finalize_detection", None)
+        if not callable(finalizer):
+            return
+        from core.pipeline.context import DetectionContext
+
+        ctx = DetectionContext(
+            product=task.product,
+            area=task.area,
+            inference_type=task.inference_type,
+            frame=task.frame,
+            processed_image=task.result.get("processed_image", task.frame),
+            result=task.result,
+            status=task.result.get("status", "ERROR"),
+            config=self._system.config,
+        )
+        finalizer(ctx, self._logger)
+        task.result["status"] = ctx.status
+        task.result["color_check"] = ctx.color_result
+
+    def _notify_inferred(self, task: DetectionTask) -> None:
+        """Publish the verdict before slower durability work begins."""
+        if self._on_task_inferred is None:
+            return
+        try:
+            self._on_task_inferred(task)
+        except Exception:
+            self._logger.error("Error in on_task_inferred callback", exc_info=True)
 
     @staticmethod
     def _build_inference_error_result(task: DetectionTask, error: str) -> dict[str, Any]:
@@ -696,6 +753,7 @@ class StorageWorker(BaseWorker):
                 processed_image=result.get("processed_image", task.frame),
                 result=result,
                 status=result.get("status", "ERROR"),
+                color_result=result.get("color_check"),
                 config=self._system.config,
             )
 

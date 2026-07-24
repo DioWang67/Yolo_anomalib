@@ -57,14 +57,16 @@ class PipelineBridge(QObject):
     image_ready : np.ndarray
         Emitted when AcquisitionWorker captures a new BGR frame.
     result_ready : DetectionTask
-        Emitted when StorageWorker finishes persisting a result.
-        The ``DetectionTask.result`` dict is populated at this point.
+        Emitted as soon as InferenceWorker produces a verdict.
+    storage_completed : DetectionTask
+        Emitted after StorageWorker finishes durable persistence.
     error_occurred : str
         Emitted on unrecoverable pipeline errors.
     """
 
     image_ready = pyqtSignal(object)    # np.ndarray (BGR) for ImagePanel
     result_ready = pyqtSignal(object)   # DetectionTask with .result populated
+    storage_completed = pyqtSignal(object)
     error_occurred = pyqtSignal(str)
     camera_disconnected = pyqtSignal()  # Camera lost during pipeline
     single_shot_finished = pyqtSignal(int)
@@ -120,9 +122,18 @@ class PipelineBridge(QObject):
         if task.result is None:
             return
         try:
-            self.result_ready.emit(task)
+            self.storage_completed.emit(task)
         except Exception:
             logger.error("PipelineBridge.on_task_processed failed", exc_info=True)
+
+    def on_task_inferred(self, task: DetectionTask, run_id: int | None = None) -> None:
+        """Publish the verdict without waiting for image/database writes."""
+        if not self._accepts_run(run_id) or task.result is None:
+            return
+        try:
+            self.result_ready.emit(task)
+        except Exception:
+            logger.error("PipelineBridge.on_task_inferred failed", exc_info=True)
 
     def on_camera_lost(self, run_id: int | None = None) -> None:
         """Hook invoked by AcquisitionWorker when camera appears disconnected.
@@ -240,6 +251,10 @@ class DetectionWorker(QThread):
                 mode=self._mode,
                 on_task_captured=(
                     (lambda task: self._bridge.on_task_captured(task, self._run_id))
+                    if self._bridge else None
+                ),
+                on_task_inferred=(
+                    (lambda task: self._bridge.on_task_inferred(task, self._run_id))
                     if self._bridge else None
                 ),
                 on_task_processed=(

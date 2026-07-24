@@ -113,6 +113,8 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         self.system.run_inference = MagicMock(
             return_value={"status": "PASS", "detections": []}
         )
+        self.system.finalize_detection = MagicMock()
+        self.system.persist_detection = MagicMock()
 
         self.system.start_pipeline("LED", "A", "yolo")
         self.assertTrue(self.system.pipeline_running)

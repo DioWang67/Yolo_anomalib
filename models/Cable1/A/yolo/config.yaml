@@ -1,4 +1,4 @@
-weights: models/Cable1/A/yolo/weights/Cable1_A_v1.0.4_20260722.pt
+weights: models/Cable1/A/yolo/weights/Cable1_A_v1.0.5_20260724.onnx
 device: cpu
 conf_thres: 0.4
 iou_thres: 0.45
@@ -111,7 +111,7 @@ position_config:
 save_annotated: true
 save_original: true
 save_fail_only: false
-exposure_time: '29496.0000'
+exposure_time: '79979.0000'
 light_brightness: 0
 save_crops: true
 save_processed: true

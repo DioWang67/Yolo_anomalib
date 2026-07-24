@@ -107,6 +107,7 @@ class AsyncPipelineManager:
         capture_interval: float = 0.0,
         mode: str = "continuous",
         on_task_captured: Callable[[DetectionTask], None] | None = None,
+        on_task_inferred: Callable[[DetectionTask], None] | None = None,
         on_task_processed: Callable[[DetectionTask], None] | None = None,
         on_camera_lost: Callable[[], None] | None = None,
         camera_lost_threshold: int = 5,
@@ -128,6 +129,7 @@ class AsyncPipelineManager:
             mode: ``single`` captures and stores one terminal result, while
                 ``continuous`` runs until stopped manually.
             on_task_captured: Optional GUI callback per captured frame.
+            on_task_inferred: Optional GUI callback as soon as inference completes.
             on_task_processed: Optional GUI callback per stored result.
             on_camera_lost: Optional callback when camera disconnects
                 (consecutive capture failures exceed threshold).
@@ -189,6 +191,7 @@ class AsyncPipelineManager:
                 in_queue=self._inference_queue,
                 out_queue=self._io_queue,
                 detection_system=detection_system,
+                on_task_inferred=on_task_inferred,
                 stop_event=self._stop_event,
             )
             self._sto_worker = StorageWorker(

@@ -211,6 +211,7 @@ class DetectionSystem:
         capture_interval: float = 0.0,
         mode: str = "continuous",
         on_task_captured=None,
+        on_task_inferred=None,
         on_task_processed=None,
         on_camera_lost=None,
         cancel_cb=None,
@@ -226,6 +227,7 @@ class DetectionSystem:
                 capture_interval=capture_interval,
                 mode=mode,
                 on_task_captured=on_task_captured,
+                on_task_inferred=on_task_inferred,
                 on_task_processed=on_task_processed,
                 on_camera_lost=on_camera_lost,
                 cancel_cb=cancel_cb,
@@ -242,6 +244,7 @@ class DetectionSystem:
         capture_interval: float = 0.0,
         mode: str = "continuous",
         on_task_captured=None,
+        on_task_inferred=None,
         on_task_processed=None,
         on_camera_lost=None,
         cancel_cb=None,
@@ -259,6 +262,7 @@ class DetectionSystem:
             mode: 'single' for one-shot camera detection, or 'continuous'
                 for manual-stop monitoring.
             on_task_captured: Optional callback for each captured task.
+            on_task_inferred: Optional callback when a verdict is available.
             on_task_processed: Optional callback for each stored task.
             on_camera_lost: Optional callback when camera disconnects.
 
@@ -304,6 +308,7 @@ class DetectionSystem:
             capture_interval=capture_interval,
             mode=mode,
             on_task_captured=on_task_captured,
+            on_task_inferred=on_task_inferred,
             on_task_processed=on_task_processed,
             on_camera_lost=on_camera_lost,
             camera_lost_threshold=getattr(self.config, "camera_lost_threshold", 5),
@@ -715,6 +720,14 @@ class DetectionSystem:
 
     def _execute_pipeline(self, ctx: DetectionContext, run_logger, cancel_cb=None):
         """Build and run the post-processing pipeline."""
+        verdict_steps, save_steps = self._build_pipeline_steps(ctx, run_logger)
+        self._run_verdict_steps(ctx, verdict_steps, cancel_cb=cancel_cb)
+        if ctx.status == "CANCELED":
+            return
+        self._run_save_steps(ctx, save_steps, cancel_cb=cancel_cb)
+
+    def _build_pipeline_steps(self, ctx: DetectionContext, run_logger):
+        """Build verdict and durability steps from the active config."""
         env = PipelineEnv(
             color_service=self.color_service,
             result_sink=self.result_sink,
@@ -747,7 +760,10 @@ class DetectionSystem:
         # leaves a stale FAIL on a good board.
         save_steps = [s for s in steps if isinstance(s, SaveResultsStep)]
         verdict_steps = [s for s in steps if not isinstance(s, SaveResultsStep)]
+        return verdict_steps, save_steps
 
+    def _run_verdict_steps(self, ctx, verdict_steps, *, cancel_cb=None) -> None:
+        """Run CPU post-processing and compute the final operator verdict."""
         for step in verdict_steps:
             if self._is_canceled(cancel_cb):
                 ctx.status = "CANCELED"
@@ -761,11 +777,18 @@ class DetectionSystem:
             ctx, fail_on_unexpected=getattr(self.config, "fail_on_unexpected", True)
         )
 
+    def _run_save_steps(self, ctx, save_steps, *, cancel_cb=None) -> None:
+        """Persist an already-finalized verdict without recomputing it."""
         for step in save_steps:
             if self._is_canceled(cancel_cb):
                 ctx.status = "CANCELED"
                 return
             step.run(ctx)
+
+    def finalize_detection(self, ctx: DetectionContext, run_logger) -> None:
+        """Finalize color/count/sequence checks before notifying the GUI."""
+        verdict_steps, _ = self._build_pipeline_steps(ctx, run_logger)
+        self._run_verdict_steps(ctx, verdict_steps)
 
     def _adjust_anomalib_output_path(self, result: dict, temp_path: str, run_logger):
         """Move anomalib output from TEMP to a final PASS/FAIL directory."""
@@ -794,12 +817,13 @@ class DetectionSystem:
                 run_logger.warning(f"Cleanup temp dir failed: {cleanup_err}")
 
     def persist_detection(self, ctx: DetectionContext, run_logger) -> None:
-        """Run the post-processing pipeline and log the summary.
+        """Persist an already-finalized pipeline result and log its summary.
 
         Public entry point for the storage stage of the async pipeline
         (see ``core.workers.DetectionPipelineHost``).
         """
-        self._execute_pipeline(ctx, run_logger)
+        _, save_steps = self._build_pipeline_steps(ctx, run_logger)
+        self._run_save_steps(ctx, save_steps)
         self._log_summary(ctx, run_logger)
 
     def _log_summary(self, ctx: DetectionContext, run_logger):

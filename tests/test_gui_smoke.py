@@ -385,9 +385,11 @@ def test_pipeline_bridge_rejects_stale_run_callbacks(monkeypatch):
     bridge = PipelineBridge()
     images = []
     results = []
+    stored = []
     camera_lost = []
     bridge.image_ready.connect(images.append)
     bridge.result_ready.connect(results.append)
+    bridge.storage_completed.connect(stored.append)
     bridge.camera_disconnected.connect(lambda: camera_lost.append(True))
 
     task = DetectionTask(
@@ -402,24 +404,30 @@ def test_pipeline_bridge_rejects_stale_run_callbacks(monkeypatch):
 
     bridge.begin_run(1)
     bridge.on_task_captured(task, run_id=1)
+    bridge.on_task_inferred(task, run_id=1)
     bridge.on_task_processed(task, run_id=1)
     bridge.on_camera_lost(run_id=1)
     assert len(images) == 1
     assert len(results) == 1
+    assert len(stored) == 1
     assert len(camera_lost) == 1
 
     bridge.begin_run(2)
     bridge.on_task_captured(task, run_id=1)
+    bridge.on_task_inferred(task, run_id=1)
     bridge.on_task_processed(task, run_id=1)
     bridge.on_camera_lost(run_id=1)
     assert len(images) == 1
     assert len(results) == 1
+    assert len(stored) == 1
     assert len(camera_lost) == 1
 
     bridge.end_run(2)
     bridge.on_task_captured(task, run_id=2)
+    bridge.on_task_inferred(task, run_id=2)
     bridge.on_task_processed(task, run_id=2)
     bridge.on_camera_lost(run_id=2)
     assert len(images) == 1
     assert len(results) == 1
+    assert len(stored) == 1
     assert len(camera_lost) == 1

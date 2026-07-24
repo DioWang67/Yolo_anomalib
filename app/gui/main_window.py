@@ -365,6 +365,9 @@ class DetectionSystemGUI(
         # --- New: Pipeline Bridge & Stats ---
         self.controller.bridge.image_ready.connect(self.on_image_ready)
         self.controller.bridge.result_ready.connect(self.on_pipeline_result)
+        self.controller.bridge.storage_completed.connect(
+            self.on_pipeline_storage_completed
+        )
         self.controller.bridge.error_occurred.connect(self.on_detection_error)
         self.controller.bridge.camera_disconnected.connect(self._on_camera_disconnected)
         self.controller.bridge.single_shot_finished.connect(
@@ -1004,6 +1007,7 @@ class DetectionSystemGUI(
             sequence_check=res.get("sequence_check"),
             result_frame=res.get("result_frame"),
             metadata={
+                "task_id": task.task_id,
                 "decision": res.get("decision"),
                 "slot_check": res.get("slot_check"),
                 "slot_mismatches": res.get("slot_mismatches", []),
@@ -1014,6 +1018,23 @@ class DetectionSystemGUI(
             },
         )
         self.on_detection_complete(result)
+
+    @pyqtSlot(object)
+    def on_pipeline_storage_completed(self, task) -> None:
+        """Attach durable artifact paths without replaying the UI verdict."""
+        from core.types import DetectionTask
+
+        if not isinstance(task, DetectionTask) or task.result is None:
+            return
+        current = self.current_result
+        if current is None or current.metadata.get("task_id") != task.task_id:
+            return
+        result = task.result
+        current.original_image_path = result.get("original_image_path", "")
+        current.preprocessed_image_path = result.get("preprocessed_image_path", "")
+        current.annotated_path = result.get("annotated_path", "")
+        current.heatmap_path = result.get("heatmap_path", "")
+        current.cropped_paths = result.get("cropped_paths", [])
 
     def _on_worker_finished(self) -> None:
         """Restore UI when worker finishes for any reason."""

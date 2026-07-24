@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
@@ -32,6 +34,30 @@ EngineFactory = Callable[[DetectionConfig], "InferenceEngine"]
 # Determine repository root (can be overridden by YOLO11_ROOT env var)
 PROJECT_ROOT = project_root()
 
+_NON_ENGINE_CONFIG_FIELDS = {
+    "exposure_time",
+    "gain",
+    "light_brightness",
+    "calibration",
+    "output_dir",
+    "save_original",
+    "save_processed",
+    "save_annotated",
+    "save_crops",
+    "save_pass_crops",
+    "save_fail_only",
+    "jpeg_quality",
+    "png_compression",
+    "max_crops_per_frame",
+    "buffer_limit",
+    "storage_queue_maxsize",
+    "image_queue_maxsize",
+    "image_queue_max_mb",
+    "image_write_timeout_seconds",
+    "min_free_disk_mb",
+    "flush_interval",
+}
+
 
 class ModelManager:
     def __init__(
@@ -58,8 +84,48 @@ class ModelManager:
             tuple[str, str], dict[str, tuple[InferenceEngine, DetectionConfig]]
         ] = OrderedDict()
         self._cache_signatures: dict[
-            tuple[str, str, str], tuple[int, int, int]
+            tuple[str, str, str], str
         ] = {}
+
+    @staticmethod
+    def _engine_config_signature(
+        cfg: dict,
+        merged: DetectionConfig,
+        inference_type: str,
+    ) -> str:
+        """Hash only fields that require rebuilding an inference backend.
+
+        Camera calibration and result-storage settings are consumed outside
+        the engine.  Excluding them prevents an exposure/light adjustment from
+        unloading and reloading a multi-megabyte model.
+        """
+        engine_cfg = {
+            key: value
+            for key, value in cfg.items()
+            if key not in _NON_ENGINE_CONFIG_FIELDS
+        }
+        weights_path = Path(str(getattr(merged, "weights", "") or ""))
+        weight_identity: tuple[int, int, int] | None = None
+        try:
+            weight_stat = weights_path.stat()
+            weight_identity = (
+                weight_stat.st_mtime_ns,
+                weight_stat.st_size,
+                weight_stat.st_ino,
+            )
+        except OSError:
+            pass
+        serialized = json.dumps(
+            {
+                "backend": inference_type,
+                "config": engine_cfg,
+                "weight_identity": weight_identity,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def _create_engine(self, config: DetectionConfig) -> InferenceEngine:
         """Construct an engine without importing native runtimes at module load."""
@@ -250,39 +316,7 @@ class ModelManager:
         model_config_path = self._locate_model_config(
             safe_product, safe_area, safe_inference_type
         )
-        config_stat = Path(model_config_path).stat()
-        config_signature = (
-            config_stat.st_mtime_ns,
-            config_stat.st_size,
-            config_stat.st_ino,
-        )
         signature_key = (safe_product, safe_area, safe_inference_type)
-        stale_engine = None
-        with self._cache_lock:
-            if key in self._cache and safe_inference_type in self._cache[key]:
-                engine, cfg_snapshot = self._cache[key][safe_inference_type]
-                if self._cache_signatures.get(signature_key) == config_signature:
-                    self.logger.logger.info(
-                        f"Using cached model: product={safe_product}, "
-                        f"area={safe_area}, type={safe_inference_type}"
-                    )
-                    self._cache.move_to_end(key)
-                    return engine, copy.deepcopy(cfg_snapshot)
-                stale_engine, _ = self._cache[key].pop(safe_inference_type)
-                self._cache_signatures.pop(signature_key, None)
-                if not self._cache[key]:
-                    self._cache.pop(key, None)
-        if stale_engine is not None:
-            try:
-                stale_engine.shutdown()
-            except Exception:
-                pass
-            self.logger.logger.info(
-                "Model config changed; reloading %s/%s/%s",
-                safe_product,
-                safe_area,
-                safe_inference_type,
-            )
 
         with open(model_config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
@@ -329,6 +363,40 @@ class ModelManager:
         self._validate_model_version(
             merged, cfg, safe_product, safe_area, safe_inference_type
         )
+
+        config_signature = self._engine_config_signature(
+            cfg,
+            merged,
+            safe_inference_type,
+        )
+        stale_engine = None
+        with self._cache_lock:
+            if key in self._cache and safe_inference_type in self._cache[key]:
+                engine, _ = self._cache[key][safe_inference_type]
+                if self._cache_signatures.get(signature_key) == config_signature:
+                    self.logger.logger.info(
+                        "Using cached model: product=%s, area=%s, type=%s",
+                        safe_product,
+                        safe_area,
+                        safe_inference_type,
+                    )
+                    self._cache.move_to_end(key)
+                    return engine, merged
+                stale_engine, _ = self._cache[key].pop(safe_inference_type)
+                self._cache_signatures.pop(signature_key, None)
+                if not self._cache[key]:
+                    self._cache.pop(key, None)
+        if stale_engine is not None:
+            try:
+                stale_engine.shutdown()
+            except Exception:
+                pass
+            self.logger.logger.info(
+                "Inference engine settings changed; reloading %s/%s/%s",
+                safe_product,
+                safe_area,
+                safe_inference_type,
+            )
 
         # The engine owns this merged config for its whole lifetime; later
         # switches build new copies, so a cached engine never sees another

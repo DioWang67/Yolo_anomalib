@@ -326,6 +326,42 @@ def test_switch_reloads_engine_after_deployed_config_changes(tmp_path, monkeypat
     assert merged.conf_thres == pytest.approx(0.412345)
 
 
+def test_switch_keeps_engine_for_station_calibration_change(tmp_path, monkeypatch):
+    """Exposure/light edits return fresh config without reloading model bytes."""
+    weights_path = tmp_path / "best.onnx"
+    weights_path.write_bytes(b"model")
+    global_cfg_path = _write_global_config(tmp_path, weights_path)
+    model_dir = tmp_path / "models" / "Cable1" / "A" / "yolo"
+    model_config = _write_model_config(model_dir, weights_path)
+    monkeypatch.chdir(tmp_path)
+
+    class FakeEngine:
+        def __init__(self, config):
+            self.config = config
+            self.shutdown_count = 0
+
+        def initialize(self):
+            return True
+
+        def shutdown(self):
+            self.shutdown_count += 1
+
+    base_config = DetectionConfig.from_yaml(str(global_cfg_path))
+    manager = ModelManager(DetectionLogger(), engine_factory=FakeEngine)
+    first, _ = manager.switch(base_config, "Cable1", "A", "yolo")
+
+    payload = yaml.safe_load(model_config.read_text(encoding="utf-8"))
+    payload["exposure_time"] = "79979.0000"
+    payload["light_brightness"] = 55
+    model_config.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    second, merged = manager.switch(base_config, "Cable1", "A", "yolo")
+
+    assert second is first
+    assert first.shutdown_count == 0
+    assert merged.exposure_time == "79979.0000"
+    assert merged.light_brightness == 55
+
+
 def test_switch_has_no_cross_model_contamination(tmp_path, monkeypatch):
     """Each switch merges from the pristine base — values set by a previous
     model (e.g. color_model_path) must not leak into the next one."""
