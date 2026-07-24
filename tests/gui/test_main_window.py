@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 pytest.importorskip("PyQt5", reason="PyQt5 is required for GUI tests")
@@ -27,6 +29,87 @@ def test_panels_present(gui):
     assert gui.control_panel is not None
     assert gui.image_panel is not None
     assert gui.info_panel is not None
+
+
+def test_retraining_workspace_is_reused_and_can_return_to_inspection(
+    gui, tmp_path, qtbot
+):
+    """Leaving retraining must switch pages without destroying its state."""
+    arguments = {
+        "result_root": tmp_path / "Result",
+        "manifest_path": tmp_path / "review.csv",
+        "training_data_dir": tmp_path / "training-data",
+        "language": "zh_TW",
+        "product": "Cable1",
+        "area": "A",
+    }
+
+    first = gui.show_retraining_workspace(**arguments)
+    gui.show_inspection_workspace()
+    second = gui.show_retraining_workspace(**arguments)
+
+    assert first is second
+    assert gui.workspace_stack.currentWidget() is first
+    qtbot.waitUntil(lambda: first.workspace is not None, timeout=5000)
+    first.back_to_inspection_requested.emit()
+    assert gui.workspace_stack.currentWidget() is gui.inspection_workspace
+
+
+def test_retraining_manifest_scan_does_not_block_page_switch(
+    gui, tmp_path, qtbot, monkeypatch
+):
+    """A slow disk scan must remain outside the Qt main thread."""
+    from app.gui import review_cases_dialog
+
+    original_prepare = review_cases_dialog.prepare_review_manifest
+
+    def slow_prepare(**kwargs):
+        time.sleep(0.4)
+        return original_prepare(**kwargs)
+
+    monkeypatch.setattr(review_cases_dialog, "prepare_review_manifest", slow_prepare)
+    started = time.perf_counter()
+    host = gui.show_retraining_workspace(
+        result_root=tmp_path / "Result",
+        manifest_path=tmp_path / "review.csv",
+        training_data_dir=tmp_path / "training-data",
+        language="zh_TW",
+        product="Cable1",
+        area="A",
+    )
+    call_seconds = time.perf_counter() - started
+
+    assert call_seconds < 0.2
+    assert gui.workspace_stack.currentWidget() is host
+    assert host.workspace is None
+    qtbot.waitUntil(lambda: host.workspace is not None, timeout=5000)
+
+
+def test_retraining_workspace_survives_repeated_page_switches(
+    gui, tmp_path, qtbot
+):
+    """Repeated navigation must reuse one workspace and remain responsive."""
+    arguments = {
+        "result_root": tmp_path / "Result",
+        "manifest_path": tmp_path / "review.csv",
+        "training_data_dir": tmp_path / "training-data",
+        "language": "zh_TW",
+        "product": "Cable1",
+        "area": "A",
+    }
+    host = gui.show_retraining_workspace(**arguments)
+    qtbot.waitUntil(lambda: host.workspace is not None, timeout=5000)
+    stable_widget_count = gui.workspace_stack.count()
+
+    started = time.perf_counter()
+    for _iteration in range(1000):
+        gui.show_inspection_workspace()
+        assert gui.show_retraining_workspace(**arguments) is host
+    elapsed_seconds = time.perf_counter() - started
+
+    assert gui.workspace_stack.currentWidget() is host
+    assert gui.workspace_stack.count() == stable_widget_count
+    assert elapsed_seconds < 5.0
 
 def test_initial_state(gui):
     """Verify initial button states."""

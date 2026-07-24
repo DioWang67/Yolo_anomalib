@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 
 from app.gui.i18n import tr
 from app.gui.widgets import BigStatusLabel, ImageViewer, ResultDisplayWidget
+from core.workspace import load_workspace_paths
 
 if TYPE_CHECKING:
     from app.gui.main_window import DetectionSystemGUI
@@ -69,16 +70,20 @@ def _open_training_review(gui: DetectionSystemGUI) -> None:
         project_root = getattr(gui, "_project_root", None)
         if project_root is None:
             project_root = Path.cwd()
-        _run_review_dialog(
+        workspace = load_workspace_paths(project_root)
+        workspace_args = dict(
             result_root=project_root / "Result",
             manifest_path=project_root / "review_manifest.csv",
-            training_data_dir=project_root.parent / "Yolo11_auto_train" / "data",
+            training_data_dir=workspace.training_data,
             language=_lang(gui),
             product=gui.product_combo.currentText().strip() or None,
             area=gui.area_combo.currentText().strip() or None,
-            parent=gui,
         )
-        gui.log_message("Training data review closed; decisions were saved immediately.")
+        if hasattr(gui, "show_retraining_workspace"):
+            gui.show_retraining_workspace(**workspace_args)
+        else:
+            _run_review_dialog(parent=gui, **workspace_args)
+        gui.log_message("Training data review opened; decisions are saved immediately.")
     except (OSError, RuntimeError, ValueError, csv.Error) as exc:
         gui.log_message(f"Training data review failed: {exc}")
 
@@ -137,8 +142,19 @@ def _run_model_versions_dialog(**kwargs) -> int:
 def _open_model_update_status(gui: DetectionSystemGUI) -> None:
     """Open the read-only cross-project model update status screen."""
     project_root = getattr(gui, "_project_root", Path.cwd())
-    data_root = project_root.parent / "Yolo11_auto_train" / "data"
     try:
+        data_root = load_workspace_paths(project_root).training_data
+        if hasattr(gui, "show_retraining_workspace"):
+            workspace = gui.show_retraining_workspace(
+                result_root=project_root / "Result",
+                manifest_path=project_root / "review_manifest.csv",
+                training_data_dir=data_root,
+                language=_lang(gui),
+                product=gui.product_combo.currentText().strip() or None,
+                area=gui.area_combo.currentText().strip() or None,
+            )
+            workspace.show_progress_page()
+            return
         _run_model_update_status_dialog(
             data_root=data_root,
             language=_lang(gui),
@@ -155,6 +171,7 @@ def _run_model_update_status_dialog(**kwargs) -> int:
     """Import the status dialog lazily to keep normal inference startup fast."""
     from app.gui.model_update_status_dialog import ModelUpdateStatusDialog
 
+    kwargs.setdefault("background_refresh", True)
     return ModelUpdateStatusDialog(**kwargs).exec_()
 
 

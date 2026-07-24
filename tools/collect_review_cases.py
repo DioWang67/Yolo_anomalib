@@ -10,7 +10,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import os
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,14 +21,23 @@ from typing import Any
 REVIEW_LABELS = (
     "",
     "confirmed_ng",
+    "confirmed_ok",
     "verified_empty",
     "false_positive",
     "false_negative",
+    "wrong_box",
     "wrong_class",
     "uncertain",
     "image_quality_issue",
+    "color_confirmed_ng",
+    "color_false_reject",
 )
 FAIL_STATUSES = {"FAIL", "DETECTION_FAIL", "ERROR", "INFERENCE_ERROR"}
+logger = logging.getLogger(__name__)
+
+
+class ReviewManifestReadError(RuntimeError):
+    """Raised when an existing review manifest cannot be read safely."""
 
 
 @dataclass(frozen=True)
@@ -46,14 +57,20 @@ class ReviewCase:
         config_snapshot_path: Path to the snapshot JSON.
         annotated_path: Best-effort path to the annotated image.
         failure_crop_paths: Pipe-delimited NG crop paths.
+        failure_category: Operator-selected failure cause, independent of routing.
+        failure_source: Extensible subsystem identifier for the failure cause.
         review_label: Empty field for human labeling.
         review_note: Empty field for human notes.
+        review_selected: ``1`` when selected in the failure overview.
         training_selected: ``1`` when included in the next training submission.
     """
 
     timestamp: str
     product: str
     area: str
+    machine_id: str
+    work_order: str
+    camera_id: str
     status: str
     detector: str
     decision_reasons: str
@@ -65,11 +82,28 @@ class ReviewCase:
     preprocessed_path: str
     annotated_path: str
     detections_json: str
+    detected_box_count: str
+    detection_evidence_source: str
     class_names_json: str
     class_map_json: str
     failure_crop_paths: str
+    crop_paths: str = ""
+    mask_paths: str = ""
+    color_result_json: str = "{}"
+    color_checker_type: str = ""
+    color_failure_count: str = "0"
+    product_verdict: str = ""
+    detection_verdict: str = ""
+    color_verdict: str = ""
+    action_route: str = ""
+    failure_category: str = ""
+    failure_source: str = ""
+    failure_note: str = ""
+    review_outcome: str = ""
+    skip_reason: str = ""
     review_label: str = ""
     review_note: str = ""
+    review_selected: str = "0"
     training_selected: str = "1"
 
 
@@ -79,6 +113,8 @@ def collect_review_cases(
     include_pass: bool = False,
     start_time: datetime | str | None = None,
     end_time: datetime | str | None = None,
+    product: str | None = None,
+    area: str | None = None,
 ) -> list[ReviewCase]:
     """Collect review cases from result metadata snapshots.
 
@@ -87,6 +123,8 @@ def collect_review_cases(
         include_pass: Include PASS cases as well as failure cases.
         start_time: Optional inclusive lower timestamp bound.
         end_time: Optional inclusive upper timestamp bound.
+        product: Optional exact product filter applied before artifact discovery.
+        area: Optional exact station/area filter applied before artifact discovery.
 
     Returns:
         Sorted list of ReviewCase records.
@@ -98,6 +136,9 @@ def collect_review_cases(
     normalized_end = normalize_time_bound(end_time, field_name="end_time")
     if normalized_start and normalized_end and normalized_start > normalized_end:
         raise ValueError("start_time must not be later than end_time")
+    product_filter = str(product or "").strip()
+    area_filter = str(area or "").strip()
+    legacy_crop_cache: dict[Path, tuple[Path, ...]] = {}
 
     cases: list[ReviewCase] = []
     for snapshot_path in _iter_snapshot_paths(root):
@@ -112,15 +153,39 @@ def collect_review_cases(
             timestamp, start_time=normalized_start, end_time=normalized_end
         ):
             continue
-
-        detector = str(snapshot.get("detector") or "")
         product = str(snapshot.get("product") or "")
         area = str(snapshot.get("area") or "")
+        if product_filter and product != product_filter:
+            continue
+        if area_filter and area != area_filter:
+            continue
+
+        detector = str(snapshot.get("detector") or "")
         decision = snapshot.get("decision") if isinstance(snapshot.get("decision"), dict) else {}
         model_info = snapshot.get("model_info") if isinstance(snapshot.get("model_info"), dict) else {}
-        detections = snapshot.get("detections")
-        if not isinstance(detections, list):
-            detections = []
+        color_result = (
+            snapshot.get("color_result")
+            if isinstance(snapshot.get("color_result"), dict)
+            else {}
+        )
+        runtime_config = (
+            snapshot.get("config")
+            if isinstance(snapshot.get("config"), dict)
+            else {}
+        )
+        equipment = (
+            snapshot.get("equipment")
+            if isinstance(snapshot.get("equipment"), dict)
+            else {}
+        )
+        artifacts = (
+            snapshot.get("artifacts")
+            if isinstance(snapshot.get("artifacts"), dict)
+            else {}
+        )
+        raw_detections = snapshot.get("detections")
+        has_detection_contract = isinstance(raw_detections, list)
+        detections = raw_detections if has_detection_contract else []
         preprocessed_path = _artifact_or_fallback(
             snapshot,
             "preprocessed_path",
@@ -133,17 +198,59 @@ def collect_review_cases(
             ),
         )
         detections = _attach_image_dimensions(detections, preprocessed_path)
+        legacy_detection_crops = (
+            []
+            if has_detection_contract
+            else _find_detection_crop_paths(
+                snapshot_path,
+                detector,
+                directory_cache=legacy_crop_cache,
+            )
+        )
+        if has_detection_contract:
+            detected_box_count = _usable_detection_count(detections)
+            detection_evidence_source = "snapshot"
+        elif legacy_detection_crops:
+            detected_box_count = len(legacy_detection_crops)
+            detection_evidence_source = "saved_crops"
+        else:
+            detected_box_count = None
+            detection_evidence_source = "unknown"
         class_names = _normalize_class_names(model_info.get("class_names"))
         observed_class_map = _observed_class_map(detections)
+        artifact_crop_values = artifacts.get("cropped_paths")
+        has_artifact_crop_contract = isinstance(
+            artifact_crop_values, (list, tuple)
+        )
+        artifact_crop_paths = [
+            Path(str(path))
+            for path in _path_list(artifact_crop_values)
+            if str(path or "").strip()
+        ]
+        failure_crop_paths = (
+            [path for path in artifact_crop_paths if "_NG_" in path.name]
+            if has_artifact_crop_contract
+            else _find_failure_crop_paths(
+                snapshot_path,
+                detector,
+                directory_cache=legacy_crop_cache,
+            )
+        )
 
         cases.append(
             ReviewCase(
                 timestamp=timestamp,
                 product=product,
                 area=area,
+                machine_id=str(equipment.get("machine_id") or ""),
+                work_order=str(equipment.get("work_order") or ""),
+                camera_id=str(equipment.get("camera_id") or ""),
                 status=status,
                 detector=detector,
-                decision_reasons="|".join(str(item) for item in decision.get("reasons", []) or []),
+                decision_reasons="|".join(
+                    str(item)
+                    for item in _snapshot_fail_reasons(snapshot, decision)
+                ),
                 model_version=str(model_info.get("model_version") or ""),
                 weights=str(model_info.get("weights") or ""),
                 inference_time=_format_inference_time(snapshot.get("inference_time")),
@@ -166,6 +273,10 @@ def collect_review_cases(
                 detections_json=json.dumps(
                     detections, ensure_ascii=False, separators=(",", ":")
                 ),
+                detected_box_count=(
+                    "" if detected_box_count is None else str(detected_box_count)
+                ),
+                detection_evidence_source=detection_evidence_source,
                 class_names_json=json.dumps(
                     class_names, ensure_ascii=False, separators=(",", ":")
                 ),
@@ -173,13 +284,54 @@ def collect_review_cases(
                     observed_class_map, ensure_ascii=False, separators=(",", ":")
                 ),
                 failure_crop_paths="|".join(
-                    str(path) for path in _find_failure_crop_paths(snapshot_path, detector)
+                    str(path) for path in failure_crop_paths
                 ),
+                crop_paths="|".join(str(path) for path in artifact_crop_paths),
+                mask_paths="|".join(
+                    str(path)
+                    for path in _path_list(artifacts.get("mask_paths"))
+                    if str(path or "").strip()
+                ),
+                color_result_json=json.dumps(
+                    color_result, ensure_ascii=False, separators=(",", ":")
+                ),
+                color_checker_type=str(
+                    runtime_config.get("color_checker_type") or ""
+                ),
+                color_failure_count=str(_color_failure_count(color_result)),
             )
         )
 
     cases.sort(key=lambda item: (item.timestamp, item.product, item.area, item.config_snapshot_path))
     return cases
+
+
+def _snapshot_fail_reasons(
+    snapshot: dict[str, Any], decision: dict[str, Any]
+) -> list[str]:
+    """Return stable failure reason codes from new or legacy snapshots."""
+    raw_reasons = snapshot.get("fail_reasons")
+    if not isinstance(raw_reasons, list):
+        raw_reasons = decision.get("reasons")
+    if not isinstance(raw_reasons, list):
+        return []
+    return [str(reason) for reason in raw_reasons if str(reason).strip()]
+
+
+def _path_list(value: Any) -> list[Any]:
+    """Return artifact path entries without treating a string as a sequence."""
+    return list(value) if isinstance(value, (list, tuple)) else []
+
+
+def _color_failure_count(color_result: dict[str, Any]) -> int:
+    """Count color-check items that failed their runtime threshold."""
+    items = color_result.get("items")
+    if not isinstance(items, list):
+        return 0
+    return sum(
+        isinstance(item, dict) and item.get("is_ok") is False
+        for item in items
+    )
 
 
 def _normalize_class_names(value: Any) -> list[str]:
@@ -213,6 +365,16 @@ def _observed_class_map(detections: list[Any]) -> dict[str, str]:
         if class_id >= 0 and class_name:
             observed[str(class_id)] = class_name
     return observed
+
+
+def _usable_detection_count(detections: list[Any]) -> int:
+    """Count structured detections that carry a usable bounding box."""
+    return sum(
+        isinstance(detection, dict)
+        and isinstance(detection.get("bbox"), (list, tuple))
+        and len(detection["bbox"]) >= 4
+        for detection in detections
+    )
 
 
 def normalize_time_bound(
@@ -348,46 +510,149 @@ def write_manifest(
         row = asdict(case)
         previous = existing_reviews.get(case.config_snapshot_path)
         if previous:
-            row["review_label"] = previous[0]
-            row["review_note"] = previous[1]
-            row["training_selected"] = previous[2]
+            for field in (
+                "product_verdict",
+                "detection_verdict",
+                "color_verdict",
+                "action_route",
+                "failure_category",
+                "failure_source",
+                "failure_note",
+                "review_outcome",
+                "skip_reason",
+                "review_label",
+                "review_note",
+                "review_selected",
+                "training_selected",
+            ):
+                row[field] = previous.get(field, row[field])
         rows.append(row)
     fieldnames = list(ReviewCase.__dataclass_fields__.keys())
-    with csv_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+    _write_csv_atomic(csv_path, fieldnames, rows)
 
     if output_json is not None:
         json_path = Path(output_json)
-        json_path.parent.mkdir(parents=True, exist_ok=True)
-        with json_path.open("w", encoding="utf-8") as handle:
-            json.dump(rows, handle, ensure_ascii=False, indent=2)
+        _write_json_atomic(json_path, rows)
 
 
-def _load_existing_reviews(csv_path: Path) -> dict[str, tuple[str, str, str]]:
+def _load_existing_reviews(csv_path: Path) -> dict[str, dict[str, str]]:
     """Load operator-entered fields so regenerating a manifest is idempotent."""
     if not csv_path.exists():
         return {}
     try:
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reviews: dict[str, tuple[str, str, str]] = {}
-            for row in csv.DictReader(handle):
+            reviews: dict[str, dict[str, str]] = {}
+            reader = csv.DictReader(handle, strict=True)
+            if not reader.fieldnames or "config_snapshot_path" not in reader.fieldnames:
+                raise ReviewManifestReadError(
+                    "Existing review manifest is missing the "
+                    f"config_snapshot_path column: {csv_path}"
+                )
+            for row in reader:
                 key = str(row.get("config_snapshot_path") or "")
                 if not key:
                     continue
                 review_label = str(row.get("review_label") or "")
-                reviews[key] = (
-                    review_label,
-                    str(row.get("review_note") or ""),
-                    "0"
-                    if review_label in {"uncertain", "image_quality_issue"}
-                    or str(row.get("training_selected") or "1") == "0"
-                    else "1",
-                )
+                reviews[key] = {
+                    "product_verdict": str(row.get("product_verdict") or ""),
+                    "detection_verdict": str(row.get("detection_verdict") or ""),
+                    "color_verdict": str(row.get("color_verdict") or ""),
+                    "action_route": str(row.get("action_route") or ""),
+                    "failure_category": str(row.get("failure_category") or ""),
+                    "failure_source": str(row.get("failure_source") or ""),
+                    "failure_note": str(row.get("failure_note") or ""),
+                    "review_outcome": str(row.get("review_outcome") or ""),
+                    "skip_reason": str(row.get("skip_reason") or ""),
+                    "review_label": review_label,
+                    "review_note": str(row.get("review_note") or ""),
+                    "review_selected": (
+                        "1" if str(row.get("review_selected") or "0") == "1" else "0"
+                    ),
+                    "training_selected": (
+                        "0"
+                        if review_label
+                        in {"confirmed_ok", "uncertain", "image_quality_issue"}
+                        or str(row.get("training_selected") or "1") == "0"
+                        else "1"
+                    ),
+                }
             return reviews
-    except (OSError, UnicodeDecodeError, csv.Error):
-        return {}
+    except ReviewManifestReadError:
+        logger.error(
+            "Existing review manifest is invalid; refusing to overwrite it: %s",
+            csv_path,
+            exc_info=True,
+        )
+        raise
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        logger.error(
+            "Unable to read existing review manifest; refusing to overwrite it: %s",
+            csv_path,
+            exc_info=True,
+        )
+        raise ReviewManifestReadError(
+            "Unable to read existing review manifest; the original file was not "
+            f"changed: {csv_path}: {exc}"
+        ) from exc
+
+
+def _write_csv_atomic(
+    path: Path,
+    fieldnames: list[str],
+    rows: list[dict[str, Any]],
+) -> None:
+    """Durably replace one CSV without exposing a partial destination file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    except OSError:
+        logger.error("Atomic review manifest write failed: %s", path, exc_info=True)
+        raise
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _write_json_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
+    """Durably replace the optional JSON companion in the same directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(rows, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    except OSError:
+        logger.error("Atomic review JSON write failed: %s", path, exc_info=True)
+        raise
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:
@@ -476,14 +741,60 @@ def _find_evidence_image(
     return matches[0] if matches else ""
 
 
-def _find_failure_crop_paths(snapshot_path: Path, detector: str) -> list[Path]:
+def _find_failure_crop_paths(
+    snapshot_path: Path,
+    detector: str,
+    *,
+    directory_cache: dict[Path, tuple[Path, ...]] | None = None,
+) -> list[Path]:
     base_path = _inspection_base_path(snapshot_path)
     if base_path is None:
         return []
     crop_dir = base_path / "cropped" / detector.lower()
-    if not crop_dir.exists():
+    return [
+        path
+        for path in _legacy_crop_files(crop_dir, directory_cache=directory_cache)
+        if "_NG_" in path.name
+    ]
+
+
+def _find_detection_crop_paths(
+    snapshot_path: Path,
+    detector: str,
+    *,
+    directory_cache: dict[Path, tuple[Path, ...]] | None = None,
+) -> list[Path]:
+    """Find legacy per-detection crops belonging to exactly one snapshot.
+
+    Schema-v1 snapshots did not persist detections.  Their normal crop names
+    still share the snapshot stem and provide reliable evidence that YOLO drew
+    boxes.  Reason-based ``_NG_`` crops are excluded because a missing-item
+    crop does not prove that a detection existed.
+    """
+    base_path = _inspection_base_path(snapshot_path)
+    if base_path is None:
         return []
-    return sorted(crop_dir.glob("*_NG_*.png"))
+    crop_dir = base_path / "cropped" / detector.lower()
+    stem = snapshot_path.name.removesuffix("_config_snapshot.json")
+    return [
+        path
+        for path in _legacy_crop_files(crop_dir, directory_cache=directory_cache)
+        if path.name.startswith(f"{stem}_") and "_NG_" not in path.name
+    ]
+
+
+def _legacy_crop_files(
+    crop_dir: Path,
+    *,
+    directory_cache: dict[Path, tuple[Path, ...]] | None,
+) -> tuple[Path, ...]:
+    """List one legacy crop directory once per collection run."""
+    if directory_cache is not None and crop_dir in directory_cache:
+        return directory_cache[crop_dir]
+    files = tuple(sorted(crop_dir.glob("*.png"))) if crop_dir.is_dir() else ()
+    if directory_cache is not None:
+        directory_cache[crop_dir] = files
+    return files
 
 
 def _inspection_base_path(snapshot_path: Path) -> Path | None:

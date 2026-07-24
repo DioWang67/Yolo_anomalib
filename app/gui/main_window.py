@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 if TYPE_CHECKING:
+    from app.gui.retraining_workspace_host import RetrainingWorkspaceHost
     from core.types import DetectionResult
 
 
@@ -50,6 +51,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QShortcut,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -101,10 +103,13 @@ class DetectionSystemGUI(
         self.show_processed_tab_chk = None
         self._run_generation = 0
         self._single_shot_running = False
+        self._single_shot_thread: threading.Thread | None = None
         self._single_shot_cancel_event = threading.Event()
         self._shutdown_in_progress = False
         self._stopping_generation: int | None = None
         self._auto_controller: AutoInspectionController | None = None
+        self._retraining_workspace: RetrainingWorkspaceHost | None = None
+        self._retraining_workspace_key: tuple[str, ...] | None = None
         # Models base path and settings
         from core.path_utils import project_root, resolve_path
         self._project_root = project_root()
@@ -249,9 +254,11 @@ class DetectionSystemGUI(
             }
         """
         )
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
+        self.workspace_stack = QStackedWidget()
+        self.setCentralWidget(self.workspace_stack)
+        self.inspection_workspace = QWidget()
+        self.workspace_stack.addWidget(self.inspection_workspace)
+        main_layout = QVBoxLayout(self.inspection_workspace)
         main_splitter = QSplitter(Qt.Horizontal)
 
         # Instantiate Panels
@@ -360,6 +367,9 @@ class DetectionSystemGUI(
         self.controller.bridge.result_ready.connect(self.on_pipeline_result)
         self.controller.bridge.error_occurred.connect(self.on_detection_error)
         self.controller.bridge.camera_disconnected.connect(self._on_camera_disconnected)
+        self.controller.bridge.single_shot_finished.connect(
+            self._on_single_shot_thread_finished
+        )
         
         self.stats_timer = QTimer(self)
         self.stats_timer.setInterval(1000)
@@ -378,6 +388,66 @@ class DetectionSystemGUI(
             self.preferences.restore_show_processed_tab()
         )
         self._apply_image_tab_visibility()
+
+    def show_inspection_workspace(self) -> None:
+        """Return to inspection without destroying a running retraining view."""
+        self.workspace_stack.setCurrentWidget(self.inspection_workspace)
+
+    def show_retraining_workspace(
+        self,
+        *,
+        result_root: str | Path,
+        manifest_path: str | Path,
+        training_data_dir: str | Path,
+        language: str,
+        product: str | None,
+        area: str | None,
+    ) -> RetrainingWorkspaceHost:
+        """Show one persistent, in-window retraining workspace for a target."""
+        from app.gui.retraining_workspace_host import RetrainingWorkspaceHost
+
+        workspace_key = (
+            str(Path(result_root).resolve()),
+            str(Path(manifest_path).resolve()),
+            str(Path(training_data_dir).resolve()),
+            language,
+            product or "",
+            area or "",
+        )
+        workspace = self._retraining_workspace
+        if workspace is None or self._retraining_workspace_key != workspace_key:
+            if workspace is not None:
+                workspace.shutdown_workspace()
+                self.workspace_stack.removeWidget(workspace)
+                workspace.deleteLater()
+            workspace = RetrainingWorkspaceHost(
+                result_root=result_root,
+                manifest_path=manifest_path,
+                training_data_dir=training_data_dir,
+                language=language,
+                product=product,
+                area=area,
+                parent=self.workspace_stack,
+            )
+            workspace.back_to_inspection_requested.connect(
+                self.show_inspection_workspace
+            )
+            workspace.workspace_ready.connect(
+                lambda count: self.log_message(
+                    f"補訓資料已在背景載入完成：{count} 筆"
+                )
+            )
+            workspace.workspace_failed.connect(
+                lambda message: self.log_message(
+                    f"補訓資料背景載入失敗：{message}"
+                )
+            )
+            self.workspace_stack.addWidget(workspace)
+            self._retraining_workspace = workspace
+            self._retraining_workspace_key = workspace_key
+        self.workspace_stack.setCurrentWidget(workspace)
+        workspace.refresh_workspace()
+        return workspace
 
     def apply_language(self, language: str) -> None:
         """Apply the selected language to operator-facing GUI text."""
@@ -748,8 +818,18 @@ class DetectionSystemGUI(
             ):
                 self.controller.bridge.error_occurred.emit(str(e))
         finally:
-            if run_generation == self._run_generation:
-                self._single_shot_running = False
+            self.controller.bridge.single_shot_finished.emit(run_generation)
+
+    @pyqtSlot(int)
+    def _on_single_shot_thread_finished(self, run_generation: int) -> None:
+        """Release single-shot ownership only after the backend really returned."""
+        self._single_shot_thread = None
+        if self._stopping_generation == run_generation:
+            self._single_shot_running = False
+            self._on_pipeline_stopped()
+            return
+        if run_generation == self._run_generation:
+            self._single_shot_running = False
 
     def stop_detection(self):
         """優雅停止管線 (非阻塞)"""
@@ -775,9 +855,7 @@ class DetectionSystemGUI(
             not self.controller.detection_system.pipeline_running
             and self._single_shot_running
         ):
-            self._single_shot_running = False
-            self._shutdown_in_progress = False
-            self._on_pipeline_stopped()
+            self.log_message("正在等待目前的模型推論安全結束...")
             return
 
         if (
@@ -817,6 +895,16 @@ class DetectionSystemGUI(
 
     def _on_pipeline_stopped(self):
         """Pipeline stopped callback."""
+        if (
+            self.controller.has_system()
+            and self.controller.detection_system.pipeline_running
+        ):
+            self._shutdown_in_progress = True
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(False)
+            self.stop_btn.setText(tr(self.current_language, "stopping"))
+            QTimer.singleShot(250, self._on_pipeline_stopped)
+            return
         self.controller.bridge.end_run()
         self._shutdown_in_progress = False
         self._stopping_generation = None
@@ -1489,11 +1577,13 @@ class DetectionSystemGUI(
 
         self.image_panel.update_image(image)
         self._single_shot_running = True
-        threading.Thread(
+        self._single_shot_thread = threading.Thread(
             target=self._run_single_shot,
             args=(image, product, area, inference_type, run_generation),
             daemon=True,
-        ).start()
+            name=f"single-inspection-{run_generation}",
+        )
+        self._single_shot_thread.start()
 
     @pyqtSlot(object)
     def on_detection_complete(self, result: DetectionResult) -> None:
@@ -1971,6 +2061,8 @@ class DetectionSystemGUI(
             QApplication.setOverrideCursor(Qt.WaitCursor)
 
         try:
+            if self._retraining_workspace is not None:
+                self._retraining_workspace.shutdown_workspace()
             if self._auto_controller is not None:
                 self._auto_controller.stop()
             self.shutdown_light()

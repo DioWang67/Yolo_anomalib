@@ -64,6 +64,18 @@ def test_thumbnail_panel_filters_and_emits_clicked_row(qtbot):
     assert selected[-1] == 1
 
 
+def test_thumbnail_panel_ignores_queued_timer_after_list_is_deleted(qtbot):
+    panel = ReviewThumbnailPanel(language="en")
+    qtbot.addWidget(panel)
+    panel.set_items(
+        [build_review_list_item(0, {"status": "FAIL"}, language="en")],
+        current_index=0,
+    )
+
+    panel.list_widget.deleteLater()
+    qtbot.wait(10)
+
+
 def test_image_viewer_distinguishes_missing_corrupt_and_loaded(tmp_path, qtbot):
     viewer = ReviewImageViewer(language="en")
     qtbot.addWidget(viewer)

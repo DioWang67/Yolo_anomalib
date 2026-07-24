@@ -155,7 +155,7 @@ def test_gui_smoke(monkeypatch, tmp_path):
 
 
 @pytest.mark.gui
-def test_single_shot_stop_resets_ui_without_pipeline_shutdown(monkeypatch, tmp_path):
+def test_single_shot_stop_waits_for_backend_before_reset(monkeypatch, tmp_path):
     _ = pytest.importorskip(
         "PyQt5.QtWidgets", reason="PyQt5 is required for GUI smoke test"
     )
@@ -195,10 +195,17 @@ def test_single_shot_stop_resets_ui_without_pipeline_shutdown(monkeypatch, tmp_p
     window.stop_detection()
     app.processEvents()
 
+    assert window._single_shot_running is True
+    assert window.start_btn.isEnabled() is False
+    assert window._shutdown_in_progress is True
+    assert window.controller._system.stop_pipeline_calls == 0
+
+    window.controller.bridge.single_shot_finished.emit(0)
+    app.processEvents()
+
     assert window._single_shot_running is False
     assert window.start_btn.isEnabled() is True
     assert window.stop_btn.isEnabled() is False
-    assert window.controller._system.stop_pipeline_calls == 0
 
     window.close()
     app.processEvents()

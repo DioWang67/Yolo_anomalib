@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
@@ -332,6 +333,8 @@ class ReviewThumbnailPanel(QWidget):
         }
 
     def eventFilter(self, watched: Any, event: Any) -> bool:  # noqa: N802 - Qt API
+        if sip.isdeleted(self) or sip.isdeleted(self.list_widget):
+            return False
         if watched is self.list_widget.viewport() and event.type() in {
             QEvent.Resize,
             QEvent.Show,
@@ -340,9 +343,13 @@ class ReviewThumbnailPanel(QWidget):
         return super().eventFilter(watched, event)
 
     def _schedule_visible_thumbnails(self) -> None:
+        if sip.isdeleted(self) or sip.isdeleted(self.list_widget):
+            return
         self._thumbnail_timer.start(0)
 
     def _request_visible_thumbnails(self) -> None:
+        if sip.isdeleted(self) or sip.isdeleted(self.list_widget):
+            return
         if not self.image_service.active or self.list_widget.count() == 0:
             return
         viewport_rect = self.list_widget.viewport().rect()
@@ -395,6 +402,8 @@ class ReviewThumbnailPanel(QWidget):
         )
 
     def _on_image_result(self, result: ImageLoadResult) -> None:
+        if sip.isdeleted(self) or sip.isdeleted(self.list_widget):
+            return
         if (
             result.purpose != "thumbnail"
             or not isinstance(result.token, tuple)

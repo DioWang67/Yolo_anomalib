@@ -10,6 +10,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.gui.review_cases_dialog import run_review_dialog
+from core.workspace import load_workspace_paths
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -17,14 +18,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--result-root", default="Result")
     parser.add_argument("--manifest", default="review_manifest.csv")
-    parser.add_argument("--training-data", default="../Yolo11_auto_train/data")
+    parser.add_argument("--training-data")
     parser.add_argument("--product")
     parser.add_argument("--area")
     args = parser.parse_args(argv)
+    training_data_dir = (
+        Path(args.training_data)
+        if args.training_data
+        else load_workspace_paths(Path(__file__).resolve().parents[1]).training_data
+    )
     run_review_dialog(
         result_root=args.result_root,
         manifest_path=args.manifest,
-        training_data_dir=args.training_data,
+        training_data_dir=training_data_dir,
         product=args.product,
         area=args.area,
     )

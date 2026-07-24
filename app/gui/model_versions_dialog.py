@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.gui.dialog_geometry import configure_responsive_dialog
 from core.services.model_version_registry import (
     ModelVersionRecord,
     ModelVersionRegistry,
@@ -70,8 +71,12 @@ class ModelVersionsDialog(QDialog):
         self.on_activated = on_activated
         self.records: list[ModelVersionRecord] = []
         self.setWindowTitle(self._text("模型版本管理", "Model Version Management"))
-        self.resize(1500, 880)
-        self.setWindowState(self.windowState() | Qt.WindowMaximized)
+        configure_responsive_dialog(
+            self,
+            preferred=(1500, 880),
+            minimum=(820, 520),
+            parent=parent,
+        )
         self._build_ui()
         self.refresh_versions(restore_initial_filters=True)
 

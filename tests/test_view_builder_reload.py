@@ -77,6 +77,63 @@ def test_training_review_opens_project_scoped_dialog(tmp_path, monkeypatch) -> N
     )
 
 
+def test_training_review_uses_main_window_workspace_when_available(
+    tmp_path, monkeypatch
+) -> None:
+    run_dialog = Mock()
+    monkeypatch.setattr("app.gui.view_builder._run_review_dialog", run_dialog)
+    show_workspace = Mock()
+    gui = SimpleNamespace(
+        is_detection_running=Mock(return_value=False),
+        _project_root=tmp_path / "yolo11_inference",
+        current_language="zh_TW",
+        product_combo=_combo("Cable1"),
+        area_combo=_combo("A"),
+        log_message=Mock(),
+        show_retraining_workspace=show_workspace,
+    )
+
+    _open_training_review(gui)
+
+    show_workspace.assert_called_once()
+    assert show_workspace.call_args.kwargs["product"] == "Cable1"
+    assert show_workspace.call_args.kwargs["area"] == "A"
+    run_dialog.assert_not_called()
+
+
+def test_training_review_uses_workspace_manifest(tmp_path, monkeypatch) -> None:
+    run_dialog = Mock()
+    monkeypatch.setattr("app.gui.view_builder._run_review_dialog", run_dialog)
+    workspace_root = tmp_path / "workspace"
+    inference_root = workspace_root / "inference-app"
+    training_data = workspace_root / "trainer" / "shared-data"
+    inference_root.mkdir(parents=True)
+    (workspace_root / "workspace.yaml").write_text(
+        """\
+schema_version: 1
+projects:
+  training: trainer
+  inference: inference-app
+paths:
+  training_data: trainer/shared-data
+  inference_models: inference-app/models
+""",
+        encoding="utf-8",
+    )
+    gui = SimpleNamespace(
+        is_detection_running=Mock(return_value=False),
+        _project_root=inference_root,
+        current_language="zh_TW",
+        product_combo=_combo("Cable1"),
+        area_combo=_combo("A"),
+        log_message=Mock(),
+    )
+
+    _open_training_review(gui)
+
+    assert run_dialog.call_args.kwargs["training_data_dir"] == training_data.resolve()
+
+
 def test_training_review_refuses_while_detection_is_running(monkeypatch) -> None:
     warning = Mock()
     monkeypatch.setattr("app.gui.view_builder.QMessageBox.warning", warning)

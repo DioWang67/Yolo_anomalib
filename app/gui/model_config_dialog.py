@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Dialog for editing common per-model settings without opening YAML."""
+
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
@@ -17,14 +17,15 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
     QPlainTextEdit,
+    QPushButton,
     QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
+from app.gui.dialog_geometry import configure_responsive_dialog
 from app.gui.i18n import normalize_language
 from core.services.model_config_editor import load_model_config
 
@@ -53,8 +54,12 @@ class ModelConfigDialog(QDialog):
             f"{self._l('Edit Model Config', '編輯機種設定')} - "
             f"{product}/{area}/{inference_type}"
         )
-        self.setMinimumWidth(560)
-        self.resize(640, 720)
+        configure_responsive_dialog(
+            self,
+            preferred=(640, 720),
+            minimum=(480, 420),
+            parent=parent,
+        )
         self._build_ui()
         self._load_values()
 
