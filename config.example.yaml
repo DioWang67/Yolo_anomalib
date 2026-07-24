@@ -63,6 +63,14 @@ max_cache_size: 3
 # Or absolute path: D:/Path/To/Result
 output_dir: "./Result"
 
+# Traceability metadata persisted with every inspection and indexed in
+# Result/inspection_records.sqlite3. machine_id falls back to the Windows host
+# name when omitted; set the other values from the active production context.
+# machine_id: "LINE-01-MACHINE-03"
+# station_id: "A"
+# work_order: "WO-20260720-001"
+# camera_id: "HIK-MV-CS060-10GM-SERIAL"
+
 # PCBA inspection product config example:
 # See configs/products/pcba_example.yaml for expected_items, position_config,
 # alignment, and missing_slot_check structure. Copy measured values into the
@@ -83,6 +91,15 @@ output_dir: "./Result"
 #     - polarity_mark
 
 # Advanced Settings (Optional)
+
+# Bounded queues keep full-resolution frames from exhausting RAM during slow
+# disk writes. Set image_queue_maxsize to 0 only for synchronous diagnostics.
+# buffer_limit: 10
+# storage_queue_maxsize: 8
+# image_queue_maxsize: 8
+# image_queue_max_mb: 256
+# image_write_timeout_seconds: 30
+# min_free_disk_mb: 1024
 
 # Inference Image Size (for letterbox preprocessing)
 # imgsz: 640

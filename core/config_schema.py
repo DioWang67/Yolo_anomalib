@@ -84,6 +84,10 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         camera_reconnect_backoff: float | None = Field(default=2.0, ge=0.0)
         current_product: str | None = None
         current_area: str | None = None
+        machine_id: str | None = None
+        station_id: str | None = None
+        work_order: str | None = None
+        camera_id: str | None = None
         expected_items: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
         enable_yolo: bool | None = True
         enable_anomalib: bool | None = False
@@ -102,7 +106,8 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
             default_factory=dict
         )
         max_cache_size: int | None = Field(default=3, ge=0)
-        buffer_limit: int | None = Field(default=10, ge=1)
+        buffer_limit: int | None = Field(default=10, ge=1, le=32)
+        storage_queue_maxsize: int | None = Field(default=8, ge=1, le=32)
         flush_interval: float | None = Field(default=None, gt=0)
         pipeline: list[str] | None = None
         steps: dict[str, Any] = Field(default_factory=dict)
@@ -117,6 +122,10 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         jpeg_quality: int | None = Field(default=95, ge=1, le=100)
         png_compression: int | None = Field(default=3, ge=0, le=9)
         max_crops_per_frame: int | None = Field(default=None, ge=0)
+        image_queue_maxsize: int | None = Field(default=8, ge=0, le=32)
+        image_queue_max_mb: int | None = Field(default=256, ge=0, le=2048)
+        image_write_timeout_seconds: float | None = Field(default=30.0, gt=0)
+        min_free_disk_mb: int | None = Field(default=1024, ge=0)
         fail_on_unexpected: bool | None = True
 
         if _VALIDATOR_MODE == "v2":
@@ -169,6 +178,10 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         height: int | None = Field(default=None, gt=0)
         MV_CC_GetImageBuffer_nMsec: int | None = Field(default=None, ge=0)
         output_dir: str | None = None
+        machine_id: str | None = None
+        station_id: str | None = None
+        work_order: str | None = None
+        camera_id: str | None = None
         enable_yolo: bool | None = None
         enable_anomalib: bool | None = None
         enable_color_check: bool | None = None
@@ -195,7 +208,12 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         png_compression: int | None = Field(default=None, ge=0, le=9)
         max_crops_per_frame: int | None = Field(default=None, ge=0)
         fail_on_unexpected: bool | None = None
-        buffer_limit: int | None = Field(default=None, ge=1)
+        buffer_limit: int | None = Field(default=None, ge=1, le=32)
+        storage_queue_maxsize: int | None = Field(default=None, ge=1, le=32)
+        image_queue_maxsize: int | None = Field(default=None, ge=0, le=32)
+        image_queue_max_mb: int | None = Field(default=None, ge=0, le=2048)
+        image_write_timeout_seconds: float | None = Field(default=None, gt=0)
+        min_free_disk_mb: int | None = Field(default=None, ge=0)
         flush_interval: float | None = Field(default=None, gt=0)
         max_cache_size: int | None = Field(default=None, ge=0)
 

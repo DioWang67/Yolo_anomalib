@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 import shutil
+import socket
+import sqlite3
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
@@ -20,15 +22,16 @@ from core.exceptions import (
 )
 from core.logging_config import DetectionLogger
 from core.position_validator import build_missing_item_locations
-from core.services.decision_engine import collect_fail_reasons
 from core.security import ensure_subpath
+from core.services.decision_engine import collect_fail_reasons
+from core.services.inspection_repository import InspectionRepository
 from core.utils import DetectionResults, ImageUtils
 
 from .annotations import annotate_yolo_frame
 from .crops import save_detection_crops, save_failure_crops
 from .excel_buffer import ExcelWorkbookBuffer
 from .excel_formatter import build_excel_row
-from .image_queue import ImageWriteError, ImageWriteQueue
+from .image_queue import ImageWriteError, ImageWriteQueue, ImageWriteReceipt
 from .path_manager import ResultPathManager
 
 
@@ -76,6 +79,9 @@ class ResultHandler:
             self.base_dir, allowed_root=self.allowed_root
         )
         self.path_manager.ensure_base()
+        self._inspection_repository = InspectionRepository(
+            Path(self.base_dir) / "inspection_records.sqlite3"
+        )
 
         self.columns = list(COLUMN_NAMES)
         self.excel_path = os.path.join(self.base_dir, "results.xlsx")
@@ -90,7 +96,18 @@ class ResultHandler:
             allowed_root=self.allowed_root,
         )
 
-        queue_size = int(self._cfg_get("image_queue_maxsize", 1000) or 1000)
+        queue_size_value = self._cfg_get("image_queue_maxsize", 8)
+        queue_size = max(0, int(8 if queue_size_value is None else queue_size_value))
+        if queue_size > 32:
+            self.logger.logger.warning(
+                "image_queue_maxsize=%d exceeds the safe limit; capping at 32",
+                queue_size,
+            )
+            queue_size = 32
+        queue_max_mb_value = self._cfg_get("image_queue_max_mb", 256)
+        queue_max_mb = max(
+            0, int(256 if queue_max_mb_value is None else queue_max_mb_value)
+        )
         warn_threshold = float(
             self._cfg_get(
                 "image_queue_warn_threshold",
@@ -98,6 +115,7 @@ class ResultHandler:
         self._img_queue = ImageWriteQueue(
             self.logger.logger,
             maxsize=queue_size,
+            max_bytes=queue_max_mb * 1024 * 1024,
             warn_threshold=warn_threshold,
             allowed_root=self.allowed_root,
         )
@@ -152,6 +170,7 @@ class ResultHandler:
         slot_mismatches: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         try:
+            self._ensure_disk_capacity(frame, processed_image)
             timestamp = datetime.now()
             bundle = self.path_manager.build_paths(
                 status=status,
@@ -197,19 +216,25 @@ class ResultHandler:
                 detections,
             )
 
+            image_receipts: list[ImageWriteReceipt] = []
             if save_flags["original"]:
-                self._img_queue.enqueue(
-                    original_path, frame, imwrite_params_jpg)
+                image_receipts.append(
+                    self._img_queue.enqueue(
+                        original_path, frame, imwrite_params_jpg
+                    )
+                )
             if save_flags["processed"]:
                 target_params = (
                     imwrite_params_png
                     if preprocessed_path.lower().endswith(".png")
                     else imwrite_params_jpg
                 )
-                self._img_queue.enqueue(
-                    preprocessed_path,
-                    processed_image,
-                    target_params,
+                image_receipts.append(
+                    self._img_queue.enqueue(
+                        preprocessed_path,
+                        processed_image,
+                        target_params,
+                    )
                 )
 
             detector_lower = (detector or "").lower()
@@ -249,6 +274,7 @@ class ResultHandler:
                         timestamp_text=bundle.timestamp,
                         params=imwrite_params_png,
                         limit=limit,
+                        receipts=image_receipts,
                     )
                 if save_flags["crops"] and str(status).upper() != "PASS":
                     failure_crop_paths = save_failure_crops(
@@ -262,6 +288,7 @@ class ResultHandler:
                         missing_locations=missing_locations,
                         detections=detections,
                         slot_mismatches=slot_mismatches,
+                        receipts=image_receipts,
                     )
                     cropped_paths.extend(failure_crop_paths)
             elif detector_lower == "fusion" and save_flags["annotated"]:
@@ -312,7 +339,17 @@ class ResultHandler:
             elif save_flags["annotated"]:
                 heatmap_dest_path = annotated_path
 
-            test_id = self._excel.next_test_id(self._excel.pending_rows())
+            # Original/processed/crop writes overlap with annotation work, but
+            # every required artifact must be confirmed before publishing the
+            # traceability record or returning SUCCESS.
+            write_timeout_value = self._cfg_get("image_write_timeout_seconds", 30.0)
+            write_timeout = max(
+                0.1,
+                float(30.0 if write_timeout_value is None else write_timeout_value),
+            )
+            self._img_queue.wait_for(image_receipts, timeout=write_timeout)
+
+            test_id = self._excel.next_test_id()
             excel_row = build_excel_row(
                 self.columns,
                 timestamp=timestamp,
@@ -335,7 +372,13 @@ class ResultHandler:
                 test_id=test_id,
             )
             try:
-                self._excel.append(excel_row)
+                excel_result = self._excel.append(excel_row)
+                if excel_result is not None and not excel_result.success:
+                    raise ResultExcelWriteError(
+                        excel_result.error or "Excel flush failed"
+                    )
+            except ResultExcelWriteError:
+                raise
             except Exception as exc:
                 self.logger.logger.exception("Excel append failed")
                 raise ResultExcelWriteError(str(exc)) from exc
@@ -362,11 +405,31 @@ class ResultHandler:
                     "annotated_path": annotated_path,
                     "heatmap_path": heatmap_dest_path,
                     "cropped_paths": list(cropped_paths),
+                    "mask_paths": [
+                        str(detection.get("mask_path"))
+                        for detection in detections
+                        if str(detection.get("mask_path") or "").strip()
+                    ],
                 },
             )
+            if config_snapshot_path:
+                try:
+                    self._inspection_repository.upsert_snapshot_file(
+                        config_snapshot_path
+                    )
+                except (
+                    OSError,
+                    ValueError,
+                    json.JSONDecodeError,
+                    sqlite3.Error,
+                ) as exc:
+                    self.logger.logger.warning(
+                        "Inspection database indexing failed: %s", exc
+                    )
 
             return {
                 "status": "SUCCESS",
+                "inspection_id": bundle.inspection_id,
                 "original_path": original_path,
                 "preprocessed_path": preprocessed_path,
                 "annotated_path": annotated_path,
@@ -393,7 +456,10 @@ class ResultHandler:
             raise ResultPersistenceError(str(exc)) from exc
 
     def flush(self) -> None:
-        self._excel.flush()
+        excel_result = self._excel.flush()
+        if not excel_result.success:
+            raise ResultExcelWriteError(excel_result.error or "Excel flush failed")
+        self._img_queue.flush()
 
     def close(self) -> None:
         def _warn(action: str, exc: Exception) -> None:
@@ -482,11 +548,13 @@ class ResultHandler:
         safe_config = self._json_safe(self.config)
         payload = {
             "schema_version": 2,
+            "inspection_id": bundle.inspection_id,
             "timestamp": timestamp.isoformat(),
             "status": status,
             "detector": detector,
             "product": product,
             "area": area,
+            "equipment": self._equipment_metadata(area),
             "decision": dict(decision or {}),
             "fail_reasons": collect_fail_reasons(
                 status=status,
@@ -511,13 +579,62 @@ class ResultHandler:
             "config_hash": self._hash_config(safe_config),
             "config": safe_config,
         }
+        temporary_path = os.path.join(
+            metadata_dir,
+            f".{stem}_config_snapshot.{bundle.inspection_id}.tmp",
+        )
+        ensure_subpath(temporary_path, self.allowed_root, must_exist=False)
         try:
-            with open(snapshot_path, "w", encoding="utf-8") as handle:
+            with open(temporary_path, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, snapshot_path)
         except OSError as exc:
-            self.logger.logger.warning("Config snapshot write failed: %s", exc)
-            return ""
+            self.logger.logger.exception("Config snapshot write failed")
+            raise ResultPersistenceError(str(exc)) from exc
+        finally:
+            try:
+                os.remove(temporary_path)
+            except FileNotFoundError:
+                pass
         return snapshot_path
+
+    def _ensure_disk_capacity(self, frame: Any, processed_image: Any) -> None:
+        """Fail before persistence when the configured disk reserve is unsafe."""
+        reserve_value = self._cfg_get("min_free_disk_mb", 1024)
+        reserve_mb = max(0, int(1024 if reserve_value is None else reserve_value))
+        if reserve_mb == 0:
+            return
+        estimated_bytes = sum(
+            max(0, int(getattr(image, "nbytes", 0) or 0))
+            for image in (frame, processed_image)
+            if image is not None
+        )
+        try:
+            free_bytes = shutil.disk_usage(self.base_dir).free
+        except OSError as exc:
+            raise ResultPersistenceError(
+                f"Unable to verify result disk capacity: {exc}"
+            ) from exc
+        required_bytes = reserve_mb * 1024 * 1024 + estimated_bytes
+        if free_bytes < required_bytes:
+            raise ResultPersistenceError(
+                "Insufficient result disk space: "
+                f"free={free_bytes // (1024 * 1024)} MiB, "
+                f"required={required_bytes // (1024 * 1024)} MiB"
+            )
+
+    def _equipment_metadata(self, area: str | None) -> dict[str, str]:
+        """Return stable equipment identifiers stored with every inspection."""
+        return {
+            "machine_id": str(
+                self._cfg_get("machine_id", None) or socket.gethostname()
+            ),
+            "station": str(self._cfg_get("station_id", None) or area or ""),
+            "work_order": str(self._cfg_get("work_order", None) or ""),
+            "camera_id": str(self._cfg_get("camera_id", None) or ""),
+        }
 
     @staticmethod
     def _hash_config(safe_config: Any) -> str:

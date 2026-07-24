@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Quantify inspection trustworthiness from a labeled review manifest.
 
 This turns the human review labels produced by ``collect_review_cases.py``
@@ -20,12 +18,18 @@ Confusion mapping (label encodes both ground truth and machine outcome):
     false_positive  -> FP  (machine NG, truly OK)  == 過殺
     false_negative  -> FN  (machine PASS, truly NG) == 漏檢
     confirmed_ok    -> TN  (machine PASS, truly OK)
+    wrong_box/class -> TP  (machine NG, truly NG; annotation needs correction)
+    color_confirmed_ng -> TP (color check failed, truly NG)
+    color_false_reject -> FP (color check failed, truly OK); a mixed failure
+                          with product_verdict=ng remains TP
     uncertain/blank -> excluded (reported separately)
 
 NOTE on 漏檢: a false_negative case has machine status PASS, so it only
 appears in the manifest when it was collected with ``--include-pass``.
 Without PASS cases in the manifest you cannot measure escape rate.
 """
+
+from __future__ import annotations
 
 import argparse
 import csv
@@ -44,10 +48,14 @@ _LABEL_TO_CELL: dict[str, str] = {
     "false_positive": "fp",
     "false_negative": "fn",
     "confirmed_ok": "tn",
+    "wrong_box": "tp",
+    "wrong_class": "tp",
     "confirmed_pass": "tn",
     "true_negative": "tn",
+    "color_confirmed_ng": "tp",
+    "color_false_reject": "fp",
 }
-_EXCLUDED_LABELS = {"uncertain"}
+_EXCLUDED_LABELS = {"image_quality_issue", "uncertain"}
 
 # Cells whose machine decision was "flagged NG"; used for status cross-checks.
 _MACHINE_POSITIVE_CELLS = {"tp", "fp"}
@@ -95,7 +103,9 @@ def _safe_ratio(numerator: int, denominator: int) -> float | None:
     return round(numerator / denominator, 4)
 
 
-def _classify(label: str, status: str) -> tuple[str, bool]:
+def _classify(
+    label: str, status: str, product_verdict: str = ""
+) -> tuple[str, bool]:
     """Map a review label to a confusion cell.
 
     Returns ``(cell, is_inconsistent)`` where *cell* is one of
@@ -111,6 +121,12 @@ def _classify(label: str, status: str) -> tuple[str, bool]:
     cell = _LABEL_TO_CELL.get(normalized)
     if cell is None:
         return "unknown_label", False
+    if normalized in {"color_confirmed_ng", "color_false_reject"}:
+        structured_verdict = product_verdict.strip().lower()
+        if structured_verdict == "ng":
+            cell = "tp"
+        elif structured_verdict == "ok":
+            cell = "fp"
 
     machine_flagged = status.strip().upper() in FAIL_STATUSES
     expected_flagged = cell in _MACHINE_POSITIVE_CELLS
@@ -126,6 +142,7 @@ def build_confusion_matrix(rows: list[dict[str, Any]]) -> ConfusionMatrix:
         cell, bad = _classify(
             str(row.get("review_label") or ""),
             str(row.get("status") or ""),
+            str(row.get("product_verdict") or ""),
         )
         counts[cell] += 1
         if bad:

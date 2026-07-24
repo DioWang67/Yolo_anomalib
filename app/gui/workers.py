@@ -67,6 +67,7 @@ class PipelineBridge(QObject):
     result_ready = pyqtSignal(object)   # DetectionTask with .result populated
     error_occurred = pyqtSignal(str)
     camera_disconnected = pyqtSignal()  # Camera lost during pipeline
+    single_shot_finished = pyqtSignal(int)
 
     def __init__(self) -> None:
         super().__init__()

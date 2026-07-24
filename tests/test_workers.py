@@ -387,6 +387,14 @@ class TestAsyncPipelineManager:
         manager.stop(timeout=0.2)
         elapsed = time.perf_counter() - started
 
+        assert manager.running is True
+        with pytest.raises(RuntimeError, match="still stopping"):
+            manager.start(
+                camera=FakeCamera(),
+                detection_system=system,
+                product="P",
+                area="A",
+            )
         system.release.set()
         time.sleep(0.2)
         assert elapsed < 1.0

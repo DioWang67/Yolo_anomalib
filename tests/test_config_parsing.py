@@ -31,6 +31,11 @@ def test_from_yaml_normalizes_pipeline_and_numeric(tmp_path):
         jpeg_quality: 88
         png_compression: 7
         max_crops_per_frame: 5
+        storage_queue_maxsize: 6
+        image_queue_maxsize: 4
+        image_queue_max_mb: 128
+        image_write_timeout_seconds: 12.5
+        min_free_disk_mb: 512
     """,
     )
     cfg = DetectionConfig.from_yaml(str(cfg_path))
@@ -38,6 +43,11 @@ def test_from_yaml_normalizes_pipeline_and_numeric(tmp_path):
     assert cfg.jpeg_quality == 88
     assert cfg.png_compression == 7
     assert cfg.max_crops_per_frame == 5
+    assert cfg.storage_queue_maxsize == 6
+    assert cfg.image_queue_maxsize == 4
+    assert cfg.image_queue_max_mb == 128
+    assert cfg.image_write_timeout_seconds == 12.5
+    assert cfg.min_free_disk_mb == 512
 
 
 def test_from_yaml_parses_camera_resilience_fields(tmp_path):
@@ -110,6 +120,9 @@ def test_normalize_model_dict_validates_imgsz(tmp_path):
         {"jpeg_quality": 101},
         {"png_compression": 10},
         {"buffer_limit": 0},
+        {"storage_queue_maxsize": 33},
+        {"image_queue_maxsize": 33},
+        {"min_free_disk_mb": -1},
         {"imgsz": [640, 0]},
     ],
 )

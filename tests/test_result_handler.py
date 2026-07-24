@@ -1,6 +1,7 @@
-import os
 import json
+import os
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -9,6 +10,7 @@ import pytest
 
 from core.exceptions import ResultImageWriteError
 from core.security import SecurityError
+from core.services.inspection_repository import InspectionRepository
 from core.services.results import handler as rh
 from core.services.results.handler import ResultHandler
 
@@ -206,6 +208,16 @@ def test_save_results_yolo_success_and_flush(tmp_result_dir):
     assert snapshot["decision"] == {"status": "PASS", "reasons": []}
     assert snapshot["model_info"]["model_version"] == "1.0.0"
     assert snapshot["inference_time"] == 0.123
+    indexed = InspectionRepository(
+        Path(tmp_result_dir) / "inspection_records.sqlite3"
+    ).query(
+        "SELECT product, station, model_version FROM inspections "
+        "WHERE snapshot_path=?",
+        (str(Path(out["config_snapshot_path"]).resolve()),),
+    )
+    assert indexed == [
+        {"product": "P", "station": "A", "model_version": "1.0.0"}
+    ]
     assert snapshot["config"]["buffer_limit"] == 1
     for key in ("original_path", "preprocessed_path", "annotated_path"):
         assert os.path.exists(out[key])

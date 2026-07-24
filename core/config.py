@@ -147,6 +147,10 @@ class DetectionConfig:
     camera_reconnect_backoff: float = 2.0
     current_product: str | None = None
     current_area: str | None = None
+    machine_id: str | None = None
+    station_id: str | None = None
+    work_order: str | None = None
+    camera_id: str | None = None
     expected_items: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     enable_yolo: bool = True
     enable_anomalib: bool = False
@@ -168,6 +172,11 @@ class DetectionConfig:
     position_config: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     max_cache_size: int = 3
     buffer_limit: int = 10
+    storage_queue_maxsize: int = 8
+    image_queue_maxsize: int = 8
+    image_queue_max_mb: int = 256
+    image_write_timeout_seconds: float = 30.0
+    min_free_disk_mb: int = 1024
     flush_interval: float | None = None
     pipeline: list[str] | None = None
     steps: dict[str, Any] = field(default_factory=dict)
@@ -319,6 +328,15 @@ class DetectionConfig:
             "position_config": dict(normalized.get("position_config", {})),
             "max_cache_size": int(normalized.get("max_cache_size", 3)),
             "buffer_limit": int(normalized.get("buffer_limit", 10)),
+            "storage_queue_maxsize": int(
+                normalized.get("storage_queue_maxsize", 8)
+            ),
+            "image_queue_maxsize": int(normalized.get("image_queue_maxsize", 8)),
+            "image_queue_max_mb": int(normalized.get("image_queue_max_mb", 256)),
+            "image_write_timeout_seconds": float(
+                normalized.get("image_write_timeout_seconds", 30.0)
+            ),
+            "min_free_disk_mb": int(normalized.get("min_free_disk_mb", 1024)),
             "flush_interval": normalized.get("flush_interval"),
             "pipeline": pipeline_value,
             "steps": dict(normalized.get("steps", {})),

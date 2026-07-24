@@ -17,6 +17,7 @@ import copy
 import logging
 import os
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,10 @@ class DetectionSystem:
         self._refresh_result_sink()
 
         self.inference_engine: InferenceEngine | None = None
+        # Native inference backends are not assumed to be re-entrant. This lock
+        # also prevents a stopped-but-not-yet-returned call from overlapping a
+        # new single-shot or auto inspection.
+        self._inference_lock = threading.RLock()
         self.current_inference_type: str | None = None
         self.model_manager = ModelManager(
             self.logger, max_cache_size=self.config.max_cache_size
@@ -165,26 +170,70 @@ class DetectionSystem:
         """Release resources: pipeline workers, models, camera, sinks."""
         # Stop async pipeline first (if running)
         self.stop_pipeline()
-
-        if self.inference_engine:
-            self.inference_engine.shutdown()
-            self.inference_engine = None
-        if self.camera:
-            self.camera.shutdown()
-            self.camera = None
-        if self.result_sink:
-            try:
-                self.result_sink.close()
-            except Exception:
-                pass
-            self.result_sink = None
-        self._sink_base_dir = None
+        if self.pipeline_running:
+            self.logger.logger.error(
+                "Pipeline workers are still active; deferring native resource "
+                "shutdown to avoid tearing down an in-flight backend"
+            )
+            return
+        if not self._inference_lock.acquire(blocking=False):
+            self.logger.logger.error(
+                "An inspection is still active; deferring native resource shutdown"
+            )
+            return
+        try:
+            if self.inference_engine:
+                self.inference_engine.shutdown()
+                self.inference_engine = None
+            if self.camera:
+                self.camera.shutdown()
+                self.camera = None
+            if self.result_sink:
+                try:
+                    self.result_sink.close()
+                except Exception:
+                    pass
+                self.result_sink = None
+            self._sink_base_dir = None
+        finally:
+            self._inference_lock.release()
 
     # ------------------------------------------------------------------
     # Producer-Consumer Pipeline API
     # ------------------------------------------------------------------
 
     def start_pipeline(
+        self,
+        product: str,
+        area: str,
+        inference_type: str = "yolo",
+        *,
+        capture_interval: float = 0.0,
+        mode: str = "continuous",
+        on_task_captured=None,
+        on_task_processed=None,
+        on_camera_lost=None,
+        cancel_cb=None,
+    ) -> None:
+        """Start a pipeline only when no other inspection owns the backend."""
+        if not self._inference_lock.acquire(blocking=False):
+            raise RuntimeError("Cannot start pipeline: inference backend is busy")
+        try:
+            self._start_pipeline_locked(
+                product,
+                area,
+                inference_type,
+                capture_interval=capture_interval,
+                mode=mode,
+                on_task_captured=on_task_captured,
+                on_task_processed=on_task_processed,
+                on_camera_lost=on_camera_lost,
+                cancel_cb=cancel_cb,
+            )
+        finally:
+            self._inference_lock.release()
+
+    def _start_pipeline_locked(
         self,
         product: str,
         area: str,
@@ -251,6 +300,7 @@ class DetectionSystem:
             area=area,
             inference_type=inference_type,
             buffer_limit=getattr(self.config, "buffer_limit", 10),
+            storage_queue_limit=getattr(self.config, "storage_queue_maxsize", 8),
             capture_interval=capture_interval,
             mode=mode,
             on_task_captured=on_task_captured,
@@ -552,9 +602,19 @@ class DetectionSystem:
                     default_threshold=default_threshold,
                     decision_tuning=decision_tuning,
                 )
+                revision_ids = self.color_override_loader.last_active_revision_ids
+                if revision_ids:
+                    run_logger.info(
+                        "Applied active color calibration revisions: %s",
+                        ", ".join(revision_ids),
+                    )
                 run_logger.info(f"Color checker loaded ({checker_type})")
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError, KeyError) as e:
                 run_logger.error(f"Color checker init failed: {e}")
+                if getattr(self.config, "color_fail_closed", True):
+                    raise RuntimeError(
+                        "Color checker configuration could not be applied"
+                    ) from e
 
     def _acquire_frame(self, frame: np.ndarray | None, run_logger) -> np.ndarray:
         """Capture a frame from the camera if not provided.
@@ -596,6 +656,26 @@ class DetectionSystem:
         Public entry point for pipeline workers (see
         ``core.workers.DetectionPipelineHost``).
         """
+        wait_started = time.monotonic()
+        with self._inference_lock:
+            waited = time.monotonic() - wait_started
+            if waited >= 0.05:
+                run_logger.warning(
+                    "Inference waited %.3fs for the single-flight guard", waited
+                )
+            return self._run_inference_locked(
+                frame, product, area, inference_type, run_logger
+            )
+
+    def _run_inference_locked(
+        self,
+        frame: np.ndarray,
+        product: str,
+        area: str,
+        inference_type: str,
+        run_logger,
+    ) -> dict[str, Any]:
+        """Run one backend call while ``_inference_lock`` is held."""
         if inference_type.lower() == "fusion":
             return FusionInferenceRunner(
                 self.model_manager, self.config, self.result_sink
@@ -767,6 +847,42 @@ class DetectionSystem:
             pass  # Avoid logging failures to interfere with main flow
 
     def detect(
+        self,
+        product: str,
+        area: str,
+        inference_type: str,
+        frame: np.ndarray | None = None,
+        cancel_cb=None,
+    ) -> DetectionResult:
+        """Run one complete inspection without overlapping shared backends."""
+        if self.pipeline_running:
+            return self._build_result(
+                product,
+                area,
+                inference_type,
+                "ERROR",
+                error="Detection pipeline is still running or stopping",
+            )
+        if not self._inference_lock.acquire(blocking=False):
+            return self._build_result(
+                product,
+                area,
+                inference_type,
+                "ERROR",
+                error="Detection backend is busy finishing a previous inspection",
+            )
+        try:
+            return self._detect_locked(
+                product,
+                area,
+                inference_type,
+                frame=frame,
+                cancel_cb=cancel_cb,
+            )
+        finally:
+            self._inference_lock.release()
+
+    def _detect_locked(
         self,
         product: str,
         area: str,

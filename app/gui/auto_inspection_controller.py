@@ -303,15 +303,19 @@ class AutoInspectionController(QObject):
         self._inference_type = inference_type
         self._cancel_event.clear()
 
-        self._worker = CameraPreviewWorker(
+        worker = CameraPreviewWorker(
             camera=camera,
             config=self._config,
             show_debug_overlay=self._show_debug_overlay,
         )
+        self._worker = worker
         self._worker.frame_ready.connect(self._on_frame_ready)
         self._worker.trigger_fired.connect(self._on_trigger_fired)
         self._worker.state_changed.connect(self.auto_state_changed)
         self._worker.error_occurred.connect(self._on_camera_error)
+        self._worker.finished.connect(
+            lambda worker=worker: self._on_preview_worker_finished(worker)
+        )
         self._worker.start()
         logger.info(
             "AutoInspectionController started: %s/%s/%s",
@@ -323,10 +327,20 @@ class AutoInspectionController(QObject):
         """Stop the preview loop and reset state machine."""
         self._cancel_event.set()
         if self._worker is not None:
-            self._worker.stop()
-            self._worker.wait(msecs=3000)
-            self._worker = None
+            worker = self._worker
+            worker.stop()
+            if worker.wait(msecs=3000):
+                if self._worker is worker:
+                    self._worker = None
+            else:
+                logger.warning(
+                    "Camera preview worker is still stopping; restart remains blocked"
+                )
         logger.info("AutoInspectionController stopped")
+
+    def _on_preview_worker_finished(self, worker: CameraPreviewWorker) -> None:
+        if self._worker is worker:
+            self._worker = None
 
     def is_running(self) -> bool:
         return self._worker is not None and self._worker.isRunning()

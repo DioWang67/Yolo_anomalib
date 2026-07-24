@@ -133,6 +133,22 @@ class ModelManager:
             if field in cfg and cfg.get(field) is not None:
                 setattr(base_config, field, cfg[field])
 
+        # Bounded operational settings may be overridden per model.  Schema
+        # validation owns their numeric ranges; absent values keep the global
+        # station defaults.
+        _OPERATIONAL_FIELDS = [
+            "buffer_limit",
+            "storage_queue_maxsize",
+            "image_queue_maxsize",
+            "image_queue_max_mb",
+            "image_write_timeout_seconds",
+            "min_free_disk_mb",
+            "flush_interval",
+        ]
+        for field in _OPERATIONAL_FIELDS:
+            if cfg.get(field) is not None:
+                setattr(base_config, field, cfg[field])
+
         # --- imgsz needs tuple conversion ---
         if "imgsz" in cfg and cfg.get("imgsz") is not None:
             base_config.imgsz = tuple(cfg["imgsz"])  # type: ignore[arg-type]

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """負責載入 LED 色彩模型並對偵測結果進行色彩檢查的服務。"""
+
+from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
@@ -68,19 +68,23 @@ class ColorCheckerService:
                 if default_threshold is not None:
                     try:
                         self._checker.set_default_threshold(default_threshold)
-                    except Exception:
-                        pass
+                    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                        raise RuntimeError(
+                            "Could not apply the configured default color threshold"
+                        ) from exc
                 self._checker_type = checker_type
                 self._model_path = model_path
                 self._decision_tuning = (
                     dict(decision_tuning) if decision_tuning else None
                 )
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError, KeyError) as e:
                 logger.warning("Failed to load StatsColorChecker from %s: %s", model_path, e)
                 self._checker = None
                 self._model_path = None
                 self._decision_tuning = None
-                return
+                raise RuntimeError(
+                    f"Failed to load StatsColorChecker from {model_path}: {e}"
+                ) from e
             overrides = None  # already applied during creation
             rules_overrides = None
         elif need_reload:
@@ -88,36 +92,46 @@ class ColorCheckerService:
                 self._checker = ColorQCEnhanced.from_json(model_path)
                 self._model_path = model_path
                 self._checker_type = checker_type
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError, KeyError) as e:
                 logger.warning("Failed to load ColorQCEnhanced from %s: %s", model_path, e)
                 self._checker = None
                 self._model_path = None
-                return
+                raise RuntimeError(
+                    f"Failed to load ColorQCEnhanced from {model_path}: {e}"
+                ) from e
 
         if checker_type == "stats":
             if default_threshold is not None:
                 try:
                     self._checker.set_default_threshold(default_threshold)
-                except Exception:
-                    pass
+                except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        "Could not apply the active default color threshold"
+                    ) from exc
             if overrides:
                 try:
                     self._checker.apply_threshold_overrides(overrides)
-                except Exception:
-                    pass
+                except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        "Could not apply active color threshold overrides"
+                    ) from exc
             return
 
         # Apply threshold overrides (case-insensitive) if provided
         if overrides:
             try:
                 self._checker.apply_threshold_overrides(overrides)
-            except Exception:
-                pass
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "Could not apply active color threshold overrides"
+                ) from exc
         if rules_overrides:
             try:
                 self._checker.apply_color_rules_overrides(rules_overrides)
-            except Exception:
-                pass
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "Could not apply active color rule overrides"
+                ) from exc
 
     def is_ready(self) -> bool:
         """Return True if a model is loaded and ready."""

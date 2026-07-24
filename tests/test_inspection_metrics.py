@@ -22,14 +22,42 @@ def test_confusion_matrix_maps_labels_to_cells():
         ("PCBA1", "A", "DETECTION_FAIL", "false_positive"),  # FP (過殺)
         ("PCBA1", "A", "PASS", "false_negative"),    # FN (漏檢)
         ("PCBA1", "A", "PASS", "confirmed_ok"),      # TN
+        ("PCBA1", "A", "FAIL", "wrong_box"),        # TP, annotation correction
+        ("PCBA1", "A", "FAIL", "wrong_class"),      # TP, class correction
         ("PCBA1", "A", "FAIL", "uncertain"),         # excluded
         ("PCBA1", "A", "FAIL", ""),                  # unlabeled
     )
     matrix = build_confusion_matrix(rows)
-    assert (matrix.tp, matrix.fp, matrix.fn, matrix.tn) == (1, 1, 1, 1)
+    assert (matrix.tp, matrix.fp, matrix.fn, matrix.tn) == (3, 1, 1, 1)
     assert matrix.uncertain == 1
     assert matrix.unlabeled == 1
     assert matrix.inconsistent == 0
+
+
+def test_color_review_uses_structured_product_truth_for_confusion_cell():
+    rows = [
+        {
+            "status": "FAIL",
+            "review_label": "color_confirmed_ng",
+            "product_verdict": "ng",
+        },
+        {
+            "status": "FAIL",
+            "review_label": "color_false_reject",
+            "product_verdict": "ok",
+        },
+        {
+            "status": "FAIL",
+            "review_label": "color_false_reject",
+            "product_verdict": "ng",
+        },
+    ]
+
+    matrix = build_confusion_matrix(rows)
+
+    assert matrix.tp == 2
+    assert matrix.fp == 1
+    assert matrix.unknown_label == 0
 
 
 def test_escape_recall_precision_math():
