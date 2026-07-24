@@ -5,6 +5,7 @@
 pytest==8.3.3
 pytest-cov>=4.0.0
 pytest-qt>=4.2.0
+PyQt5==5.15.11
 
 # Code Quality
 ruff>=0.1.0
