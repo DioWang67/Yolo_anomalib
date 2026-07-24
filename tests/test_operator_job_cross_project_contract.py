@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 from app.gui.model_update_status_dialog import load_model_update_jobs
 from tools.operator_job_control import request_operator_job_cancel
 
@@ -18,6 +20,8 @@ def _load_training_operator_job_module() -> ModuleType:
         / "picture_tool"
         / "operator_job.py"
     )
+    if not module_path.is_file():
+        pytest.skip("cross-project contract requires a sibling Yolo11_auto_train checkout")
     module_name = "_offline_training_operator_job_contract"
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     if spec is None or spec.loader is None:

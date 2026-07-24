@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from PyQt5 import sip
 from PyQt5.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QImageReader
 
@@ -415,13 +416,15 @@ class AsyncImageService(QObject):
         return _CacheValue(status, image, error, cost_bytes, expires_at)
 
     def _queue_result(self, result: ImageLoadResult) -> None:
+        if sip.isdeleted(self):
+            return
         if self.synchronous:
             self._emit_if_active(result)
         else:
             QTimer.singleShot(0, lambda: self._emit_if_active(result))
 
     def _emit_if_active(self, result: ImageLoadResult) -> None:
-        if self._active:
+        if not sip.isdeleted(self) and self._active:
             self.result_ready.emit(result)
 
 

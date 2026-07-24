@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
@@ -493,6 +494,8 @@ class ReviewSelectionGallery(QWidget):
             )
         )
     def eventFilter(self, watched: Any, event: Any) -> bool:  # noqa: N802 - Qt API
+        if sip.isdeleted(self) or sip.isdeleted(self.thumbnail_list):
+            return False
         if watched is self.thumbnail_list.viewport() and event.type() in {
             QEvent.Resize,
             QEvent.Show,
@@ -501,9 +504,13 @@ class ReviewSelectionGallery(QWidget):
         return super().eventFilter(watched, event)
 
     def _schedule_visible_thumbnails(self) -> None:
+        if sip.isdeleted(self) or sip.isdeleted(self.thumbnail_list):
+            return
         self._thumbnail_timer.start(0)
 
     def _request_visible_thumbnails(self) -> None:
+        if sip.isdeleted(self) or sip.isdeleted(self.thumbnail_list):
+            return
         if not self.image_service.active or self.thumbnail_list.count() == 0:
             return
         visible_positions = self._visible_item_positions()
@@ -532,6 +539,8 @@ class ReviewSelectionGallery(QWidget):
 
     def request_all_thumbnails(self) -> None:
         """Queue all rendered placeholders for deterministic benchmarks and tests."""
+        if sip.isdeleted(self) or sip.isdeleted(self.thumbnail_list):
+            return
         if self.image_service.synchronous:
             self._resident_thumbnail_indices = {
                 int(self.thumbnail_list.item(position).data(ROW_INDEX_ROLE))
@@ -541,6 +550,8 @@ class ReviewSelectionGallery(QWidget):
             self._request_thumbnail_at(position, priority=-1)
 
     def _request_thumbnail_at(self, position: int, *, priority: int) -> None:
+        if sip.isdeleted(self) or sip.isdeleted(self.thumbnail_list):
+            return
         item = self.thumbnail_list.item(position)
         if item is None or bool(item.data(THUMBNAIL_REQUESTED_ROLE)):
             return
@@ -562,6 +573,8 @@ class ReviewSelectionGallery(QWidget):
         )
 
     def _visible_item_positions(self) -> list[int]:
+        if sip.isdeleted(self) or sip.isdeleted(self.thumbnail_list):
+            return []
         viewport_rect = self.thumbnail_list.viewport().rect()
         return [
             position
@@ -572,6 +585,8 @@ class ReviewSelectionGallery(QWidget):
         ]
 
     def _on_image_result(self, result: ImageLoadResult) -> None:
+        if sip.isdeleted(self) or sip.isdeleted(self.thumbnail_list):
+            return
         if (
             result.purpose != "thumbnail"
             or not isinstance(result.token, tuple)
@@ -609,6 +624,8 @@ class ReviewSelectionGallery(QWidget):
             self.thumbnail_list.blockSignals(signals_were_blocked)
 
     def _evict_nonresident_icons(self) -> None:
+        if sip.isdeleted(self) or sip.isdeleted(self.thumbnail_list):
+            return
         signals_were_blocked = self.thumbnail_list.blockSignals(True)
         try:
             for position in range(self.thumbnail_list.count()):
@@ -629,6 +646,8 @@ class ReviewSelectionGallery(QWidget):
             self.thumbnail_list.blockSignals(signals_were_blocked)
 
     def _find_item(self, *, row_index: int, path: str) -> QListWidgetItem | None:
+        if sip.isdeleted(self) or sip.isdeleted(self.thumbnail_list):
+            return None
         for position in range(self.thumbnail_list.count()):
             item = self.thumbnail_list.item(position)
             if (

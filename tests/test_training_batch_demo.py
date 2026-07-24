@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from PIL import Image
+import pytest
 
 from app.gui.training_batch_dialog import TrainingBatchDialog
 from tools.open_training_batch_demo import (
@@ -18,9 +19,16 @@ def _demo_root() -> Path:
     return Path(__file__).resolve().parents[1] / "demo" / "operator_queue"
 
 
+def _load_demo_rows_or_skip() -> list[dict[str, str]]:
+    try:
+        return load_demo_rows(_demo_root())
+    except FileNotFoundError:
+        pytest.skip("operator demo images are station-local and not in source control")
+
+
 def test_demo_contains_ten_isolated_images_in_three_routes():
     demo_root = _demo_root()
-    rows = load_demo_rows(demo_root)
+    rows = _load_demo_rows_or_skip()
 
     assert len(rows) == 10
     assert all(
@@ -70,7 +78,7 @@ def test_demo_script_imports_when_started_outside_project_root(tmp_path):
 
 
 def test_demo_direct_submission_only_removes_direct_cases(qtbot):
-    rows = load_demo_rows(_demo_root())
+    rows = _load_demo_rows_or_skip()
     dialog = TrainingBatchDialog(
         _active_entries(rows),
         language="zh_TW",

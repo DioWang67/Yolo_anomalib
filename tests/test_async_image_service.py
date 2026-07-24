@@ -2,6 +2,7 @@ import os
 import threading
 
 import pytest
+from PyQt5 import sip
 from PyQt5.QtCore import QObject, QSize, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QImage
 from PyQt5.QtWidgets import QApplication
@@ -278,6 +279,41 @@ def test_shutdown_discards_late_running_result(tmp_path, qtbot, monkeypatch):
     QApplication.processEvents()
 
     assert results == []
+
+
+def test_queued_result_ignores_deleted_service(qtbot):
+    service = AsyncImageService(max_workers=1)
+    result = ImageLoadResult(
+        request_id=1,
+        token="deleted",
+        purpose="thumbnail",
+        path="missing.png",
+        status=IMAGE_STATUS_MISSING,
+        image=None,
+    )
+
+    service._queue_result(result)
+    sip.delete(service)
+    QApplication.processEvents()
+
+
+def test_gallery_ignores_queued_work_after_list_is_deleted(qtbot):
+    service = ControlledImageService()
+    gallery = ReviewSelectionGallery(language="en", image_service=service)
+    qtbot.addWidget(gallery)
+    result = ImageLoadResult(
+        request_id=1,
+        token=(id(gallery), gallery._generation, 0, "missing.png"),
+        purpose="thumbnail",
+        path="missing.png",
+        status=IMAGE_STATUS_MISSING,
+        image=None,
+    )
+
+    sip.delete(gallery.thumbnail_list)
+    gallery._request_visible_thumbnails()
+    gallery._request_thumbnail_at(0, priority=0)
+    gallery._on_image_result(result)
 
 
 def test_gallery_pages_large_result_before_requesting_visible_images(qtbot):

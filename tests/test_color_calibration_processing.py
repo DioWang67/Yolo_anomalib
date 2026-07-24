@@ -182,7 +182,12 @@ def test_existing_backend_exposes_deterministic_pure_recommendation():
     )
     backend = PictureToolThresholdBackend()
     policy = CalibrationPolicy(minimum_total=2, minimum_ok=1, minimum_ng=1)
-    first = backend.recommend(evidence, policy)
+    try:
+        first = backend.recommend(evidence, policy)
+    except ColorCalibrationError as exc:
+        if exc.code == "CALIBRATION_BACKEND_UNAVAILABLE":
+            pytest.skip("threshold backend requires a sibling Yolo11_auto_train checkout")
+        raise
     second = backend.recommend(tuple(reversed(evidence)), policy)
     assert first == second
     assert first["status"] == "ready"
