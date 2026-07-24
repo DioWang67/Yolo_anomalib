@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from core.workspace import WorkspaceConfigurationError, load_workspace_paths
+
+MANIFEST = """\
+schema_version: 1
+projects:
+  training: Yolo11_auto_train
+  inference: yolo11_inference
+paths:
+  training_data: Yolo11_auto_train/data
+  inference_models: yolo11_inference/models
+"""
+
+
+def test_workspace_manifest_is_discovered_from_ancestor(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "vision-workspace"
+    inference_child = workspace_root / "yolo11_inference" / "app" / "gui"
+    inference_child.mkdir(parents=True)
+    (workspace_root / "workspace.yaml").write_text(MANIFEST, encoding="utf-8")
+
+    paths = load_workspace_paths(inference_child)
+
+    assert paths.root == workspace_root.resolve()
+    assert paths.training_project == (workspace_root / "Yolo11_auto_train").resolve()
+    assert paths.training_data == (workspace_root / "Yolo11_auto_train" / "data").resolve()
+    assert paths.inference_models == (workspace_root / "yolo11_inference" / "models").resolve()
+    assert paths.manifest_path == (workspace_root / "workspace.yaml").resolve()
+
+
+def test_environment_workspace_takes_precedence(tmp_path: Path, monkeypatch) -> None:
+    environment_root = tmp_path / "configured"
+    environment_root.mkdir()
+    (environment_root / "workspace.yaml").write_text(MANIFEST, encoding="utf-8")
+    nearer_root = tmp_path / "nearer"
+    child = nearer_root / "yolo11_inference"
+    child.mkdir(parents=True)
+    (nearer_root / "workspace.yaml").write_text(MANIFEST, encoding="utf-8")
+    monkeypatch.setenv("YOLO11_WORKSPACE_ROOT", str(environment_root))
+
+    paths = load_workspace_paths(child)
+
+    assert paths.root == environment_root.resolve()
+
+
+def test_environment_workspace_requires_manifest(tmp_path: Path, monkeypatch) -> None:
+    environment_root = tmp_path / "configured"
+    environment_root.mkdir()
+    monkeypatch.setenv("YOLO11_WORKSPACE_ROOT", str(environment_root))
+
+    with pytest.raises(WorkspaceConfigurationError, match="does not contain"):
+        load_workspace_paths(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "unsafe_value",
+    ("../outside/data", "../../outside"),
+)
+def test_workspace_rejects_paths_outside_manifest_root(
+    tmp_path: Path, unsafe_value: str
+) -> None:
+    manifest = MANIFEST.replace("Yolo11_auto_train/data", unsafe_value)
+    (tmp_path / "workspace.yaml").write_text(manifest, encoding="utf-8")
+
+    with pytest.raises(WorkspaceConfigurationError, match="training_data"):
+        load_workspace_paths(tmp_path)
+
+
+def test_workspace_rejects_absolute_path(tmp_path: Path) -> None:
+    unsafe_value = tmp_path.resolve().as_posix()
+    manifest = MANIFEST.replace("Yolo11_auto_train/data", unsafe_value)
+    (tmp_path / "workspace.yaml").write_text(manifest, encoding="utf-8")
+
+    with pytest.raises(WorkspaceConfigurationError, match="training_data"):
+        load_workspace_paths(tmp_path)
+
+
+def test_legacy_sibling_layout_remains_supported(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("YOLO11_WORKSPACE_ROOT", raising=False)
+    inference_root = tmp_path / "yolo11_inference"
+    nested = inference_root / "app" / "gui"
+    nested.mkdir(parents=True)
+
+    paths = load_workspace_paths(nested)
+
+    assert paths.manifest_path is None
+    assert paths.inference_project == inference_root.resolve()
+    assert paths.training_data == (tmp_path / "Yolo11_auto_train" / "data").resolve()
