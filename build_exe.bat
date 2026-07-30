@@ -17,6 +17,9 @@ REM --- 自動偵測腳本所在目錄（不依賴 cwd）---
 pushd "%~dp0"
 set "SOURCE_PATH=%CD%"
 popd
+set "YOLO_CONFIG_DIR=%SOURCE_PATH%\data\.ultralytics"
+set "YOLO_AUTOINSTALL=false"
+if not exist "%YOLO_CONFIG_DIR%" mkdir "%YOLO_CONFIG_DIR%"
 
 REM --- Python 環境設定（可透過 YOLO11_PYTHON 環境變數覆蓋）---
 set "DEFAULT_PYTHON=D:\miniconda\envs\yolo_anomalib\python.exe"
@@ -30,7 +33,8 @@ REM --- 驗證 Python 存在 ---
 if not exist "%ENV_PYTHON%" (
     echo [ERROR] 找不到 Python: %ENV_PYTHON%
     echo 請修改腳本中的 DEFAULT_PYTHON，或設定環境變數 YOLO11_PYTHON。
-    pause & exit /b 1
+    if not defined CI pause
+    exit /b 1
 )
 
 echo [INFO] 使用 Python: %ENV_PYTHON%
@@ -42,7 +46,8 @@ REM --- 確認 PyInstaller 已安裝 ---
 "%ENV_PYTHON%" -c "import PyInstaller" 2>nul
 if errorlevel 1 (
     echo [ERROR] PyInstaller 未安裝，請執行: pip install pyinstaller
-    pause & exit /b 1
+    if not defined CI pause
+    exit /b 1
 )
 
 REM --- 輸出設定 ---
@@ -53,7 +58,8 @@ set "SPEC_FILE=%SOURCE_PATH%\yolo11_inference.spec"
 
 if not exist "%SPEC_FILE%" (
     echo [ERROR] 找不到打包規格檔: %SPEC_FILE%
-    pause & exit /b 1
+    if not defined CI pause
+    exit /b 1
 )
 
 REM --- 清理上次輸出 ---
@@ -81,7 +87,8 @@ REM ==========================================================================
 if not exist "%OUTPUT_PATH%\%BUILD_NAME%\%BUILD_NAME%.exe" (
     echo.
     echo [ERROR] 打包失敗！請檢查上方錯誤訊息。
-    pause & exit /b 1
+    if not defined CI pause
+    exit /b 1
 )
 
 echo.
@@ -89,14 +96,29 @@ echo [INFO] Running build postprocess...
 "%ENV_PYTHON%" "%SOURCE_PATH%\tools\postprocess_build.py" "%SOURCE_PATH%" "%OUTPUT_PATH%\%BUILD_NAME%"
 if errorlevel 1 (
     echo [ERROR] Build postprocess failed.
-    pause & exit /b 1
+    if not defined CI pause
+    exit /b 1
 )
 
 copy /Y "%SOURCE_PATH%\tools\diagnostics\diagnose_camera.bat" "%OUTPUT_PATH%\%BUILD_NAME%\diagnose_camera.bat" >nul
+echo [INFO] Copying operator and engineering documentation...
+copy /Y "%SOURCE_PATH%\README.md" "%OUTPUT_PATH%\%BUILD_NAME%\README.md" >nul
+if errorlevel 1 (
+    echo [ERROR] README copy failed.
+    if not defined CI pause
+    exit /b 1
+)
+xcopy /E /I /Y "%SOURCE_PATH%\docs" "%OUTPUT_PATH%\%BUILD_NAME%\docs" >nul
+if errorlevel 1 (
+    echo [ERROR] Documentation copy failed.
+    if not defined CI pause
+    exit /b 1
+)
 "%ENV_PYTHON%" "%SOURCE_PATH%\tools\packaging\write_runtime_manifest.py" "%OUTPUT_PATH%\%BUILD_NAME%" --output "%OUTPUT_PATH%\%BUILD_NAME%\runtime_manifest_20260528.txt"
 if errorlevel 1 (
     echo [ERROR] Runtime manifest generation failed.
-    pause & exit /b 1
+    if not defined CI pause
+    exit /b 1
 )
 
 echo.
@@ -106,7 +128,9 @@ echo.
 REM --- 執行驗證腳本 ---
 "%ENV_PYTHON%" "%SOURCE_PATH%\verify_build.py" "%OUTPUT_PATH%\%BUILD_NAME%"
 if errorlevel 1 (
-    echo [WARNING] 驗證有問題，請確認上方報告。
+    echo [ERROR] 打包驗證失敗，禁止交付此版本。
+    if not defined CI pause
+    exit /b 1
 ) else (
     echo [OK] 驗證通過。
 )
@@ -115,5 +139,5 @@ echo.
 echo 輸出目錄: %OUTPUT_PATH%\%BUILD_NAME%
 echo 執行程式: %OUTPUT_PATH%\%BUILD_NAME%\%BUILD_NAME%.exe
 echo.
-pause
+if not defined CI pause
 endlocal

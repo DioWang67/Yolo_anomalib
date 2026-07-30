@@ -137,6 +137,162 @@ def test_update_model_config_rejects_invalid_position_unit(tmp_path):
         )
 
 
+def test_update_model_config_writes_duplicate_filter_and_pipeline_order(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "weights": "old.pt",
+                "enable_color_check": True,
+                "pipeline": [
+                    "color_check",
+                    "count_check",
+                    "sequence_check",
+                    "save_results",
+                ],
+                "steps": {"count_check": {"strict": True}},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    update_model_config(
+        config_path,
+        {
+            "duplicate_filter_enabled": True,
+            "duplicate_filter_mode": "suppress",
+            "duplicate_filter_iou_threshold": 0.90,
+            "duplicate_filter_center_distance_ratio_max": 0.10,
+            "duplicate_filter_area_similarity_min": 0.80,
+        },
+        product="PCBA1",
+        area="A",
+    )
+
+    saved = load_model_config(config_path)
+    assert saved["pipeline"] == [
+        "color_check",
+        "cross_class_duplicate_filter",
+        "count_check",
+        "sequence_check",
+        "save_results",
+    ]
+    duplicate = saved["steps"]["cross_class_duplicate_filter"]
+    assert duplicate["enabled"] is True
+    assert duplicate["mode"] == "suppress"
+    assert duplicate["iou_threshold"] == 0.90
+    assert duplicate["require_same_verified_class"] is True
+    assert duplicate["require_color_check_pass"] is True
+    assert duplicate["require_position_disabled"] is True
+    assert saved["steps"]["count_check"]["strict"] is True
+
+
+def test_update_model_config_disabling_duplicate_filter_removes_pipeline_step(
+    tmp_path,
+):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "weights": "old.pt",
+                "pipeline": [
+                    "color_check",
+                    "cross_class_duplicate_filter",
+                    "save_results",
+                ],
+                "steps": {
+                    "cross_class_duplicate_filter": {
+                        "enabled": True,
+                        "mode": "suppress",
+                    }
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    update_model_config(
+        config_path,
+        {"duplicate_filter_enabled": False},
+        product="PCBA1",
+        area="A",
+    )
+
+    saved = load_model_config(config_path)
+    assert "cross_class_duplicate_filter" not in saved["pipeline"]
+    assert saved["steps"]["cross_class_duplicate_filter"]["enabled"] is False
+
+
+def test_update_model_config_disabled_duplicate_filter_preserves_implicit_pipeline(
+    tmp_path,
+):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "weights: old.pt\nenable_color_check: false\n",
+        encoding="utf-8",
+    )
+
+    update_model_config(
+        config_path,
+        {
+            "duplicate_filter_enabled": False,
+            "duplicate_filter_mode": "report_only",
+            "duplicate_filter_iou_threshold": 0.90,
+            "duplicate_filter_center_distance_ratio_max": 0.10,
+            "duplicate_filter_area_similarity_min": 0.80,
+        },
+        product="PCBA1",
+        area="A",
+    )
+
+    saved = load_model_config(config_path)
+    assert "pipeline" not in saved
+    assert "steps" not in saved
+
+
+def test_update_model_config_requires_color_check_for_duplicate_filter(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "weights: old.pt\nenable_color_check: false\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ModelConfigEditError, match="顏色檢查"):
+        update_model_config(
+            config_path,
+            {"duplicate_filter_enabled": True},
+            product="PCBA1",
+            area="A",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("duplicate_filter_mode", "automatic"),
+        ("duplicate_filter_iou_threshold", 0.0),
+        ("duplicate_filter_area_similarity_min", 1.1),
+    ],
+)
+def test_update_model_config_rejects_invalid_duplicate_filter_values(
+    tmp_path,
+    field,
+    value,
+):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("weights: old.pt\n", encoding="utf-8")
+
+    with pytest.raises(ModelConfigEditError, match=field):
+        update_model_config(
+            config_path,
+            {field: value},
+            product="PCBA1",
+            area="A",
+        )
+
+
 def test_save_calibration_settings_writes_camera_and_target(tmp_path):
     from core.services.model_config_editor import save_calibration_settings
 

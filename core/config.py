@@ -177,6 +177,19 @@ class DetectionConfig:
     image_queue_max_mb: int = 256
     image_write_timeout_seconds: float = 30.0
     min_free_disk_mb: int = 1024
+    inspection_backup_interval_hours: int = 24
+    inspection_retention_cleanup_enabled: bool = False
+    inspection_pass_image_days: int = 30
+    inspection_fail_preprocessed_days: int = 90
+    inspection_fail_all_image_days: int = 180
+    inspection_sync_enabled: bool = False
+    inspection_sync_endpoint: str = ""
+    inspection_sync_api_token_env: str = "YOLO11_INSPECTION_SYNC_TOKEN"
+    inspection_sync_timeout_seconds: float = 10.0
+    inspection_sync_interval_seconds: float = 30.0
+    inspection_sync_batch_size: int = 20
+    inspection_sync_max_attempts: int = 12
+    inspection_sync_allow_insecure_http: bool = False
     flush_interval: float | None = None
     pipeline: list[str] | None = None
     steps: dict[str, Any] = field(default_factory=dict)
@@ -337,6 +350,49 @@ class DetectionConfig:
                 normalized.get("image_write_timeout_seconds", 30.0)
             ),
             "min_free_disk_mb": int(normalized.get("min_free_disk_mb", 1024)),
+            "inspection_backup_interval_hours": int(
+                normalized.get("inspection_backup_interval_hours", 24)
+            ),
+            "inspection_retention_cleanup_enabled": bool(
+                normalized.get("inspection_retention_cleanup_enabled", False)
+            ),
+            "inspection_pass_image_days": int(
+                normalized.get("inspection_pass_image_days", 30)
+            ),
+            "inspection_fail_preprocessed_days": int(
+                normalized.get("inspection_fail_preprocessed_days", 90)
+            ),
+            "inspection_fail_all_image_days": int(
+                normalized.get("inspection_fail_all_image_days", 180)
+            ),
+            "inspection_sync_enabled": bool(
+                normalized.get("inspection_sync_enabled", False)
+            ),
+            "inspection_sync_endpoint": str(
+                normalized.get("inspection_sync_endpoint", "") or ""
+            ),
+            "inspection_sync_api_token_env": str(
+                normalized.get(
+                    "inspection_sync_api_token_env",
+                    "YOLO11_INSPECTION_SYNC_TOKEN",
+                )
+                or ""
+            ),
+            "inspection_sync_timeout_seconds": float(
+                normalized.get("inspection_sync_timeout_seconds", 10.0)
+            ),
+            "inspection_sync_interval_seconds": float(
+                normalized.get("inspection_sync_interval_seconds", 30.0)
+            ),
+            "inspection_sync_batch_size": int(
+                normalized.get("inspection_sync_batch_size", 20)
+            ),
+            "inspection_sync_max_attempts": int(
+                normalized.get("inspection_sync_max_attempts", 12)
+            ),
+            "inspection_sync_allow_insecure_http": bool(
+                normalized.get("inspection_sync_allow_insecure_http", False)
+            ),
             "flush_interval": normalized.get("flush_interval"),
             "pipeline": pipeline_value,
             "steps": dict(normalized.get("steps", {})),

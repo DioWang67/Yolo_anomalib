@@ -4,24 +4,13 @@ import csv
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QAction,
-    QCheckBox,
-    QComboBox,
-    QGroupBox,
-    QLabel,
     QMenuBar,
     QMessageBox,
-    QPushButton,
-    QTabWidget,
-    QTextEdit,
-    QVBoxLayout,
-    QWidget,
 )
 
 from app.gui.i18n import tr
-from app.gui.widgets import BigStatusLabel, ImageViewer, ResultDisplayWidget
 from core.workspace import load_workspace_paths
 
 if TYPE_CHECKING:
@@ -30,6 +19,27 @@ if TYPE_CHECKING:
 
 def _lang(gui: DetectionSystemGUI) -> str:
     return getattr(gui, "current_language", "en")
+
+
+def _retraining_targets(gui: DetectionSystemGUI) -> tuple[tuple[str, str], ...]:
+    """Return deployed product/area pairs without an unsafe all-target option."""
+    targets: set[tuple[str, str]] = set()
+    available_areas = getattr(gui, "available_areas", {})
+    if isinstance(available_areas, dict):
+        for product, areas in available_areas.items():
+            if not isinstance(areas, (list, tuple, set)):
+                continue
+            for area in areas:
+                normalized = (str(product).strip(), str(area).strip())
+                if all(normalized):
+                    targets.add(normalized)
+    selected = (
+        gui.product_combo.currentText().strip(),
+        gui.area_combo.currentText().strip(),
+    )
+    if all(selected):
+        targets.add(selected)
+    return tuple(sorted(targets))
 
 
 def _reload_models(gui: DetectionSystemGUI) -> None:
@@ -71,16 +81,19 @@ def _open_training_review(gui: DetectionSystemGUI) -> None:
         if project_root is None:
             project_root = Path.cwd()
         workspace = load_workspace_paths(project_root)
-        workspace_args = dict(
-            result_root=project_root / "Result",
-            manifest_path=project_root / "review_manifest.csv",
-            training_data_dir=workspace.training_data,
-            language=_lang(gui),
-            product=gui.product_combo.currentText().strip() or None,
-            area=gui.area_combo.currentText().strip() or None,
-        )
+        workspace_args = {
+            "result_root": project_root / "Result",
+            "manifest_path": project_root / "review_manifest.csv",
+            "training_data_dir": workspace.training_data,
+            "language": _lang(gui),
+            "product": gui.product_combo.currentText().strip() or None,
+            "area": gui.area_combo.currentText().strip() or None,
+        }
         if hasattr(gui, "show_retraining_workspace"):
-            gui.show_retraining_workspace(**workspace_args)
+            gui.show_retraining_workspace(
+                **workspace_args,
+                available_targets=_retraining_targets(gui),
+            )
         else:
             _run_review_dialog(parent=gui, **workspace_args)
         gui.log_message("Training data review opened; decisions are saved immediately.")
@@ -152,6 +165,7 @@ def _open_model_update_status(gui: DetectionSystemGUI) -> None:
                 language=_lang(gui),
                 product=gui.product_combo.currentText().strip() or None,
                 area=gui.area_combo.currentText().strip() or None,
+                available_targets=_retraining_targets(gui),
             )
             workspace.show_progress_page()
             return
@@ -175,147 +189,6 @@ def _run_model_update_status_dialog(**kwargs) -> int:
     return ModelUpdateStatusDialog(**kwargs).exec_()
 
 
-def build_control_panel(gui: DetectionSystemGUI) -> QGroupBox:
-    """Build the legacy control panel with localized labels."""
-    language = _lang(gui)
-    panel = QGroupBox(tr(language, "inspection_setup"))
-    layout = QVBoxLayout()
-
-    product_group = QGroupBox(tr(language, "product"))
-    product_layout = QVBoxLayout()
-    gui.product_combo = QComboBox()
-    gui.product_combo.currentTextChanged.connect(gui.on_product_changed)
-    product_layout.addWidget(QLabel(f"{tr(language, 'product')}:"))
-    product_layout.addWidget(gui.product_combo)
-    product_group.setLayout(product_layout)
-    layout.addWidget(product_group)
-
-    area_group = QGroupBox(tr(language, "area"))
-    area_layout = QVBoxLayout()
-    gui.area_combo = QComboBox()
-    gui.area_combo.currentTextChanged.connect(gui.on_area_changed)
-    area_layout.addWidget(QLabel(f"{tr(language, 'area')}:"))
-    area_layout.addWidget(gui.area_combo)
-    area_group.setLayout(area_layout)
-    layout.addWidget(area_group)
-
-    inference_group = QGroupBox(tr(language, "model"))
-    inference_layout = QVBoxLayout()
-    gui.inference_combo = QComboBox()
-    gui.inference_combo.currentTextChanged.connect(gui.on_inference_changed)
-    inference_layout.addWidget(QLabel(f"{tr(language, 'type')}:"))
-    inference_layout.addWidget(gui.inference_combo)
-    inference_group.setLayout(inference_layout)
-    layout.addWidget(inference_group)
-
-    button_group = QGroupBox(tr(language, "operation"))
-    button_layout = QVBoxLayout()
-    gui.start_btn = QPushButton(tr(language, "start"))
-    gui.start_btn.setObjectName("primaryAction")
-    gui.start_btn.clicked.connect(gui.start_detection)
-    button_layout.addWidget(gui.start_btn)
-
-    gui.stop_btn = QPushButton(tr(language, "stop"))
-    gui.stop_btn.setObjectName("dangerAction")
-    gui.stop_btn.clicked.connect(gui.stop_detection)
-    gui.stop_btn.setEnabled(False)
-    button_layout.addWidget(gui.stop_btn)
-
-    gui.save_btn = QPushButton(tr(language, "save_result"))
-    gui.save_btn.setObjectName("secondaryAction")
-    gui.save_btn.clicked.connect(gui.save_results)
-    gui.save_btn.setEnabled(False)
-    button_layout.addWidget(gui.save_btn)
-
-    if hasattr(gui, "on_use_camera_toggled"):
-        gui.use_camera_chk = QCheckBox(tr(language, "use_camera"))
-        gui.use_camera_chk.setChecked(True)
-        gui.use_camera_chk.toggled.connect(gui.on_use_camera_toggled)
-        button_layout.addWidget(gui.use_camera_chk)
-
-    if hasattr(gui, "handle_reconnect_camera"):
-        gui.reconnect_camera_btn = QPushButton(tr(language, "reconnect"))
-        gui.reconnect_camera_btn.setObjectName("secondaryAction")
-        gui.reconnect_camera_btn.clicked.connect(gui.handle_reconnect_camera)
-        button_layout.addWidget(gui.reconnect_camera_btn)
-
-        gui.disconnect_camera_btn = QPushButton(tr(language, "disconnect"))
-        gui.disconnect_camera_btn.setObjectName("secondaryAction")
-        gui.disconnect_camera_btn.clicked.connect(gui.handle_disconnect_camera)
-        button_layout.addWidget(gui.disconnect_camera_btn)
-
-    gui.pick_image_btn = QPushButton(tr(language, "choose_image"))
-    gui.pick_image_btn.setObjectName("secondaryAction")
-    gui.pick_image_btn.clicked.connect(gui.pick_image)
-    gui.image_path_label = QLabel(tr(language, "no_image"))
-    gui.image_path_label.setWordWrap(True)
-    button_layout.addWidget(gui.pick_image_btn)
-    button_layout.addWidget(gui.image_path_label)
-
-    if hasattr(gui, "clear_selected_image"):
-        gui.clear_image_btn = QPushButton(tr(language, "clear_image"))
-        gui.clear_image_btn.setObjectName("secondaryAction")
-        gui.clear_image_btn.clicked.connect(gui.clear_selected_image)
-        gui.clear_image_btn.setEnabled(False)
-        button_layout.addWidget(gui.clear_image_btn)
-
-    button_group.setLayout(button_layout)
-    layout.addWidget(button_group)
-    layout.addStretch()
-    panel.setLayout(layout)
-    return panel
-
-
-def build_image_area(gui: DetectionSystemGUI) -> QGroupBox:
-    """Build the legacy image preview area."""
-    language = _lang(gui)
-    area = QGroupBox(tr(language, "viewer"))
-    layout = QVBoxLayout()
-    gui.image_tabs = QTabWidget()
-
-    gui.original_image = ImageViewer(tr(language, "original_image"))
-    gui.original_image.set_language(language)
-    gui.image_tabs.addTab(gui.original_image, tr(language, "original"))
-
-    gui.processed_image = ImageViewer(tr(language, "processed_image"))
-    gui.processed_image.set_language(language)
-    gui.image_tabs.addTab(gui.processed_image, tr(language, "processed"))
-
-    gui.result_image = ImageViewer(tr(language, "result_image"))
-    gui.result_image.set_language(language)
-    gui.image_tabs.addTab(gui.result_image, tr(language, "result"))
-
-    layout.addWidget(gui.image_tabs)
-    area.setLayout(layout)
-    return area
-
-
-def build_info_panel(gui: DetectionSystemGUI) -> QWidget:
-    """Build the legacy info panel."""
-    language = _lang(gui)
-    panel = QWidget()
-    layout = QVBoxLayout()
-
-    gui.big_status_label = BigStatusLabel()
-    layout.addWidget(gui.big_status_label)
-
-    gui.result_widget = ResultDisplayWidget()
-    gui.result_widget.set_language(language)
-    layout.addWidget(gui.result_widget)
-
-    log_group = QGroupBox(tr(language, "debug_log"))
-    log_layout = QVBoxLayout()
-    gui.log_text = QTextEdit()
-    gui.log_text.setFont(QFont("Consolas", 8))
-    gui.log_text.setReadOnly(True)
-    log_layout.addWidget(gui.log_text)
-    log_group.setLayout(log_layout)
-    layout.addWidget(log_group)
-
-    panel.setLayout(layout)
-    return panel
-
-
 def build_menu_bar(gui: DetectionSystemGUI) -> QMenuBar:
     """Build a localized menu bar for the current GUI language."""
     language = _lang(gui)
@@ -329,10 +202,6 @@ def build_menu_bar(gui: DetectionSystemGUI) -> QMenuBar:
     save_action = QAction(tr(language, "save_config"), gui)
     save_action.triggered.connect(gui.save_config)
     file_menu.addAction(save_action)
-
-    review_action = QAction(tr(language, "review_training_data"), gui)
-    review_action.triggered.connect(lambda: _open_training_review(gui))
-    file_menu.addAction(review_action)
 
     file_menu.addSeparator()
 

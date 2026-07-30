@@ -40,10 +40,9 @@ if not defined YOLO11_PYTHON (
     )
 )
 
-"%PYTHON_EXE%" --version
-"%PYTHON_EXE%" -c "import torch; print('PyTorch', torch.__version__)"
+"%PYTHON_EXE%" tools\check_runtime_environment.py
 if errorlevel 1 (
-    echo ERROR: PyTorch runtime check failed: %PYTHON_EXE%
+    echo ERROR: Python runtime environment check failed: %PYTHON_EXE%
     exit /b 1
 )
 

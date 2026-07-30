@@ -22,6 +22,7 @@ Confusion mapping (label encodes both ground truth and machine outcome):
     color_confirmed_ng -> TP (color check failed, truly NG)
     color_false_reject -> FP (color check failed, truly OK); a mixed failure
                           with product_verdict=ng remains TP
+    position_false_reject -> FP (position check failed, truly OK)
     uncertain/blank -> excluded (reported separately)
 
 NOTE on 漏檢: a false_negative case has machine status PASS, so it only
@@ -54,6 +55,7 @@ _LABEL_TO_CELL: dict[str, str] = {
     "true_negative": "tn",
     "color_confirmed_ng": "tp",
     "color_false_reject": "fp",
+    "position_false_reject": "fp",
 }
 _EXCLUDED_LABELS = {"image_quality_issue", "uncertain"}
 

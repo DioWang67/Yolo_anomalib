@@ -79,6 +79,10 @@ class ModelManager:
         self.max_cache_size = max_cache_size
         self._engine_factory = engine_factory
         self._cache_lock = threading.Lock()
+        # Engine construction may load native runtimes and must not run while
+        # holding the cache lock. Serializing the rare activation path avoids
+        # duplicate candidates while ordinary cache reads remain concurrent.
+        self._activation_lock = threading.Lock()
         # cache key: (product, area) -> { type: (engine, config_snapshot) }
         self._cache: OrderedDict[
             tuple[str, str], dict[str, tuple[InferenceEngine, DetectionConfig]]
@@ -369,7 +373,6 @@ class ModelManager:
             merged,
             safe_inference_type,
         )
-        stale_engine = None
         with self._cache_lock:
             if key in self._cache and safe_inference_type in self._cache[key]:
                 engine, _ = self._cache[key][safe_inference_type]
@@ -382,53 +385,94 @@ class ModelManager:
                     )
                     self._cache.move_to_end(key)
                     return engine, merged
-                stale_engine, _ = self._cache[key].pop(safe_inference_type)
-                self._cache_signatures.pop(signature_key, None)
-                if not self._cache[key]:
-                    self._cache.pop(key, None)
-        if stale_engine is not None:
-            try:
-                stale_engine.shutdown()
-            except Exception:
-                pass
-            self.logger.logger.info(
-                "Inference engine settings changed; reloading %s/%s/%s",
-                safe_product,
-                safe_area,
-                safe_inference_type,
-            )
 
-        # The engine owns this merged config for its whole lifetime; later
-        # switches build new copies, so a cached engine never sees another
-        # product's values.
-        engine = self._create_engine(merged)
-        if not engine.initialize():
-            raise RuntimeError("Inference engine init failed")
+        with self._activation_lock:
+            # Another caller may have completed the same activation while this
+            # caller waited. Recheck before loading a second native backend.
+            with self._cache_lock:
+                cached = self._cache.get(key, {}).get(safe_inference_type)
+                if (
+                    cached is not None
+                    and self._cache_signatures.get(signature_key)
+                    == config_signature
+                ):
+                    self._cache.move_to_end(key)
+                    return cached[0], merged
+                stale_engine = cached[0] if cached is not None else None
 
-        if safe_inference_type == "anomalib":
-            self._initialize_product_models(merged, safe_product)
-
-        with self._cache_lock:
-            if key not in self._cache:
-                self._cache[key] = {}
-            self._cache[key][safe_inference_type] = (engine, copy.deepcopy(merged))
-            self._cache_signatures[signature_key] = config_signature
-            self._cache.move_to_end(key)
-            if len(self._cache) > self.max_cache_size:
-                old_key, engines = self._cache.popitem(last=False)
-                for backend, (eng, _) in engines.items():
-                    self._cache_signatures.pop(
-                        (old_key[0], old_key[1], backend), None
-                    )
-                    try:
-                        eng.shutdown()
-                    except Exception:
-                        pass
+            if stale_engine is not None:
                 self.logger.logger.info(
-                    f"Evicted cached model: product={old_key[0]}, area={old_key[1]}"
+                    "Inference engine settings changed; preparing replacement "
+                    "for %s/%s/%s",
+                    safe_product,
+                    safe_area,
+                    safe_inference_type,
                 )
 
-        return engine, merged
+            # The old engine remains reachable until every candidate
+            # initialization step succeeds. This is the activation rollback.
+            candidate = self._create_engine(merged)
+            try:
+                if not candidate.initialize():
+                    raise RuntimeError("Inference engine init failed")
+                if safe_inference_type == "anomalib":
+                    self._initialize_product_models(merged, safe_product)
+            except (ImportError, OSError, RuntimeError, TypeError, ValueError):
+                try:
+                    candidate.shutdown()
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    self.logger.logger.warning(
+                        "Failed candidate engine cleanup raised an error",
+                        exc_info=True,
+                    )
+                raise
+
+            engines_to_shutdown: list[InferenceEngine] = []
+            evicted_key: tuple[str, str] | None = None
+            with self._cache_lock:
+                previous = self._cache.get(key, {}).get(safe_inference_type)
+                if key not in self._cache:
+                    self._cache[key] = {}
+                self._cache[key][safe_inference_type] = (
+                    candidate,
+                    copy.deepcopy(merged),
+                )
+                self._cache_signatures[signature_key] = config_signature
+                self._cache.move_to_end(key)
+                if previous is not None and previous[0] is not candidate:
+                    engines_to_shutdown.append(previous[0])
+
+                if len(self._cache) > self.max_cache_size:
+                    evicted_key, evicted_engines = self._cache.popitem(last=False)
+                    for backend, (evicted_engine, _) in evicted_engines.items():
+                        self._cache_signatures.pop(
+                            (evicted_key[0], evicted_key[1], backend), None
+                        )
+                        if evicted_engine is not candidate:
+                            engines_to_shutdown.append(evicted_engine)
+
+            # Native shutdown can block, so it runs outside all synchronization
+            # locks after the new engine is already the active cache entry.
+            retired_ids: set[int] = set()
+            for old_engine in engines_to_shutdown:
+                if id(old_engine) in retired_ids:
+                    continue
+                retired_ids.add(id(old_engine))
+                try:
+                    old_engine.shutdown()
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    self.logger.logger.warning(
+                        "Retired inference engine shutdown failed",
+                        exc_info=True,
+                    )
+            if evicted_key is not None:
+                self.logger.logger.info(
+                    "Evicted cached model: product=%s, area=%s",
+                    evicted_key[0],
+                    evicted_key[1],
+                )
+
+            return candidate, merged
 
     def _validate_inspection_scope(
         self,

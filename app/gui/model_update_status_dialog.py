@@ -115,6 +115,18 @@ PROCESS_BOUND_JOB_STATES = frozenset(
         "unresponsive",
     }
 )
+POSITION_MODE_LABELS = {
+    "auto": ("自動判斷", "Auto"),
+    "yolo_only": ("僅 YOLO", "YOLO only"),
+    "calibrate_validate": (
+        "YOLO＋位置校正與驗證",
+        "YOLO + position calibration/validation",
+    ),
+}
+POSITION_ACTIVATION_LABELS = {
+    "preserve": ("保留現場狀態", "Preserve station state"),
+    "enable_after_gate": ("驗證通過後啟用", "Enable after gate"),
+}
 
 
 @dataclass(frozen=True)
@@ -143,6 +155,8 @@ class ModelUpdateJob:
     augmentations_per_image: int = 0
     batch: int = 0
     imgsz: int = 0
+    position_training_mode: str = "auto"
+    position_activation: str = "preserve"
 
 
 def workflow_step_index(state: str, current_task: str = "") -> int:
@@ -249,6 +263,12 @@ def load_model_update_jobs(data_root: str | Path) -> list[ModelUpdateJob]:
                 ),
                 batch=_safe_int(training_options.get("batch"), minimum=0),
                 imgsz=_safe_int(training_options.get("imgsz"), minimum=0),
+                position_training_mode=str(
+                    training_options.get("position_training_mode") or "auto"
+                ),
+                position_activation=str(
+                    training_options.get("position_activation") or "preserve"
+                ),
             )
         )
     return sorted(
@@ -306,6 +326,7 @@ class ModelUpdateStatusDialog(QDialog):
         selected_product: str | None = None,
         selected_area: str | None = None,
         background_refresh: bool = False,
+        embedded: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -317,6 +338,7 @@ class ModelUpdateStatusDialog(QDialog):
         self._resume_requested_job_ids: set[str] = set()
         self._cancel_requested_job_ids: set[str] = set()
         self._background_refresh = bool(background_refresh)
+        self._embedded = bool(embedded)
         self._load_generation = 0
         self._load_worker: ModelUpdateJobLoadWorker | None = None
         self._refresh_pending = False
@@ -324,12 +346,15 @@ class ModelUpdateStatusDialog(QDialog):
         self._closed = False
         self._render_limit = JOB_PAGE_SIZE
         self.setWindowTitle(self._text("產線模型補訓｜進度總覽", "Production Retraining | Progress"))
-        configure_responsive_dialog(
-            self,
-            preferred=(1350, 780),
-            minimum=(780, 520),
-            parent=parent,
-        )
+        if self._embedded:
+            self.setWindowFlags(Qt.Widget)
+        else:
+            configure_responsive_dialog(
+                self,
+                preferred=(1350, 780),
+                minimum=(780, 520),
+                parent=parent,
+            )
         self._build_ui()
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setInterval(NORMAL_REFRESH_INTERVAL_MS)
@@ -342,16 +367,25 @@ class ModelUpdateStatusDialog(QDialog):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        title = QLabel(
-            self._text(
-                "從補標到部署都在同一個流程中；畫面會自動更新，不會中斷檢測或補訓。",
-                "Annotation through deployment stays in one workflow and refreshes automatically.",
+        layout.setContentsMargins(
+            8 if self._embedded else 11,
+            6 if self._embedded else 11,
+            8 if self._embedded else 11,
+            8 if self._embedded else 11,
+        )
+        layout.setSpacing(6 if self._embedded else 8)
+        if not self._embedded:
+            title = QLabel(
+                self._text(
+                    "從補標到部署都在同一個流程中；畫面會自動更新，不會中斷檢測或補訓。",
+                    "Annotation through deployment stays in one workflow and refreshes automatically.",
+                )
             )
-        )
-        title.setStyleSheet(
-            "QLabel { background: #243447; color: white; padding: 12px; font-size: 13pt; font-weight: bold; }"
-        )
-        layout.addWidget(title)
+            title.setStyleSheet(
+                "QLabel { background: #243447; color: white; padding: 12px; "
+                "font-size: 13pt; font-weight: bold; }"
+            )
+            layout.addWidget(title)
         layout.addWidget(self._build_workflow_panel())
 
         filters = QHBoxLayout()
@@ -393,6 +427,8 @@ class ModelUpdateStatusDialog(QDialog):
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
         header.setSectionResizeMode(8, QHeaderView.Stretch)
         self.table.itemSelectionChanged.connect(self._update_details)
+        if self._embedded:
+            self.table.setMinimumHeight(120)
         layout.addWidget(self.table, 1)
         self.load_more_button = QPushButton(
             self._text("載入更多歷史任務", "Load more history")
@@ -401,19 +437,34 @@ class ModelUpdateStatusDialog(QDialog):
         self.load_more_button.clicked.connect(self._load_more_jobs)
         layout.addWidget(self.load_more_button)
 
+        details_row = QHBoxLayout()
+        details_row.setSpacing(10)
         self.details_label = QLabel()
         self.details_label.setWordWrap(True)
         self.details_label.setStyleSheet("QLabel { background: #eef2f6; border: 1px solid #c8d1dc; padding: 8px; }")
-        layout.addWidget(self.details_label)
+        details_row.addWidget(self.details_label, 1)
+        self.resume_button = QPushButton(
+            self._text("繼續這筆補訓", "Continue this retraining job")
+        )
+        self.resume_button.setObjectName("resumeOperatorJobButton")
+        self.resume_button.setMinimumHeight(44)
+        self.resume_button.setEnabled(False)
+        self.resume_button.setStyleSheet(
+            "QPushButton#resumeOperatorJobButton {"
+            "background:#237a3b;color:white;border:0;border-radius:6px;"
+            "padding:8px 18px;font-weight:bold;}"
+            "QPushButton#resumeOperatorJobButton:disabled {"
+            "background:#aab2bd;color:#eef1f4;}"
+        )
+        self.resume_button.clicked.connect(self._resume_selected_job)
+        details_row.addWidget(self.resume_button)
+        layout.addLayout(details_row)
 
         footer = QHBoxLayout()
         self.summary_label = QLabel()
         self.summary_label.setStyleSheet("font-weight: bold;")
         footer.addWidget(self.summary_label)
         footer.addStretch()
-        self.resume_button = QPushButton(self._text("繼續這筆補訓", "Continue this retraining job"))
-        self.resume_button.setEnabled(False)
-        self.resume_button.clicked.connect(self._resume_selected_job)
         self.clear_record_button = QPushButton(
             self._text("清除選取紀錄", "Clear selected record")
         )
@@ -436,7 +487,6 @@ class ModelUpdateStatusDialog(QDialog):
         self.cancel_button.clicked.connect(self._cancel_selected_job)
         footer.addWidget(self.clear_record_button)
         footer.addWidget(self.cancel_button)
-        footer.addWidget(self.resume_button)
         close_button = QPushButton(self._text("關閉", "Close"))
         close_button.clicked.connect(self.accept)
         footer.addWidget(close_button)
@@ -713,7 +763,8 @@ class ModelUpdateStatusDialog(QDialog):
             return
         self._render_workflow(job)
         can_resume = (
-            job.state in {"queued", "waiting_annotation", "failed"} and job.job_id not in self._resume_requested_job_ids
+            job.state in {"queued", "waiting_annotation", "failed", "cancelled"}
+            and job.job_id not in self._resume_requested_job_ids
         )
         process_active = operator_process_is_active(job) if can_resume else False
         self.resume_button.setEnabled(can_resume and not process_active)
@@ -748,8 +799,32 @@ class ModelUpdateStatusDialog(QDialog):
         )
         self.resume_button.setText(
             self._text(
-                "修正後重新嘗試" if job.state == "failed" else "繼續這筆補訓",
-                "Retry after correction" if job.state == "failed" else "Continue this retraining job",
+                (
+                    "開啟／繼續補標"
+                    if job.pending_count > 0
+                    else (
+                        "修正後重新嘗試"
+                        if job.state == "failed"
+                        else (
+                            "從中斷處繼續補訓"
+                            if job.state == "cancelled"
+                            else "繼續這筆補訓"
+                        )
+                    )
+                ),
+                (
+                    "Open / continue annotation"
+                    if job.pending_count > 0
+                    else (
+                        "Retry after correction"
+                        if job.state == "failed"
+                        else (
+                            "Resume retraining from checkpoint"
+                            if job.state == "cancelled"
+                            else "Continue this retraining job"
+                        )
+                    )
+                ),
             )
         )
         resume_requested = job.job_id in self._resume_requested_job_ids
@@ -772,6 +847,18 @@ class ModelUpdateStatusDialog(QDialog):
                 f"{job.augmentations_per_image} augmentations / batch {job.batch} / "
                 f"{job.imgsz}px",
             )
+        position_mode_labels = POSITION_MODE_LABELS.get(
+            job.position_training_mode,
+            (job.position_training_mode, job.position_training_mode),
+        )
+        activation_labels = POSITION_ACTIVATION_LABELS.get(
+            job.position_activation,
+            (job.position_activation, job.position_activation),
+        )
+        detail += self._text(
+            f"\n位置設定：{position_mode_labels[0]}／{activation_labels[0]}",
+            f"\nPosition: {position_mode_labels[1]} / {activation_labels[1]}",
+        )
         if job.error:
             detail += f"\n{self._text('失敗原因', 'Error')}: {job.error}"
         if job.heartbeat_at is not None:
@@ -836,7 +923,12 @@ class ModelUpdateStatusDialog(QDialog):
 
     def _resume_selected_job(self) -> None:
         job = self._selected_job()
-        if job is None or job.state not in {"queued", "waiting_annotation", "failed"}:
+        if job is None or job.state not in {
+            "queued",
+            "waiting_annotation",
+            "failed",
+            "cancelled",
+        }:
             return
         if operator_process_is_active(job):
             self.resume_button.setEnabled(False)
@@ -853,11 +945,14 @@ class ModelUpdateStatusDialog(QDialog):
                 ),
             )
             return
-        result = QProcess.startDetached(
-            "cmd.exe",
-            ["/c", str(launcher), str(job.handoff_path), "--background"],
-            str(training_root),
-        )
+        needs_annotation = job.pending_count > 0
+        arguments = [
+            "/c",
+            str(launcher),
+            str(job.handoff_path),
+            "--background",
+        ]
+        result = QProcess.startDetached("cmd.exe", arguments, str(training_root))
         started = result[0] if isinstance(result, tuple) else bool(result)
         if not started:
             QMessageBox.critical(
@@ -870,8 +965,16 @@ class ModelUpdateStatusDialog(QDialog):
         self.resume_button.setEnabled(False)
         self.details_label.setText(
             self._text(
-                "正在背景重新啟動這筆補訓…",
-                "Restarting this retraining job in the background…",
+                (
+                    "正在開啟補標工具；完成最後一張並按 Ctrl+S 後會接續補訓…"
+                    if needs_annotation
+                    else "正在背景重新啟動這筆補訓…"
+                ),
+                (
+                    "Opening annotation; save the final image with Ctrl+S to continue training…"
+                    if needs_annotation
+                    else "Restarting this retraining job in the background…"
+                ),
             )
         )
 
@@ -981,7 +1084,9 @@ def _format_datetime(value: datetime | None) -> str:
 
 def operator_process_is_active(job: ModelUpdateJob) -> bool:
     """Return whether the recorded local training process is still active."""
-    return is_process_active(
-        job.training_process_id,
-        job.training_process_host,
+    return bool(
+        is_process_active(
+            job.training_process_id,
+            job.training_process_host,
+        )
     )

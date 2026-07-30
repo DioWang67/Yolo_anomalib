@@ -10,6 +10,8 @@ from tools.review_routing import (
     color_summary,
     has_color_failure,
     has_non_color_failure,
+    has_position_failure,
+    has_position_only_failure,
     has_threshold_color_failure,
 )
 
@@ -25,6 +27,7 @@ from tools.review_routing import (
         ("wrong_box", "yolo", "wrong_box"),
         ("wrong_class", "yolo", "wrong_class"),
         ("image_quality_issue", "none", "unjudgeable"),
+        ("position_false_reject", "position", "correct"),
     ],
 )
 def test_legacy_decisions_map_to_structured_contract(label, route, detection):
@@ -81,7 +84,21 @@ def test_action_route_validates_new_contract_and_falls_back_for_legacy():
         }
     ) == "both"
     assert action_route({"review_label": "color_false_reject"}) == "color"
+    assert action_route({"review_label": "position_false_reject"}) == "position"
     assert action_route({"review_label": "unknown"}) == "none"
+
+
+def test_position_routing_requires_an_exclusive_position_failure():
+    assert has_position_failure({"decision_reasons": "POSITION_SHIFT"}) is True
+    assert (
+        has_position_only_failure({"decision_reasons": "POSITION_SHIFT"}) is True
+    )
+    assert (
+        has_position_only_failure(
+            {"decision_reasons": "POSITION_SHIFT|MISSING"}
+        )
+        is False
+    )
 
 
 def test_color_failure_parsing_and_operator_summary():

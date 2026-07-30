@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Small helper for editing per-model YAML configs safely."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -150,6 +150,11 @@ def update_model_config(
         if key.startswith("position_") or key in {"missing_slot_check_enabled"}
     }
     count_check_strict = sanitized.pop("count_check_strict", None)
+    duplicate_filter_changes = {
+        key: sanitized.pop(key)
+        for key in list(sanitized.keys())
+        if key.startswith("duplicate_filter_")
+    }
     for key, value in sanitized.items():
         if value is None:
             data.pop(key, None)
@@ -172,6 +177,9 @@ def update_model_config(
 
     if count_check_strict is not None:
         _apply_count_check_strict(data, count_check_strict)
+
+    if duplicate_filter_changes:
+        _apply_duplicate_filter_changes(data, duplicate_filter_changes)
 
     return save_model_config(config_path, data)
 
@@ -259,6 +267,32 @@ def _sanitize_changes(changes: dict[str, Any]) -> dict[str, Any]:
             continue
         if key == "count_check_strict":
             output[key] = bool(value)
+            continue
+        if key == "duplicate_filter_enabled":
+            output[key] = bool(value)
+            continue
+        if key == "duplicate_filter_mode":
+            mode = str(value).strip().lower()
+            if mode not in {"report_only", "suppress"}:
+                raise ModelConfigEditError(
+                    "duplicate_filter_mode 必須是 report_only 或 suppress"
+                )
+            output[key] = mode
+            continue
+        if key in {
+            "duplicate_filter_iou_threshold",
+            "duplicate_filter_center_distance_ratio_max",
+            "duplicate_filter_area_similarity_min",
+        }:
+            number = float(value)
+            if not 0.0 <= number <= 1.0:
+                raise ModelConfigEditError(f"{key} 必須介於 0.0 到 1.0")
+            if key in {
+                "duplicate_filter_iou_threshold",
+                "duplicate_filter_area_similarity_min",
+            } and number == 0.0:
+                raise ModelConfigEditError(f"{key} 必須大於 0.0")
+            output[key] = number
             continue
         if key in {
             "position_check_enabled",
@@ -412,3 +446,68 @@ def _apply_count_check_strict(data: dict[str, Any], strict: bool) -> None:
     count_check["strict"] = bool(strict)
     steps["count_check"] = count_check
     data["steps"] = steps
+
+
+def _apply_duplicate_filter_changes(
+    data: dict[str, Any],
+    changes: dict[str, Any],
+) -> None:
+    steps = data.get("steps")
+    if not isinstance(steps, dict):
+        steps = {}
+    step_config = steps.get("cross_class_duplicate_filter")
+    had_step_config = isinstance(step_config, dict)
+    if not isinstance(step_config, dict):
+        step_config = {}
+    requested_enabled = bool(
+        changes.get(
+            "duplicate_filter_enabled",
+            step_config.get("enabled", False),
+        )
+    )
+    if requested_enabled and not bool(data.get("enable_color_check", False)):
+        raise ModelConfigEditError(
+            "啟用跨類別重複框處理前，必須先啟用顏色檢查"
+        )
+    pipeline_value = data.get("pipeline")
+    pipeline_contains_step = (
+        isinstance(pipeline_value, list)
+        and "cross_class_duplicate_filter"
+        in {str(item).strip() for item in pipeline_value}
+    )
+    if not requested_enabled and not had_step_config and not pipeline_contains_step:
+        return
+
+    mapping = {
+        "duplicate_filter_enabled": "enabled",
+        "duplicate_filter_mode": "mode",
+        "duplicate_filter_iou_threshold": "iou_threshold",
+        "duplicate_filter_center_distance_ratio_max": "center_distance_ratio_max",
+        "duplicate_filter_area_similarity_min": "area_similarity_min",
+    }
+    for source_key, target_key in mapping.items():
+        if source_key in changes:
+            step_config[target_key] = changes[source_key]
+    step_config.setdefault("require_same_verified_class", True)
+    step_config.setdefault("require_color_check_pass", True)
+    step_config.setdefault("require_different_raw_class", True)
+    step_config.setdefault("require_position_disabled", True)
+    steps["cross_class_duplicate_filter"] = step_config
+    data["steps"] = steps
+
+    pipeline = pipeline_value
+    if not isinstance(pipeline, list):
+        if not requested_enabled:
+            return
+        pipeline = ["color_check"] if bool(data.get("enable_color_check")) else []
+    normalized = [
+        str(item).strip()
+        for item in pipeline
+        if str(item).strip() != "cross_class_duplicate_filter"
+    ]
+    if bool(step_config.get("enabled", False)):
+        insert_at = 0
+        if "color_check" in normalized:
+            insert_at = normalized.index("color_check") + 1
+        normalized.insert(insert_at, "cross_class_duplicate_filter")
+    data["pipeline"] = normalized

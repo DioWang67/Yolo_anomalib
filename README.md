@@ -1,15 +1,20 @@
 # yolo11_inference
 
-訓練資料回收不需要使用指令：在 GUI 選好產品／站別後點「檔案 → 訓練資料複核與提交」，或雙擊根目錄的 `一鍵蒐集訓練資料.bat`。可選擇預設或自訂時間範圍；畫面先以多圖總覽列出候選失敗案例，勾選後會進入只包含已選圖片的獨立畫面，未選圖片不會混入。選取會立即保存，可關閉後稍後再決定是否逐張分類。逐張分類可另記錄「閾值未達標」及來源（目前為 YOLO／顏色；未來 detector 可使用新的來源代碼），此失敗原因不會取代人工 OK／NG 判定或自行改變送訓路由。系統另提供 PASS 抽樣與「從已保存結果回報漏檢」。外部圖片必須先用目前產線模型檢測一次，避免錯誤產品、站別或類別進入補訓。逐張判定後可開啟「補訓清單」排除誤入資料；誤檢、漏檢及錯類案件會先進入內建 LabelImg，組長只需框選、選類別、按 `Ctrl+S` 並關閉工具。空白的漏檢標註不會被接受；全部驗證完成後才依序執行資料切分、訓練、同 test set 新舊模型品質比較與部署。資料不足或品質不合格時保留舊模型；部署成功後，下一次推理會自動載入新模型。
+工業視覺檢測系統，整合 YOLO 物件偵測、位置／顏色規則、檢測紀錄、
+人工複核、安全補訓與版本化部署。
 
-影像過曝、失焦、遮擋或取像失敗請選「影像過曝／模糊／遮擋」。此類資料會保留稽核紀錄但暫不送訓，也不會被當成需要補標的資料。
+請依角色從下列文件開始：
 
-推論結果回訓、版本化部署與模型 reload 流程請見
-[`../Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md`](../Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md)。
+- 產線操作者／班組長：[AI 檢測系統操作手冊](docs/OPERATOR_MANUAL.md)
+- 設備、製程、AI、軟體與 IT：[工程維運手冊](docs/ENGINEERING_MANUAL.md)
+- 不確定該看哪份文件：[文件總索引](docs/DOCUMENTATION_INDEX.md)
 
-工業視覺檢測系統，整合 YOLO 物件偵測與 Anomalib 異常檢測，支援多產品/多站別的品質檢測流程。
+目前補訓入口在主 GUI 的`工程設定 > 模型補訓`，需要 PIN 且開始前必須
+停止檢測。位置檢測補訓是每筆工作明確勾選的選項，不會沿用上次設定。
+推論、回訓與安全部署閉環見
+[`Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md`](../Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md)。
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10/3.11](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)](https://www.python.org/downloads/)
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 
 ## 主要功能
@@ -21,7 +26,8 @@
 - 🎨 **LED 顏色檢測**: 統計式顏色驗證
 - 🧭 **顏色誤殺閉環**: 顏色專用覆核、校正資料分流及具名批准門檻發布（見 [操作說明](docs/COLOR_REVIEW_CALIBRATION.md)）
 - 🖥️ **雙介面支援**: CLI 命令列 + PyQt5 GUI
-- 📊 **結果管理**: Excel 報表輸出、影像標註保存
+- 📊 **結果管理**: SQLite 檢測索引、GUI 查詢、篩選式 Excel 報表與證據影像
+- 🔁 **公司同步**: 本機優先 outbox、離線重試、冪等 revision 同步
 - 🔄 **多產品支援**: 靈活的產品/區域/類型配置體系
 - 🚀 **非同步管線 (NEW)**: Producer-Consumer 三階段管線，解耦取像/推論/I/O，適用於高 FPS 產線
 
@@ -80,7 +86,7 @@ yolo11_inference/
 
 ### 前置需求
 
-- Python 3.10 或更高版本
+- Python 3.10 或 3.11
 - CUDA 12.1+ (若使用 GPU)
 - 海康威視相機 SDK (若使用實體相機)
 
@@ -181,8 +187,14 @@ python GUI.py
 
 結果將保存到 `Result/` 目錄（或 `config.yaml` 中指定的 `output_dir`）：
 
-- 標註影像：`Result/<timestamp>_annotated.jpg`
-- Excel 報表：`Result/detection_results.xlsx`
+- 原始、處理後、標註、crop、heatmap 與結果快照（依設定與模型類型產生）；
+- 可查詢索引：`Result/inspection_records.sqlite3`；
+- 一致性備份：`Result/database_backups/`；
+- Excel：從 GUI `檢測紀錄 > 匯出 Excel`，依目前產品、工位、狀態與日期
+  篩選輸出摘要、明細與異常統計。
+
+操作方式見 [操作者手冊](docs/OPERATOR_MANUAL.md#7-檢測紀錄)，資料結構與
+恢復方式見 [資料庫文件](docs/INSPECTION_DATABASE.md)。
 
 ## 測試
 
@@ -323,6 +335,13 @@ Notes:
 
 `position_validator` 用於檢查偵測物件的中心位置是否符合預期範圍。
 
+位置補訓不是每次 YOLO 補訓的固定步驟。送出工作時必須明確勾選
+`啟用位置檢測補訓`；若還要在 Gate 通過後開啟現場檢測，再明確勾選
+`位置驗證通過後啟用現場位置檢測`。兩個選擇都不會記住到下一筆工作。
+
+Golden manifest 只接受人工確認的位置誤殺 OK，或只含
+`POSITION_SHIFT` 的確認 NG。缺件、顏色或混合原因不能充當位置樣本。
+
 ### 配置範例
 
 ```yaml
@@ -345,7 +364,9 @@ LED:
 3. 與預期位置比對，檢查是否在容差範圍內
 4. 輸出驗證報告 (JSON)
 
-詳細說明請參考 `docs/TECH_GUIDE.md`。
+操作判斷見 [操作者手冊的位置補訓章節](docs/OPERATOR_MANUAL.md#10-送出補訓與位置檢測)；
+工程 Gate 與故障處理見
+[工程維運手冊](docs/ENGINEERING_MANUAL.md#8-位置檢測補訓)。
 
 ## 從 Yolo11_auto_train 部署模型
 
@@ -356,7 +377,9 @@ LED:
 picture-tool-pipeline --config configs/<product>.yaml --tasks deploy
 ```
 
-或手動複製：
+正式站點請使用 `deploy` 任務或 GUI 通過 Gate 後的版本化部署。以下手動方式
+只供隔離的開發環境檢查檔案結構，不可用於生產發布，因為它沒有驗證
+checksum、ONNX/PT 等價性，也沒有建立可成對回滾的 deployment manifest：
 
 ```bash
 mkdir -p models/<product>/<area>/yolo
@@ -367,7 +390,9 @@ cp runs/detect/<name>/detection_config.yaml     models/<product>/<area>/yolo/con
 cp runs/detect/<name>/auto_position_config.yaml models/<product>/<area>/yolo/position_config.yaml
 ```
 
-完整的訓練→部署流程說明請參考 `Yolo11_auto_train/docs/INTEGRATION_GUIDE.md`。
+完整的訓練→部署流程說明請參考
+[`Yolo11_auto_train/docs/INTEGRATION_GUIDE.md`](../Yolo11_auto_train/docs/INTEGRATION_GUIDE.md)
+及 [工程維運手冊](docs/ENGINEERING_MANUAL.md#7-補訓閉環)。
 
 ---
 
@@ -377,6 +402,8 @@ cp runs/detect/<name>/auto_position_config.yaml models/<product>/<area>/yolo/pos
 
 | 類別 | 文件 |
 |------|------|
+| 操作者／班組長 | [AI 檢測系統操作手冊](docs/OPERATOR_MANUAL.md) |
+| 工程／IT | [工程維運手冊](docs/ENGINEERING_MANUAL.md) |
 | 技術總覽 | [技術深度指南](docs/TECH_GUIDE.md) |
 | 模組責任 | [模組架構說明](docs/MODULE_ARCHITECTURE.md) |
 | Windows 現場部署 | [Windows Deployment SOP](docs/WINDOWS_DEPLOYMENT_SOP.md) |
@@ -386,6 +413,8 @@ cp runs/detect/<name>/auto_position_config.yaml models/<product>/<area>/yolo/pos
 | 上線檢查 | [Production Go-Live Checklist](docs/PRODUCTION_GO_LIVE_CHECKLIST.md) |
 | 相機診斷 | [Camera Runtime Diagnostics](docs/CAMERA_RUNTIME_DIAGNOSTICS.md) |
 | 模型版本 | [Model Version Management Guide](docs/MODEL_VERSION_GUIDE.md) |
+| 檢測資料庫 | [Inspection Database](docs/INSPECTION_DATABASE.md) |
+| 公司同步 | [Company Server Sync](docs/COMPANY_SERVER_SYNC.md) |
 | 安全 | [Security Guide](docs/SECURITY.md) |
 
 目前 PCBA 文件支援 controlled pilot；若要 unattended production，仍需完成

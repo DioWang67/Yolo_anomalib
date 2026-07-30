@@ -41,6 +41,7 @@ class RequiredAction(str, Enum):
     ANNOTATION = "annotation"
     CLASS_FIX = "class_fix"
     COLOR_CALIBRATION = "color_calibration"
+    POSITION_CALIBRATION = "position_calibration"
     EXCLUDE = "exclude"
     MANUAL_REVIEW = "manual_review"
 
@@ -119,6 +120,7 @@ VALID_REVIEW_LABELS = frozenset(
         "image_quality_issue",
         "color_confirmed_ng",
         "color_false_reject",
+        "position_false_reject",
         "uncertain",
     }
 )
@@ -152,12 +154,15 @@ VALID_DETECTION_VERDICTS = frozenset(
 VALID_COLOR_VERDICTS = frozenset(
     {"not_applicable", "confirmed_ng", "actually_ok", "unjudgeable"}
 )
-VALID_ACTION_ROUTES = frozenset({"none", "yolo", "color", "both"})
-DIRECT_TRAIN_LABELS = frozenset({"confirmed_ng", "verified_empty"})
+VALID_ACTION_ROUTES = frozenset({"none", "yolo", "color", "position", "both"})
+DIRECT_TRAIN_LABELS = frozenset(
+    {"confirmed_ng", "verified_empty", "position_false_reject"}
+)
 CORRECTION_LABELS = frozenset(
     {"false_positive", "false_negative", "wrong_box", "wrong_class"}
 )
 COLOR_LABELS = frozenset({"color_confirmed_ng", "color_false_reject"})
+POSITION_LABELS = frozenset({"position_false_reject"})
 EXCLUDED_LABELS = frozenset({"image_quality_issue"})
 PROCESSING_JOB_STATES = frozenset(
     {"preparing_dataset", "training", "evaluating", "deploying", "processing"}
@@ -393,6 +398,7 @@ def validate_record_consistency(
         "wrong_class",
         "color_confirmed_ng",
         "color_false_reject",
+        "position_false_reject",
     }
     if detection == "unjudgeable" and (
         semantics.ai_correctness != AICorrectness.UNKNOWN
@@ -436,6 +442,14 @@ def validate_record_consistency(
                 code="color_only_sent_to_yolo",
                 message="A color-only issue cannot use the YOLO annotation route",
                 suggestion="Use action_route=color.",
+            )
+        )
+    if label in POSITION_LABELS and effective_route != "position":
+        issues.append(
+            WorkflowViolation(
+                code="position_feedback_wrong_route",
+                message="Position calibration feedback must use action_route=position",
+                suggestion="Use action_route=position.",
             )
         )
     if handoff_selected and not reviewed:
@@ -545,6 +559,12 @@ def map_review_action_to_legacy_fields(
         "uncertain": ("unjudgeable", "unjudgeable", "unjudgeable", "none"),
         "color_confirmed_ng": ("ng", "correct", "confirmed_ng", "color"),
         "color_false_reject": ("ok", "correct", "actually_ok", "color"),
+        "position_false_reject": (
+            "ok",
+            "correct",
+            "not_applicable",
+            "position",
+        ),
     }
     if label not in mappings:
         raise ValueError(f"Unsupported review action: {label}")
@@ -638,6 +658,7 @@ def _derive_product_verdict(
         "wrong_class": ProductVerdict.NG,
         "color_confirmed_ng": ProductVerdict.NG,
         "color_false_reject": ProductVerdict.OK,
+        "position_false_reject": ProductVerdict.OK,
     }.get(label, ProductVerdict.UNKNOWN)
 
 
@@ -664,6 +685,7 @@ def _derive_ai_correctness(
         "wrong_class": AICorrectness.WRONG_CLASS,
         "color_confirmed_ng": AICorrectness.CORRECT,
         "color_false_reject": AICorrectness.FALSE_POSITIVE,
+        "position_false_reject": AICorrectness.CORRECT,
     }.get(label, AICorrectness.UNKNOWN)
 
 
@@ -673,7 +695,12 @@ def _derive_annotation_validity(
     annotation_status = _text(record.get("annotation_status"))
     if annotation_status in {"verified_annotation", "verified_empty"}:
         return AnnotationValidity.VERIFIED
-    if label in {"confirmed_ng", "confirmed_ok", "verified_empty"}:
+    if label in {
+        "confirmed_ng",
+        "confirmed_ok",
+        "verified_empty",
+        "position_false_reject",
+    }:
         return AnnotationValidity.VERIFIED
     if label in {"false_positive", "wrong_box"}:
         return AnnotationValidity.NEEDS_BOX_FIX
@@ -711,6 +738,8 @@ def _derive_required_action(
         return RequiredAction.CLASS_FIX
     if label in COLOR_LABELS or route == "color":
         return RequiredAction.COLOR_CALIBRATION
+    if label in POSITION_LABELS or route == "position":
+        return RequiredAction.POSITION_CALIBRATION
     if label == "uncertain":
         return RequiredAction.MANUAL_REVIEW
     return RequiredAction.NONE
@@ -720,6 +749,8 @@ def _legacy_route(label: str, record: Mapping[str, Any]) -> str:
     if label in COLOR_LABELS:
         detection = _text(record.get("detection_verdict")) or "correct"
         return "both" if detection in {"wrong_box", "wrong_class"} else "color"
+    if label in POSITION_LABELS:
+        return "position"
     if label in DIRECT_TRAIN_LABELS | CORRECTION_LABELS:
         return "yolo"
     return "none"

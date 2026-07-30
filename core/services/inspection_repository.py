@@ -5,22 +5,50 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+from core.services.inspection_database import (
+    SCHEMA_VERSION as _SCHEMA_VERSION,
+)
+from core.services.inspection_database import (
+    InspectionDatabaseBackup,
+    InspectionDatabaseManager,
+)
+
+SCHEMA_VERSION = _SCHEMA_VERSION
 
 
 class InspectionRepository:
     """Store inspection metadata while keeping image files outside the database."""
 
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        now_provider: Callable[[], datetime] | None = None,
+    ) -> None:
         self.path = Path(database_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._now_provider = now_provider or _system_utc_now
+        self._database = InspectionDatabaseManager(self.path)
         self._initialize()
+
+    def backup(
+        self,
+        destination: str | Path | None = None,
+        *,
+        reason: str = "manual",
+    ) -> InspectionDatabaseBackup:
+        """Create one verified online backup without stopping inspection reads."""
+        return self._database.backup(destination, reason=reason)
+
+    def check_integrity(self) -> None:
+        """Run a complete SQLite integrity check."""
+        self._database.check_integrity()
 
     def upsert_snapshot_file(self, snapshot_path: str | Path) -> str:
         """Index one schema-v2 result snapshot and return its stable ID."""
@@ -48,7 +76,7 @@ class InspectionRepository:
             for item in payload.get("detections", [])
             if isinstance(item, Mapping)
         ]
-        now = _utc_now()
+        now = _utc_now(self._now_provider)
         artifact_rows = _artifact_rows(inspection_id, artifacts)
 
         with closing(self._connect()) as connection, connection:
@@ -141,6 +169,7 @@ class InspectionRepository:
                     for index, prediction in enumerate(detections)
                 ],
             )
+            _enqueue_sync(connection, inspection_id, now)
         return inspection_id
 
     def sync_review_row(
@@ -152,7 +181,7 @@ class InspectionRepository:
             raise ValueError("config_snapshot_path is required for review indexing")
         path = Path(snapshot_path).resolve()
         inspection_id = _inspection_id(path)
-        now = _utc_now()
+        now = _utc_now(self._now_provider)
         with closing(self._connect()) as connection:
             exists = connection.execute(
                 "SELECT 1 FROM inspections WHERE inspection_id=?",
@@ -206,6 +235,7 @@ class InspectionRepository:
                         now,
                     ),
                 )
+            _enqueue_sync(connection, inspection_id, now)
         return inspection_id
 
     def load_manifest_sync_state(self) -> dict[str, dict[str, str]]:
@@ -248,98 +278,10 @@ class InspectionRepository:
         return [dict(row) for row in rows]
 
     def _initialize(self) -> None:
-        with closing(self._connect()) as connection, connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS schema_info (
-                    version INTEGER NOT NULL
-                );
-                INSERT INTO schema_info(version)
-                SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM schema_info);
-
-                CREATE TABLE IF NOT EXISTS inspections (
-                    inspection_id TEXT PRIMARY KEY,
-                    snapshot_path TEXT NOT NULL UNIQUE,
-                    timestamp TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    detector TEXT NOT NULL,
-                    product TEXT NOT NULL,
-                    station TEXT NOT NULL,
-                    machine_id TEXT NOT NULL DEFAULT '',
-                    work_order TEXT NOT NULL DEFAULT '',
-                    camera_id TEXT NOT NULL DEFAULT '',
-                    model_version TEXT NOT NULL DEFAULT '',
-                    model_weights TEXT NOT NULL DEFAULT '',
-                    inference_time REAL,
-                    decision_reasons_json TEXT NOT NULL DEFAULT '[]',
-                    predictions_json TEXT NOT NULL DEFAULT '[]',
-                    original_path TEXT NOT NULL DEFAULT '',
-                    preprocessed_path TEXT NOT NULL DEFAULT '',
-                    annotated_path TEXT NOT NULL DEFAULT '',
-                    heatmap_path TEXT NOT NULL DEFAULT '',
-                    crop_paths_json TEXT NOT NULL DEFAULT '[]',
-                    mask_paths_json TEXT NOT NULL DEFAULT '[]',
-                    review_outcome TEXT NOT NULL DEFAULT '',
-                    review_label TEXT NOT NULL DEFAULT '',
-                    failure_category TEXT NOT NULL DEFAULT '',
-                    failure_source TEXT NOT NULL DEFAULT '',
-                    failure_note TEXT NOT NULL DEFAULT '',
-                    skip_reason TEXT NOT NULL DEFAULT '',
-                    action_route TEXT NOT NULL DEFAULT '',
-                    training_selected INTEGER NOT NULL DEFAULT 0 CHECK(training_selected IN (0, 1)),
-                    training_set_state TEXT NOT NULL DEFAULT 'not_selected',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS ai_predictions (
-                    inspection_id TEXT NOT NULL REFERENCES inspections(inspection_id) ON DELETE CASCADE,
-                    prediction_index INTEGER NOT NULL,
-                    class_id INTEGER,
-                    class_name TEXT NOT NULL DEFAULT '',
-                    confidence REAL,
-                    bbox_x1 REAL, bbox_y1 REAL, bbox_x2 REAL, bbox_y2 REAL,
-                    mask_json TEXT NOT NULL DEFAULT '',
-                    PRIMARY KEY (inspection_id, prediction_index)
-                );
-
-                CREATE TABLE IF NOT EXISTS inspection_artifacts (
-                    inspection_id TEXT NOT NULL REFERENCES inspections(inspection_id) ON DELETE CASCADE,
-                    artifact_type TEXT NOT NULL,
-                    artifact_index INTEGER NOT NULL,
-                    path TEXT NOT NULL,
-                    PRIMARY KEY (inspection_id, artifact_type, artifact_index)
-                );
-
-                CREATE TABLE IF NOT EXISTS review_events (
-                    review_event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    inspection_id TEXT NOT NULL REFERENCES inspections(inspection_id) ON DELETE CASCADE,
-                    review_outcome TEXT NOT NULL,
-                    review_label TEXT NOT NULL,
-                    failure_category TEXT NOT NULL,
-                    failure_source TEXT NOT NULL,
-                    failure_note TEXT NOT NULL,
-                    skip_reason TEXT NOT NULL,
-                    action_route TEXT NOT NULL,
-                    training_selected INTEGER NOT NULL CHECK(training_selected IN (0, 1)),
-                    reviewed_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_inspections_product ON inspections(product);
-                CREATE INDEX IF NOT EXISTS idx_inspections_equipment ON inspections(machine_id, station, camera_id);
-                CREATE INDEX IF NOT EXISTS idx_inspections_model ON inspections(model_version);
-                CREATE INDEX IF NOT EXISTS idx_inspections_review ON inspections(review_outcome, failure_category);
-                CREATE INDEX IF NOT EXISTS idx_inspections_timestamp ON inspections(timestamp);
-                """
-            )
+        self._database.initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=5.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA busy_timeout=5000")
-        return connection
+        return self._database.connect()
 
 
 def _inspection_id(snapshot_path: Path) -> str:
@@ -410,5 +352,43 @@ def _prediction_row(
     )
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _system_utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_now(now_provider: Callable[[], datetime]) -> str:
+    current = now_provider()
+    if not isinstance(current, datetime):
+        raise TypeError("Inspection repository clock must return datetime.")
+    if current.tzinfo is None or current.utcoffset() is None:
+        raise ValueError(
+            "Inspection repository clock must return a timezone-aware datetime."
+        )
+    return current.astimezone(timezone.utc).isoformat()
+
+
+def _enqueue_sync(
+    connection: sqlite3.Connection,
+    inspection_id: str,
+    now: str,
+) -> None:
+    """Publish the latest committed inspection revision to the local outbox."""
+    connection.execute(
+        """
+        INSERT INTO inspection_sync_outbox (
+            inspection_id, revision, state, attempt_count, next_attempt_at,
+            lease_token, lease_expires_at, last_error, synced_at, updated_at
+        ) VALUES (?, 1, 'pending', 0, ?, '', '', '', '', ?)
+        ON CONFLICT(inspection_id) DO UPDATE SET
+            revision=inspection_sync_outbox.revision + 1,
+            state='pending',
+            attempt_count=0,
+            next_attempt_at=excluded.next_attempt_at,
+            lease_token='',
+            lease_expires_at='',
+            last_error='',
+            synced_at='',
+            updated_at=excluded.updated_at
+        """,
+        (inspection_id, now, now),
+    )

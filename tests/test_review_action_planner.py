@@ -82,6 +82,29 @@ def test_pass_snapshot_status_maps_to_confirmed_ok():
     assert plan.updates["training_selected"] == "0"
 
 
+def test_position_only_false_reject_routes_to_position_calibration():
+    record = _record(
+        decision_reasons="POSITION_SHIFT",
+        detections_json='[{"bbox":[1,2,3,4]}]',
+    )
+
+    plan = plan_pass(record)
+
+    assert plan.review_label == "position_false_reject"
+    assert plan.updates["action_route"] == "position"
+    assert plan.updates["detection_verdict"] == "correct"
+    assert plan.updates["training_selected"] == "1"
+    assert plan.semantics.required_action.value == "position_calibration"
+    _assert_consistent(plan, record)
+
+
+def test_mixed_position_and_detection_failure_is_not_position_calibration():
+    plan = plan_pass(_record(decision_reasons="POSITION_SHIFT|MISSING"))
+
+    assert plan.review_label == "false_positive"
+    assert plan.updates["action_route"] == "yolo"
+
+
 @pytest.mark.parametrize(
     ("category", "expected_label", "training_selected"),
     [

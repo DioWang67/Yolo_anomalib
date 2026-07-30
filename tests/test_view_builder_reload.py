@@ -98,6 +98,9 @@ def test_training_review_uses_main_window_workspace_when_available(
     show_workspace.assert_called_once()
     assert show_workspace.call_args.kwargs["product"] == "Cable1"
     assert show_workspace.call_args.kwargs["area"] == "A"
+    assert show_workspace.call_args.kwargs["available_targets"] == (
+        ("Cable1", "A"),
+    )
     run_dialog.assert_not_called()
 
 

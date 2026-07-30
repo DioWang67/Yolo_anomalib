@@ -3,7 +3,7 @@ from __future__ import annotations
 """Stats-based color checker derived from the improved color_verifier script."""
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from pathlib import Path
 
@@ -128,21 +128,22 @@ def _load_color_ranges(
         lab_min = np.asarray(stats["lab_min"], dtype=np.float32) - lab_margin_vec
         lab_max = np.asarray(stats["lab_max"], dtype=np.float32) + lab_margin_vec
 
-        def _opt_array(key: str) -> np.ndarray | None:
-            if key not in stats:
-                return None
-            return np.asarray(stats[key], dtype=np.float32)
-
         ranges[color_name.lower()] = _ColorRange(
             name=color_name,
             hsv_min=hsv_min,
             hsv_max=hsv_max,
             lab_min=lab_min,
             lab_max=lab_max,
-            hsv_mean=_opt_array("hsv_mean"),
-            lab_mean=_opt_array("lab_mean"),
+            hsv_mean=_optional_stat_array(stats, "hsv_mean"),
+            lab_mean=_optional_stat_array(stats, "lab_mean"),
         )
     return ranges
+
+
+def _optional_stat_array(stats: Mapping[str, object], key: str) -> np.ndarray | None:
+    if key not in stats:
+        return None
+    return np.asarray(stats[key], dtype=np.float32)
 
 
 def _circular_hue_distance(h1: float, h2: float) -> float:

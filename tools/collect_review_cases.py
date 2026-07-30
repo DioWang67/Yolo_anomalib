@@ -31,6 +31,7 @@ REVIEW_LABELS = (
     "image_quality_issue",
     "color_confirmed_ng",
     "color_false_reject",
+    "position_false_reject",
 )
 FAIL_STATUSES = {"FAIL", "DETECTION_FAIL", "ERROR", "INFERENCE_ERROR"}
 logger = logging.getLogger(__name__)

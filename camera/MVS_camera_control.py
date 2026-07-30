@@ -169,8 +169,8 @@ class MVSCamera:
                 # NOTE: the frame is consumed by inference and color checks.
                 # Never draw overlays (FPS text, status, etc.) on it here —
                 # display decoration belongs to the preview layer, on a copy.
-                # Validated on 2026-06-08 PCBA1 field images via
-                # tools/validate_overlay_impact.py (26/26 outcomes unchanged).
+                # Validated on 2026-06-08 PCBA1 field images; see
+                # docs/archive/validation/FPS_OVERLAY_AB_VALIDATION.md.
                 if self.save_image:
                     try:
                         timestamp = time.strftime("%Y%m%d_%H%M%S")

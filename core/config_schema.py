@@ -119,6 +119,33 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         save_annotated: bool | None = True
         save_crops: bool | None = True
         save_fail_only: bool | None = False
+        inspection_backup_interval_hours: int | None = Field(
+            default=24, ge=1, le=168
+        )
+        inspection_retention_cleanup_enabled: bool | None = False
+        inspection_pass_image_days: int | None = Field(default=30, ge=1)
+        inspection_fail_preprocessed_days: int | None = Field(default=90, ge=1)
+        inspection_fail_all_image_days: int | None = Field(default=180, ge=1)
+        inspection_sync_enabled: bool | None = False
+        inspection_sync_endpoint: str | None = Field(default="", max_length=2048)
+        inspection_sync_api_token_env: str | None = Field(
+            default="YOLO11_INSPECTION_SYNC_TOKEN",
+            min_length=1,
+            max_length=128,
+        )
+        inspection_sync_timeout_seconds: float | None = Field(
+            default=10.0, gt=0, le=120
+        )
+        inspection_sync_interval_seconds: float | None = Field(
+            default=30.0, gt=0, le=3600
+        )
+        inspection_sync_batch_size: int | None = Field(
+            default=20, ge=1, le=500
+        )
+        inspection_sync_max_attempts: int | None = Field(
+            default=12, ge=1, le=100
+        )
+        inspection_sync_allow_insecure_http: bool | None = False
         jpeg_quality: int | None = Field(default=95, ge=1, le=100)
         png_compression: int | None = Field(default=3, ge=0, le=9)
         max_crops_per_frame: int | None = Field(default=None, ge=0)

@@ -524,6 +524,71 @@ def test_identical_human_and_snapshot_labels_keep_human_with_audit(tmp_path):
     assert audit_records[0].reason == "identical_label_prefer_human_over_ai"
 
 
+def test_operator_handoff_exports_position_false_reject_as_verified_data(tmp_path):
+    original = tmp_path / "original.jpg"
+    processed = tmp_path / "processed.jpg"
+    _save_test_image(original, color=(10, 20, 30))
+    _save_test_image(processed, color=(10, 20, 30))
+    manifest = tmp_path / "position_review.csv"
+    fields = {
+        "product": "Cable1",
+        "area": "A",
+        "status": "FAIL",
+        "decision_reasons": "POSITION_SHIFT",
+        "config_snapshot_path": "position.json",
+        "original_path": str(original),
+        "preprocessed_path": str(processed),
+        "detections_json": json.dumps(
+            [
+                {
+                    "class_id": 0,
+                    "confidence": 0.95,
+                    "bbox": [10, 20, 30, 60],
+                    "image_width": 100,
+                    "image_height": 100,
+                }
+            ]
+        ),
+        "class_names_json": json.dumps(["Black"]),
+        "class_map_json": '{"0":"Black"}',
+        "review_selected": "1",
+        "review_outcome": "pass",
+        "review_label": "position_false_reject",
+        "training_selected": "1",
+        "product_verdict": "ok",
+        "detection_verdict": "correct",
+        "color_verdict": "not_applicable",
+        "action_route": "position",
+    }
+    with manifest.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerow(fields)
+
+    output = tmp_path / "training-data"
+    report = export_operator_handoff(
+        manifest,
+        output,
+        inference_models_dir=tmp_path / "models",
+    )
+
+    assert report.ready_count == 1
+    ready_manifest = (
+        output
+        / "Cable1"
+        / "A"
+        / "metadata"
+        / "review_dataset_manifest.csv"
+    )
+    with ready_manifest.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["review_label"] == "position_false_reject"
+    assert rows[0]["annotation_status"] == "verified_snapshot"
+    assert Path(rows[0]["output_label"]).read_text(encoding="utf-8").startswith(
+        "0 0.20000000"
+    )
+
+
 def test_operator_handoff_exports_verified_boxes_and_routes_missed_cases(tmp_path):
     processed = tmp_path / "processed.jpg"
     processed_missed = tmp_path / "processed_missed.jpg"
@@ -667,12 +732,14 @@ def test_operator_handoff_exports_verified_boxes_and_routes_missed_cases(tmp_pat
         str(original_wrong_box),
     }
     handoff = json.loads(report.handoff_path.read_text(encoding="utf-8"))
-    assert handoff["schema_version"] == 4
+    assert handoff["schema_version"] == 5
     assert handoff["training_options"] == {
         "epochs": 20,
         "augmentations_per_image": 20,
         "batch": 8,
         "imgsz": 640,
+        "position_training_mode": "yolo_only",
+        "position_activation": "preserve",
     }
     assert handoff["job_id"] == report.job_id
     assert report.handoff_path.name == "handoff.json"
@@ -1170,6 +1237,8 @@ def test_operator_handoff_verified_empty_creates_explicit_negative_label(tmp_pat
         "augmentations_per_image": 12,
         "batch": 4,
         "imgsz": 960,
+        "position_training_mode": "yolo_only",
+        "position_activation": "preserve",
     }
     label = next((output / "Cable1" / "A" / "raw" / "labels").glob("*.txt"))
     assert label.read_text(encoding="utf-8") == ""

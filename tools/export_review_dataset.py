@@ -44,6 +44,7 @@ DEFAULT_LABELS = {
     "false_negative",
     "wrong_box",
     "wrong_class",
+    "position_false_reject",
 }
 
 HOLD_LABELS = {"confirmed_ok", "uncertain", "image_quality_issue"}
@@ -331,7 +332,7 @@ def export_operator_handoff(
                 continue
             if route == "both":
                 review_label = str(row.get("detection_verdict") or "").strip()
-            if review_label == "confirmed_ng":
+            if review_label in {"confirmed_ng", "position_false_reject"}:
                 if row_index not in allowed_ready_rows:
                     continue
                 item, reason = _export_snapshot_verified_row(
@@ -484,7 +485,7 @@ def export_operator_handoff(
         handoff_path = job_dir / "handoff.json"
         status_path = job_dir / "status.json"
         handoff_payload = {
-            "schema_version": 4,
+            "schema_version": 5,
             "job_id": job_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "submission_hash": submission_hash,
@@ -942,7 +943,7 @@ def prepare_ready_review_item(
     """
     values = {str(key): str(value or "") for key, value in row.items()}
     review_label = str(values.get("review_label") or "").strip()
-    if review_label == "confirmed_ng":
+    if review_label in {"confirmed_ng", "position_false_reject"}:
         return _export_snapshot_verified_row(
             values,
             row_index,
@@ -1111,6 +1112,7 @@ def _preflight_operator_class_contracts(
             "false_negative",
             "wrong_box",
             "wrong_class",
+            "position_false_reject",
         }:
             continue
         contract_rows.append(("pending", row))
@@ -1823,7 +1825,7 @@ def _preflight_ready_canonical_selection(
                     pending_replacements.setdefault(target, set()).add(identity)
                 continue
             item: ExportedReviewItem | None = None
-            if review_label == "confirmed_ng":
+            if review_label in {"confirmed_ng", "position_false_reject"}:
                 item, _reason = _export_snapshot_verified_row(
                     row,
                     row_index,
@@ -2301,7 +2303,10 @@ def _cleanup_legacy_review_files(
         if not folder.exists():
             continue
         for path in folder.iterdir():
-            if path.is_file() and "_confirmed_ng_" in path.name:
+            if path.is_file() and (
+                "_confirmed_ng_" in path.name
+                or "_position_false_reject_" in path.name
+            ):
                 if path.resolve() not in referenced:
                     path.unlink()
 

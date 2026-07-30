@@ -20,7 +20,7 @@ def _write_job(
     state: str,
     product: str = "Cable1",
     area: str = "A",
-    training_options: dict[str, int] | None = None,
+    training_options: dict[str, int | str] | None = None,
     status_values: dict[str, object] | None = None,
 ) -> None:
     job_dir = data_root / ".operator_handoff" / "jobs" / job_id
@@ -60,6 +60,8 @@ def test_load_model_update_jobs_keeps_corrupt_status_visible(tmp_path: Path) -> 
             "augmentations_per_image": 7,
             "batch": 4,
             "imgsz": 960,
+            "position_training_mode": "calibrate_validate",
+            "position_activation": "enable_after_gate",
         },
     )
     bad_dir = data_root / ".operator_handoff" / "jobs" / "job-bad"
@@ -78,6 +80,8 @@ def test_load_model_update_jobs_keeps_corrupt_status_visible(tmp_path: Path) -> 
         good_job.batch,
         good_job.imgsz,
     ) == (80, 7, 4, 960)
+    assert good_job.position_training_mode == "calibrate_validate"
+    assert good_job.position_activation == "enable_after_gate"
     assert next(job for job in jobs if job.job_id == "job-bad").state == "invalid"
 
 
@@ -112,11 +116,41 @@ def test_waiting_job_exposes_resume_when_previous_window_is_gone(
     qtbot,
 ) -> None:
     data_root = tmp_path / "data"
-    _write_job(data_root, "job-waiting", state="waiting_annotation")
+    _write_job(
+        data_root,
+        "job-waiting",
+        state="waiting_annotation",
+        status_values={"pending_count": 1},
+    )
     dialog = ModelUpdateStatusDialog(data_root=data_root, language="zh_TW")
     qtbot.addWidget(dialog)
 
     assert dialog.resume_button.isEnabled() is True
+    assert dialog.resume_button.text() == "開啟／繼續補標"
+
+
+def test_embedded_progress_keeps_annotation_action_visible(
+    tmp_path: Path,
+    qtbot,
+) -> None:
+    data_root = tmp_path / "data"
+    _write_job(
+        data_root,
+        "job-waiting",
+        state="waiting_annotation",
+        status_values={"pending_count": 1},
+    )
+    dialog = ModelUpdateStatusDialog(
+        data_root=data_root,
+        language="zh_TW",
+        embedded=True,
+    )
+    qtbot.addWidget(dialog)
+    dialog.resize(1100, 500)
+    dialog.show()
+
+    assert dialog.minimumHeight() < 520
+    assert dialog.resume_button.isVisibleTo(dialog)
 
 
 def test_completed_job_cannot_be_resumed(tmp_path: Path, qtbot) -> None:
@@ -136,6 +170,21 @@ def test_failed_job_can_be_retried_after_correction(tmp_path: Path, qtbot) -> No
 
     assert dialog.resume_button.isEnabled() is True
     assert dialog.resume_button.text() == "修正後重新嘗試"
+
+
+def test_cancelled_job_can_resume_from_checkpoint(tmp_path: Path, qtbot) -> None:
+    data_root = tmp_path / "data"
+    _write_job(
+        data_root,
+        "job-cancelled",
+        state="cancelled",
+        status_values={"current_task": "yolo_train", "message": "模型更新已停止"},
+    )
+    dialog = ModelUpdateStatusDialog(data_root=data_root, language="zh_TW")
+    qtbot.addWidget(dialog)
+
+    assert dialog.resume_button.isEnabled() is True
+    assert dialog.resume_button.text() == "從中斷處繼續補訓"
 
 
 def test_dead_training_process_is_projected_as_retryable_failure(
@@ -203,6 +252,48 @@ def test_retry_starts_retraining_in_background(tmp_path: Path, qtbot, monkeypatc
         )
     ]
     assert "背景" in dialog.details_label.text()
+
+
+def test_waiting_annotation_hides_orchestrator_and_opens_annotation_tool(
+    tmp_path: Path,
+    qtbot,
+    monkeypatch,
+) -> None:
+    data_root = tmp_path / "data"
+    _write_job(
+        data_root,
+        "job-waiting",
+        state="waiting_annotation",
+        status_values={"pending_count": 1},
+    )
+    launcher = tmp_path / "open_operator_training.bat"
+    launcher.write_text("@echo off\n", encoding="utf-8")
+    launches = []
+
+    class DetachedProcess:
+        @staticmethod
+        def startDetached(program, arguments, working_directory):
+            launches.append((program, arguments, working_directory))
+            return True, 9876
+
+    monkeypatch.setattr(
+        "app.gui.model_update_status_dialog.QProcess",
+        DetachedProcess,
+    )
+    dialog = ModelUpdateStatusDialog(data_root=data_root, language="zh_TW")
+    qtbot.addWidget(dialog)
+
+    dialog._resume_selected_job()
+
+    job = dialog.jobs[0]
+    assert launches == [
+        (
+            "cmd.exe",
+            ["/c", str(launcher), str(job.handoff_path), "--background"],
+            str(tmp_path),
+        )
+    ]
+    assert "Ctrl+S" in dialog.details_label.text()
 
 
 def test_confirmation_feedback_waits_without_counting_as_active(tmp_path: Path, qtbot) -> None:

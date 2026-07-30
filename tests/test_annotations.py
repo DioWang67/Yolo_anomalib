@@ -203,3 +203,89 @@ def test_annotate_yolo_frame_prefers_missing_locations_over_expected_boxes():
 
     assert tuple(frame[50, 50]) == (0, 0, 255)
     assert tuple(frame[110, 110]) == (0, 0, 0)
+
+
+def test_annotate_yolo_frame_uses_source_indices_after_duplicate_suppression(
+    monkeypatch,
+):
+    frame = np.zeros((220, 220, 3), dtype=np.uint8)
+    effective = [
+        {
+            "bbox": [100, 100, 130, 145],
+            "class": "Orange",
+            "verified_class": "Orange",
+            "source_index": 5,
+        }
+    ]
+    raw = [
+        {
+            "bbox": [100, 100, 130, 145],
+            "class": "Orange",
+            "verified_class": "Orange",
+            "source_index": 5,
+        },
+        {
+            "bbox": [100, 100, 130, 146],
+            "class": "Red",
+            "verified_class": "Orange",
+            "source_index": 6,
+        },
+    ]
+    color_result = {
+        "is_ok": True,
+        "items": [
+            {
+                "index": 5,
+                "class_name": "Orange",
+                "best_color": "Orange",
+                "diff": 0.54,
+                "threshold": 0.75,
+                "is_ok": True,
+            },
+            {
+                "index": 6,
+                "class_name": "Red",
+                "best_color": "Orange",
+                "diff": 0.54,
+                "threshold": 0.75,
+                "is_ok": True,
+            },
+        ],
+    }
+    duplicate_filter = {
+        "status": "suppressed",
+        "suppressions": [
+            {
+                "kept_index": 5,
+                "suppressed_index": 6,
+                "verified_class": "Orange",
+                "iou": 0.977,
+            }
+        ],
+        "proposed_suppressions": [],
+    }
+    captured_lines = []
+    monkeypatch.setattr(
+        "core.services.results.annotations._draw_info_panel",
+        lambda _frame, lines, origin: captured_lines.extend(lines),
+    )
+
+    annotate_yolo_frame(
+        FakeImageUtils(),
+        frame,
+        effective,
+        color_result,
+        "PASS",
+        duplicate_filter=duplicate_filter,
+        raw_detections=raw,
+    )
+
+    text = "\n".join(line for line, _ in captured_lines)
+    assert "DUP removed: #6 -> #5" in text
+    assert "#5 Orange -> Orange" in text
+    assert "#6 Red -> Orange" not in text
+    assert np.any(
+        (frame[:, :, 0] > 100)
+        & (frame[:, :, 1] < 80)
+        & (frame[:, :, 2] > 100)
+    )

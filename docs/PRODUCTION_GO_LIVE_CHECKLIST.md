@@ -1,5 +1,31 @@
 # Production Go-Live Checklist
 
+角色操作先閱讀：
+
+- [操作者手冊](OPERATOR_MANUAL.md)
+- [工程維運手冊](ENGINEERING_MANUAL.md)
+
+## Station-wide preflight
+
+Run this before product-specific acceptance:
+
+```powershell
+python -m tools.production_preflight --result-root Result --config config.yaml --backup-restore-drill
+```
+
+`FAIL` always blocks release. `WARN` requires a named engineering acceptance
+for a supervised pilot. When company synchronization is in rollout scope, run
+with `--strict`; it must return only `PASS`, and the offline/reconnect and
+duplicate-prevention pilot in `docs/COMPANY_SERVER_SYNC.md` is mandatory:
+
+```powershell
+python -m tools.production_preflight --result-root Result --config config.yaml --backup-restore-drill --strict
+```
+
+When company synchronization is explicitly outside the current rollout,
+`company_sync_configuration: WARN` documents that limitation. It is not
+permission to claim company-server integration is complete.
+
 This checklist targets controlled PCBA inspection rollout. Passing it means the system is ready for pilot production, not that all AOI defect classes are solved.
 
 ## Required Before Pilot
@@ -17,6 +43,11 @@ This checklist targets controlled PCBA inspection rollout. Passing it means the 
 - [ ] At least one shift-long dry run has review manifest output.
 - [ ] `docs/PCBA_PILOT_ACCEPTANCE_TEMPLATE.md` is filled for each product/area.
 - [ ] Operator review labels are defined: `confirmed_ng`, `false_positive`, `false_negative`, `uncertain`.
+- [ ] Operator and engineering owners have reviewed the current role manuals.
+- [ ] Inspection database integrity and backup/restore drill pass.
+- [ ] Excel export was opened and spot-checked against SQLite records.
+- [ ] Company sync is either accepted as out-of-scope or passes the strict
+      offline/reconnect/idempotency pilot.
 - [ ] Rollback model/config path is documented.
 
 Run the config gate:

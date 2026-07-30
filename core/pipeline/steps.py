@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from collections import Counter
+from copy import deepcopy
 from typing import Any
 
 from core.exceptions import ResultPersistenceError
 from core.pipeline.context import DetectionContext
 from core.position_validator import PositionValidator
 from core.services.color_checker import ColorCheckerService
+from core.services.cross_class_duplicate_filter import (
+    DuplicateFilterMode,
+    DuplicateFilterPolicy,
+    analyze_cross_class_duplicates,
+)
 from core.services.decision_engine import InspectionDecisionEngine
 from core.services.result_sink import ExcelImageResultSink
-
 
 INFERENCE_ERROR_STATUS = "INFERENCE_ERROR"
 DETECTION_FAIL_STATUS = "DETECTION_FAIL"
@@ -95,6 +100,134 @@ class ColorCheckStep(Step):
                 self.logger.info("Color check mismatch -> overall FAIL")
         except Exception:
             pass
+
+
+class CrossClassDuplicateFilterStep(Step):
+    """Analyze or suppress high-confidence cross-class duplicate boxes."""
+
+    def __init__(self, logger, options: dict | None = None) -> None:
+        self.logger = logger
+        self.options = options or {}
+        self.policy = DuplicateFilterPolicy.from_options(self.options)
+
+    def run(self, ctx: DetectionContext) -> None:
+        if str(ctx.status).upper() == INFERENCE_ERROR_STATUS:
+            return
+
+        detections = ctx.result.get("detections", []) or []
+        metadata: dict[str, Any] = {
+            "enabled": True,
+            "mode": self.policy.mode.value,
+            "status": "not_evaluated",
+            "policy_version": 1,
+            "policy": self.policy.to_dict(),
+            "raw_count": len(detections),
+            "effective_count": len(detections),
+            "candidate_count": 0,
+            "suppressed_count": 0,
+            "would_suppress_count": 0,
+            "candidates": [],
+            "suppressions": [],
+            "proposed_suppressions": [],
+        }
+        ctx.result["duplicate_filter"] = metadata
+        if not detections:
+            metadata["status"] = "no_detections"
+            return
+
+        if self.policy.require_position_disabled:
+            position_state = self._position_check_state(ctx)
+            if position_state != "disabled":
+                metadata["status"] = (
+                    "blocked_position_enabled"
+                    if position_state == "enabled"
+                    else "blocked_position_state_unknown"
+                )
+                self.logger.warning(
+                    "Cross-class duplicate filter blocked: position check state=%s",
+                    position_state,
+                )
+                return
+
+        color_items = self._color_items_by_index(ctx.color_result)
+        if not color_items:
+            metadata["status"] = "blocked_color_result_unavailable"
+            self.logger.warning(
+                "Cross-class duplicate filter blocked: color result unavailable"
+            )
+            return
+
+        for index, detection in enumerate(detections):
+            detection.setdefault("source_index", index)
+
+        analysis = analyze_cross_class_duplicates(
+            detections=detections,
+            color_items_by_index=color_items,
+            policy=self.policy,
+        )
+        proposed = analysis["proposed_suppressions"]
+        metadata.update(analysis)
+        metadata["effective_count"] = len(detections)
+        metadata["would_suppress_count"] = len(proposed)
+        metadata["proposed_suppressions"] = proposed
+        if not proposed:
+            metadata["status"] = "no_candidates"
+            return
+
+        if self.policy.mode is DuplicateFilterMode.REPORT_ONLY:
+            metadata["status"] = "reported"
+            self.logger.info(
+                "Cross-class duplicate candidates reported: count=%s",
+                len(proposed),
+            )
+            return
+
+        suppressed_indices = {
+            int(item["suppressed_index"]) for item in proposed
+        }
+        ctx.result["raw_detections"] = deepcopy(detections)
+        ctx.result["detections"] = [
+            detection
+            for index, detection in enumerate(detections)
+            if index not in suppressed_indices
+        ]
+        metadata["status"] = "suppressed"
+        metadata["suppressions"] = proposed
+        metadata["suppressed_count"] = len(proposed)
+        metadata["effective_count"] = len(ctx.result["detections"])
+        self.logger.info(
+            "Cross-class duplicate boxes suppressed: raw=%s, effective=%s, indices=%s",
+            len(detections),
+            len(ctx.result["detections"]),
+            sorted(suppressed_indices),
+        )
+
+    @staticmethod
+    def _color_items_by_index(
+        color_result: dict[str, Any] | None,
+    ) -> dict[int, dict[str, Any]]:
+        items = (color_result or {}).get("items", []) or []
+        indexed: dict[int, dict[str, Any]] = {}
+        for position, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("index", position))
+            except (TypeError, ValueError):
+                continue
+            indexed[index] = item
+        return indexed
+
+    @staticmethod
+    def _position_check_state(ctx: DetectionContext) -> str:
+        config = ctx.config
+        if config is None:
+            return "unknown"
+        try:
+            enabled = config.is_position_check_enabled(ctx.product, ctx.area)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return "unknown"
+        return "enabled" if bool(enabled) else "disabled"
 
 
 class CountCheckStep(Step):
@@ -277,6 +410,15 @@ class SaveResultsStep(Step):
             return
         try:
             is_anomalib_only = str(ctx.inference_type).lower() == "anomalib"
+            duplicate_kwargs: dict[str, Any] = {}
+            if ctx.result.get("duplicate_filter") is not None:
+                duplicate_kwargs["duplicate_filter"] = ctx.result.get(
+                    "duplicate_filter"
+                )
+            if ctx.result.get("raw_detections") is not None:
+                duplicate_kwargs["raw_detections"] = ctx.result.get(
+                    "raw_detections"
+                )
             if is_anomalib_only and ctx.result.get("anomaly_score") is not None:
                 save_result = self.sink.save(
                     frame=ctx.frame,
@@ -297,6 +439,7 @@ class SaveResultsStep(Step):
                     model_info=ctx.result.get("model_info"),
                     inference_time=ctx.result.get("inference_time"),
                     slot_mismatches=ctx.result.get("slot_mismatches", []),
+                    **duplicate_kwargs,
                 )
             else:
                 save_result = self.sink.save(
@@ -319,6 +462,7 @@ class SaveResultsStep(Step):
                     model_info=ctx.result.get("model_info"),
                     inference_time=ctx.result.get("inference_time"),
                     slot_mismatches=ctx.result.get("slot_mismatches", []),
+                    **duplicate_kwargs,
                 )
             ctx.save_result = save_result
         except ResultPersistenceError as exc:

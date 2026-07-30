@@ -1,8 +1,9 @@
 from unittest.mock import MagicMock
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QDialog, QScrollArea
+from PyQt5.QtWidgets import QDialog, QLabel, QScrollArea
 
+from app.gui.hover_help import HoverHelpBadge
 from app.gui.training_batch_dialog import (
     CATEGORY_ROLE,
     TrainingBatchDialog,
@@ -52,6 +53,28 @@ def test_batch_overview_restores_selection_and_counts(qtbot):
     assert "已選擇 1 張" in dialog.summary_label.text()
     assert "已排除 1 張" in dialog.summary_label.text()
     assert "暫不送訓 1 張" in dialog.summary_label.text()
+
+
+def test_queue_guidance_is_available_as_hover_help(qtbot):
+    dialog = TrainingBatchDialog(_entries(), language="zh_TW", queue_mode=True)
+    qtbot.addWidget(dialog)
+
+    title_help = dialog.findChild(HoverHelpBadge, "batchTitleHelp")
+    selection_help = dialog.findChild(HoverHelpBadge, "queueSelectionHelp")
+    route_help = dialog.findChild(HoverHelpBadge, "routeGuidanceHelp")
+    visible_copy = {
+        label.text()
+        for label in dialog.findChildren(QLabel)
+        if label.isVisibleTo(dialog)
+    }
+
+    assert title_help is not None
+    assert "先勾選要處理的影像" in title_help.toolTip()
+    assert selection_help is not None
+    assert "雙擊照片可放大" in selection_help.toolTip()
+    assert route_help is not None
+    assert "不會混送" in route_help.toolTip()
+    assert all("系統已依判定結果分好類" not in text for text in visible_copy)
 
 
 def test_batch_overview_filters_direct_and_annotation_rows(qtbot):

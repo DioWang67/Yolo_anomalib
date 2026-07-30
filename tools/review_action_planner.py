@@ -20,7 +20,11 @@ from tools.review_classification import (
     ReviewFailureClassification,
     normalize_source_key,
 )
-from tools.review_routing import has_color_failure, has_non_color_failure
+from tools.review_routing import (
+    has_color_failure,
+    has_non_color_failure,
+    has_position_only_failure,
+)
 from tools.review_workflow import (
     ReviewSemantics,
     derive_review_semantics,
@@ -64,6 +68,8 @@ def plan_pass(record: Mapping[str, Any]) -> ReviewActionPlan:
     """Plan an operator PASS without exposing an action route to the UI."""
     if has_color_failure(record):
         label = "color_false_reject"
+    elif has_position_only_failure(record):
+        label = "position_false_reject"
     elif str(record.get("status") or "").strip().upper() == "PASS":
         label = "confirmed_ok"
     else:

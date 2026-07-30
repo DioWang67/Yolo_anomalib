@@ -169,7 +169,7 @@ def test_activate_restores_version_config_but_preserves_station_fields(
     assert registry.previous_version("PCBA1", "A", "yolo").weight_path.name == current_name
 
 
-def test_activate_rejects_legacy_artifact_without_explicit_permission(
+def test_registry_hides_noncurrent_best_alias(
     tmp_path: Path,
 ) -> None:
     models_root, target = _create_target(tmp_path)
@@ -188,13 +188,31 @@ def test_activate_rejects_legacy_artifact_without_explicit_permission(
         {"weights": f"models/PCBA1/A/yolo/weights/{current_name}"},
     )
     registry = ModelVersionRegistry(models_root)
-    legacy = next(item for item in registry.list_versions() if item.weight_path == legacy_path)
 
-    with pytest.raises(ModelVersionRegistryError, match="設定快照"):
-        registry.activate(legacy)
+    records = registry.list_versions()
 
-    activated = registry.activate(legacy, allow_incomplete=True)
-    assert activated.is_current is True
+    assert legacy_path not in {record.weight_path for record in records}
+    assert [record.weight_path.name for record in records] == [current_name]
+
+
+def test_registry_hides_paired_training_weight_but_keeps_current_legacy_alias(
+    tmp_path: Path,
+) -> None:
+    models_root, target = _create_target(tmp_path)
+    current_alias = target / "weights" / "best.onnx"
+    paired_training = target / "weights" / "PCBA1_A_v1.0.1_20260715.training.pt"
+    current_alias.write_bytes(b"runtime")
+    paired_training.write_bytes(b"training")
+    _write_yaml(
+        target / "config.yaml",
+        {"weights": "models/PCBA1/A/yolo/weights/best.onnx"},
+    )
+
+    records = ModelVersionRegistry(models_root).list_versions()
+
+    assert [record.weight_path for record in records] == [current_alias.resolve()]
+    assert records[0].is_current is True
+    assert records[0].version == "legacy"
 
 
 def test_activate_rejects_artifact_with_wrong_hash(tmp_path: Path) -> None:

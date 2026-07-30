@@ -858,6 +858,22 @@ class DetectionSystem:
                 )
             if ctx.result.get("unexpected_items"):
                 reasons.append(f"unexpected items: {ctx.result['unexpected_items']}")
+            duplicate_filter = ctx.result.get("duplicate_filter")
+            if isinstance(duplicate_filter, dict):
+                proposed_count = int(
+                    duplicate_filter.get("would_suppress_count", 0) or 0
+                )
+                suppressed_count = int(
+                    duplicate_filter.get("suppressed_count", 0) or 0
+                )
+                if suppressed_count:
+                    reasons.append(
+                        f"cross-class duplicates suppressed: {suppressed_count}"
+                    )
+                elif proposed_count:
+                    reasons.append(
+                        f"cross-class duplicate candidates: {proposed_count}"
+                    )
             pos_wrong = [
                 d.get("class")
                 for d in (ctx.result.get("detections", []) or [])
@@ -1026,6 +1042,12 @@ class DetectionSystem:
                     "layout_alignment": result.get("layout_alignment"),
                     "alignment_quality": result.get("alignment_quality"),
                     "aligned_expected_boxes": result.get("aligned_expected_boxes", {}),
+                    "duplicate_filter": result.get("duplicate_filter"),
+                    "raw_detection_count": len(
+                        result.get("raw_detections")
+                        or result.get("detections")
+                        or []
+                    ),
                 },
             )
 

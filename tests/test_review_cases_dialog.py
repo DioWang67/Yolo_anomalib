@@ -14,6 +14,7 @@ from app.gui.review_cases_dialog import (
     LEGACY_SELECTED_PAGE_ENV,
     ReviewCasesDialog,
     ReviewManifestStore,
+    _assert_rows_match_target,
     _environment_flag_enabled,
     _find_saved_case_index,
     _is_color_only_submission,
@@ -45,6 +46,27 @@ from tools.review_routing import ReviewDecision
 from tools.review_workflow import ReviewWorkflowValidationError
 
 
+def test_training_target_guard_rejects_mixed_products() -> None:
+    with pytest.raises(ValueError, match="cannot mix"):
+        _assert_rows_match_target(
+            [
+                {"product": "Cable1", "area": "A"},
+                {"product": "PCBA1", "area": "TOP"},
+            ],
+            product="Cable1",
+            area="A",
+        )
+
+
+def test_training_target_guard_rejects_active_target_mismatch() -> None:
+    with pytest.raises(ValueError, match="does not match"):
+        _assert_rows_match_target(
+            [{"product": "Cable1", "area": "B"}],
+            product="Cable1",
+            area="A",
+        )
+
+
 def test_embedded_workspace_close_returns_to_inspection_without_shutdown(
     tmp_path, qtbot
 ):
@@ -64,6 +86,32 @@ def test_embedded_workspace_close_returns_to_inspection_without_shutdown(
 
     assert requested == [True]
     dialog.image_service.shutdown.assert_not_called()
+
+
+def test_photo_selection_keeps_only_short_heading_and_hover_help(tmp_path, qtbot):
+    dialog = ReviewCasesDialog(
+        result_root=tmp_path / "Result",
+        manifest_path=tmp_path / "review.csv",
+        training_data_dir=tmp_path / "training-data",
+        language="zh_TW",
+        product="Cable1",
+        area="A",
+        embedded=True,
+    )
+    qtbot.addWidget(dialog)
+
+    heading = dialog.findChild(QLabel, "reviewSelectionHeading")
+    help_badge = dialog.findChild(QLabel, "reviewSelectionHeadingHelp")
+    target_scope = dialog.findChild(QLabel, "reviewTargetScope")
+
+    assert heading is not None
+    assert heading.text() == "第 1 階段：選照片"
+    assert help_badge is not None
+    assert help_badge.text() == "ⓘ 提示"
+    assert "勾選會立即保存" in help_badge.toolTip()
+    assert target_scope is not None
+    assert target_scope.text() == "Cable1／A"
+    assert "不會混入其他機種" in target_scope.toolTip()
 
 
 def test_embedded_workspace_opens_progress_as_same_window_page(tmp_path, qtbot):

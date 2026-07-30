@@ -4,6 +4,11 @@ This SOP is for deploying `yolo11_inference` on a Windows inspection PC. It
 focuses on running an already trained model and validating the runtime package.
 Training and dataset curation remain outside this repo.
 
+The production GUI can initiate the file-based handoff to the sibling
+`Yolo11_auto_train` project. Operator steps are documented in
+`docs/OPERATOR_MANUAL.md`; training, position gates and recovery ownership are
+documented in `docs/ENGINEERING_MANUAL.md`.
+
 ## Scope
 
 - Target: Windows production or pilot machine.
@@ -63,6 +68,8 @@ yolo11_inference\
   models\
   config.yaml
   Runtime\
+  README.md
+  docs\
 ```
 
 Keep model and config relative paths unchanged unless the config is updated at
@@ -163,6 +170,10 @@ The current `main.py --type` CLI accepts only `yolo` and `anomalib`.
 
 ## 7. Evidence Collection
 
+The normal GUI path is `檢測紀錄 > 匯出 Excel` for reports and
+`工程設定 > 模型補訓` for reviewed retraining handoff. The commands below are
+engineering/PCBA pilot alternatives, not the primary operator workflow.
+
 After pilot inference has generated `Result\`, collect review evidence:
 
 ```powershell
@@ -197,6 +208,8 @@ for retraining or go/no-go decisions.
 | `--check-hikrobot-runtime` unknown | command target | running `python main.py`, not packaged exe/`GUI.py` |
 | `MV_E_NODATA` | camera diagnostics logs | firewall, NIC, trigger mode, or another process holding camera |
 | no result images | `output_dir` and write permission | path or permission mismatch |
+| preflight reports sync WARN | rollout scope | synchronization is disabled; obtain written acceptance or finish company API setup |
+| position retraining has no eligible samples | position-only reviewed holdout | collect `position_false_reject` OK or pure `POSITION_SHIFT` confirmed-NG cases |
 
 ## Exit Criteria
 
@@ -208,4 +221,10 @@ Deployment is ready for supervised pilot when:
 - golden board smoke test passes repeatedly;
 - known NG samples fail with expected reason codes;
 - rollback bundle and config are available.
+
+The build copies the complete `docs` folder into the release. Before handoff,
+verify both role manuals are present on the target machine:
+
+- `docs\OPERATOR_MANUAL.md`
+- `docs\ENGINEERING_MANUAL.md`
 

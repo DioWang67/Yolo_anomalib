@@ -24,9 +24,14 @@ from PyQt5.QtWidgets import (
 )
 
 from app.gui.dialog_geometry import configure_responsive_dialog
+from app.gui.hover_help import HoverHelpBadge
 from tools.review_routing import action_route
 
-DIRECT_TRAIN_LABELS = {"confirmed_ng", "verified_empty"}
+DIRECT_TRAIN_LABELS = {
+    "confirmed_ng",
+    "verified_empty",
+    "position_false_reject",
+}
 ANNOTATION_LABELS = {"false_positive", "false_negative", "wrong_box", "wrong_class"}
 COLOR_REVIEW_LABELS = {"color_confirmed_ng", "color_false_reject"}
 BATCH_ACTION_LABELS = {
@@ -49,6 +54,10 @@ BATCH_ACTION_LABELS = {
     "color_false_reject": (
         "顏色其實 OK（門檻過嚴）",
         "Color is actually OK (threshold too strict)",
+    ),
+    "position_false_reject": (
+        "位置檢測誤判，實物位置正常",
+        "Position false reject (actual position is acceptable)",
     ),
 }
 
@@ -124,9 +133,17 @@ class TrainingBatchDialog(QDialog):
         return zh if str(self.language).lower().startswith("zh") else en
 
     def _build_ui(self) -> None:
+        self.setObjectName("TrainingBatchDialog")
+        self.setStyleSheet(
+            "QDialog#TrainingBatchDialog { background:#f3f6fa;"
+            "font-family:'Segoe UI','Microsoft JhengHei';font-size:10pt; }"
+            "QDialog#TrainingBatchDialog QComboBox {"
+            "background:white;border:1px solid #c7d1dc;border-radius:6px;"
+            "padding:5px 9px;min-height:24px;}"
+        )
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(13)
         self.direct_action_button: QPushButton | None = None
         self.annotation_action_button: QPushButton | None = None
         self.color_action_button: QPushButton | None = None
@@ -134,8 +151,7 @@ class TrainingBatchDialog(QDialog):
         self.confirm_button: QPushButton | None = None
         self.remove_selected_button: QPushButton | None = None
         self.route_count_labels: dict[str, QLabel] = {}
-        title = QLabel(
-            self._text(
+        title_help = self._text(
                 (
                     "這是已送出批次的唯讀照片；雙擊可放大，不會重新送訓。"
                     if self.history_mode
@@ -156,13 +172,40 @@ class TrainingBatchDialog(QDialog):
                     )
                 ),
             )
+        title_panel = QFrame()
+        title_panel.setObjectName("BatchTitlePanel")
+        title_panel.setStyleSheet(
+            "QFrame#BatchTitlePanel { background:#20354a;border-radius:8px; }"
         )
-        title.setWordWrap(True)
+        title_layout = QHBoxLayout(title_panel)
+        title_layout.setContentsMargins(16, 10, 16, 10)
+        title = QLabel(
+            self._text(
+                (
+                    "已送出批次"
+                    if self.history_mode
+                    else ("第 3 步：確認待送照片" if self.queue_mode else "確認補訓照片")
+                ),
+                (
+                    "Submitted batch"
+                    if self.history_mode
+                    else ("Step 3: Confirm queue" if self.queue_mode else "Confirm retraining photos")
+                ),
+            )
+        )
         title.setStyleSheet(
-            "QLabel { background: #20354a; color: white; padding: 14px 16px; "
-            "border-radius: 8px; font-size: 14pt; font-weight: bold; }"
+            "color:white;font-size:14pt;font-weight:bold;border:0;"
         )
-        layout.addWidget(title)
+        title_layout.addWidget(title)
+        title_help_badge = HoverHelpBadge(
+            title_help,
+            language=self.language,
+            parent=title_panel,
+        )
+        title_help_badge.setObjectName("batchTitleHelp")
+        title_layout.addWidget(title_help_badge)
+        title_layout.addStretch()
+        layout.addWidget(title_panel)
         if self.queue_mode:
             layout.addWidget(self._build_workflow_strip())
 
@@ -193,6 +236,17 @@ class TrainingBatchDialog(QDialog):
             self.filter_combo.addItem(self._text("已排除", "Excluded"), "excluded")
         self.filter_combo.currentIndexChanged.connect(self._apply_filter)
         toolbar.addWidget(self.filter_combo)
+        if self.queue_mode:
+            selection_help = HoverHelpBadge(
+                self._text(
+                    "勾選代表保留在待送清單；點選照片後可從右側移除。雙擊照片可放大。",
+                    "Checked items stay in the queue. Select images to remove them from the right panel; double-click to enlarge.",
+                ),
+                language=self.language,
+                parent=gallery_panel,
+            )
+            selection_help.setObjectName("queueSelectionHelp")
+            toolbar.addWidget(selection_help)
         toolbar.addStretch()
         if not self.history_mode:
             include_button = QPushButton(
@@ -209,27 +263,13 @@ class TrainingBatchDialog(QDialog):
             toolbar.addWidget(exclude_button)
         gallery_layout.addLayout(toolbar)
 
-        if self.queue_mode:
-            selection_hint = QLabel(
-                self._text(
-                    "✓ 勾選代表保留在待送清單；點選照片後可從右側移除。雙擊照片可放大。",
-                    "Checked items stay in the queue. Select images to remove them from the right panel; double-click to enlarge.",
-                )
-            )
-            selection_hint.setWordWrap(True)
-            selection_hint.setStyleSheet(
-                "QLabel { background:#eef6ff; color:#174a7e; padding:8px 10px; "
-                "border:1px solid #b8d3ee; border-radius:5px; }"
-            )
-            gallery_layout.addWidget(selection_hint)
-
         self.thumbnail_list = QListWidget()
         self.thumbnail_list.setViewMode(QListView.IconMode)
         self.thumbnail_list.setResizeMode(QListView.Adjust)
         self.thumbnail_list.setMovement(QListView.Static)
-        self.thumbnail_list.setIconSize(QSize(245, 165))
-        self.thumbnail_list.setGridSize(QSize(280, 260))
-        self.thumbnail_list.setSpacing(8)
+        self.thumbnail_list.setIconSize(QSize(220, 145))
+        self.thumbnail_list.setGridSize(QSize(250, 220))
+        self.thumbnail_list.setSpacing(10)
         self.thumbnail_list.setWordWrap(True)
         self.thumbnail_list.setSelectionMode(
             QAbstractItemView.ExtendedSelection
@@ -263,7 +303,7 @@ class TrainingBatchDialog(QDialog):
             "font-size:10.5pt; font-weight:bold; }"
         )
         if self.queue_mode:
-            self.route_summary_layout.insertWidget(2, self.summary_label)
+            self.route_summary_layout.insertWidget(1, self.summary_label)
             self.confirm_button = self.direct_action_button
             return
 
@@ -306,10 +346,11 @@ class TrainingBatchDialog(QDialog):
     def _build_workflow_strip(self) -> QFrame:
         panel = QFrame()
         panel.setStyleSheet(
-            "QFrame { background: #f5f7fa; border: 1px solid #d8dee6; border-radius: 7px; }"
+            "QFrame { background:transparent;border:0; }"
         )
         steps = QHBoxLayout(panel)
-        steps.setContentsMargins(10, 8, 10, 8)
+        steps.setContentsMargins(0, 0, 0, 0)
+        steps.setSpacing(8)
         labels = (
             ("1", self._text("資料已複核", "Data reviewed"), "done"),
             ("2", self._text("確認並送出", "Confirm and submit"), "active"),
@@ -320,40 +361,44 @@ class TrainingBatchDialog(QDialog):
             label.setAlignment(Qt.AlignCenter)
             label.setMinimumHeight(34)
             styles = {
-                "done": "background:#e7f4ea;color:#216e39;border:1px solid #9bc9a7;",
-                "active": "background:#2563a6;color:white;border:1px solid #1f5188;font-weight:bold;",
-                "next": "background:white;color:#697586;border:1px solid #d8dee6;",
+                "done": "background:#eaf6ef;color:#216e45;border:1px solid #b8ddc7;",
+                "active": "background:#285f91;color:white;border:1px solid #285f91;font-weight:600;",
+                "next": "background:white;color:#697586;border:1px solid #dce3ec;",
             }
-            label.setStyleSheet(styles[state] + "border-radius:5px;padding:4px;")
+            label.setStyleSheet(styles[state] + "border-radius:7px;padding:4px;")
             steps.addWidget(label, 1)
         return panel
 
     def _build_route_action_panel(self) -> QFrame:
         panel = QFrame()
-        panel.setMinimumWidth(330)
-        panel.setMaximumWidth(380)
+        panel.setMinimumWidth(340)
+        panel.setMaximumWidth(390)
         panel.setStyleSheet(
-            "QFrame#RoutePanel { background:#f8fafc; border:1px solid #d8dee6; "
-            "border-radius:8px; }"
+            "QFrame#RoutePanel { background:white;border:1px solid #dce3ec;"
+            "border-radius:10px; }"
         )
         panel.setObjectName("RoutePanel")
         cards = QVBoxLayout(panel)
-        cards.setContentsMargins(14, 14, 14, 14)
-        cards.setSpacing(10)
+        cards.setContentsMargins(15, 15, 15, 15)
+        cards.setSpacing(9)
         self.route_summary_layout = cards
 
         heading = QLabel(self._text("這批要怎麼處理？", "How should this batch proceed?"))
         heading.setStyleSheet("font-size:14pt;font-weight:bold;color:#20354a;border:0;")
-        guidance = QLabel(
+        guidance = HoverHelpBadge(
             self._text(
                 "系統已依判定結果分好類。每個按鈕只會處理該分類中已勾選的照片，不會混送。",
                 "Cases are already grouped by verdict. Each action processes only checked images in that category.",
-            )
+            ),
+            language=self.language,
+            parent=panel,
         )
-        guidance.setWordWrap(True)
-        guidance.setStyleSheet("color:#5b6573;border:0;")
-        cards.addWidget(heading)
-        cards.addWidget(guidance)
+        guidance.setObjectName("routeGuidanceHelp")
+        heading_row = QHBoxLayout()
+        heading_row.addWidget(heading)
+        heading_row.addWidget(guidance)
+        heading_row.addStretch()
+        cards.addLayout(heading_row)
         specs = (
             (
                 "direct",
@@ -381,7 +426,7 @@ class TrainingBatchDialog(QDialog):
             card, button = self._route_card(
                 route, title, description, button_text, color
             )
-            cards.addWidget(card, 1)
+            cards.addWidget(card)
             if route == "direct":
                 self.direct_action_button = button
             elif route == "annotation":
@@ -443,20 +488,27 @@ class TrainingBatchDialog(QDialog):
         card = QFrame()
         card.setObjectName(f"RouteCard_{route}")
         card.setStyleSheet(
-            f"QFrame#{card.objectName()} {{ background:white; border:2px solid {color}; "
-            "border-radius:6px; }}"
+            f"QFrame#{card.objectName()} {{ background:#fbfcfe;"
+            f"border:1px solid #dce3ec;border-left:4px solid {color};"
+            "border-radius:7px; }}"
         )
         content = QVBoxLayout(card)
-        content.setContentsMargins(12, 9, 12, 10)
+        content.setContentsMargins(12, 9, 11, 10)
+        content.setSpacing(7)
         heading = QLabel(title)
         heading.setStyleSheet(f"color:{color};font-size:11pt;font-weight:bold;border:0;")
         count = QLabel(self._text("已勾選 0 張", "0 selected"))
         count.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         count.setStyleSheet("color:#243447;font-size:10pt;font-weight:bold;border:0;")
-        detail = QLabel(description)
-        detail.setWordWrap(True)
-        detail.setStyleSheet("color:#5b6573;border:0;")
+        detail_help = HoverHelpBadge(
+            description,
+            language=self.language,
+            parent=card,
+        )
+        detail_help.setObjectName(f"routeHelp_{route}")
+        heading.setToolTip(description)
         button = QPushButton(button_text)
+        button.setToolTip(description)
         button.setMinimumHeight(40)
         button.setStyleSheet(
             f"QPushButton {{ background:{color};color:white;border:0;border-radius:5px;"
@@ -467,9 +519,9 @@ class TrainingBatchDialog(QDialog):
         heading_row = QHBoxLayout()
         heading_row.setContentsMargins(0, 0, 0, 0)
         heading_row.addWidget(heading, 1)
+        heading_row.addWidget(detail_help)
         heading_row.addWidget(count)
         content.addLayout(heading_row)
-        content.addWidget(detail)
         content.addWidget(button)
         self.route_count_labels[route] = count
         return card, button

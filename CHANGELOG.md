@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Conservative cross-class duplicate-box handling after color verification,
+  with report-only/suppress modes, position-check fail-closed protection,
+  raw/effective result traceability, GUI evidence overlays and a read-only
+  historical replay audit tool.
+- Role-based production documentation:
+  - `docs/OPERATOR_MANUAL.md` for daily inspection, history, Excel, review,
+    retraining and escalation;
+  - `docs/ENGINEERING_MANUAL.md` for configuration, position gates, deployment,
+    SQLite recovery, server synchronization and release acceptance.
+- PIN-protected full-width engineering settings and in-window retraining
+  workspace.
+- Inspection-history page with database-backed filters, evidence preview,
+  synchronization status and cancellable Excel export.
+- Versioned SQLite inspection database, verified backup/restore tooling,
+  retention dry-run and production preflight.
+- Local-first company-server synchronization outbox with idempotency,
+  revisions, retry leases and dead-letter administration.
+- Explicit per-job position-retraining and post-gate activation controls.
+
 - Documentation for the local `yolo_anomalib` conda environment, fusion
   inference usage, and model-level color checker overrides.
 
@@ -25,6 +44,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Multiple allowed roots scenario tests
 
 ### Changed
+- Renamed the existing model IoU control to `YOLO NMS IoU (same-class)` and
+  added separately scoped duplicate IoU/geometry controls under model settings.
+- Removed unused legacy GUI panel builders and the superseded ad-hoc performance
+  benchmark; retained the current GUI, packaging and camera compatibility
+  entrypoints.
+- Replaced the historical project progress file as a calibration record with
+  `docs/CALIBRATION_CHANGE_LOG.md`, and moved historical evidence under
+  `docs/archive/`.
+- Retraining is opened from `工程設定 > 模型補訓`; legacy documentation that
+  pointed to the File menu has been corrected.
+- Position validation runs only when explicitly selected for the current
+  retraining job. Position choices are intentionally not persisted.
+- Result reporting uses `inspection_records.sqlite3` as the searchable source
+  and GUI-filtered Excel snapshots instead of one fixed workbook.
+
 - Fusion inference and color override handling are documented as model-level
   pipeline behavior, including the fallback behavior when Anomalib or PyYAML is
   unavailable.

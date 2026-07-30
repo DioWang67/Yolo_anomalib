@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import cv2
@@ -57,6 +58,8 @@ def annotate_yolo_frame(
     missing_items: list[str] | None = None,
     expected_boxes: dict[str, dict[str, Any]] | None = None,
     missing_locations: list[dict[str, Any]] | None = None,
+    duplicate_filter: dict[str, Any] | None = None,
+    raw_detections: list[dict[str, Any]] | None = None,
 ) -> None:
     """Render detection, color, and position cues onto the frame."""
     panel_lines: list[tuple[str, tuple[int, int, int]]] = []
@@ -68,18 +71,25 @@ def annotate_yolo_frame(
     color_items: list[dict[str, Any]] = []
     if color_result:
         color_items = (color_result or {}).get("items", []) or []
+    color_items_by_index = _items_by_index(color_items)
 
     fail_indices: list[int] = []
+    if duplicate_filter:
+        panel_lines.extend(_build_duplicate_summary_lines(duplicate_filter))
+        _draw_duplicate_suppressions(
+            frame,
+            duplicate_filter,
+            raw_detections or detections,
+        )
     if detections:
         for idx, det in enumerate(detections):
-            color_item: dict[str, Any] | None = None
-            if idx < len(color_items):
-                color_item = color_items[idx]
-            _draw_detection_box(frame, idx, det, color_item)
+            source_index = _source_index(det, idx)
+            color_item = color_items_by_index.get(source_index)
+            _draw_detection_box(frame, source_index, det, color_item)
             if color_item is not None:
                 try:
                     if not color_item.get("is_ok", True):
-                        fail_indices.append(idx)
+                        fail_indices.append(source_index)
                 except Exception:
                     continue
     if not missing_locations:
@@ -277,10 +287,11 @@ def _highlight_color_failures(
 ) -> None:
     try:
         items = (color_result or {}).get("items", []) or []
+        items_by_index = _items_by_index(items)
         for idx, det in enumerate(detections or []):
-            if idx >= len(items):
+            item = items_by_index.get(_source_index(det, idx))
+            if item is None:
                 continue
-            item = items[idx]
             if not item.get("is_ok", True):
                 color = (0, 0, 255)
                 x1, y1, x2, y2 = _coerce_bbox(det.get("bbox"))
@@ -330,7 +341,14 @@ def _build_color_summary_lines(
         status = "PASS" if color_result.get("is_ok", False) else "FAIL"
         color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
         lines.append((f"Color: {status}", color))
-        details = _format_color_lines(color_result)
+        effective_indices = {
+            _source_index(detection, position)
+            for position, detection in enumerate(detections or [])
+        }
+        details = _format_color_lines(
+            color_result,
+            effective_indices=effective_indices,
+        )
         for line, is_ok in details:
             line_color = (0, 255, 0) if is_ok else (0, 0, 255)
             lines.append((line, line_color))
@@ -356,7 +374,7 @@ def _build_detection_summary_lines(
             confidence = 0.0
         lines.append(
             (
-                f"#{index} {class_name} confidence={confidence:.2f}",
+                f"#{_source_index(detection, index)} {class_name} confidence={confidence:.2f}",
                 _position_color(detection),
             )
         )
@@ -396,13 +414,21 @@ def _draw_info_panel(
 
 
 def _format_color_lines(
-    color_result: dict[str, Any], max_items: int | None = None
+    color_result: dict[str, Any],
+    max_items: int | None = None,
+    effective_indices: set[int] | None = None,
 ) -> list[tuple[str, bool]]:
     lines: list[tuple[str, bool]] = []
     try:
         items = (color_result or {}).get("items", []) or []
         ranked: list[tuple[int, int, dict[str, Any]]] = []
         for pos, item in enumerate(items):
+            try:
+                item_index = int(item.get("index", pos))
+            except (TypeError, ValueError):
+                continue
+            if effective_indices is not None and item_index not in effective_indices:
+                continue
             is_ok = bool(item.get("is_ok", True))
             rank = 0 if not is_ok else 1
             ranked.append((rank, pos, item))
@@ -434,16 +460,18 @@ def _left_right_color_sequence(
 ) -> list[str]:
     try:
         items = (color_result or {}).get("items", []) or []
+        items_by_index = _items_by_index(items)
         seq: list[tuple[float, str]] = []
         for idx, det in enumerate(detections or []):
-            if idx >= len(items):
+            item = items_by_index.get(_source_index(det, idx))
+            if item is None:
                 continue
             bbox = det.get("bbox")
             if not bbox or len(bbox) < 4:
                 continue
             x1, _, x2, _ = bbox
             center = (float(x1) + float(x2)) / 2.0
-            best = str(items[idx].get("best_color") or "-")
+            best = str(item.get("best_color") or "-")
             seq.append((center, best))
         seq.sort(key=lambda item: item[0])
         return [color for _, color in seq]
@@ -467,9 +495,129 @@ def _position_color(detection: dict[str, Any]) -> tuple[int, int, int]:
 def _coerce_bbox(bbox: Any) -> tuple[int, int, int, int]:
     if not bbox or len(bbox) < 4:
         return (0, 0, 0, 0)
-    return tuple(int(float(v)) for v in bbox[:4])
+    x1, y1, x2, y2 = (int(float(v)) for v in bbox[:4])
+    return (x1, y1, x2, y2)
 
 
 def _bbox_center(bbox: tuple[int, int, int, int]) -> tuple[int, int]:
     x1, y1, x2, y2 = bbox
     return ((x1 + x2) // 2, (y1 + y2) // 2)
+
+
+def _source_index(detection: dict[str, Any], fallback: int) -> int:
+    try:
+        return int(detection.get("source_index", fallback))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _items_by_index(
+    items: list[dict[str, Any]],
+) -> dict[int, dict[str, Any]]:
+    indexed: dict[int, dict[str, Any]] = {}
+    for position, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("index", position))
+        except (TypeError, ValueError):
+            continue
+        indexed[index] = item
+    return indexed
+
+
+def _build_duplicate_summary_lines(
+    duplicate_filter: dict[str, Any],
+) -> list[tuple[str, tuple[int, int, int]]]:
+    status = str(duplicate_filter.get("status") or "")
+    suppressions = duplicate_filter.get("suppressions", []) or []
+    proposals = duplicate_filter.get("proposed_suppressions", []) or []
+    records = suppressions if status == "suppressed" else proposals
+    if not records:
+        return []
+
+    action = "removed" if status == "suppressed" else "candidate"
+    lines: list[tuple[str, tuple[int, int, int]]] = []
+    for record in records[:2]:
+        try:
+            suppressed = int(record["suppressed_index"])
+            kept = int(record["kept_index"])
+            iou = float(record.get("iou", 0.0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        lines.append(
+            (
+                f"DUP {action}: #{suppressed} -> #{kept} IoU={iou:.2f}",
+                (0, 215, 255),
+            )
+        )
+    if len(records) > 2:
+        lines.append((f"DUP ... +{len(records) - 2} more", (0, 215, 255)))
+    return lines
+
+
+def _draw_duplicate_suppressions(
+    frame: np.ndarray,
+    duplicate_filter: dict[str, Any],
+    raw_detections: list[dict[str, Any]],
+) -> None:
+    if str(duplicate_filter.get("status") or "") != "suppressed":
+        return
+    raw_by_index = {
+        _source_index(detection, position): detection
+        for position, detection in enumerate(raw_detections or [])
+    }
+    for record in duplicate_filter.get("suppressions", []) or []:
+        try:
+            suppressed_index = int(record["suppressed_index"])
+            kept_index = int(record["kept_index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        detection = raw_by_index.get(suppressed_index)
+        if detection is None:
+            continue
+        x1, y1, x2, y2 = _coerce_bbox(detection.get("bbox"))
+        color = (255, 0, 255)
+        _draw_dashed_rectangle(frame, (x1, y1, x2, y2), color)
+        cv2.putText(
+            frame,
+            f"#{suppressed_index} DUP -> #{kept_index}",
+            (x1, min(frame.shape[0] - 5, y2 + 17)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
+
+
+def _draw_dashed_rectangle(
+    frame: np.ndarray,
+    bbox: tuple[int, int, int, int],
+    color: tuple[int, int, int],
+    dash_length: int = 6,
+) -> None:
+    x1, y1, x2, y2 = bbox
+    segments = (
+        ((x1, y1), (x2, y1)),
+        ((x2, y1), (x2, y2)),
+        ((x2, y2), (x1, y2)),
+        ((x1, y2), (x1, y1)),
+    )
+    for start, end in segments:
+        length = int(math.dist(start, end))
+        if length <= 0:
+            continue
+        for offset in range(0, length, dash_length * 2):
+            end_offset = min(offset + dash_length, length)
+            ratio_start = offset / length
+            ratio_end = end_offset / length
+            line_start = (
+                round(start[0] + (end[0] - start[0]) * ratio_start),
+                round(start[1] + (end[1] - start[1]) * ratio_start),
+            )
+            line_end = (
+                round(start[0] + (end[0] - start[0]) * ratio_end),
+                round(start[1] + (end[1] - start[1]) * ratio_end),
+            )
+            cv2.line(frame, line_start, line_end, color, 1, cv2.LINE_AA)

@@ -664,9 +664,13 @@ def _is_weight_candidate(path: Path, current_path: Path | None) -> bool:
         return False
     if path.suffix.lower() not in SUPPORTED_WEIGHT_SUFFIXES:
         return False
-    if path.name.lower().startswith("last.") and (
-        current_path is None or path.resolve() != current_path.resolve()
-    ):
+    is_current = bool(
+        current_path is not None and path.resolve() == current_path.resolve()
+    )
+    normalized_name = path.name.lower()
+    if normalized_name.endswith(".training.pt") and not is_current:
+        return False
+    if path.stem.lower() in {"best", "last"} and not is_current:
         return False
     return True
 

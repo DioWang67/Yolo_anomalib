@@ -110,6 +110,28 @@ def test_custom_step_registration_and_autosave_append():
         unregister_step("dummy")
 
 
-@pytest.mark.parametrize("name", ["color_check", "save_results", "position_check"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "color_check",
+        "save_results",
+        "position_check",
+        "cross_class_duplicate_filter",
+    ],
+)
 def test_available_steps_contains_defaults(name):
     assert name in available_steps()
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        ["cross_class_duplicate_filter", "save_results"],
+        ["cross_class_duplicate_filter", "color_check", "save_results"],
+        ["color_check", "count_check", "cross_class_duplicate_filter", "save_results"],
+    ],
+)
+def test_duplicate_filter_rejects_unsafe_pipeline_order(steps):
+    env = _make_env(enable_color=True)
+    with pytest.raises(ValueError, match="cross_class_duplicate_filter"):
+        build_pipeline(steps, env, {})

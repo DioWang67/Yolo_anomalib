@@ -8,8 +8,13 @@ pytest.importorskip("PyQt5", reason="PyQt5 is required for GUI tests")
 pytest.importorskip("pytestqt", reason="pytest-qt is required for GUI tests")
 pytestmark = pytest.mark.gui
 
-from app.gui.calibration_dialog import CalibrationDialog
-from core.services.auto_calibrator import CalibrationOutcome, CalibrationReason
+from PyQt5.QtWidgets import QMessageBox  # noqa: E402
+
+from app.gui.calibration_dialog import CalibrationDialog  # noqa: E402
+from core.services.auto_calibrator import (  # noqa: E402
+    CalibrationOutcome,
+    CalibrationReason,
+)
 
 
 class FakeSession:
@@ -32,6 +37,9 @@ class FakeSession:
     def measure(self, roi=None):
         return self.luma
 
+    def capture_and_measure(self, roi=None):
+        return None, self.luma
+
     def record_current(self, roi=None):
         return dict(self.recorded)
 
@@ -49,7 +57,10 @@ class SaveSpy:
 
 
 @pytest.fixture
-def dialog(qtbot, tmp_path):
+def dialog(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: QMessageBox.Ok)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.Ok)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: QMessageBox.Ok)
     session = FakeSession()
     save_spy = SaveSpy()
     dlg = CalibrationDialog(

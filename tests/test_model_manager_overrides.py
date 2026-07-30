@@ -326,6 +326,47 @@ def test_switch_reloads_engine_after_deployed_config_changes(tmp_path, monkeypat
     assert merged.conf_thres == pytest.approx(0.412345)
 
 
+def test_failed_replacement_keeps_previous_engine_active(tmp_path, monkeypatch):
+    weights_path = tmp_path / "best.onnx"
+    weights_path.write_bytes(b"model")
+    global_cfg_path = _write_global_config(tmp_path, weights_path)
+    model_dir = tmp_path / "models" / "Cable1" / "A" / "yolo"
+    model_config = _write_model_config(model_dir, weights_path)
+    monkeypatch.chdir(tmp_path)
+
+    class FakeEngine:
+        instances = []
+
+        def __init__(self, config):
+            self.config = config
+            self.shutdown_count = 0
+            self.instances.append(self)
+
+        def initialize(self):
+            if len(self.instances) == 2:
+                assert self.instances[0].shutdown_count == 0
+                return False
+            return True
+
+        def shutdown(self):
+            self.shutdown_count += 1
+
+    base_config = DetectionConfig.from_yaml(str(global_cfg_path))
+    manager = ModelManager(DetectionLogger(), engine_factory=FakeEngine)
+    active, _ = manager.switch(base_config, "Cable1", "A", "yolo")
+
+    payload = yaml.safe_load(model_config.read_text(encoding="utf-8"))
+    payload["conf_thres"] = 0.54321
+    model_config.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="init failed"):
+        manager.switch(base_config, "Cable1", "A", "yolo")
+
+    assert manager.get_cached_engine("Cable1", "A", "yolo") is active
+    assert active.shutdown_count == 0
+    assert FakeEngine.instances[1].shutdown_count == 1
+
+
 def test_switch_keeps_engine_for_station_calibration_change(tmp_path, monkeypatch):
     """Exposure/light edits return fresh config without reloading model bytes."""
     weights_path = tmp_path / "best.onnx"

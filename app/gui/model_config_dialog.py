@@ -90,6 +90,15 @@ class ModelConfigDialog(QDialog):
             "position_alignment_enabled": self.position_alignment_chk.isChecked(),
             "missing_slot_check_enabled": self.missing_slot_chk.isChecked(),
             "count_check_strict": self.count_check_strict_chk.isChecked(),
+            "duplicate_filter_enabled": self.duplicate_filter_enabled_chk.isChecked(),
+            "duplicate_filter_mode": self.duplicate_filter_mode_combo.currentData(),
+            "duplicate_filter_iou_threshold": self.duplicate_filter_iou_spin.value(),
+            "duplicate_filter_center_distance_ratio_max": (
+                self.duplicate_filter_center_spin.value()
+            ),
+            "duplicate_filter_area_similarity_min": (
+                self.duplicate_filter_area_spin.value()
+            ),
             "fail_on_unexpected": self.fail_on_unexpected_chk.isChecked(),
             "save_original": self.save_original_chk.isChecked(),
             "save_processed": self.save_processed_chk.isChecked(),
@@ -129,7 +138,10 @@ class ModelConfigDialog(QDialog):
         self.conf_spin = self._ratio_spin()
         self.iou_spin = self._ratio_spin()
         model_form.addRow(self._l("conf threshold", "conf 閾值"), self.conf_spin)
-        model_form.addRow(self._l("iou threshold", "iou 閾值"), self.iou_spin)
+        model_form.addRow(
+            self._l("YOLO NMS IoU (same-class)", "YOLO NMS IoU（同類框）"),
+            self.iou_spin,
+        )
 
         imgsz_row = QHBoxLayout()
         self.imgsz_w_spin = self._size_spin()
@@ -190,6 +202,59 @@ class ModelConfigDialog(QDialog):
         )
         behavior_form.addRow(self.count_check_strict_chk)
         content_layout.addWidget(behavior_group)
+
+        duplicate_group = QGroupBox(
+            self._l("Cross-class Duplicate Boxes", "跨類別重複框")
+        )
+        duplicate_form = QFormLayout(duplicate_group)
+        self.duplicate_filter_enabled_chk = QCheckBox(
+            self._l(
+                "Enable conservative duplicate-box handling",
+                "啟用保守型重複框處理",
+            )
+        )
+        duplicate_form.addRow(self.duplicate_filter_enabled_chk)
+
+        self.duplicate_filter_mode_combo = QComboBox()
+        self.duplicate_filter_mode_combo.addItem(
+            self._l("Observe only (no verdict change)", "僅觀察（不改判定）"),
+            "report_only",
+        )
+        self.duplicate_filter_mode_combo.addItem(
+            self._l("Suppress qualified duplicates", "消除符合條件的重複框"),
+            "suppress",
+        )
+        duplicate_form.addRow(
+            self._l("Mode", "模式"),
+            self.duplicate_filter_mode_combo,
+        )
+
+        self.duplicate_filter_iou_spin = self._ratio_spin()
+        self.duplicate_filter_center_spin = self._ratio_spin()
+        self.duplicate_filter_area_spin = self._ratio_spin()
+        duplicate_form.addRow(
+            self._l("Cross-class overlap IoU", "跨類別重疊 IoU"),
+            self.duplicate_filter_iou_spin,
+        )
+        duplicate_form.addRow(
+            self._l("Maximum center-distance ratio", "中心距離比例上限"),
+            self.duplicate_filter_center_spin,
+        )
+        duplicate_form.addRow(
+            self._l("Minimum area similarity", "面積相似度下限"),
+            self.duplicate_filter_area_spin,
+        )
+        duplicate_note = QLabel(
+            self._l(
+                "Suppression requires different YOLO classes, the same verified "
+                "color, both color checks passing, and position check disabled.",
+                "只有「YOLO 原類別不同、顏色複核相同、兩者顏色皆通過，且位置檢測停用」"
+                "時才會消除；原始框仍會寫入檢測紀錄。",
+            )
+        )
+        duplicate_note.setWordWrap(True)
+        duplicate_form.addRow(duplicate_note)
+        content_layout.addWidget(duplicate_group)
 
         position_group = QGroupBox(self._l("Position Check", "位置檢測"))
         position_form = QFormLayout(position_group)
@@ -312,6 +377,28 @@ class ModelConfigDialog(QDialog):
         count_cfg = steps_cfg.get("count_check", {}) if isinstance(steps_cfg, dict) else {}
         self.count_check_strict_chk.setChecked(
             bool(count_cfg.get("strict", False)) if isinstance(count_cfg, dict) else False
+        )
+        duplicate_cfg = (
+            steps_cfg.get("cross_class_duplicate_filter", {})
+            if isinstance(steps_cfg, dict)
+            else {}
+        )
+        if not isinstance(duplicate_cfg, dict):
+            duplicate_cfg = {}
+        self.duplicate_filter_enabled_chk.setChecked(
+            bool(duplicate_cfg.get("enabled", False))
+        )
+        duplicate_mode = str(duplicate_cfg.get("mode", "report_only"))
+        mode_index = self.duplicate_filter_mode_combo.findData(duplicate_mode)
+        self.duplicate_filter_mode_combo.setCurrentIndex(max(0, mode_index))
+        self.duplicate_filter_iou_spin.setValue(
+            float(duplicate_cfg.get("iou_threshold", 0.90))
+        )
+        self.duplicate_filter_center_spin.setValue(
+            float(duplicate_cfg.get("center_distance_ratio_max", 0.10))
+        )
+        self.duplicate_filter_area_spin.setValue(
+            float(duplicate_cfg.get("area_similarity_min", 0.80))
         )
         self.fail_on_unexpected_chk.setChecked(bool(cfg.get("fail_on_unexpected", True)))
         self.save_original_chk.setChecked(bool(cfg.get("save_original", True)))

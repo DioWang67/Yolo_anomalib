@@ -8,7 +8,7 @@ import argparse
 import csv
 import json
 import logging
-from collections.abc import Callable, Iterable, MutableMapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -590,26 +590,27 @@ def load_color_ranges(
         lab_min = np.asarray(stats["lab_min"], dtype=np.float32) - lab_margin_vec
         lab_max = np.asarray(stats["lab_max"], dtype=np.float32) + lab_margin_vec
 
-        def _optional_array(key: str) -> np.ndarray | None:
-            if key not in stats:
-                return None
-            return np.asarray(stats[key], dtype=np.float32)
-
         ranges[color] = ColorRange(
             color,
             hsv_min,
             hsv_max,
             lab_min,
             lab_max,
-            hsv_mean=_optional_array("hsv_mean"),
-            lab_mean=_optional_array("lab_mean"),
+            hsv_mean=_optional_stat_array(stats, "hsv_mean"),
+            lab_mean=_optional_stat_array(stats, "lab_mean"),
             coverage_mean=float(stats["coverage_mean"]) if "coverage_mean" in stats else None,
-            hsv_p10=_optional_array("hsv_p10"),
-            hsv_p90=_optional_array("hsv_p90"),
-            lab_p10=_optional_array("lab_p10"),
-            lab_p90=_optional_array("lab_p90"),
+            hsv_p10=_optional_stat_array(stats, "hsv_p10"),
+            hsv_p90=_optional_stat_array(stats, "hsv_p90"),
+            lab_p10=_optional_stat_array(stats, "lab_p10"),
+            lab_p90=_optional_stat_array(stats, "lab_p90"),
         )
     return ranges
+
+
+def _optional_stat_array(stats: Mapping[str, object], key: str) -> np.ndarray | None:
+    if key not in stats:
+        return None
+    return np.asarray(stats[key], dtype=np.float32)
 
 
 def _load_expected_map(path: Path | None) -> dict[str, str]:

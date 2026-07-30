@@ -26,6 +26,8 @@
 
 - `status` / `fail_reasons`：最終判定與**機器可讀失敗原因碼**（見下表）
 - `detections`：各偵測框（含 `verified_class`、位置檢查欄位）
+- `raw_detections`：重複框處理前的原始框；沒有抑制時與 detections 相同
+- `duplicate_filter`：候選、保留／排除 index、IoU、policy 與阻擋原因
 - `missing_items`、`color_result`、`sequence_check`、`anomaly_score`
 - `model_info`：權重路徑、`model_version`、conf/iou 閾值
 - `artifacts`：原圖 / 前處理圖 / 標註圖 / 熱圖 / 裁剪圖路徑
@@ -59,6 +61,14 @@
    **自動校正**（見第 8 節）。
 5. `INFERENCE_ERROR`：不屬誤判，直接走設備異常/當機處理流程
    （見 `docs/CAMERA_RUNTIME_DIAGNOSTICS.md`）。
+
+若結果圖有紫色`DUP`：
+
+1. 先比對`raw_detections`與有效`detections`，不要把紫色框直接標成真實多件；
+2. 確認 kept／suppressed 框是否落在同一實體，並核對 IoU、verified class；
+3. 若兩個實體被錯誤合併，立即把該產品／工位切回`report_only`並列為
+   blocking UNDERKILL 事故；
+4. 若同一實體確實產生跨類別雙框，標記為模型重複框案例，送入模型改善資料。
 
 漏判（客訴/下游站退回）發生時：依據流水時間回查 `Result/` 當日 PASS 記錄，
 取出該筆 `*_config_snapshot.json` 與原圖，進入第 4 節分流。
@@ -115,7 +125,8 @@ python tools/export_review_dataset.py `
    不需重新打包。
 3. 變更後必跑回歸集：歷史 OVERKILL/UNDERKILL 案例 + 金板（golden sample），
    確認「舊過殺不復發、舊攔截不放行」。
-4. 記錄於 `docs/PROGRESS_LOG.md`：日期、變更項、新舊值、回歸結果、批准人。
+4. 記錄於 `docs/CALIBRATION_CHANGE_LOG.md`：日期、變更項、新舊值、雜湊／版本、
+   回歸證據、結果、執行人與批准人。
 5. 部署到機台走 `docs/RELEASE_ROLLBACK_SOP.md`，不直接在機台上手改。
 
 重訓觸發條件（滿足其一）：
@@ -143,7 +154,8 @@ python tools/export_review_dataset.py `
 4. metadata JSON 與 Excel：非經主管批准不清理
 
 注意：`config.yaml` 的 `save_fail_only: true` 會停存 PASS 影像。啟用前
-必須確認該站別已無漏判回查需求，並在 PROGRESS_LOG 記錄批准人。
+必須確認該站別已無漏判回查需求，並在
+`docs/CALIBRATION_CHANGE_LOG.md` 記錄批准人。
 
 ---
 

@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Any
 
 COLOR_REVIEW_LABELS = frozenset({"color_confirmed_ng", "color_false_reject"})
+POSITION_REVIEW_LABELS = frozenset({"position_false_reject"})
+POSITION_FAILURE_REASONS = frozenset({"POSITION_SHIFT"})
 YOLO_REVIEW_LABELS = frozenset(
     {
         "confirmed_ng",
@@ -18,7 +20,7 @@ YOLO_REVIEW_LABELS = frozenset(
         "wrong_class",
     }
 )
-VALID_ACTION_ROUTES = frozenset({"none", "yolo", "color", "both"})
+VALID_ACTION_ROUTES = frozenset({"none", "yolo", "color", "position", "both"})
 VALID_COLOR_VERDICTS = frozenset(
     {"not_applicable", "confirmed_ng", "actually_ok", "unjudgeable"}
 )
@@ -105,6 +107,13 @@ class ReviewDecision:
                 "unjudgeable",
                 "none",
             ),
+            "position_false_reject": cls(
+                "position_false_reject",
+                "ok",
+                "correct",
+                "not_applicable",
+                "position",
+            ),
         }
         try:
             return decisions[review_label]
@@ -154,6 +163,8 @@ def action_route(row: Mapping[str, Any]) -> str:
     if label in COLOR_REVIEW_LABELS:
         detection = str(row.get("detection_verdict") or "correct").strip().lower()
         return "both" if detection in {"wrong_box", "wrong_class"} else "color"
+    if label in POSITION_REVIEW_LABELS:
+        return "position"
     if label in YOLO_REVIEW_LABELS:
         return "yolo"
     return "none"
@@ -181,6 +192,17 @@ def has_color_failure(row: Mapping[str, Any]) -> bool:
 def has_non_color_failure(row: Mapping[str, Any]) -> bool:
     """Return whether a failure reason other than color mismatch is present."""
     return bool(_decision_reasons(row) - {"COLOR_MISMATCH"})
+
+
+def has_position_failure(row: Mapping[str, Any]) -> bool:
+    """Return whether position validation contributed to the inspection failure."""
+    return bool(_decision_reasons(row) & POSITION_FAILURE_REASONS)
+
+
+def has_position_only_failure(row: Mapping[str, Any]) -> bool:
+    """Return whether the failure is exclusively from deployable position checks."""
+    reasons = _decision_reasons(row)
+    return bool(reasons) and reasons <= POSITION_FAILURE_REASONS
 
 
 def color_result(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -211,7 +233,7 @@ def has_threshold_color_failure(row: Mapping[str, Any]) -> bool:
     """Return whether a failed item specifically failed ``diff > threshold``."""
     for item in color_failure_items(row):
         try:
-            if float(item.get("diff")) > float(item.get("threshold")):
+            if float(str(item.get("diff"))) > float(str(item.get("threshold"))):
                 return True
         except (TypeError, ValueError):
             continue
@@ -225,8 +247,8 @@ def color_summary(row: Mapping[str, Any]) -> str:
         expected = str(item.get("class_name") or item.get("class") or "-")
         predicted = str(item.get("best_color") or "-")
         try:
-            diff = float(item.get("diff"))
-            threshold = float(item.get("threshold"))
+            diff = float(str(item.get("diff")))
+            threshold = float(str(item.get("threshold")))
             if diff > threshold:
                 values = f"diff {diff:.3f} > 門檻 {threshold:.3f}"
             else:

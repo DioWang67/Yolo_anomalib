@@ -271,6 +271,19 @@ def test_save_results_fail_snapshot_contains_traceability_record(tmp_result_dir)
         decision={"status": "FAIL", "reasons": ["MISSING"]},
         model_info={"weights": "ckpt.pt", "model_version": "1.0.0"},
         inference_time=0.2,
+        duplicate_filter={
+            "status": "suppressed",
+            "suppressed_count": 1,
+            "suppressions": [{"kept_index": 0, "suppressed_index": 1}],
+        },
+        raw_detections=[
+            *detections,
+            {
+                "bbox": [5, 6, 20, 23],
+                "class": "other",
+                "confidence": 0.51,
+            },
+        ],
     )
 
     with open(out["config_snapshot_path"], "r", encoding="utf-8") as handle:
@@ -286,6 +299,9 @@ def test_save_results_fail_snapshot_contains_traceability_record(tmp_result_dir)
     assert snapshot["detections"][0]["class"] == "wire"
     assert snapshot["detections"][0]["bbox"] == [5, 6, 20, 22]
     assert snapshot["detections"][0]["confidence"] == pytest.approx(0.91, abs=1e-4)
+    assert len(snapshot["raw_detections"]) == 2
+    assert snapshot["raw_detections"][1]["class"] == "other"
+    assert snapshot["duplicate_filter"]["status"] == "suppressed"
     assert snapshot["color_result"]["is_ok"] is False
     assert snapshot["sequence_check"]["reason"] == "order_mismatch"
     assert snapshot["artifacts"]["annotated_path"] == out["annotated_path"]

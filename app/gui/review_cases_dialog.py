@@ -9,10 +9,11 @@ import os
 import socket
 import sqlite3
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from PyQt5.QtCore import QDateTime, QEvent, QProcess, Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
@@ -42,6 +43,7 @@ from app.gui.async_image_service import AsyncImageService
 from app.gui.dialog_geometry import configure_responsive_dialog
 from app.gui.historical_cleanup_dialog import HistoricalCleanupDialog
 from app.gui.historical_cleanup_view_model import HistoricalCleanupViewModel
+from app.gui.hover_help import HoverHelpBadge
 from app.gui.processing_batch_dialog import (
     ProcessingBatchDialog,
     processing_annotation_step_enabled,
@@ -222,6 +224,7 @@ STORED_REVIEW_LABELS = frozenset(
         "image_quality_issue",
         "color_confirmed_ng",
         "color_false_reject",
+        "position_false_reject",
     }
 )
 NON_TRAINING_LABELS = frozenset({"confirmed_ok", "uncertain", "image_quality_issue"})
@@ -241,6 +244,7 @@ ACTION_COLORS = {
     "color_confirmed_ng": "#8f2d56",
     "color_false_reject": "#00796b",
     "color_needs_annotation": "#6a4c93",
+    "position_false_reject": "#1565c0",
 }
 
 PASS_SAMPLE_INTERVAL = 100
@@ -270,6 +274,10 @@ OPERATOR_ACTION_LABELS = {
     "color_needs_annotation": (
         "顏色覆核＋框需修正",
         "Review color and correct the box",
+    ),
+    "position_false_reject": (
+        "位置檢測誤判，實物位置正常",
+        "Position false reject (actual position is acceptable)",
     ),
 }
 
@@ -888,6 +896,7 @@ class ReviewCasesDialog(QDialog):
         use_legacy_selected_page: bool = False,
         use_legacy_review_layout: bool = False,
         embedded: bool = False,
+        show_embedded_navigation: bool = True,
         manifest_prepared: bool = False,
         prepared_rows: list[dict[str, str]] | None = None,
         parent: QWidget | None = None,
@@ -909,6 +918,7 @@ class ReviewCasesDialog(QDialog):
         self._use_legacy_selected_page = use_legacy_selected_page
         self._use_legacy_review_layout = use_legacy_review_layout
         self._embedded = embedded
+        self._show_embedded_navigation = show_embedded_navigation
         self._submission_active = False
         self._retry_review_action: Any | None = None
         self._review_thumbnail_visible_indices: tuple[int, ...] = ()
@@ -921,6 +931,11 @@ class ReviewCasesDialog(QDialog):
                 product=product,
                 area=area,
             )
+        _assert_rows_match_target(
+            prepared_rows or [],
+            product=product,
+            area=area,
+        )
         self.store = ReviewManifestStore(
             self.manifest_path,
             database_path=self.result_root / "inspection_records.sqlite3",
@@ -983,6 +998,52 @@ class ReviewCasesDialog(QDialog):
     def _text(self, zh: str, en: str) -> str:
         return zh if str(self.language).lower().startswith("zh") else en
 
+    def _add_stage_heading(
+        self,
+        layout: QVBoxLayout,
+        *,
+        title: str,
+        help_text: str,
+        object_name: str,
+        context_text: str | None = None,
+        context_tooltip: str | None = None,
+    ) -> None:
+        """Keep the stage visible while moving verbose guidance into hover help."""
+        panel = QFrame(self)
+        panel.setObjectName(f"{object_name}Panel")
+        panel.setStyleSheet(
+            f"QFrame#{object_name}Panel {{"
+            "background:#f7f9fc;border:1px solid #dce3ec;"
+            "border-radius:9px;}"
+        )
+        heading_row = QHBoxLayout(panel)
+        heading_row.setContentsMargins(14, 10, 14, 10)
+        heading_row.setSpacing(10)
+        heading = QLabel(title)
+        heading.setObjectName(object_name)
+        heading.setStyleSheet(
+            "font-size:14pt;font-weight:600;color:#1f3347;border:0;"
+        )
+        heading_row.addWidget(heading)
+        if context_text:
+            context = QLabel(context_text)
+            context.setObjectName("reviewTargetScope")
+            context.setToolTip(context_tooltip or "")
+            context.setStyleSheet(
+                "color:#166044;background:#e9f7ef;border:1px solid #b5dbc5;"
+                "border-radius:11px;padding:3px 9px;font-weight:600;"
+            )
+            heading_row.addWidget(context)
+        heading_row.addStretch()
+        help_badge = HoverHelpBadge(
+            help_text,
+            language=self.language,
+            parent=panel,
+        )
+        help_badge.setObjectName(f"{object_name}Help")
+        heading_row.addWidget(help_badge)
+        layout.addWidget(panel)
+
     def _reconcile_handed_off_selection(self) -> None:
         """Exclude legacy rows that already exist in ready or pending data."""
         handed_off_artifacts = _load_handed_off_artifacts(
@@ -1023,8 +1084,13 @@ class ReviewCasesDialog(QDialog):
 
     def _build_ui(self) -> None:
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(8, 8, 8, 8)
-        if self._embedded:
+        root_layout.setContentsMargins(14, 12, 14, 14)
+        root_layout.setSpacing(10)
+        self.setStyleSheet(
+            "QDialog { background:#f3f6fa;"
+            "font-family:'Segoe UI','Microsoft JhengHei';font-size:10pt; }"
+        )
+        if self._embedded and self._show_embedded_navigation:
             navigation = QHBoxLayout()
             back_button = QPushButton(
                 self._text("← 返回檢測主畫面", "← Back to inspection")
@@ -1061,30 +1127,30 @@ class ReviewCasesDialog(QDialog):
         """Build stage one: choose failure images before assigning verdicts."""
         self.review_selection_page = QWidget()
         layout = QVBoxLayout(self.review_selection_page)
-        instruction = QLabel(
-            self._text(
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(10)
+        self._add_stage_heading(
+            layout,
+            title=self._text("第 1 階段：選照片", "Stage 1: Select photos"),
+            help_text=self._text(
                 "模型補訓第 1 階段：先一次瀏覽失敗圖，勾選真正需要人工審核的照片；雙擊可放大。",
                 "Retraining stage 1: scan failures in bulk and select only images that need human review; double-click to enlarge.",
             )
-        )
-        instruction.setWordWrap(True)
-        instruction.setStyleSheet(
-            "QLabel { background:#243447;color:white;padding:12px;"
-            "font-size:13pt;font-weight:bold; }"
-        )
-        layout.addWidget(instruction)
-        saved_hint = QLabel(
-            self._text(
+            + "\n"
+            + self._text(
                 "這一階段只累積失敗圖片；勾選會立即保存。你可以先關閉，等樣本足夠後再進入分類與補訓。",
                 "This stage only collects failed images. Selections are saved immediately; close now and classify later when enough samples have accumulated.",
-            )
+            ),
+            object_name="reviewSelectionHeading",
+            context_text=self._text(
+                f"{self.product or '未選擇'}／{self.area or '未選擇'}",
+                f"{self.product or 'Not selected'} / {self.area or 'Not selected'}",
+            ),
+            context_tooltip=self._text(
+                "本頁只顯示這個機種與區域，不會混入其他機種。",
+                "Only this product and area are shown; other targets are excluded.",
+            ),
         )
-        saved_hint.setWordWrap(True)
-        saved_hint.setStyleSheet(
-            "QLabel { background:#eef6ff;color:#174a7e;padding:9px;"
-            "border:1px solid #a9c8e8;border-radius:5px; }"
-        )
-        layout.addWidget(saved_hint)
         layout.addLayout(self._build_time_filter())
         self.review_gallery = ReviewSelectionGallery(
             language=self.language,
@@ -1136,18 +1202,17 @@ class ReviewCasesDialog(QDialog):
         """Build a target-wide gallery containing selected images only."""
         self.selected_review_page = QWidget()
         layout = QVBoxLayout(self.selected_review_page)
-        instruction = QLabel(
-            self._text(
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(10)
+        self._add_stage_heading(
+            layout,
+            title=self._text("第 2 階段：確認已選照片", "Stage 2: Confirm selections"),
+            help_text=self._text(
                 "模型補訓第 2 階段：此畫面只顯示已選擇並保存的圖片，不混入未選圖片。取消勾選會立即移出此清單。",
                 "Retraining stage 2: this page contains saved selections only. Unselected images are never mixed in; unchecking removes an image immediately.",
-            )
+            ),
+            object_name="selectedReviewHeading",
         )
-        instruction.setWordWrap(True)
-        instruction.setStyleSheet(
-            "QLabel { background:#174a7e;color:white;padding:12px;"
-            "font-size:13pt;font-weight:bold; }"
-        )
-        layout.addWidget(instruction)
         self.selected_review_gallery = ReviewSelectionGallery(
             language=self.language,
             selected_only=True,
@@ -1470,17 +1535,15 @@ class ReviewCasesDialog(QDialog):
         """Build stage three: classify only the cases selected in the overview."""
         self.classification_page = QWidget()
         layout = QVBoxLayout(self.classification_page)
-        instruction = QLabel(
-            self._text(
+        self._add_stage_heading(
+            layout,
+            title=self._text("第 3 階段：人工判定", "Stage 3: Human review"),
+            help_text=self._text(
                 "模型補訓第 3 階段：人工只需選 Pass、Fail 或略過；Fail 再選原因並可輸入現場說明。",
                 "Retraining stage 3: choose Pass, Fail, or Skip; failed reviews also require a reason and may include an on-site note.",
-            )
+            ),
+            object_name="classificationHeading",
         )
-        instruction.setWordWrap(True)
-        instruction.setStyleSheet(
-            "QLabel { background: #243447; color: white; padding: 10px; font-size: 11pt; font-weight: bold; }"
-        )
-        layout.addWidget(instruction)
         self.progress_label = QLabel()
         self.question_label = QLabel()
         self.question_label.setStyleSheet("font-size: 13pt; font-weight: bold;")
@@ -3329,6 +3392,8 @@ class ReviewCasesDialog(QDialog):
         """Create a verified ZIP without starting training on the inference PC."""
         if not selected_indices:
             return
+        if not self._selected_rows_match_target(selected_indices):
+            return
         default_name = (
             f"portable_training_{self.product or 'product'}_"
             f"{self.area or 'area'}_{datetime.now():%Y%m%d_%H%M%S}.zip"
@@ -3428,6 +3493,8 @@ class ReviewCasesDialog(QDialog):
                     "No retraining image is selected.",
                 ),
             )
+            return
+        if not self._selected_rows_match_target(selected_indices):
             return
         feedback_only = _is_confirmation_only_submission(
             self.store.rows,
@@ -3590,6 +3657,29 @@ class ReviewCasesDialog(QDialog):
         ):
             self._remove_submitted_rows_from_queue(selected_indices)
             self._show_submission_active(message, reused_existing=False)
+
+    def _selected_rows_match_target(
+        self,
+        selected_indices: set[int],
+    ) -> bool:
+        try:
+            rows = [self.store.rows[index] for index in selected_indices]
+            _assert_rows_match_target(
+                rows,
+                product=self.product,
+                area=self.area,
+            )
+        except (IndexError, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                self.windowTitle(),
+                self._text(
+                    f"送訓目標驗證失敗：\n{exc}",
+                    f"Training target validation failed:\n{exc}",
+                ),
+            )
+            return False
+        return True
 
     def _record_submission_audit(
         self,
@@ -3820,6 +3910,7 @@ class ReviewCasesDialog(QDialog):
             selected_product=self.product,
             selected_area=self.area,
             background_refresh=True,
+            embedded=self._embedded,
             parent=self,
         )
         if self._embedded:
@@ -4158,6 +4249,42 @@ def _target_manifest_path(path: Path, *, product: str | None, area: str | None) 
     safe_product = "".join(character if character.isalnum() or character in "._-" else "_" for character in product)
     safe_area = "".join(character if character.isalnum() or character in "._-" else "_" for character in area)
     return path.with_name(f"{path.stem}_{safe_product}_{safe_area}{path.suffix}")
+
+
+def _assert_rows_match_target(
+    rows: list[dict[str, str]],
+    *,
+    product: str | None,
+    area: str | None,
+) -> None:
+    """Reject mixed or unscoped rows before they reach one training batch."""
+    if not rows:
+        return
+    observed_targets = {
+        (
+            str(row.get("product") or "").strip(),
+            str(row.get("area") or "").strip(),
+        )
+        for row in rows
+    }
+    if any(not all(target) for target in observed_targets):
+        raise ValueError(
+            "Every selected photo must contain product and area metadata."
+        )
+    if len(observed_targets) != 1:
+        labels = ", ".join(
+            f"{target_product}/{target_area}"
+            for target_product, target_area in sorted(observed_targets)
+        )
+        raise ValueError(
+            f"One training batch cannot mix product/area targets: {labels}"
+        )
+    if product and area and observed_targets != {(product, area)}:
+        actual_product, actual_area = next(iter(observed_targets))
+        raise ValueError(
+            "Selected photo target does not match the active target: "
+            f"active={product}/{area}, actual={actual_product}/{actual_area}"
+        )
 
 
 def _load_handed_off_artifacts(

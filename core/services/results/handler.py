@@ -8,7 +8,7 @@ import shutil
 import socket
 import sqlite3
 from dataclasses import asdict, is_dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,16 @@ from core.logging_config import DetectionLogger
 from core.position_validator import build_missing_item_locations
 from core.security import ensure_subpath
 from core.services.decision_engine import collect_fail_reasons
+from core.services.inspection_maintenance import (
+    InspectionMaintenanceScheduler,
+    InspectionRetentionPolicy,
+)
 from core.services.inspection_repository import InspectionRepository
+from core.services.inspection_sync import (
+    InspectionSyncConfigurationError,
+    InspectionSyncWorker,
+    build_inspection_sync_worker,
+)
 from core.utils import DetectionResults, ImageUtils
 
 from .annotations import annotate_yolo_frame
@@ -82,6 +91,70 @@ class ResultHandler:
         self._inspection_repository = InspectionRepository(
             Path(self.base_dir) / "inspection_records.sqlite3"
         )
+        retention_policy = InspectionRetentionPolicy(
+            pass_image_days=int(
+                self._cfg_get("inspection_pass_image_days", 30) or 30
+            ),
+            fail_preprocessed_days=int(
+                self._cfg_get("inspection_fail_preprocessed_days", 90) or 90
+            ),
+            fail_all_image_days=int(
+                self._cfg_get("inspection_fail_all_image_days", 180) or 180
+            ),
+        )
+        backup_interval_hours = int(
+            self._cfg_get("inspection_backup_interval_hours", 24) or 24
+        )
+        self._inspection_maintenance = InspectionMaintenanceScheduler(
+            self.base_dir,
+            database_path=self._inspection_repository.path,
+            cleanup_enabled=bool(
+                self._cfg_get("inspection_retention_cleanup_enabled", False)
+            ),
+            policy=retention_policy,
+            interval=timedelta(hours=max(1, backup_interval_hours)),
+            logger=self.logger.logger,
+        )
+        self._inspection_sync: InspectionSyncWorker | None = None
+        if bool(self._cfg_get("inspection_sync_enabled", False)):
+            try:
+                self._inspection_sync = build_inspection_sync_worker(
+                    self._inspection_repository.path,
+                    endpoint=str(
+                        self._cfg_get("inspection_sync_endpoint", "") or ""
+                    ),
+                    api_token_env=str(
+                        self._cfg_get(
+                            "inspection_sync_api_token_env",
+                            "YOLO11_INSPECTION_SYNC_TOKEN",
+                        )
+                        or ""
+                    ),
+                    timeout_seconds=float(
+                        self._cfg_get("inspection_sync_timeout_seconds", 10.0)
+                        or 10.0
+                    ),
+                    interval_seconds=float(
+                        self._cfg_get("inspection_sync_interval_seconds", 30.0)
+                        or 30.0
+                    ),
+                    batch_size=int(
+                        self._cfg_get("inspection_sync_batch_size", 20) or 20
+                    ),
+                    max_attempts=int(
+                        self._cfg_get("inspection_sync_max_attempts", 12) or 12
+                    ),
+                    allow_insecure_http=bool(
+                        self._cfg_get(
+                            "inspection_sync_allow_insecure_http",
+                            False,
+                        )
+                    ),
+                    logger=self.logger.logger,
+                )
+            except (InspectionSyncConfigurationError, ValueError):
+                self._inspection_maintenance.close()
+                raise
 
         self.columns = list(COLUMN_NAMES)
         self.excel_path = os.path.join(self.base_dir, "results.xlsx")
@@ -168,6 +241,8 @@ class ResultHandler:
         model_info: dict[str, Any] | None = None,
         inference_time: float | None = None,
         slot_mismatches: list[dict[str, Any]] | None = None,
+        duplicate_filter: dict[str, Any] | None = None,
+        raw_detections: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         try:
             self._ensure_disk_capacity(frame, processed_image)
@@ -251,6 +326,8 @@ class ResultHandler:
                     missing_items=missing_items,
                     expected_boxes=expected_boxes,
                     missing_locations=missing_locations,
+                    duplicate_filter=duplicate_filter,
+                    raw_detections=raw_detections,
                 )
                 self._img_queue.write_sync(
                     annotated_path,
@@ -301,6 +378,8 @@ class ResultHandler:
                         color_result,
                         status,
                         missing_locations=missing_locations,
+                        duplicate_filter=duplicate_filter,
+                        raw_detections=raw_detections,
                     )
                     self._img_queue.write_sync(
                         annotated_path,
@@ -399,6 +478,8 @@ class ResultHandler:
                 color_result=color_result,
                 sequence_check=sequence_check,
                 error_message=error_message,
+                duplicate_filter=duplicate_filter,
+                raw_detections=raw_detections,
                 artifacts={
                     "original_path": original_path,
                     "preprocessed_path": preprocessed_path,
@@ -417,6 +498,9 @@ class ResultHandler:
                     self._inspection_repository.upsert_snapshot_file(
                         config_snapshot_path
                     )
+                    if self._inspection_sync is not None:
+                        self._inspection_sync.notify()
+                    self._inspection_maintenance.maybe_schedule()
                 except (
                     OSError,
                     ValueError,
@@ -444,6 +528,7 @@ class ResultHandler:
                 "decision": dict(decision or {}),
                 "model_info": dict(model_info or {}),
                 "inference_time": inference_time,
+                "duplicate_filter": dict(duplicate_filter or {}),
                 "config_snapshot_path": config_snapshot_path,
             }
         except ImageWriteError as exc:
@@ -475,7 +560,13 @@ class ResultHandler:
             ("Image queue flush", self._img_queue.flush),
             ("Image queue shutdown", self._img_queue.shutdown),
             ("Excel close", self._excel.close),
+            ("Inspection maintenance", self._inspection_maintenance.close),
         ]
+        if self._inspection_sync is not None:
+            operations.insert(
+                0,
+                ("Inspection company sync", self._inspection_sync.close),
+            )
         for label, fn in operations:
             try:
                 fn()
@@ -533,6 +624,8 @@ class ResultHandler:
         color_result: dict[str, Any] | None = None,
         sequence_check: dict[str, Any] | None = None,
         error_message: str | None = None,
+        duplicate_filter: dict[str, Any] | None = None,
+        raw_detections: list[dict[str, Any]] | None = None,
         artifacts: dict[str, Any] | None = None,
     ) -> str:
         """Persist the full per-inspection result record (result.json).
@@ -572,12 +665,16 @@ class ResultHandler:
             "model_info": dict(model_info or {}),
             "inference_time": inference_time,
             "detections": self._json_safe(list(detections or [])),
+            "raw_detections": self._json_safe(
+                list(raw_detections if raw_detections is not None else detections or [])
+            ),
             "missing_items": list(missing_items or []),
             "anomaly_score": (
                 float(anomaly_score) if anomaly_score is not None else None
             ),
             "color_result": self._json_safe(color_result or {}),
             "sequence_check": self._json_safe(sequence_check or {}),
+            "duplicate_filter": self._json_safe(duplicate_filter or {}),
             "error_message": error_message or "",
             "artifacts": self._json_safe(artifacts or {}),
             "config_hash": self._hash_config(safe_config),

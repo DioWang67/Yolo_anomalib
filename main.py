@@ -6,7 +6,6 @@ import os
 import sys
 
 from app.cli import run_cli
-from core.detection_system import DetectionSystem
 from core.logging_config import configure_logging
 
 try:
@@ -23,7 +22,15 @@ def setup_logging() -> None:
         pass
 
 
-if __name__ == "__main__":
+def _create_detection_system():
+    """Import the ML runtime only after argument parsing has completed."""
+    from core.detection_system import DetectionSystem
+
+    return DetectionSystem()
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Run the supported command-line entry point."""
     setup_logging()
     parser = argparse.ArgumentParser(
         description="YOLO/Anomalib detection runner")
@@ -40,9 +47,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--image", type=str, help="指定輸入影像路徑（可選）", required=False
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    system = DetectionSystem()
+    system = _create_detection_system()
     try:
         if args.product and args.area and args.infer_type:
             frame = None
@@ -94,3 +101,7 @@ if __name__ == "__main__":
             run_cli(system)
     finally:
         system.shutdown()
+
+
+if __name__ == "__main__":
+    main()

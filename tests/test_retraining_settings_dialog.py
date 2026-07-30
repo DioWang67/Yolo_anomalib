@@ -93,3 +93,51 @@ def test_retraining_settings_dialog_persists_integer_options(
         batch=4,
         imgsz=960,
     )
+
+
+def test_position_training_requires_explicit_checkbox_opt_in(qtbot):
+    dialog = RetrainingSettingsDialog(3, initial=RetrainingOptions())
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    assert dialog.position_training_checkbox.isChecked() is False
+    assert dialog.position_activation_checkbox.isEnabled() is False
+    assert dialog.options().position_training_mode == "yolo_only"
+
+    dialog.position_training_checkbox.click()
+    dialog.position_activation_checkbox.click()
+
+    assert dialog.options().position_training_mode == "calibrate_validate"
+    assert dialog.options().position_activation == "enable_after_gate"
+    assert "位置檢測補訓：已啟用" in dialog.summary_label.text()
+
+    dialog.position_training_checkbox.click()
+
+    assert dialog.options().position_training_mode == "yolo_only"
+    assert dialog.options().position_activation == "preserve"
+    assert dialog.position_activation_checkbox.isEnabled() is False
+
+
+def test_position_activation_is_not_persisted_between_jobs(
+    tmp_path, qtbot, monkeypatch
+):
+    settings = QSettings(str(tmp_path / "retraining.ini"), QSettings.IniFormat)
+    monkeypatch.setattr(
+        RetrainingSettingsDialog,
+        "_settings",
+        staticmethod(lambda: settings),
+    )
+    dialog = RetrainingSettingsDialog(
+        2,
+        initial=RetrainingOptions(
+            position_training_mode="calibrate_validate",
+            position_activation="enable_after_gate",
+        ),
+    )
+    qtbot.addWidget(dialog)
+
+    dialog.accept()
+
+    loaded = RetrainingSettingsDialog.load_saved_options()
+    assert loaded.position_training_mode == "yolo_only"
+    assert loaded.position_activation == "preserve"

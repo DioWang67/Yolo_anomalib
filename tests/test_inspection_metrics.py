@@ -60,6 +60,16 @@ def test_color_review_uses_structured_product_truth_for_confusion_cell():
     assert matrix.unknown_label == 0
 
 
+def test_position_false_reject_is_counted_as_overkill():
+    matrix = build_confusion_matrix(
+        _rows(("PCBA1", "A", "FAIL", "position_false_reject"))
+    )
+
+    assert matrix.fp == 1
+    assert matrix.unknown_label == 0
+    assert matrix.inconsistent == 0
+
+
 def test_escape_recall_precision_math():
     # TP=8, FN=2 -> recall 0.8, escape 0.2 ; FP=2 -> precision 0.8
     rows = (

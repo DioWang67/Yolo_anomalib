@@ -63,6 +63,29 @@ max_cache_size: 3
 # Or absolute path: D:/Path/To/Result
 output_dir: "./Result"
 
+# Inspection evidence maintenance. A verified SQLite backup is scheduled in
+# the background after a saved inspection when the latest backup is older than
+# this interval. Automatic image deletion is opt-in; use the dry-run CLI first.
+inspection_backup_interval_hours: 24
+inspection_retention_cleanup_enabled: false
+inspection_pass_image_days: 30
+inspection_fail_preprocessed_days: 90
+inspection_fail_all_image_days: 180
+
+# Optional company-server synchronization. Inspection always commits to local
+# SQLite first; this background outbox retries after network outages and uses
+# inspection_id as the HTTP Idempotency-Key. Keep disabled until IT provides
+# the production HTTPS endpoint. Put the token in the named environment
+# variable; never store credentials in this YAML file.
+inspection_sync_enabled: false
+inspection_sync_endpoint: "https://inspection-api.example.company/api/v1/inspections"
+inspection_sync_api_token_env: "YOLO11_INSPECTION_SYNC_TOKEN"
+inspection_sync_timeout_seconds: 10
+inspection_sync_interval_seconds: 30
+inspection_sync_batch_size: 20
+inspection_sync_max_attempts: 12
+inspection_sync_allow_insecure_http: false
+
 # Traceability metadata persisted with every inspection and indexed in
 # Result/inspection_records.sqlite3. machine_id falls back to the Windows host
 # name when omitted; set the other values from the active production context.

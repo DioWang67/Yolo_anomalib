@@ -161,6 +161,39 @@ def test_color_only_derives_color_calibration_and_keeps_route():
     assert blocking_violations(validate_record_consistency(record)) == ()
 
 
+def test_position_false_reject_derives_position_calibration():
+    record = _reviewed(
+        review_outcome="pass",
+        review_label="position_false_reject",
+        failure_category="",
+        product_verdict="ok",
+        detection_verdict="correct",
+        action_route="position",
+    )
+
+    semantics = derive_review_semantics(record)
+
+    assert semantics.product_verdict == ProductVerdict.OK
+    assert semantics.ai_correctness == AICorrectness.CORRECT
+    assert semantics.annotation_validity == AnnotationValidity.VERIFIED
+    assert semantics.required_action == RequiredAction.POSITION_CALIBRATION
+    assert derive_workflow_state(record) == WorkflowState.READY
+    assert blocking_violations(validate_record_consistency(record)) == ()
+
+
+def test_position_feedback_cannot_be_sent_to_yolo():
+    record = _reviewed(
+        review_outcome="pass",
+        review_label="position_false_reject",
+        failure_category="",
+        product_verdict="ok",
+        detection_verdict="correct",
+        action_route="yolo",
+    )
+
+    assert "position_feedback_wrong_route" in _codes(record)
+
+
 def test_skip_cannot_be_training_selected():
     record = _reviewed(
         review_outcome="skip",
@@ -342,6 +375,7 @@ def test_domain_semantics_can_map_back_to_legacy_columns():
         "wrong_class",
         "color_confirmed_ng",
         "color_false_reject",
+        "position_false_reject",
     ],
 )
 def test_existing_legal_routing_result_is_unchanged(label):

@@ -814,6 +814,10 @@ class StorageWorker(BaseWorker):
         task.result["color_check"] = ctx.color_result
         if ctx.result.get("sequence_check") is not None:
             task.result["sequence_check"] = ctx.result.get("sequence_check")
+        if ctx.result.get("duplicate_filter") is not None:
+            task.result["duplicate_filter"] = ctx.result.get("duplicate_filter")
+        if ctx.result.get("raw_detections") is not None:
+            task.result["raw_detections"] = ctx.result.get("raw_detections")
         if save_result:
             task.result["save_result"] = save_result
             task.result["original_image_path"] = save_result.get("original_path", "")

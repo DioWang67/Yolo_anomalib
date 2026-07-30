@@ -122,6 +122,7 @@ models/*_backup/
 # Local ONNX Runtime/PyInstaller smoke-test workspaces.
 build_ort_smoke*/
 dist_ort_smoke*/
+data/.ultralytics/
 
 # Local model training/review artifacts.
 models/**/config.yaml.bak
@@ -140,5 +141,6 @@ review_manifest.*
 # Deployment and rollback metadata is paired with ignored model binaries and
 # belongs to the station artifact store, not source control.
 models/**/deployment_manifest.yaml
+models/**/activation_history.yaml
 models/**/versions/
 models/**/weights/*.manifest.yaml
