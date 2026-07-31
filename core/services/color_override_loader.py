@@ -15,17 +15,33 @@ class ColorOverrideLoader:
         max_cache_size: Maximum number of config files to keep in memory.
     """
 
-    def __init__(self, models_root: Path, max_cache_size: int = 32, revision_resolver: Any = None) -> None:
+    def __init__(
+        self,
+        models_root: Path,
+        max_cache_size: int = 32,
+        revision_resolver: Any = None,
+        revisions_root: Path | None = None,
+        revision_overrides: dict[str, str] | None = None,
+        include_active_revisions: bool = True,
+    ) -> None:
         self.models_root = models_root
         self.max_cache_size = max_cache_size
         self._cache: dict[str, dict[str, Any]] = {}
         self.last_active_revision_ids: tuple[str, ...] = ()
+        self._revisions_root = (
+            revisions_root
+            if revisions_root is not None
+            else models_root.parent / ".color_revisions"
+        )
+        self._default_include_active_revisions = include_active_revisions
         if revision_resolver is None:
             from tools.color_configuration_resolver import ColorConfigurationResolver
 
             revision_resolver = ColorConfigurationResolver(
                 models_root=models_root,
-                revisions_root=models_root.parent / ".color_revisions",
+                revisions_root=self._revisions_root,
+                revision_overrides=revision_overrides,
+                include_active_revisions=include_active_revisions,
             )
         self._revision_resolver = revision_resolver
 
@@ -36,6 +52,9 @@ class ColorOverrideLoader:
         area: str,
         inference_type: str,
         logger: Any,
+        *,
+        revision_overrides: dict[str, str] | None = None,
+        include_active_revisions: bool | None = None,
     ) -> tuple[
         dict[str, float] | None,
         dict[str, dict[str, Any]] | None,
@@ -66,7 +85,15 @@ class ColorOverrideLoader:
             stat = cfg_path.stat()
         except FileNotFoundError:
             self._cache.pop(cache_key, None)
-            return self._apply_active(config, product, area, inference_type, fallbacks)
+            return self._apply_active(
+                config,
+                product,
+                area,
+                inference_type,
+                fallbacks,
+                revision_overrides=revision_overrides,
+                include_active_revisions=include_active_revisions,
+            )
 
         cached = self._cache.get(cache_key)
         if cached and cached.get("mtime") == stat.st_mtime:
@@ -76,6 +103,8 @@ class ColorOverrideLoader:
                 area,
                 inference_type,
                 self._with_fallback(cached, fallbacks),
+                revision_overrides=revision_overrides,
+                include_active_revisions=include_active_revisions,
             )
 
         yaml_module = _import_yaml()
@@ -83,18 +112,42 @@ class ColorOverrideLoader:
             logger.warning(
                 "PyYAML is not available; skipping color overrides from %s", cfg_path
             )
-            return self._apply_active(config, product, area, inference_type, fallbacks)
+            return self._apply_active(
+                config,
+                product,
+                area,
+                inference_type,
+                fallbacks,
+                revision_overrides=revision_overrides,
+                include_active_revisions=include_active_revisions,
+            )
 
         try:
             with cfg_path.open("r", encoding="utf-8") as handle:
                 model_cfg = yaml_module.safe_load(handle)
         except (OSError, yaml_module.YAMLError) as exc:
             logger.warning("Failed to reload color overrides from %s: %s", cfg_path, exc)
-            return self._apply_active(config, product, area, inference_type, fallbacks)
+            return self._apply_active(
+                config,
+                product,
+                area,
+                inference_type,
+                fallbacks,
+                revision_overrides=revision_overrides,
+                include_active_revisions=include_active_revisions,
+            )
 
         if not isinstance(model_cfg, dict):
             logger.warning("Color override config %s is not a valid mapping, skipping", cfg_path)
-            return self._apply_active(config, product, area, inference_type, fallbacks)
+            return self._apply_active(
+                config,
+                product,
+                area,
+                inference_type,
+                fallbacks,
+                revision_overrides=revision_overrides,
+                include_active_revisions=include_active_revisions,
+            )
 
         disk_overrides = self._non_empty_mapping_or_none(
             model_cfg.get("color_threshold_overrides")
@@ -118,7 +171,15 @@ class ColorOverrideLoader:
             disk_rules if disk_rules is not None else fallback_rules,
             disk_tuning if disk_tuning is not None else fallback_tuning,
         )
-        return self._apply_active(config, product, area, inference_type, values)
+        return self._apply_active(
+            config,
+            product,
+            area,
+            inference_type,
+            values,
+            revision_overrides=revision_overrides,
+            include_active_revisions=include_active_revisions,
+        )
 
     def _apply_active(
         self,
@@ -131,6 +192,9 @@ class ColorOverrideLoader:
             dict[str, dict[str, Any]] | None,
             dict[str, Any] | None,
         ],
+        *,
+        revision_overrides: dict[str, str] | None,
+        include_active_revisions: bool | None,
     ) -> tuple[
         dict[str, float] | None,
         dict[str, dict[str, Any]] | None,
@@ -140,7 +204,10 @@ class ColorOverrideLoader:
         if not checker_type:
             self.last_active_revision_ids = ()
             return values
-        active, global_value, revision_ids = self._revision_resolver.active_overrides(
+        resolver = self._resolver_for(
+            revision_overrides, include_active_revisions
+        )
+        active, global_value, revision_ids = resolver.active_overrides(
             product=product,
             area=area,
             model_type=inference_type,
@@ -154,6 +221,26 @@ class ColorOverrideLoader:
         if global_value is not None:
             config.color_score_threshold = global_value
         return merged or None, values[1], values[2]
+
+    def _resolver_for(
+        self,
+        revision_overrides: dict[str, str] | None,
+        include_active_revisions: bool | None,
+    ) -> Any:
+        if revision_overrides is None and include_active_revisions is None:
+            return self._revision_resolver
+        from tools.color_configuration_resolver import ColorConfigurationResolver
+
+        return ColorConfigurationResolver(
+            models_root=self.models_root,
+            revisions_root=self._revisions_root,
+            revision_overrides=dict(revision_overrides or {}),
+            include_active_revisions=(
+                self._default_include_active_revisions
+                if include_active_revisions is None
+                else include_active_revisions
+            ),
+        )
 
     @staticmethod
     def _non_empty_mapping_or_none(value: Any) -> dict | None:

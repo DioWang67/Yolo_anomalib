@@ -320,10 +320,42 @@ class ProcessingBatchDialog(QDialog):
         self.report_path_label.setWordWrap(True)
         self.report_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.report_path_label.setStyleSheet("color:#365f87;border:0;")
+        self.color_version_title = QLabel(
+            self._text("顏色設定版本", "Color Configuration Versions")
+        )
+        self.color_version_title.setStyleSheet(
+            "font-size:11pt;font-weight:bold;color:#20354a;border:0;"
+        )
+        self.color_version_table = QTableWidget(0, 6)
+        self.color_version_table.setObjectName("ColorVersionHistoryTable")
+        self.color_version_table.setHorizontalHeaderLabels(
+            [
+                self._text("範圍", "Scope"),
+                self._text("版本", "Version"),
+                self._text("狀態", "Status"),
+                self._text("證據", "Evidence"),
+                self._text("設定差異", "Changes"),
+                self._text("建立時間", "Created"),
+            ]
+        )
+        self.color_version_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.color_version_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.color_version_table.setMinimumHeight(145)
+        version_header = self.color_version_table.horizontalHeader()
+        version_header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        version_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        version_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        version_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        version_header.setSectionResizeMode(4, QHeaderView.Stretch)
+        version_header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.color_version_title.setVisible(False)
+        self.color_version_table.setVisible(False)
         layout.addWidget(self.report_status_label)
         layout.addWidget(self.report_summary_label)
         layout.addWidget(self.event_log_view)
         layout.addWidget(self.report_path_label)
+        layout.addWidget(self.color_version_title)
+        layout.addWidget(self.color_version_table)
 
         actions = QHBoxLayout()
         self.open_report_button = QPushButton(
@@ -519,7 +551,34 @@ class ProcessingBatchDialog(QDialog):
             button.setVisible(True)
         self.apply_color_button.setEnabled(color.pending_count == 0 and color.approved_count > 0)
         self.open_color_completion_button.setVisible(bool(color.completion_path))
-        self.rollback_color_button.setVisible(True)
+        self._render_color_revision_history()
+
+    def _render_color_revision_history(self) -> None:
+        color = getattr(self.view_model, "color_calibration", None)
+        revisions = tuple(getattr(color, "revisions", ())) if color is not None else ()
+        self.color_version_title.setVisible(bool(revisions))
+        self.color_version_table.setVisible(bool(revisions))
+        self.color_version_table.setRowCount(len(revisions))
+        for row, revision in enumerate(revisions):
+            values = (
+                revision.scope_label,
+                revision.display_version,
+                self._text("使用中", "ACTIVE")
+                if revision.active
+                else self._text("可回退", "AVAILABLE"),
+                revision.evidence_level,
+                revision.changes,
+                revision.created_at,
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column == 1:
+                    item.setToolTip(revision.revision_id)
+                    item.setData(Qt.UserRole, revision.revision_id)
+                self.color_version_table.setItem(row, column, item)
+        self.rollback_color_button.setVisible(
+            any(not revision.active for revision in revisions)
+        )
 
     def _render_annotation_result(self) -> None:
         annotation = getattr(self.view_model, "annotation_package", None)
@@ -693,6 +752,7 @@ class ProcessingBatchDialog(QDialog):
         try:
             outcome = color.apply_approved()
             self.open_color_completion_button.setVisible(bool(color.completion_path))
+            self._render_color_revision_history()
             QMessageBox.information(
                 self, self._text("校正處理完成", "Color Calibration Completed"),
                 f"{outcome.status}\n{outcome.report_path}",
@@ -720,13 +780,38 @@ class ProcessingBatchDialog(QDialog):
         )
         if not accepted:
             return
-        target_revision, accepted = QInputDialog.getText(
+        scope = next(item for item in color.scopes if item.label == label)
+        candidates = tuple(
+            item
+            for item in color.revisions_for_scope(scope.scope_hash)
+            if not item.active
+        )
+        if not candidates:
+            QMessageBox.information(
+                self,
+                self._text("沒有可回退版本", "No Rollback Version"),
+                self._text(
+                    "此範圍目前沒有較早的顏色設定版本。",
+                    "This scope has no earlier color configuration version.",
+                ),
+            )
+            return
+        version_labels = [
+            f"{item.display_version} | {item.changes}" for item in candidates
+        ]
+        selected_version, accepted = QInputDialog.getItem(
             self,
-            self._text("目標 Revision", "Target Revision"),
-            self._text("輸入要重新啟用的 revision ID：", "Enter the revision ID to reactivate:"),
+            self._text("選擇顏色版本", "Select Color Version"),
+            self._text("回退目標", "Rollback target"),
+            version_labels,
+            0,
+            False,
         )
         if not accepted:
             return
+        target_revision = candidates[
+            version_labels.index(selected_version)
+        ].display_version
         operator, accepted = QInputDialog.getText(
             self,
             self._text("操作人員", "Operator"),
@@ -741,14 +826,14 @@ class ProcessingBatchDialog(QDialog):
         )
         if not accepted:
             return
-        scope = next(item for item in color.scopes if item.label == label)
         try:
             pointer = color.rollback(
                 scope.scope_hash,
-                target_revision.strip(),
+                target_revision,
                 operator.strip(),
                 reason.strip(),
             )
+            self._render_color_revision_history()
             QMessageBox.information(
                 self,
                 self._text("回復完成", "Rollback Completed"),

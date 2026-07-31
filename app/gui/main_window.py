@@ -77,6 +77,8 @@ from app.gui.camera_handler import CameraHandlerMixin
 from app.gui.controller import DetectionController
 from app.gui.engineering_settings_page import EngineeringSettingsPage
 from app.gui.inspection_history_page import InspectionHistoryPage
+from app.gui.inspection_release_presentation import format_component_summary
+from app.gui.inspection_version_workspace import InspectionVersionWorkspace
 from app.gui.light_handler import LightHandlerMixin
 from app.gui.i18n import normalize_language, tr
 from app.gui.model_config_dialog import ModelConfigDialog
@@ -86,6 +88,7 @@ from app.gui.panels.info_panel import InfoPanel
 from app.gui.preferences import PreferencesManager
 from app.gui.utils import load_image_with_retry
 from app.gui.view_builder import (
+    _open_inspection_releases,
     _open_model_update_status,
     _open_model_versions,
     _open_training_review,
@@ -313,9 +316,18 @@ class DetectionSystemGUI(
         )
         self.image_panel = ImagePanel()
         self.info_panel = InfoPanel()
+        self.inspection_version_workspace = InspectionVersionWorkspace(
+            project_root=self._project_root,
+            is_inspection_running=self.is_detection_running,
+            parent=self.control_panel.version_workspace,
+        )
+        self.control_panel.install_version_workspace(
+            self.inspection_version_workspace
+        )
         self.engineering_settings_page = EngineeringSettingsPage(
             self.control_panel.engineering_panel,
             language=self.current_language,
+            workspace_tabs=self.control_panel.engineering_tabs,
             parent=self.workspace_stack,
         )
         self.inspection_history_page = InspectionHistoryPage(
@@ -391,6 +403,29 @@ class DetectionSystemGUI(
             lambda: self._run_engineering_action(
                 lambda: _open_model_versions(self)
             )
+        )
+        self.control_panel.inspection_releases_requested.connect(
+            lambda: self._run_engineering_action(
+                lambda: _open_inspection_releases(self)
+            )
+        )
+        self.control_panel.acceptance_requested.connect(
+            lambda: self._run_engineering_action(
+                self.open_model_acceptance
+            )
+        )
+        self.inspection_version_workspace.validation_requested.connect(
+            lambda: self._run_engineering_action(
+                self.open_model_acceptance
+            )
+        )
+        self.inspection_version_workspace.advanced_settings_requested.connect(
+            lambda: self._run_engineering_action(
+                self.edit_current_model_config
+            )
+        )
+        self.inspection_version_workspace.release_activated.connect(
+            self._on_inspection_release_activated
         )
         self.control_panel.retraining_workspace_requested.connect(
             lambda: self._run_engineering_action(
@@ -529,7 +564,14 @@ class DetectionSystemGUI(
         self.engineering_settings_page.set_target(
             self.product_combo.currentText(),
             self.area_combo.currentText(),
+            self.inference_combo.currentText(),
         )
+        self.inspection_version_workspace.set_scope(
+            self.product_combo.currentText(),
+            self.area_combo.currentText(),
+            self.inference_combo.currentText(),
+        )
+        self.refresh_engineering_version_summary()
         self.engineering_settings_page.clear_preview()
         self.workspace_stack.setCurrentWidget(self.engineering_settings_page)
         QTimer.singleShot(
@@ -537,6 +579,95 @@ class DetectionSystemGUI(
             self.engineering_settings_page.back_button.setFocus,
         )
         return True
+
+    def refresh_engineering_version_summary(self) -> None:
+        """Render the exact active release and its components in Engineering."""
+        product = self.product_combo.currentText().strip()
+        area = self.area_combo.currentText().strip()
+        inference_type = self.inference_combo.currentText().strip()
+        if not all((product, area, inference_type)):
+            self.control_panel.set_current_inspection_combination(
+                "目前正式組合：尚未選擇完整範圍"
+            )
+            return
+        try:
+            from core.services.inspection_release_models import (
+                InspectionScope,
+                template_for_inference_type,
+            )
+            from core.services.inspection_release_store import InspectionReleaseStore
+
+            template = template_for_inference_type(inference_type)
+            scope = InspectionScope(product, area, template.template_id)
+            store = InspectionReleaseStore(
+                self._project_root / ".inspection_releases"
+            )
+            pointer = store.active_pointer(scope)
+            if not pointer:
+                summary = "目前正式組合：尚未建立"
+            else:
+                release = store.load(scope, str(pointer["release_id"]))
+                components = format_component_summary(release)
+                summary = (
+                    f"目前正式組合：{release.display_version}｜"
+                    f"{components}｜{pointer.get('mode')}"
+                )
+            self.control_panel.set_current_inspection_combination(summary)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.control_panel.set_current_inspection_combination(
+                f"目前正式組合：無法讀取（{exc}）"
+            )
+
+    def _on_inspection_release_activated(self, _release: object) -> None:
+        """Reload runtime state after an atomic release pointer change."""
+        product = self.product_combo.currentText().strip()
+        area = self.area_combo.currentText().strip()
+        inference_type = self.inference_combo.currentText().strip()
+        try:
+            self.controller.reload_model_settings(
+                product,
+                area,
+                inference_type,
+            )
+            self.load_available_models()
+        except RuntimeError as exc:
+            self.log_message(f"檢測組合已切換，但模型重新載入失敗：{exc}")
+            QMessageBox.warning(
+                self,
+                self.windowTitle(),
+                f"檢測組合已切換，但模型重新載入失敗。\n{exc}",
+            )
+        self.refresh_engineering_version_summary()
+        self.inspection_version_workspace.refresh()
+
+    def open_model_acceptance(self) -> None:
+        """Open the validation workspace for the selected inspection scope."""
+        existing = getattr(self, "_acceptance_window", None)
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            existing.activateWindow()
+            return
+        try:
+            from app.acceptance.window import ModelAcceptanceWindow
+
+            window = ModelAcceptanceWindow(project_root=self._project_root)
+            window.setParent(self, Qt.Window)
+            window.setAttribute(Qt.WA_DeleteOnClose, True)
+            for combo, value in (
+                (window.product_combo, self.product_combo.currentText()),
+                (window.area_combo, self.area_combo.currentText()),
+                (window.type_combo, self.inference_combo.currentText()),
+            ):
+                index = combo.findText(value)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+            window.destroyed.connect(
+                lambda: setattr(self, "_acceptance_window", None)
+            )
+            self._acceptance_window = window
+            window.show()
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, "組合驗證", str(exc))
 
     def show_inspection_history(self) -> None:
         """Show persisted records for the currently selected target."""
@@ -607,6 +738,9 @@ class DetectionSystemGUI(
             workspace.back_to_inspection_requested.connect(
                 self.show_inspection_workspace
             )
+            workspace.color_configuration_changed.connect(
+                self._reload_color_configuration
+            )
             workspace.workspace_ready.connect(
                 lambda count: self.log_message(
                     f"補訓資料已在背景載入完成：{count} 筆"
@@ -625,6 +759,28 @@ class DetectionSystemGUI(
         self.workspace_stack.setCurrentWidget(workspace)
         workspace.refresh_workspace()
         return workspace
+
+    def _reload_color_configuration(
+        self, product: str, area: str, inference_type: str
+    ) -> None:
+        """Invalidate the active model so the next inspection reads the revision."""
+        try:
+            self.controller.reload_model_settings(
+                product,
+                area,
+                inference_type,
+            )
+        except RuntimeError as exc:
+            self.log_message(f"顏色設定已保存，但模型重新載入失敗：{exc}")
+            QMessageBox.warning(
+                self,
+                self.windowTitle(),
+                f"顏色設定已保存，但目前檢測仍在執行，尚未重新載入。\n{exc}",
+            )
+            return
+        self.log_message(
+            f"顏色設定已重新載入：{product}/{area}/{inference_type}"
+        )
 
     def apply_language(self, language: str) -> None:
         """Apply the selected language to operator-facing GUI text."""

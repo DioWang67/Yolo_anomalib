@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -563,7 +564,9 @@ class ControlPanel(QGroupBox):
     stop_requested = pyqtSignal()
     save_requested = pyqtSignal()
     edit_model_config_requested = pyqtSignal()
+    inspection_releases_requested = pyqtSignal()
     model_versions_requested = pyqtSignal()
+    acceptance_requested = pyqtSignal()
     retraining_workspace_requested = pyqtSignal()
     model_update_status_requested = pyqtSignal()
     inspection_history_requested = pyqtSignal()
@@ -1078,12 +1081,29 @@ class ControlPanel(QGroupBox):
 
     def _build_engineer_panel(self, panel: QWidget) -> None:
         """Build advanced controls for the full-width engineering page."""
-        eng_layout = QGridLayout(panel)
-        eng_layout.setContentsMargins(8, 8, 8, 16)
-        eng_layout.setHorizontalSpacing(16)
-        eng_layout.setVerticalSpacing(14)
-        eng_layout.setColumnStretch(0, 1)
-        eng_layout.setColumnStretch(1, 1)
+        root_layout = QVBoxLayout(panel)
+        root_layout.setContentsMargins(8, 8, 8, 16)
+        self.engineering_tabs = QTabWidget()
+        self.version_workspace = QWidget()
+        self.improvement_workspace = QWidget()
+        self.equipment_workspace = QWidget()
+        self.engineering_tabs.addTab(self.version_workspace, "檢測版本")
+        self.engineering_tabs.addTab(self.improvement_workspace, "資料改善")
+        self.engineering_tabs.addTab(self.equipment_workspace, "設備與系統")
+        root_layout.addWidget(self.engineering_tabs)
+
+        self.version_layout = QVBoxLayout(self.version_workspace)
+        self.version_layout.setContentsMargins(14, 14, 14, 14)
+        self.version_layout.setSpacing(12)
+        improvement_layout = QVBoxLayout(self.improvement_workspace)
+        improvement_layout.setContentsMargins(14, 14, 14, 14)
+        improvement_layout.setSpacing(12)
+        equipment_layout = QGridLayout(self.equipment_workspace)
+        equipment_layout.setContentsMargins(14, 14, 14, 14)
+        equipment_layout.setHorizontalSpacing(16)
+        equipment_layout.setVerticalSpacing(14)
+        equipment_layout.setColumnStretch(0, 1)
+        equipment_layout.setColumnStretch(1, 1)
 
         # Camera
         camera_group = QGroupBox("Camera")
@@ -1123,23 +1143,63 @@ class ControlPanel(QGroupBox):
         cam_layout.addWidget(self.pick_image_btn)
         cam_layout.addWidget(self.image_path_label)
         camera_group.setLayout(cam_layout)
-        eng_layout.addWidget(camera_group, 1, 0)
+        equipment_layout.addWidget(camera_group, 0, 0)
 
-        # Debug / model config
-        debug_group = QGroupBox("Debug / Config")
+        # Version and release workflow
+        debug_group = QGroupBox("檢測版本工作流")
         self.debug_group = debug_group
         debug_layout = QVBoxLayout()
         debug_layout.setSpacing(6)
 
-        self.edit_model_config_btn = QPushButton("Edit Model Config")
+        self.version_workflow_label = QLabel(
+            "① 檢測元件版本  →  ② 建立候選組合  →  "
+            "③ 組合驗證  →  ④ 啟用或回退"
+        )
+        self.version_workflow_label.setWordWrap(True)
+        self.version_workflow_label.setStyleSheet(
+            "background:#eef6ff;color:#245b8f;border:1px solid #c7ddf2;"
+            "border-radius:6px;padding:10px;font-weight:600;"
+        )
+        debug_layout.addWidget(self.version_workflow_label)
+
+        self.current_combination_label = QLabel("目前正式組合：—")
+        self.current_combination_label.setWordWrap(True)
+        self.current_combination_label.setStyleSheet(
+            "background:#edf6ed;color:#246b36;border:1px solid #bad8bf;"
+            "border-radius:6px;padding:10px;font-weight:600;"
+        )
+        debug_layout.addWidget(self.current_combination_label)
+
+        self.model_versions_btn = QPushButton("檢測元件版本")
+        self.model_versions_btn.setObjectName("secondaryAction")
+        self.model_versions_btn.clicked.connect(self.model_versions_requested.emit)
+        debug_layout.addWidget(self.model_versions_btn)
+
+        self.inspection_releases_btn = QPushButton("檢測組合管理")
+        self.inspection_releases_btn.setObjectName("secondaryAction")
+        self.inspection_releases_btn.clicked.connect(
+            self.inspection_releases_requested.emit
+        )
+        debug_layout.addWidget(self.inspection_releases_btn)
+
+        self.acceptance_btn = QPushButton("組合驗證")
+        self.acceptance_btn.setObjectName("primaryAction")
+        self.acceptance_btn.clicked.connect(self.acceptance_requested.emit)
+        debug_layout.addWidget(self.acceptance_btn)
+
+        self.edit_model_config_btn = QPushButton("進階模型設定")
         self.edit_model_config_btn.setObjectName("secondaryAction")
         self.edit_model_config_btn.clicked.connect(self.edit_model_config_requested.emit)
         debug_layout.addWidget(self.edit_model_config_btn)
 
-        self.model_versions_btn = QPushButton("Model Versions / Restore")
-        self.model_versions_btn.setObjectName("secondaryAction")
-        self.model_versions_btn.clicked.connect(self.model_versions_requested.emit)
-        debug_layout.addWidget(self.model_versions_btn)
+        debug_group.setLayout(debug_layout)
+        self.version_layout.addWidget(debug_group)
+        self.version_layout.addStretch(1)
+
+        # Display and output controls remain operational settings, not versions.
+        self.display_group = QGroupBox("顯示與輸出")
+        display_layout = QVBoxLayout()
+        display_layout.setSpacing(6)
 
         self.output_path_label = QLabel("Output: --")
         self.output_path_label.setStyleSheet(
@@ -1147,33 +1207,42 @@ class ControlPanel(QGroupBox):
         )
         self.output_path_label.setWordWrap(True)
         self.output_path_label.setToolTip("Current result output directory")
-        debug_layout.addWidget(self.output_path_label)
+        display_layout.addWidget(self.output_path_label)
 
         self.show_detection_boxes_chk = QCheckBox("Show detection boxes")
         self.show_detection_boxes_chk.setChecked(True)
         self.show_detection_boxes_chk.setToolTip("Toggle inspection overlays on result view")
         self.show_detection_boxes_chk.toggled.connect(self.show_detection_boxes_toggled.emit)
-        debug_layout.addWidget(self.show_detection_boxes_chk)
+        display_layout.addWidget(self.show_detection_boxes_chk)
 
         self.show_original_tab_chk = QCheckBox("Show original tab")
         self.show_original_tab_chk.setChecked(True)
         self.show_original_tab_chk.setToolTip("Show or hide the original image tab")
         self.show_original_tab_chk.toggled.connect(self.show_original_tab_toggled.emit)
-        debug_layout.addWidget(self.show_original_tab_chk)
+        display_layout.addWidget(self.show_original_tab_chk)
 
         self.show_processed_tab_chk = QCheckBox("Show processed tab")
         self.show_processed_tab_chk.setChecked(True)
         self.show_processed_tab_chk.setToolTip("Show or hide the processed image tab")
         self.show_processed_tab_chk.toggled.connect(self.show_processed_tab_toggled.emit)
-        debug_layout.addWidget(self.show_processed_tab_chk)
-
-        debug_group.setLayout(debug_layout)
-        eng_layout.addWidget(debug_group, 1, 1)
+        display_layout.addWidget(self.show_processed_tab_chk)
+        self.display_group.setLayout(display_layout)
+        equipment_layout.addWidget(self.display_group, 0, 1)
 
         # Model retraining
         self.retraining_group = QGroupBox("Model Retraining")
         retraining_layout = QVBoxLayout()
         retraining_layout.setSpacing(6)
+
+        self.improvement_workflow_label = QLabel(
+            "資料複核  →  模型補訓／顏色校正  →  新元件版本"
+        )
+        self.improvement_workflow_label.setWordWrap(True)
+        self.improvement_workflow_label.setStyleSheet(
+            "background:#fff7e8;color:#8a5a00;border:1px solid #ead3a3;"
+            "border-radius:6px;padding:10px;font-weight:600;"
+        )
+        retraining_layout.addWidget(self.improvement_workflow_label)
 
         self.retraining_workspace_btn = QPushButton(
             "Open Retraining Data / Submit"
@@ -1198,7 +1267,8 @@ class ControlPanel(QGroupBox):
         retraining_layout.addWidget(self.model_update_status_btn)
 
         self.retraining_group.setLayout(retraining_layout)
-        eng_layout.addWidget(self.retraining_group, 0, 0, 1, 2)
+        improvement_layout.addWidget(self.retraining_group)
+        improvement_layout.addStretch(1)
 
         # Auto-trigger calibration
         calib_group = QGroupBox("Auto-Trigger Calibration")
@@ -1246,7 +1316,7 @@ class ControlPanel(QGroupBox):
         calib_layout.addWidget(self._calib_apply_btn)
 
         calib_group.setLayout(calib_layout)
-        eng_layout.addWidget(calib_group, 2, 0)
+        equipment_layout.addWidget(calib_group, 1, 0)
 
         # Security (change PIN / lock)
         sec_group = QGroupBox("Security")
@@ -1265,8 +1335,8 @@ class ControlPanel(QGroupBox):
         sec_layout.addWidget(self._lock_btn)
 
         sec_group.setLayout(sec_layout)
-        eng_layout.addWidget(sec_group, 2, 1)
-        eng_layout.setRowStretch(3, 1)
+        equipment_layout.addWidget(sec_group, 1, 1)
+        equipment_layout.setRowStretch(2, 1)
 
     # ------------------------------------------------------------------
     # Engineer page navigation (PIN gate)
@@ -1415,14 +1485,16 @@ class ControlPanel(QGroupBox):
     def engineering_focus_widgets(self) -> tuple[QWidget, ...]:
         """Return engineering controls in their visual keyboard order."""
         return (
+            self.model_versions_btn,
+            self.inspection_releases_btn,
+            self.acceptance_btn,
+            self.edit_model_config_btn,
             self.retraining_workspace_btn,
             self.model_update_status_btn,
             self.use_camera_chk,
             self.reconnect_camera_btn,
             self.disconnect_camera_btn,
             self.pick_image_btn,
-            self.edit_model_config_btn,
-            self.model_versions_btn,
             self.show_detection_boxes_chk,
             self.show_original_tab_chk,
             self.show_processed_tab_chk,
@@ -1575,6 +1647,22 @@ class ControlPanel(QGroupBox):
         self.output_path_label.setText(f"{tr(self._language, 'output')}: {path}")
         self.output_path_label.setToolTip(path)
 
+    def install_version_workspace(self, workspace: QWidget) -> None:
+        """Replace legacy version launchers with the embedded workflow."""
+        current = getattr(self, "_embedded_version_workspace", None)
+        if current is workspace:
+            return
+        if current is not None:
+            self.version_layout.removeWidget(current)
+            current.setParent(None)
+        self._embedded_version_workspace = workspace
+        self.version_layout.insertWidget(0, workspace, 1)
+        self.debug_group.hide()
+
+    def set_current_inspection_combination(self, summary: str) -> None:
+        """Update the read-only production combination shown in Engineering."""
+        self.current_combination_label.setText(summary.strip() or "目前正式組合：—")
+
     def set_auto_mode_status(self, state_name: str) -> None:
         self.auto_mode_status_label.setText(state_name)
 
@@ -1600,14 +1688,52 @@ class ControlPanel(QGroupBox):
         self.product_label.setText(tr(self._language, "product"))
         self.area_label.setText(tr(self._language, "area"))
         self.model_label.setText(tr(self._language, "model"))
+        zh = self._language.lower().startswith("zh")
+        self.engineering_tabs.setTabText(
+            0, "檢測版本" if zh else "Inspection Versions"
+        )
+        self.engineering_tabs.setTabText(
+            1, "資料改善" if zh else "Data Improvement"
+        )
+        self.engineering_tabs.setTabText(
+            2, "設備與系統" if zh else "Equipment & System"
+        )
+        self.debug_group.setTitle(
+            "檢測版本工作流" if zh else "Inspection Version Workflow"
+        )
+        self.version_workflow_label.setText(
+            (
+                "① 檢測元件版本  →  ② 建立候選組合  →  "
+                "③ 組合驗證  →  ④ 啟用或回退"
+            )
+            if zh
+            else (
+                "1. Component versions  →  2. Candidate combination  →  "
+                "3. Validation  →  4. Activate or roll back"
+            )
+        )
+        if self.current_combination_label.text() in {
+            "目前正式組合：—",
+            "Production combination: —",
+        }:
+            self.current_combination_label.setText(
+                "目前正式組合：—" if zh else "Production combination: —"
+            )
         self.model_versions_btn.setText(
-            "模型版本與回復"
-            if self._language.lower().startswith("zh")
-            else "Model Versions / Restore"
+            "檢測元件版本" if zh else "Inspection Component Versions"
+        )
+        self.inspection_releases_btn.setText(
+            "檢測組合管理" if zh else "Inspection Combinations"
+        )
+        self.acceptance_btn.setText(
+            "組合驗證" if zh else "Combination Validation"
+        )
+        self.edit_model_config_btn.setText(
+            "進階模型設定" if zh else "Advanced Model Settings"
         )
         self.model_update_status_btn.setText(
             "模型補訓進度"
-            if self._language.lower().startswith("zh")
+            if zh
             else "Retraining Progress"
         )
         self.model_update_status_btn.setToolTip(
@@ -1623,11 +1749,22 @@ class ControlPanel(QGroupBox):
         if self.image_path_label.text() in {"No image selected", "尚未選擇影像"}:
             self.image_path_label.setText(tr(self._language, "no_image"))
         self.clear_image_btn.setText(tr(self._language, "clear_image"))
-        self.debug_group.setTitle(tr(self._language, "debug_config_group"))
-        self.edit_model_config_btn.setText(tr(self._language, "edit_model_config"))
-        self.retraining_group.setTitle(tr(self._language, "retraining_group"))
+        self.display_group.setTitle(
+            "顯示與輸出" if zh else "Display & Output"
+        )
+        self.retraining_group.setTitle(
+            "資料改善工作流" if zh else "Data Improvement Workflow"
+        )
+        self.improvement_workflow_label.setText(
+            "資料複核  →  模型補訓／顏色校正  →  新元件版本"
+            if zh
+            else (
+                "Data review  →  Model retraining / color calibration  →  "
+                "New component version"
+            )
+        )
         self.retraining_workspace_btn.setText(
-            tr(self._language, "open_retraining_workspace")
+            "資料複核與改善送出" if zh else "Review Data & Submit Improvement"
         )
         self.retraining_workspace_btn.setToolTip(
             tr(self._language, "open_retraining_workspace_hint")

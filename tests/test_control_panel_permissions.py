@@ -31,8 +31,10 @@ def test_engineering_controls_are_not_embedded_in_narrow_operator_layout(
     panel = isolated_panel
 
     assert panel.engineering_panel.isAncestorOf(panel.model_versions_btn)
+    assert panel.engineering_panel.isAncestorOf(panel.inspection_releases_btn)
     assert panel.engineering_panel.isAncestorOf(panel.retraining_workspace_btn)
     assert not panel.model_group.isAncestorOf(panel.model_versions_btn)
+    assert not panel.model_group.isAncestorOf(panel.inspection_releases_btn)
     assert not panel.model_group.isAncestorOf(panel.retraining_workspace_btn)
     assert panel.engineering_panel.isAncestorOf(panel.model_update_status_btn)
     assert panel.layout().indexOf(panel.engineering_panel) == -1

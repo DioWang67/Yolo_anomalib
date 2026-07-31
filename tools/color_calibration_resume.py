@@ -185,13 +185,44 @@ class ColorCalibrationResumeService:
                 continue
             proposed = json.loads(proposed_path.read_text(encoding="utf-8"))
             active = self.revision_store.read_active_pointer(scope)
-            parent_id = str(active.get("revision_id") or "") if active else ""
             try:
+                revision_metrics = _revision_metrics(proposal, preview.metrics)
+                if active is None:
+                    baseline = self.revision_store.commit(
+                        package,
+                        scope,
+                        operator=operator,
+                        reason="Baseline snapshot before versioned color activation",
+                        proposal_sha256=approval.proposal_sha256,
+                        preview_sha256=approval.preview_sha256,
+                        proposed_config=_baseline_config(proposal),
+                        metrics={
+                            **revision_metrics,
+                            "revision_role": "BASELINE",
+                        },
+                        parent_config_sha256=current_sha,
+                    )
+                    revisions.append(baseline.revision_id)
+                    self.revision_store.activate(
+                        baseline,
+                        operator=operator,
+                        reason="Capture rollback target before color activation",
+                        expected_current_sha256=current_sha,
+                        event_type="COLOR_BASELINE_CAPTURED",
+                    )
+                    active = self.revision_store.read_active_pointer(scope)
+                    if active is None:
+                        raise ColorCalibrationError(
+                            "COLOR_ACTIVE_REVISION_MISSING",
+                            "Baseline activation did not create an active revision.",
+                        )
+                parent_id = str(active.get("revision_id") or "")
+                parent_sha = str(active.get("config_sha256") or "")
                 revision = self.revision_store.commit(
                     package, scope, operator=operator, reason=approval.decision_reason,
                     proposal_sha256=approval.proposal_sha256, preview_sha256=approval.preview_sha256,
-                    proposed_config=proposed, metrics=dict(preview.metrics), parent_revision_id=parent_id,
-                    parent_config_sha256=current_sha,
+                    proposed_config=proposed, metrics=revision_metrics,
+                    parent_revision_id=parent_id, parent_config_sha256=parent_sha,
                 )
                 revisions.append(revision.revision_id)
                 if cancellation_token is not None and cancellation_token.is_cancelled:
@@ -205,7 +236,7 @@ class ColorCalibrationResumeService:
                     continue
                 self.revision_store.activate(
                     revision, operator=operator, reason=approval.decision_reason,
-                    expected_current_sha256=current_sha,
+                    expected_current_sha256=parent_sha,
                 )
                 activated.append(scope.scope_hash)
                 if cancellation_token is not None and cancellation_token.is_cancelled:
@@ -294,6 +325,36 @@ def _scope_artifacts(package: ColorCalibrationPackage, scope_hash: str):
         if proposal.scope.scope_hash == scope_hash:
             return proposal, preview, gate
     raise ColorCalibrationError("CALIBRATION_SCOPE_MISSING", f"Unknown color scope: {scope_hash}")
+
+
+def _baseline_config(proposal) -> dict[str, Any]:
+    if proposal.current_public_threshold is None or proposal.current_config_value is None:
+        raise ColorCalibrationError(
+            "CURRENT_CONFIG_INVALID",
+            "The current color threshold cannot be captured as a rollback baseline.",
+        )
+    return {
+        "schema_version": proposal.config_schema_version,
+        "scope": {**asdict(proposal.scope), "scope_hash": proposal.scope.scope_hash},
+        "threshold_key": proposal.scope.threshold_key,
+        "checker_type": proposal.scope.checker_type,
+        "public_threshold": proposal.current_public_threshold,
+        "config_value": proposal.current_config_value,
+    }
+
+
+def _revision_metrics(proposal, metrics: Mapping[str, Any]) -> dict[str, Any]:
+    ng_count = int(proposal.negative_count)
+    evidence_level = "FULL" if ng_count > 0 else "OK_ONLY"
+    return {
+        **dict(metrics),
+        "evidence": {
+            "level": evidence_level,
+            "ok_count": int(proposal.positive_count),
+            "ng_count": ng_count,
+            "sample_count": int(proposal.sample_count),
+        },
+    }
 
 
 def _load_approvals(package: ColorCalibrationPackage) -> dict[str, ColorCalibrationApproval]:

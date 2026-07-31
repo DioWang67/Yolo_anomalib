@@ -57,6 +57,8 @@ class ModelVersionsDialog(QDialog):
         selected_model_type: str | None = None,
         is_inspection_running: Callable[[], bool] | None = None,
         on_activated: Callable[[ModelVersionRecord], None] | None = None,
+        is_combination_managed: Callable[[ModelVersionRecord], bool] | None = None,
+        on_use_in_combination: Callable[[ModelVersionRecord], None] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -69,6 +71,8 @@ class ModelVersionsDialog(QDialog):
         )
         self.is_inspection_running = is_inspection_running or (lambda: False)
         self.on_activated = on_activated
+        self.is_combination_managed = is_combination_managed or (lambda _record: False)
+        self.on_use_in_combination = on_use_in_combination
         self.records: list[ModelVersionRecord] = []
         self.setWindowTitle(self._text("模型版本管理", "Model Version Management"))
         configure_responsive_dialog(
@@ -347,9 +351,19 @@ class ModelVersionsDialog(QDialog):
 
     def _update_selection_details(self) -> None:
         record = self._selected_record()
-        enabled = bool(record and record.exists and not record.is_current)
+        managed = bool(record and self.is_combination_managed(record))
+        enabled = bool(
+            record
+            and record.exists
+            and (managed or not record.is_current)
+        )
+        self.activate_button.setText(
+            self._text("建立檢測組合", "Create inspection combination")
+            if managed
+            else self._text("切換至選取版本", "Activate selected version")
+        )
         self.activate_button.setEnabled(enabled)
-        self.rollback_button.setEnabled(record is not None)
+        self.rollback_button.setEnabled(record is not None and not managed)
         if record is None:
             self.details_label.setText(self._text("請選取一個版本。", "Select a version."))
             return
@@ -366,11 +380,21 @@ class ModelVersionsDialog(QDialog):
             + f": {record.training_config_hash or '—'}\n"
             + self._text("評估指標", "Metrics")
             + f": {metrics if metrics != '{}' else '—'}    {metadata_state}"
+            + (
+                self._text(
+                    "\n此工位使用檢測組合管理；套用時會建立包含此模型的組合版本。",
+                    "\nThis station uses inspection combinations; applying this model creates a combination version.",
+                )
+                if managed
+                else ""
+            )
         )
 
     def _activate_selected(self) -> None:
         record = self._selected_record()
-        if record is None or record.is_current:
+        if record is None:
+            return
+        if record.is_current and not self.is_combination_managed(record):
             return
         self._activate_record(record)
 
@@ -397,6 +421,10 @@ class ModelVersionsDialog(QDialog):
                 self._text("無法切換模型", "Cannot switch model"),
                 self._text("檢測正在執行，請先停止檢測後再切換模型。", "Stop inspection before switching models."),
             )
+            return
+        if self.is_combination_managed(record):
+            if self.on_use_in_combination is not None:
+                self.on_use_in_combination(record)
             return
         target = f"{record.product}/{record.area}/{record.model_type}  v{record.version}"
         warning = ""

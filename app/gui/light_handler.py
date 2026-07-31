@@ -280,7 +280,11 @@ class LightHandlerMixin:
         """Return model-configured LED brightness percent, or None if absent."""
         model_type = "yolo" if inference_type.lower() == "fusion" else inference_type
         try:
-            config_path = self._catalog.config_path(product, area, model_type)
+            config_path = self._active_release_model_config(
+                product, area, inference_type, model_type
+            )
+            if config_path is None:
+                config_path = self._catalog.config_path(product, area, model_type)
             config = load_model_config(config_path)
         except Exception as exc:  # noqa: BLE001 - config parse/open errors are non-fatal here.
             self.log_message(self._t("model_config_save_error", error=exc))
@@ -302,6 +306,32 @@ class LightHandlerMixin:
             )
             return None
         return percent
+
+    def _active_release_model_config(
+        self,
+        product: str,
+        area: str,
+        inference_type: str,
+        model_type: str,
+    ):
+        """Resolve lighting from the same immutable release as inference."""
+        project_root = getattr(self, "_project_root", None)
+        if project_root is None:
+            return None
+        from core.services.inspection_release_models import (
+            InspectionScope,
+            template_for_inference_type,
+        )
+        from core.services.inspection_release_store import InspectionReleaseStore
+
+        template = template_for_inference_type(inference_type)
+        scope = InspectionScope(product, area, template.template_id)
+        store = InspectionReleaseStore(project_root / ".inspection_releases")
+        pointer = store.active_pointer(scope)
+        if pointer is None:
+            return None
+        release = store.load(scope, str(pointer.get("release_id") or ""))
+        return release.model_config_overrides().get(model_type)
 
     def _open_light_controller_if_available(self) -> LightController | None:
         """Return an open light controller without prompting the operator."""

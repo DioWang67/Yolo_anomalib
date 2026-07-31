@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -27,6 +28,7 @@ class EngineeringSettingsPage(QWidget):
         engineering_controls: QScrollArea,
         *,
         language: str,
+        workspace_tabs: QTabWidget | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -37,7 +39,8 @@ class EngineeringSettingsPage(QWidget):
         self.engineering_controls.setVisible(True)
         self.engineering_controls.setMaximumHeight(16_777_215)
         self.engineering_controls.setFocusPolicy(Qt.NoFocus)
-        self._target = ("", "")
+        self.workspace_tabs = workspace_tabs
+        self._target = ("", "", "")
 
         self.setStyleSheet(
             "QWidget#EngineeringSettingsPage {"
@@ -58,9 +61,17 @@ class EngineeringSettingsPage(QWidget):
         layout.setContentsMargins(14, 12, 14, 14)
         layout.setSpacing(12)
         layout.addWidget(self._build_header())
-        layout.addWidget(self._build_preview_card())
+        self.preview_card = self._build_preview_card()
+        layout.addWidget(self.preview_card)
         layout.addWidget(self.engineering_controls, 1)
         self.set_language(self._language)
+        if self.workspace_tabs is not None:
+            self.workspace_tabs.currentChanged.connect(
+                self._sync_preview_visibility
+            )
+            self._sync_preview_visibility(
+                self.workspace_tabs.currentIndex()
+            )
 
     def _build_header(self) -> QFrame:
         header = QFrame(self)
@@ -93,6 +104,14 @@ class EngineeringSettingsPage(QWidget):
         )
         title_column.addWidget(self.hint_label)
         layout.addLayout(title_column, 1)
+
+        self.scope_badge = QLabel(header)
+        self.scope_badge.setAlignment(Qt.AlignCenter)
+        self.scope_badge.setStyleSheet(
+            "background:#edf6ed;color:#246b36;border:1px solid #bad8bf;"
+            "border-radius:11px;padding:4px 10px;font-weight:600;"
+        )
+        layout.addWidget(self.scope_badge)
 
         self.security_badge = QLabel(header)
         self.security_badge.setAlignment(Qt.AlignCenter)
@@ -150,9 +169,18 @@ class EngineeringSettingsPage(QWidget):
         """Remove a stale frame when no live inspection source is active."""
         self.preview_viewer.clear()
 
-    def set_target(self, product: str, area: str) -> None:
+    def set_target(
+        self,
+        product: str,
+        area: str,
+        inference_type: str = "",
+    ) -> None:
         """Update the target context shown beside the calibration preview."""
-        self._target = (str(product).strip(), str(area).strip())
+        self._target = (
+            str(product).strip(),
+            str(area).strip(),
+            str(inference_type).strip(),
+        )
         self._update_target_label()
 
     def configure_tab_order(self, widgets: tuple[QWidget, ...]) -> None:
@@ -166,15 +194,23 @@ class EngineeringSettingsPage(QWidget):
             QWidget.setTabOrder(current, following)
 
     def _update_target_label(self) -> None:
-        product, area = self._target
+        product, area, inference_type = self._target
         if product and area:
             text = tr(self._language, "engineer_preview_target").format(
                 product=product,
                 area=area,
             )
+            if inference_type:
+                text = f"{text} / {inference_type}"
         else:
             text = tr(self._language, "engineer_preview_target_missing")
         self.preview_target_label.setText(text)
+        self.scope_badge.setText(text)
+
+    @pyqtSlot(int)
+    def _sync_preview_visibility(self, tab_index: int) -> None:
+        """Show the live preview only inside the equipment workspace."""
+        self.preview_card.setVisible(tab_index == 2)
 
     def set_language(self, language: str) -> None:
         """Update page chrome while preserving all engineering control state."""

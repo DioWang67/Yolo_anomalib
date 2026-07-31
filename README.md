@@ -25,6 +25,7 @@
 - 📷 **工業相機整合**: 支援海康威視 MVS SDK
 - 🎨 **LED 顏色檢測**: 統計式顏色驗證
 - 🧭 **顏色誤殺閉環**: 顏色專用覆核、校正資料分流及具名批准門檻發布（見 [操作說明](docs/COLOR_REVIEW_CALIBRATION.md)）
+- 🧪 **模型組合驗收**: 獨立人工真值、YOLO × 顏色矩陣、完整組合發布與原子回滾（見 [驗收與發布](docs/MODEL_COMBINATION_ACCEPTANCE.md)）
 - 🖥️ **雙介面支援**: CLI 命令列 + PyQt5 GUI
 - 📊 **結果管理**: SQLite 檢測索引、GUI 查詢、篩選式 Excel 報表與證據影像
 - 🔁 **公司同步**: 本機優先 outbox、離線重試、冪等 revision 同步
@@ -413,6 +414,7 @@ cp runs/detect/<name>/auto_position_config.yaml models/<product>/<area>/yolo/pos
 | 上線檢查 | [Production Go-Live Checklist](docs/PRODUCTION_GO_LIVE_CHECKLIST.md) |
 | 相機診斷 | [Camera Runtime Diagnostics](docs/CAMERA_RUNTIME_DIAGNOSTICS.md) |
 | 模型版本 | [Model Version Management Guide](docs/MODEL_VERSION_GUIDE.md) |
+| 模型組合驗收 | [模型組合驗收與發布](docs/MODEL_COMBINATION_ACCEPTANCE.md) |
 | 檢測資料庫 | [Inspection Database](docs/INSPECTION_DATABASE.md) |
 | 公司同步 | [Company Server Sync](docs/COMPANY_SERVER_SYNC.md) |
 | 安全 | [Security Guide](docs/SECURITY.md) |

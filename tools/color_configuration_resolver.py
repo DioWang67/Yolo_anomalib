@@ -22,12 +22,54 @@ class ResolvedColorConfiguration:
 
 
 class ColorConfigurationResolver:
-    def __init__(self, *, models_root: str | Path, revisions_root: str | Path) -> None:
+    def __init__(
+        self,
+        *,
+        models_root: str | Path,
+        revisions_root: str | Path,
+        revision_overrides: Mapping[str, str] | None = None,
+        include_active_revisions: bool = True,
+    ) -> None:
         self.models_root = Path(models_root).resolve()
         self.revision_store = ColorConfigurationRevisionStore(root=revisions_root)
+        self.revision_overrides = {
+            str(scope_hash).strip(): str(revision).strip()
+            for scope_hash, revision in (revision_overrides or {}).items()
+        }
+        if any(
+            not scope_hash or not revision
+            for scope_hash, revision in self.revision_overrides.items()
+        ):
+            raise ColorCalibrationError(
+                "COLOR_REVISION_REFERENCE_REQUIRED",
+                "Color revision overrides require a scope hash and revision.",
+            )
+        self.include_active_revisions = bool(include_active_revisions)
 
     def resolve(self, scope: ColorCalibrationScope) -> ResolvedColorConfiguration:
-        pointer = self.revision_store.read_active_pointer(scope)
+        selected_reference = self.revision_overrides.get(scope.scope_hash)
+        if selected_reference is not None:
+            revision = self.revision_store.resolve_revision(
+                scope, selected_reference
+            )
+            if self.revision_store.is_revoked(revision):
+                raise ColorCalibrationError(
+                    "COLOR_REVISION_REVOKED",
+                    "A revoked color revision cannot be used for acceptance.",
+                )
+            config = json.loads(revision.config_path.read_text(encoding="utf-8"))
+            return ResolvedColorConfiguration(
+                scope,
+                revision.revision_id,
+                revision.new_config_sha256,
+                config,
+                revision.config_path,
+            )
+        pointer = (
+            self.revision_store.read_active_pointer(scope)
+            if self.include_active_revisions
+            else None
+        )
         if pointer:
             revision = self.revision_store.load(scope, str(pointer["revision_id"]))
             if self.revision_store.is_revoked(revision):
@@ -50,16 +92,29 @@ class ColorConfigurationResolver:
         overrides: dict[str, float] = {}
         global_value: float | None = None
         revision_ids: list[str] = []
+        scopes: dict[str, ColorCalibrationScope] = {}
         active_root = self.revision_store.root / "active"
-        if not active_root.is_dir():
-            return overrides, global_value, ()
-        for pointer_path in sorted(active_root.glob("*.json")):
+        pointer_paths = (
+            sorted(active_root.glob("*.json"))
+            if self.include_active_revisions and active_root.is_dir()
+            else ()
+        )
+        for pointer_path in pointer_paths:
             try:
                 pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
                 raw = pointer["scope"]
                 scope = ColorCalibrationScope(*(str(raw[key]) for key in ("product", "area", "model_type", "checker_type", "threshold_key")))
-                if (scope.product, scope.area, scope.model_type, scope.checker_type) != (product, area, model_type, checker_type):
-                    continue
+                scopes[scope.scope_hash] = scope
+            except ColorCalibrationError:
+                raise
+            except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise ColorCalibrationError("COLOR_ACTIVE_POINTER_INVALID", f"Invalid active color pointer: {pointer_path}") from exc
+        for scope_hash in self.revision_overrides:
+            scopes[scope_hash] = self.revision_store.scope_for_hash(scope_hash)
+        for scope in sorted(scopes.values()):
+            if (scope.product, scope.area, scope.model_type, scope.checker_type) != (product, area, model_type, checker_type):
+                continue
+            try:
                 resolved = self.resolve(scope)
                 value = float(resolved.config["config_value"])
                 if not 0.0 <= value <= 1.0:
@@ -72,7 +127,10 @@ class ColorConfigurationResolver:
             except ColorCalibrationError:
                 raise
             except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                raise ColorCalibrationError("COLOR_ACTIVE_POINTER_INVALID", f"Invalid active color pointer: {pointer_path}") from exc
+                raise ColorCalibrationError(
+                    "COLOR_REVISION_INVALID",
+                    f"Invalid selected color revision: {scope.scope_hash}",
+                ) from exc
         return overrides, global_value, tuple(revision_ids)
 
     def _base_config_path(self, scope: ColorCalibrationScope) -> Path:

@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import (
     QAction,
     QMenuBar,
@@ -109,31 +110,53 @@ def _run_review_dialog(**kwargs) -> int:
 
 
 def _open_model_versions(gui: DetectionSystemGUI) -> None:
-    """Open the model inventory and safely refresh a newly activated model."""
+    """Open the unified model and color component version inventory."""
     try:
-        from core.services.model_version_registry import ModelVersionRegistry
+        from app.gui.inspection_components_dialog import (
+            InspectionComponentsDialog,
+        )
+        from core.services.inspection_component_catalog import (
+            InspectionComponentCatalog,
+        )
 
-        registry = ModelVersionRegistry(gui._models_base)
+        project_root = getattr(
+            gui,
+            "_project_root",
+            gui._models_base.parent,
+        )
+        catalog = InspectionComponentCatalog(
+            models_root=gui._models_base,
+            color_revisions_root=project_root / ".color_revisions",
+            color_profiles_root=project_root / ".color_profiles",
+            inspection_releases_root=project_root / ".inspection_releases",
+        )
 
-        def on_activated(record) -> None:
-            gui.controller.reload_model_settings(
-                record.product, record.area, record.model_type
+        def on_create_combination(record) -> None:
+            _open_inspection_releases(
+                gui,
+                product=record.product,
+                area=record.area,
+                inference_type=record.inference_type,
+                preferred_model_version=(
+                    record.version
+                    if record.category == "AI_MODEL"
+                    else ""
+                ),
+                preferred_color_version=(
+                    record.version
+                    if record.category == "COLOR_REVISION"
+                    else ""
+                ),
+                begin_creation=True,
             )
-            gui._catalog.refresh()
-            gui.load_available_models()
-            gui.log_message(
-                "模型版本已切換："
-                f"{record.product}/{record.area}/{record.model_type} v{record.version}"
-            )
 
-        _run_model_versions_dialog(
-            registry=registry,
-            language=_lang(gui),
-            selected_product=gui.product_combo.currentText().strip() or None,
-            selected_area=gui.area_combo.currentText().strip() or None,
-            selected_model_type=gui.inference_combo.currentText().strip() or None,
-            is_inspection_running=gui.is_detection_running,
-            on_activated=on_activated,
+        _run_inspection_components_dialog(
+            dialog_class=InspectionComponentsDialog,
+            catalog=catalog,
+            selected_product=gui.product_combo.currentText().strip(),
+            selected_area=gui.area_combo.currentText().strip(),
+            selected_inference_type=gui.inference_combo.currentText().strip(),
+            on_create_combination=on_create_combination,
             parent=gui,
         )
     except (OSError, RuntimeError, ValueError) as exc:
@@ -145,11 +168,79 @@ def _open_model_versions(gui: DetectionSystemGUI) -> None:
         )
 
 
+def _open_inspection_releases(
+    gui: DetectionSystemGUI,
+    *,
+    product: str | None = None,
+    area: str | None = None,
+    inference_type: str | None = None,
+    preferred_model_version: str = "",
+    preferred_color_version: str = "",
+    begin_creation: bool = False,
+) -> None:
+    """Open the single control plane for model/color release combinations."""
+    try:
+        from app.gui.inspection_releases_dialog import InspectionReleasesDialog
+        from core.services.inspection_release_store import InspectionReleaseStore
+
+        store = InspectionReleaseStore(
+            gui._project_root / ".inspection_releases"
+        )
+
+        def on_activated(release) -> None:
+            gui.controller.reload_model_settings(
+                release.scope.product,
+                release.scope.area,
+                release.scope.inference_type,
+            )
+            gui._catalog.refresh()
+            gui.load_available_models()
+            gui.log_message(
+                "Inspection release activated: "
+                f"{release.scope.product}/{release.scope.area} "
+                f"{release.display_version}"
+            )
+
+        dialog = InspectionReleasesDialog(
+            store=store,
+            product=product or gui.product_combo.currentText().strip() or None,
+            area=area or gui.area_combo.currentText().strip() or None,
+            inference_type=(
+                inference_type
+                or gui.inference_combo.currentText().strip()
+                or None
+            ),
+            preferred_model_version=preferred_model_version,
+            preferred_color_version=preferred_color_version,
+            is_inspection_running=gui.is_detection_running,
+            on_activated=on_activated,
+            parent=gui,
+        )
+        if begin_creation:
+            QTimer.singleShot(0, dialog.begin_combination_creation)
+        dialog.exec_()
+        refresh_summary = getattr(
+            gui,
+            "refresh_engineering_version_summary",
+            None,
+        )
+        if callable(refresh_summary):
+            refresh_summary()
+    except (OSError, RuntimeError, ValueError) as exc:
+        gui.log_message(f"Inspection release manager failed: {exc}")
+        QMessageBox.critical(gui, "檢測組合管理", str(exc))
+
+
 def _run_model_versions_dialog(**kwargs) -> int:
     """Import the version dialog lazily to keep GUI startup lightweight."""
     from app.gui.model_versions_dialog import ModelVersionsDialog
 
     return ModelVersionsDialog(**kwargs).exec_()
+
+
+def _run_inspection_components_dialog(*, dialog_class, **kwargs) -> int:
+    """Construct the injected component inventory dialog and run it."""
+    return dialog_class(**kwargs).exec_()
 
 
 def _open_model_update_status(gui: DetectionSystemGUI) -> None:

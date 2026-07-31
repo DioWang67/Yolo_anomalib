@@ -132,6 +132,63 @@ def test_processing_dialog_shows_annotation_package_actions_only_when_available(
     assert "training has not started" in dialog.report_summary_label.text()
 
 
+def test_processing_dialog_shows_human_color_versions_and_differences(qtbot):
+    view_model = ProcessingSummaryViewModel(_plan(_ready()), language="en")
+    revisions = (
+        SimpleNamespace(
+            scope_hash="scope-a",
+            scope_label="Cable1/A/yolo/stats/black",
+            revision_id="uuid-candidate",
+            display_version="color-v1.0.2",
+            active=True,
+            evidence_level="OK_ONLY",
+            changes="public_threshold: 0.55 -> 0.57",
+            created_at="2026-07-30 17:30:00",
+        ),
+        SimpleNamespace(
+            scope_hash="scope-a",
+            scope_label="Cable1/A/yolo/stats/black",
+            revision_id="uuid-baseline",
+            display_version="color-v1.0.1",
+            active=False,
+            evidence_level="OK_ONLY",
+            changes="baseline snapshot",
+            created_at="2026-07-30 17:29:00",
+        ),
+    )
+    view_model.color_calibration = SimpleNamespace(
+        visible=True,
+        pending_count=0,
+        approved_count=1,
+        rejected_count=0,
+        completion_path="",
+        scopes=(
+            SimpleNamespace(
+                label="Cable1/A/yolo/stats/black",
+                proposal_status="PROPOSED",
+                gate_status="PASSED",
+                regression_count=0,
+            ),
+        ),
+        revisions=revisions,
+    )
+    dialog = ProcessingBatchDialog(view_model, language="en")
+    qtbot.addWidget(dialog)
+
+    dialog._render_color_result()
+
+    table = dialog.findChild(QTableWidget, "ColorVersionHistoryTable")
+    assert table is not None
+    assert table.isHidden() is False
+    assert table.rowCount() == 2
+    assert table.item(0, 1).text() == "color-v1.0.2"
+    assert table.item(0, 2).text() == "ACTIVE"
+    assert table.item(0, 3).text() == "OK_ONLY"
+    assert "0.55 -> 0.57" in table.item(0, 4).text()
+    assert table.item(0, 1).data(Qt.UserRole) == "uuid-candidate"
+    assert dialog.rollback_color_button.isHidden() is False
+
+
 def test_blocking_summary_table_contains_required_columns(qtbot):
     dialog = ProcessingBatchDialog(
         ProcessingSummaryViewModel(_plan(_blocked()), language="en"),

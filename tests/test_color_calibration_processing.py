@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -322,9 +323,17 @@ def test_approved_revision_activation_and_follow_up_replan(tmp_path):
         current_manifest_sha="a" * 64, operator="operator",
     )
     assert completion.status == "PARTIAL_SUCCESS"
-    assert len(completion.revision_ids) == 1
+    assert len(completion.revision_ids) == 2
     assert resolver.revision_store.active_pointer_path(first).is_file()
     assert not resolver.revision_store.active_pointer_path(second).exists()
+    history = resolver.revision_store.revision_history(first)
+    assert [item.display_version for item in history] == [
+        "color-v1.0.2",
+        "color-v1.0.1",
+    ]
+    assert history[0].active is True
+    assert history[0].parent_display_version == "color-v1.0.1"
+    assert history[1].changes == ("baseline snapshot",)
     assert completion.follow_up_plan is not None
     assert completion.follow_up_plan.color_source_package_id == package.package_id
     assert completion.follow_up_plan.statistics.color_count == 4
@@ -398,6 +407,80 @@ def test_runtime_resolver_loads_active_threshold_override(tmp_path):
     assert overrides[scope.threshold_key] == pytest.approx(0.3)
     assert global_value is None
     assert revision_ids == (revision.revision_id,)
+
+
+def test_acceptance_resolver_uses_exact_inactive_revision_without_activation(
+    tmp_path,
+):
+    models, _records, _plan, package = _fixture(tmp_path)
+    scope = package.scopes[0]
+    base_sha = sha256_file(
+        models / "Cable1" / scope.area / "yolo" / "config.yaml"
+    )
+    store = ColorConfigurationRevisionStore(
+        root=tmp_path / ".color_revisions",
+        id_generator=SequenceIds(),
+        clock=lambda: NOW,
+    )
+    proposed = json.loads(
+        (
+            package.root
+            / "proposed_configs"
+            / f"{scope.scope_hash}.json"
+        ).read_text(encoding="utf-8")
+    )
+    active = store.commit(
+        package,
+        scope,
+        operator="reviewer",
+        reason="baseline",
+        proposal_sha256="p1",
+        preview_sha256="v1",
+        proposed_config=proposed,
+        metrics={},
+        parent_config_sha256=base_sha,
+    )
+    store.activate(
+        active,
+        operator="reviewer",
+        reason="baseline",
+        expected_current_sha256=base_sha,
+    )
+    candidate_config = {
+        **proposed,
+        "config_value": 0.2,
+        "public_threshold": 0.8,
+    }
+    candidate = store.commit(
+        package,
+        scope,
+        operator="reviewer",
+        reason="candidate only",
+        proposal_sha256="p2",
+        preview_sha256="v2",
+        proposed_config=candidate_config,
+        metrics={},
+        parent_revision_id=active.revision_id,
+        parent_config_sha256=active.new_config_sha256,
+    )
+
+    resolver = ColorConfigurationResolver(
+        models_root=models,
+        revisions_root=tmp_path / ".color_revisions",
+        revision_overrides={scope.scope_hash: candidate.display_version},
+        include_active_revisions=False,
+    )
+    overrides, global_value, revision_ids = resolver.active_overrides(
+        product="Cable1",
+        area=scope.area,
+        model_type="yolo",
+        checker_type="stats",
+    )
+
+    assert overrides[scope.threshold_key] == pytest.approx(0.2)
+    assert global_value is None
+    assert revision_ids == (candidate.revision_id,)
+    assert store.read_active_pointer(scope)["revision_id"] == active.revision_id
 
 
 def test_color_override_loader_merges_revision_without_schema_change(tmp_path):
@@ -603,6 +686,7 @@ def test_revision_commit_is_idempotent_and_rollback_is_new_activation(tmp_path):
     first = store.commit(package, scope, operator="reviewer", reason="first", proposal_sha256="p1", preview_sha256="v1", proposed_config=proposed, metrics={}, parent_config_sha256=base_sha)
     duplicate = store.commit(package, scope, operator="reviewer", reason="first", proposal_sha256="p1", preview_sha256="v1", proposed_config=proposed, metrics={}, parent_config_sha256=base_sha)
     assert duplicate.revision_id == first.revision_id
+    assert first.display_version == "color-v1.0.1"
     store.activate(first, operator="reviewer", reason="first", expected_current_sha256=base_sha)
     second_config = dict(proposed)
     second_config["config_value"] = 0.2
@@ -612,11 +696,147 @@ def test_revision_commit_is_idempotent_and_rollback_is_new_activation(tmp_path):
         proposed_config=second_config, metrics={}, parent_revision_id=first.revision_id,
         parent_config_sha256=first.new_config_sha256,
     )
+    assert second.display_version == "color-v1.0.2"
     store.activate(second, operator="reviewer", reason="second", expected_current_sha256=first.new_config_sha256)
-    store.rollback(scope, first.revision_id, operator="reviewer", reason="regression observed")
+    store.rollback(scope, "color-v1.0.1", operator="reviewer", reason="regression observed")
     assert store.read_active_pointer(scope)["revision_id"] == first.revision_id
     revocation = store.revoke(second, operator="reviewer", reason="regressed")
     assert revocation.is_file()
     assert second.config_path.is_file()
     assert store.is_revoked(second)
     assert any((first.root / "activation_events").glob("*.json"))
+
+
+def test_color_version_rejects_duplicate_alias_for_different_config(tmp_path):
+    models, _records, _plan, package = _fixture(tmp_path)
+    scope = package.scopes[0]
+    base_sha = sha256_file(models / "Cable1" / scope.area / "yolo" / "config.yaml")
+    store = ColorConfigurationRevisionStore(
+        root=tmp_path / ".color_revisions",
+        id_generator=SequenceIds(),
+        clock=lambda: NOW,
+    )
+    proposed = json.loads(
+        (
+            package.root / "proposed_configs" / f"{scope.scope_hash}.json"
+        ).read_text(encoding="utf-8")
+    )
+    first = store.commit(
+        package,
+        scope,
+        operator="reviewer",
+        reason="first",
+        proposal_sha256="p1",
+        preview_sha256="v1",
+        proposed_config=proposed,
+        metrics={},
+        parent_config_sha256=base_sha,
+        display_version="color-v1.0.7",
+    )
+    changed = {**proposed, "config_value": 0.2, "public_threshold": 0.8}
+
+    with pytest.raises(ColorCalibrationError) as caught:
+        store.commit(
+            package,
+            scope,
+            operator="reviewer",
+            reason="collision",
+            proposal_sha256="p2",
+            preview_sha256="v2",
+            proposed_config=changed,
+            metrics={},
+            parent_revision_id=first.revision_id,
+            parent_config_sha256=first.new_config_sha256,
+            display_version="color-v1.0.7",
+        )
+
+    assert caught.value.code == "COLOR_VERSION_COLLISION"
+
+
+def test_concurrent_color_commits_allocate_distinct_versions(tmp_path):
+    models, _records, _plan, package = _fixture(tmp_path)
+    scope = package.scopes[0]
+    base_sha = sha256_file(models / "Cable1" / scope.area / "yolo" / "config.yaml")
+    store = ColorConfigurationRevisionStore(
+        root=tmp_path / ".color_revisions",
+        id_generator=SequenceIds(),
+        clock=lambda: NOW,
+    )
+    proposed = json.loads(
+        (
+            package.root / "proposed_configs" / f"{scope.scope_hash}.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    def commit(config_value):
+        return store.commit(
+            package,
+            scope,
+            operator="reviewer",
+            reason=f"value {config_value}",
+            proposal_sha256=f"p-{config_value}",
+            preview_sha256=f"v-{config_value}",
+            proposed_config={
+                **proposed,
+                "config_value": config_value,
+                "public_threshold": 1.0 - config_value,
+            },
+            metrics={},
+            parent_config_sha256=base_sha,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        revisions = tuple(executor.map(commit, (0.2, 0.3)))
+
+    assert {item.display_version for item in revisions} == {
+        "color-v1.0.1",
+        "color-v1.0.2",
+    }
+
+
+def test_legacy_revision_without_display_version_gets_stable_compatible_label(tmp_path):
+    models, _records, _plan, package = _fixture(tmp_path)
+    scope = package.scopes[0]
+    base_sha = sha256_file(models / "Cable1" / scope.area / "yolo" / "config.yaml")
+    store = ColorConfigurationRevisionStore(
+        root=tmp_path / ".color_revisions",
+        id_generator=SequenceIds(),
+        clock=lambda: NOW,
+    )
+    proposed = json.loads(
+        (
+            package.root / "proposed_configs" / f"{scope.scope_hash}.json"
+        ).read_text(encoding="utf-8")
+    )
+    revision = store.commit(
+        package,
+        scope,
+        operator="reviewer",
+        reason="legacy",
+        proposal_sha256="p1",
+        preview_sha256="v1",
+        proposed_config=proposed,
+        metrics={},
+        parent_config_sha256=base_sha,
+    )
+    metadata_path = revision.root / "revision.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.pop("display_version")
+    metadata["schema_version"] = 1
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    checksums_path = revision.root / "checksums.json"
+    checksums = json.loads(checksums_path.read_text(encoding="utf-8"))
+    checksums["revision.json"] = sha256_file(metadata_path)
+    checksums_path.write_text(
+        json.dumps(checksums, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = store.list_revisions(scope)
+
+    assert loaded[0].revision_id == revision.revision_id
+    assert loaded[0].display_version == "color-v1.0.1"
+    assert store.resolve_revision(scope, "color-v1.0.1").revision_id == revision.revision_id

@@ -50,3 +50,22 @@ picture-tool-color-calibrate apply color-threshold-report.json `
 套用前會驗證報告 checksum、目標路徑及目前門檻是否仍與報告一致。通過後先備份 `config.yaml`，再以原子替換發布；設定漂移、鎖定、無批准人或任何寫入錯誤都會中止。稽核紀錄保存在模型目錄的 `color_threshold_history.json`，備份保存在 `color_threshold_backups/`。
 
 `stats` checker 的執行結果以 diff 表示，但設定檔使用相似度分數；部署工具會自動執行 `config_value = 1 - diff_threshold`。其他 checker 直接使用 diff 門檻，作業員與工程師不需要自行換算。
+
+## 完整五色基準重建
+
+逐色門檻校正只調整特定顏色的接受範圍；`重建完整顏色基準`則會使用人工
+確認為 OK 的驗收照片，重新計算 Black、Green、Orange、Red、Yellow 五色
+的 HSV/Lab 統計中心。兩者不是同一功能，也不能以單純放寬門檻取代基準重建。
+
+重建時會使用指定 YOLO 版本在處理後影像上的框裁切元件，並為每色保留
+holdout。候選只會寫入不可變的 `.color_baselines` 套件，不會直接修改正式
+設定。完成後必須：
+
+1. 審查每色 crop 數、holdout 正確率與中心漂移；
+2. 視需要疊加已批准的逐色修訂，建立完整顏色方案；
+3. 使用相同驗收集執行 YOLO × 顏色組合測試；
+4. 確認誤殺、漏檢與顏色指標後才建立候選發布版本；
+5. 沒有真實顏色 NG 時，只能標示顏色逃逸率 UNKNOWN。
+
+完整流程與啟用限制見
+[模型組合驗收與發布](MODEL_COMBINATION_ACCEPTANCE.md)。

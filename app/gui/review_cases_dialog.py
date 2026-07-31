@@ -91,6 +91,7 @@ from tools.color_calibration_service import CalibrationPolicy
 from tools.color_configuration_resolver import ColorConfigurationResolver
 from tools.color_configuration_revisions import ColorConfigurationRevisionStore
 from tools.color_feedback import read_color_feedback_progress
+from tools.experimental_color_candidate import ExperimentalColorCandidateService
 from tools.export_review_dataset import (
     export_operator_handoff,
     update_operator_job_status,
@@ -882,6 +883,7 @@ class ReviewCasesDialog(QDialog):
     """Show saved inference images and guide an operator through each decision."""
 
     back_to_inspection_requested = pyqtSignal()
+    color_configuration_changed = pyqtSignal(str, str, str)
 
     def __init__(
         self,
@@ -920,6 +922,8 @@ class ReviewCasesDialog(QDialog):
         self._embedded = embedded
         self._show_embedded_navigation = show_embedded_navigation
         self._submission_active = False
+        self._experimental_candidate_service = None
+        self._last_experimental_candidate = None
         self._retry_review_action: Any | None = None
         self._review_thumbnail_visible_indices: tuple[int, ...] = ()
         self._filter_state_path = self.manifest_path.with_name(f".{self.manifest_path.stem}_filter.json")
@@ -3203,6 +3207,14 @@ class ReviewCasesDialog(QDialog):
             source_manifest_sha=manifest_sha,
         )
         if processing_execution_framework_enabled():
+            configured_result_root = getattr(self, "result_root", None)
+            project_root = (
+                Path(configured_result_root).resolve().parent
+                if isinstance(configured_result_root, (str, Path))
+                else self.manifest_path.parent
+            )
+            production_models_root = project_root / "models"
+            production_color_revisions_root = project_root / ".color_revisions"
             run_store = ProcessingRunStore(
                 self.manifest_path.parent / ".processing_runs"
             )
@@ -3228,14 +3240,15 @@ class ReviewCasesDialog(QDialog):
                 dataset_dry_run=processing_dataset_dry_run_enabled(),
                 annotation_step_enabled=annotation_step_enabled,
                 color_step_enabled=color_step_enabled,
-                models_root=self.manifest_path.parent / "models",
-                color_revisions_root=self.manifest_path.parent / ".color_revisions",
+                models_root=production_models_root,
+                color_revisions_root=production_color_revisions_root,
             )
             annotation_resume = None
             annotation_launcher = None
             color_decider = None
             color_resume = None
             color_rollback = None
+            color_history = None
             if annotation_step_enabled:
                 revision_store = AnnotationRevisionStore(
                     root=self.manifest_path.parent / ".annotation_revisions",
@@ -3267,11 +3280,11 @@ class ReviewCasesDialog(QDialog):
                     )
             if color_step_enabled:
                 color_resolver = ColorConfigurationResolver(
-                    models_root=self.manifest_path.parent / "models",
-                    revisions_root=self.manifest_path.parent / ".color_revisions",
+                    models_root=production_models_root,
+                    revisions_root=production_color_revisions_root,
                 )
                 color_revision_store = ColorConfigurationRevisionStore(
-                    root=self.manifest_path.parent / ".color_revisions"
+                    root=production_color_revisions_root
                 )
                 color_approval_service = ColorCalibrationApprovalService()
 
@@ -3327,6 +3340,14 @@ class ReviewCasesDialog(QDialog):
                         operator=rollback_operator,
                         reason=reason,
                     )
+
+                def color_history(package_path):
+                    package = load_color_calibration_package(package_path)
+                    return tuple(
+                        summary
+                        for scope in package.scopes
+                        for summary in color_revision_store.revision_history(scope)
+                    )
             view_model = ProcessingExecutionViewModel(
                 plan,
                 engine=engine,
@@ -3339,6 +3360,7 @@ class ReviewCasesDialog(QDialog):
                 color_decider=color_decider,
                 color_resume=color_resume,
                 color_rollback=color_rollback,
+                color_history=color_history,
             )
         else:
             view_model = ProcessingSummaryViewModel(plan, language=self.language)
@@ -3601,7 +3623,7 @@ class ReviewCasesDialog(QDialog):
                 reused_existing=False,
                 color_feedback=True,
             )
-            self._show_color_submission_result(message)
+            self._show_color_submission_result(message, report=report)
             return
         if report.ready_count <= 0 and report.total_pending_count <= 0:
             QMessageBox.warning(self, self.windowTitle(), message)
@@ -3788,7 +3810,7 @@ class ReviewCasesDialog(QDialog):
             )
         self.feedback_label.setText(f"{summary.replace(chr(10), '｜')}｜{suffix}")
 
-    def _show_color_submission_result(self, summary: str) -> None:
+    def _show_color_submission_result(self, summary: str, *, report: Any = None) -> None:
         """Make a successful color submission visible in the active workflow."""
         title = self._text(
             "顏色校正資料已送出",
@@ -3831,6 +3853,18 @@ class ReviewCasesDialog(QDialog):
         )
         layout.addWidget(summary_label)
         actions = QHBoxLayout()
+        experimental_button = QPushButton(
+            self._text(
+                "建立 OK-only 實驗版本",
+                "Create OK-only experimental version",
+            )
+        )
+        experimental_button.setObjectName("ExperimentalColorVersionButton")
+        rollback_button = QPushButton(
+            self._text("回退實驗版本", "Rollback experimental version")
+        )
+        rollback_button.setObjectName("ExperimentalColorRollbackButton")
+        rollback_button.setVisible(False)
         history_button = QPushButton(
             self._text("查看已送出紀錄", "View submission history")
         )
@@ -3845,8 +3879,23 @@ class ReviewCasesDialog(QDialog):
             page.deleteLater()
 
         history_button.clicked.connect(self._open_submission_history)
+        experimental_button.clicked.connect(
+            lambda: self._create_experimental_color_candidate(
+                report, summary_label, rollback_button
+            )
+        )
+        rollback_button.clicked.connect(
+            lambda: self._rollback_experimental_color_candidate(
+                summary_label, rollback_button
+            )
+        )
+        experimental_button.setVisible(
+            bool(self._eligible_experimental_color_scopes(report))
+        )
         back_button.clicked.connect(close_result_page)
         actions.addStretch()
+        actions.addWidget(experimental_button)
+        actions.addWidget(rollback_button)
         actions.addWidget(history_button)
         actions.addWidget(back_button)
         actions.addStretch()
@@ -3854,6 +3903,219 @@ class ReviewCasesDialog(QDialog):
         layout.addStretch()
         self.workflow_stack.addWidget(page)
         self.workflow_stack.setCurrentWidget(page)
+
+    def _experimental_color_service(self) -> ExperimentalColorCandidateService:
+        project_root = self.result_root.resolve().parent
+        return ExperimentalColorCandidateService(
+            models_root=project_root / "models",
+            revisions_root=project_root / ".color_revisions",
+        )
+
+    def _eligible_experimental_color_scopes(self, report: Any):
+        if report is None:
+            return ()
+        manifest_paths = tuple(
+            getattr(report, "color_manifest_paths", ()) or ()
+        )
+        if not manifest_paths:
+            return ()
+        try:
+            service = self._experimental_color_service()
+            return service.eligible_scopes(manifest_paths)
+        except (OSError, ValueError, RuntimeError, csv.Error):
+            logger.exception("Could not inspect OK-only color candidate eligibility.")
+            return ()
+
+    def _create_experimental_color_candidate(
+        self,
+        report: Any,
+        summary_label: QLabel,
+        rollback_button: QPushButton,
+    ) -> None:
+        scopes = self._eligible_experimental_color_scopes(report)
+        if not scopes:
+            QMessageBox.information(
+                self,
+                self.windowTitle(),
+                self._text(
+                    "目前沒有符合條件的 OK-only 顏色範圍。",
+                    "No color scope is currently eligible for an OK-only candidate.",
+                ),
+            )
+            return
+        labels = [
+            (
+                f"{item.scope.key}｜{item.current_public_threshold:.3f}"
+                f" → {item.proposed_public_threshold:.3f}｜"
+                f"可修正 {item.corrected_ok_count}/{item.sample_count}"
+            )
+            for item in scopes
+        ]
+        selected_label, accepted = QInputDialog.getItem(
+            self,
+            self._text("建立實驗版本", "Create Experimental Version"),
+            self._text("選擇顏色範圍", "Select color scope"),
+            labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        selected = scopes[labels.index(selected_label)]
+        operator, accepted = QInputDialog.getText(
+            self,
+            self._text("操作人員", "Operator"),
+            self._text("輸入具名操作人員：", "Enter the named operator:"),
+        )
+        if not accepted:
+            return
+        reason, accepted = QInputDialog.getText(
+            self,
+            self._text("建立原因", "Candidate Reason"),
+            self._text(
+                "說明為何要建立 OK-only 實驗版本：",
+                "Explain why this OK-only candidate is being created:",
+            ),
+        )
+        if not accepted:
+            return
+        manifest_paths = tuple(report.color_manifest_paths)
+        try:
+            service = self._experimental_color_service()
+            candidate = service.create_candidate(
+                manifest_paths,
+                selected.scope.scope_hash,
+                operator=operator,
+                reason=reason,
+            )
+        except (OSError, ValueError, RuntimeError, csv.Error) as exc:
+            QMessageBox.warning(
+                self,
+                self._text("建立失敗", "Candidate Creation Failed"),
+                str(exc),
+            )
+            return
+        self._experimental_candidate_service = service
+        self._last_experimental_candidate = candidate
+        candidate_text = self._text(
+            f"\n\n已建立 {candidate.candidate_version}（尚未啟用）\n"
+            f"目前仍使用 {candidate.baseline_version}\n"
+            f"門檻：{candidate.current_public_threshold:.3f}"
+            f" → {candidate.proposed_public_threshold:.3f}\n"
+            "證據：OK_ONLY，NG 漏判率未知。",
+            f"\n\nCreated {candidate.candidate_version} (not active)\n"
+            f"Still active: {candidate.baseline_version}\n"
+            f"Threshold: {candidate.current_public_threshold:.3f}"
+            f" -> {candidate.proposed_public_threshold:.3f}\n"
+            "Evidence: OK_ONLY; NG escape rate is unknown.",
+        )
+        summary_label.setText(summary_label.text() + candidate_text)
+        answer = QMessageBox.question(
+            self,
+            self._text("啟用實驗版本", "Activate Experimental Version"),
+            self._text(
+                f"{candidate.candidate_version} 尚未啟用。\n"
+                "此版本沒有 Black NG 證據，漏判風險未知。\n"
+                f"原設定已保存為 {candidate.baseline_version}。\n\n"
+                "現在啟用小批試跑嗎？",
+                f"{candidate.candidate_version} is not active.\n"
+                "There is no Black NG evidence, so escape risk is unknown.\n"
+                f"The original setting is preserved as {candidate.baseline_version}.\n\n"
+                "Activate it for a limited trial now?",
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        activation_reason, accepted = QInputDialog.getText(
+            self,
+            self._text("啟用原因", "Activation Reason"),
+            self._text(
+                "輸入小批試跑的啟用原因：",
+                "Enter the reason for this limited trial:",
+            ),
+        )
+        if not accepted:
+            return
+        try:
+            service.activate_candidate(
+                candidate,
+                operator=operator,
+                reason=activation_reason,
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.warning(
+                self,
+                self._text("啟用失敗", "Activation Failed"),
+                str(exc),
+            )
+            return
+        rollback_button.setVisible(True)
+        self.color_configuration_changed.emit(
+            candidate.scope.product,
+            candidate.scope.area,
+            candidate.scope.model_type,
+        )
+        QMessageBox.information(
+            self,
+            self._text("實驗版本已啟用", "Experimental Version Activated"),
+            self._text(
+                f"目前使用 {candidate.candidate_version}。\n"
+                f"若現場結果異常，按「回退實驗版本」恢復 {candidate.baseline_version}。",
+                f"Active: {candidate.candidate_version}.\n"
+                f"Use Rollback experimental version to restore {candidate.baseline_version}.",
+            ),
+        )
+
+    def _rollback_experimental_color_candidate(
+        self,
+        summary_label: QLabel,
+        rollback_button: QPushButton,
+    ) -> None:
+        service = self._experimental_candidate_service
+        candidate = self._last_experimental_candidate
+        if service is None or candidate is None:
+            return
+        reason, accepted = QInputDialog.getText(
+            self,
+            self._text("回退原因", "Rollback Reason"),
+            self._text("輸入回退原因：", "Enter the rollback reason:"),
+        )
+        if not accepted:
+            return
+        operator = str(
+            os.environ.get("USERNAME")
+            or os.environ.get("USER")
+            or socket.gethostname()
+        )
+        try:
+            service.revision_store.rollback(
+                candidate.scope,
+                candidate.baseline_version,
+                operator=operator,
+                reason=reason,
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.warning(
+                self,
+                self._text("回退失敗", "Rollback Failed"),
+                str(exc),
+            )
+            return
+        rollback_button.setVisible(False)
+        self.color_configuration_changed.emit(
+            candidate.scope.product,
+            candidate.scope.area,
+            candidate.scope.model_type,
+        )
+        summary_label.setText(
+            summary_label.text()
+            + self._text(
+                f"\n已回退至 {candidate.baseline_version}。",
+                f"\nRolled back to {candidate.baseline_version}.",
+            )
+        )
 
     def _color_feedback_progress_message(self, report: Any) -> str:
         """Verify the exported manifests and explain when they become actionable."""

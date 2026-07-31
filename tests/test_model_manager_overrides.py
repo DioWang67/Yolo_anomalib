@@ -133,6 +133,47 @@ def test_model_overrides_resolve_relative_paths_and_keep_globals(tmp_path, monke
     assert engine is not None
 
 
+def test_exact_config_override_reads_history_without_changing_active_config(
+    tmp_path,
+):
+    weights_path = tmp_path / "historical.onnx"
+    weights_path.write_bytes(b"historical")
+    global_cfg_path = _write_global_config(tmp_path, weights_path)
+    active_dir = tmp_path / "models" / "Cable1" / "A" / "yolo"
+    active_path = _write_model_config(active_dir, weights_path)
+    active_before = active_path.read_bytes()
+    historical_path = tmp_path / "history" / "v1.0.5.config.yaml"
+    historical_path.parent.mkdir()
+    historical_path.write_text(
+        yaml.safe_dump(
+            {
+                "weights": str(weights_path),
+                "enable_yolo": True,
+                "exposure_time": "10500.0000",
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = ModelManager(
+        DetectionLogger(),
+        engine_factory=_FakeInferenceEngine,
+        models_root=tmp_path / "models",
+        model_config_overrides={
+            ("Cable1", "A", "yolo"): historical_path
+        },
+    )
+
+    _, config = manager.switch(
+        DetectionConfig.from_yaml(str(global_cfg_path)),
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+    )
+
+    assert config.exposure_time == "10500.0000"
+    assert active_path.read_bytes() == active_before
+
+
 def test_model_overrides_apply_expected_items_from_model_config(tmp_path, monkeypatch):
     weights_path = tmp_path / "best.onnx"
     weights_path.write_bytes(b"")

@@ -152,16 +152,19 @@ def test_training_review_refuses_while_detection_is_running(monkeypatch) -> None
     warning.assert_called_once()
 
 
-def test_model_versions_dialog_is_scoped_to_inference_models(
+def test_component_versions_dialog_is_scoped_to_selected_inspection(
     tmp_path, monkeypatch
 ) -> None:
     run_dialog = Mock()
     monkeypatch.setattr(
-        "app.gui.view_builder._run_model_versions_dialog", run_dialog
+        "app.gui.view_builder._run_inspection_components_dialog", run_dialog
     )
     models_root = tmp_path / "models"
     models_root.mkdir()
+    project_root = tmp_path / "inference"
+    project_root.mkdir()
     gui = SimpleNamespace(
+        _project_root=project_root,
         _models_base=models_root,
         current_language="zh_TW",
         product_combo=_combo("PCBA1"),
@@ -178,30 +181,37 @@ def test_model_versions_dialog_is_scoped_to_inference_models(
 
     run_dialog.assert_called_once()
     kwargs = run_dialog.call_args.kwargs
-    assert kwargs["registry"].models_root == models_root.resolve()
+    assert kwargs["catalog"].models_root == models_root.resolve()
+    assert (
+        kwargs["catalog"].color_revisions_root
+        == (project_root / ".color_revisions").resolve()
+    )
     assert kwargs["selected_product"] == "PCBA1"
     assert kwargs["selected_area"] == "A"
-    assert kwargs["selected_model_type"] == "yolo"
+    assert kwargs["selected_inference_type"] == "yolo"
 
 
-def test_model_activation_callback_clears_runtime_cache(tmp_path, monkeypatch) -> None:
+def test_component_selection_opens_prefilled_combination_builder(
+    tmp_path, monkeypatch
+) -> None:
     captured = {}
 
     def run_dialog(**kwargs):
         captured.update(kwargs)
-        kwargs["on_activated"](
-            SimpleNamespace(
-                product="PCBA1", area="A", model_type="yolo", version="1.2.3"
-            )
-        )
         return 1
 
     monkeypatch.setattr(
-        "app.gui.view_builder._run_model_versions_dialog", run_dialog
+        "app.gui.view_builder._run_inspection_components_dialog", run_dialog
+    )
+    open_combinations = Mock()
+    monkeypatch.setattr(
+        "app.gui.view_builder._open_inspection_releases",
+        open_combinations,
     )
     models_root = tmp_path / "models"
     models_root.mkdir()
     gui = SimpleNamespace(
+        _project_root=tmp_path,
         _models_base=models_root,
         current_language="zh_TW",
         product_combo=_combo("PCBA1"),
@@ -216,11 +226,24 @@ def test_model_activation_callback_clears_runtime_cache(tmp_path, monkeypatch) -
 
     _open_model_versions(gui)
 
-    gui.controller.reload_model_settings.assert_called_once_with(
-        "PCBA1", "A", "yolo"
+    captured["on_create_combination"](
+        SimpleNamespace(
+            product="PCBA1",
+            area="A",
+            inference_type="yolo",
+            category="COLOR_REVISION",
+            version="color-v1.0.2",
+        )
     )
-    gui._catalog.refresh.assert_called_once_with()
-    gui.load_available_models.assert_called_once_with()
+    open_combinations.assert_called_once_with(
+        gui,
+        product="PCBA1",
+        area="A",
+        inference_type="yolo",
+        preferred_model_version="",
+        preferred_color_version="color-v1.0.2",
+        begin_creation=True,
+    )
 
 
 def test_model_update_status_uses_training_data_directory(

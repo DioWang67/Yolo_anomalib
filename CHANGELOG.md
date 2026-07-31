@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Independent model acceptance workspace with reusable human truth, immutable
+  snapshots, backup export, FP/FN metrics and YOLO × color combination tests.
+- Versioned inspection-component catalog and atomic inspection releases for
+  YOLO, Anomalib, fusion and full Stats Color profiles, including guarded
+  activation and complete-combination rollback.
+- Five-color Stats Color baseline rebuilding from confirmed OK evidence with
+  train/holdout separation, HSV/Lab drift review and immutable candidates.
 - Conservative cross-class duplicate-box handling after color verification,
   with report-only/suppress modes, position-check fail-closed protection,
   raw/effective result traceability, GUI evidence overlays and a read-only
@@ -44,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Multiple allowed roots scenario tests
 
 ### Changed
+- Consolidated engineering version operations into component, candidate,
+  validation and deployment views; UI metrics now use 誤殺／漏檢 terminology.
+- Acceptance color crops now use the processed-image coordinate space emitted
+  by inference. Earlier `stats-robust-v1` candidates are retained for audit but
+  marked incompatible; new candidates use `stats-robust-v2`.
+- Release timestamps are stored as ISO 8601 UTC and rendered in the station's
+  local timezone instead of displaying raw UTC wall time.
 - Renamed the existing model IoU control to `YOLO NMS IoU (same-class)` and
   added separately scoped duplicate IoU/geometry controls under model settings.
 - Removed unused legacy GUI panel builders and the superseded ad-hoc performance

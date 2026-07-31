@@ -115,11 +115,11 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "history_reason_sequence_mismatch": "Sequence mismatch",
         "history_reason_anomaly_detected": "Anomaly detected",
         "history_reason_inference_error": "Inference error",
-        "engineer_settings_closed": "Engineer Settings >",
+        "engineer_settings_closed": "Engineering Settings >",
         "back_to_inspection": "← Back to Inspection & Lock",
         "engineer_page_title": "Engineering Settings",
         "engineer_page_hint": (
-            "Camera, model, retraining, calibration, and security controls"
+            "Inspection versions, data improvement, equipment, and system controls"
         ),
         "engineer_page_badge": "PIN protected",
         "engineer_settings_hint": (
@@ -532,7 +532,7 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "engineer_settings_closed": "工程設定 >",
         "back_to_inspection": "← 返回檢測並鎖定",
         "engineer_page_title": "工程設定",
-        "engineer_page_hint": "相機、模型、補訓、校正與安全控制",
+        "engineer_page_hint": "檢測版本、資料改善、設備校正與系統控制",
         "engineer_page_badge": "PIN 保護",
         "engineer_settings_hint": "需輸入 PIN；離開此頁會重新鎖定工程控制。",
         "engineer_preview_title": "校正即時預覽",

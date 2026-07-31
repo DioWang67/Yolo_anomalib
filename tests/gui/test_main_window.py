@@ -665,6 +665,32 @@ def test_retraining_workspace_is_reused_and_can_return_to_inspection(
     assert gui.workspace_stack.currentWidget() is gui.inspection_workspace
 
 
+def test_color_revision_signal_invalidates_active_model(
+    gui, tmp_path, qtbot, monkeypatch
+):
+    calls = []
+    monkeypatch.setattr(
+        gui.controller,
+        "reload_model_settings",
+        lambda product, area, inference_type: calls.append(
+            (product, area, inference_type)
+        ),
+    )
+    host = gui.show_retraining_workspace(
+        result_root=tmp_path / "Result",
+        manifest_path=tmp_path / "review.csv",
+        training_data_dir=tmp_path / "training-data",
+        language="zh_TW",
+        product="Cable1",
+        area="A",
+    )
+    qtbot.waitUntil(lambda: host.workspace is not None, timeout=5000)
+
+    host.color_configuration_changed.emit("Cable1", "A", "yolo")
+
+    assert calls == [("Cable1", "A", "yolo")]
+
+
 def test_retraining_manifest_scan_does_not_block_page_switch(
     gui, tmp_path, qtbot, monkeypatch
 ):

@@ -69,6 +69,7 @@ class DetectionResult:
 
     # --- Image data (not serialized) ---
     result_frame: np.ndarray | None = field(default=None, repr=False)
+    processed_image: np.ndarray | None = field(default=None, repr=False)
 
     # --- Extensible metadata bucket ---
     metadata: dict[str, Any] = field(default_factory=dict)

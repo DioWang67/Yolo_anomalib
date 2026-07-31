@@ -58,6 +58,7 @@ class ProcessingExecutionViewModel(ProcessingSummaryViewModel):
         color_decider=None,
         color_resume=None,
         color_rollback=None,
+        color_history=None,
     ) -> None:
         super().__init__(plan, language=language)
         self._execution_engine = engine
@@ -73,6 +74,7 @@ class ProcessingExecutionViewModel(ProcessingSummaryViewModel):
         self._color_decider = color_decider
         self._color_resume = color_resume
         self._color_rollback = color_rollback
+        self._color_history = color_history
         self.execution_details = (
             f"Mode: {'Dry-run' if getattr(engine, '_dry_run', True) else 'Actual'} | "
             f"Artifact root: {store.artifacts_dir}"
@@ -107,6 +109,7 @@ class ProcessingExecutionViewModel(ProcessingSummaryViewModel):
             decider=self._color_decider,
             resume=self._color_resume,
             rollback=self._color_rollback,
+            history=self._color_history,
         )
         failed_statuses = {
             ProcessingReportStatus.VALIDATION_FAILED,

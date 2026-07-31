@@ -19,6 +19,7 @@ import os
 import shutil
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +29,8 @@ from camera.camera_controller import CameraController
 from core.async_pipeline import AsyncPipelineManager
 from core.config import DetectionConfig
 from core.fusion_inference import FusionInferenceRunner
-from core.inference_tokens import InferenceTypeToken
 from core.inference_engine import InferenceEngine
+from core.inference_tokens import InferenceTypeToken
 from core.logging_config import DetectionLogger
 from core.logging_utils import context_adapter
 from core.path_utils import project_root, resolve_path
@@ -42,10 +43,14 @@ from core.runtime_preflight import validate_runtime_for_model
 from core.security import ensure_subpath, resolve_output_dir
 from core.services.color_checker import ColorCheckerService
 from core.services.color_override_loader import ColorOverrideLoader
+from core.services.inspection_release_models import InspectionRelease
+from core.services.inspection_release_store import (
+    InspectionReleaseResolver,
+    InspectionReleaseStore,
+)
 from core.services.model_manager import ModelManager
 from core.services.result_sink import ExcelImageResultSink
-from core.types import DetectionItem, DetectionResult, DetectionTask
-
+from core.types import DetectionItem, DetectionResult
 
 PROJECT_ROOT = project_root()
 
@@ -56,11 +61,43 @@ class DetectionSystem:
     _CAMERA_SETTINGS_SETTLE_DELAY_SECONDS = 0.10
     _CAMERA_SETTINGS_SETTLE_FRAMES = 2
 
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(
+        self,
+        config_path: str = "config.yaml",
+        *,
+        initialize_camera: bool = True,
+        models_root: str | Path | None = None,
+        color_revisions_root: str | Path | None = None,
+        color_revision_overrides: dict[str, str] | None = None,
+        include_active_color_revisions: bool = True,
+        model_config_overrides: Mapping[
+            tuple[str, str, str], str | Path
+        ]
+        | None = None,
+        inspection_releases_root: str | Path | None = None,
+        include_active_inspection_release: bool = True,
+    ):
         """Initializes the DetectionSystem with project settings.
 
         Args:
             config_path: Relative or absolute path to the global config.yaml.
+            initialize_camera: Whether to initialize production camera hardware.
+                Offline tools pass ``False`` and provide image frames explicitly;
+                production callers keep the default behavior.
+            models_root: Optional explicit model bundle root. Candidate
+                acceptance uses a job-scoped bundle instead of the deployed
+                ``models`` directory.
+            color_revisions_root: Optional production color-revision store.
+                Candidate validation keeps this separate from its model bundle.
+            color_revision_overrides: Optional acceptance-only mapping from
+                scope hash to an immutable revision ID or display version.
+            include_active_color_revisions: Whether unselected active color
+                pointers participate. Matrix tests set this to ``False``.
+            model_config_overrides: Optional acceptance-only exact model
+                config snapshots. This does not change deployed config files.
+            inspection_releases_root: Optional immutable release-store root.
+            include_active_inspection_release: Disable when an offline tool
+                supplies its own exact model and color combination.
         """
 
         self.logger = DetectionLogger()
@@ -94,16 +131,49 @@ class DetectionSystem:
         # new single-shot or auto inspection.
         self._inference_lock = threading.RLock()
         self.current_inference_type: str | None = None
+        self.models_root = (
+            Path(models_root).expanduser().resolve()
+            if models_root is not None
+            else root_dir / "models"
+        )
+        manager_kwargs: dict[str, Any] = {}
+        if models_root is not None:
+            manager_kwargs["models_root"] = models_root
+        if model_config_overrides is not None:
+            manager_kwargs["model_config_overrides"] = model_config_overrides
         self.model_manager = ModelManager(
-            self.logger, max_cache_size=self.config.max_cache_size
+            self.logger,
+            max_cache_size=self.config.max_cache_size,
+            **manager_kwargs,
         )
         self.color_service = ColorCheckerService()
-        self.color_override_loader = ColorOverrideLoader(PROJECT_ROOT / "models")
+        self.color_override_loader = ColorOverrideLoader(
+            self.models_root,
+            revisions_root=(
+                Path(color_revisions_root).expanduser().resolve()
+                if color_revisions_root is not None
+                else None
+            ),
+            revision_overrides=color_revision_overrides,
+            include_active_revisions=include_active_color_revisions,
+        )
+        self._inspection_release_resolver: InspectionReleaseResolver | None = None
+        self._active_inspection_release: InspectionRelease | None = None
+        if include_active_inspection_release:
+            release_root = (
+                Path(inspection_releases_root).expanduser().resolve()
+                if inspection_releases_root is not None
+                else root_dir / ".inspection_releases"
+            )
+            self._inspection_release_resolver = InspectionReleaseResolver(
+                InspectionReleaseStore(release_root)
+            )
 
         # --- Producer-Consumer pipeline (delegated to AsyncPipelineManager) ---
         self._pipeline = AsyncPipelineManager()
 
-        self.initialize_camera()
+        if initialize_camera:
+            self.initialize_camera()
 
     def _resolve_output_dir(self) -> Path:
         output_dir = resolve_output_dir(
@@ -161,6 +231,7 @@ class DetectionSystem:
                 pass
             self.inference_engine = None
         self.current_inference_type = None
+        self._active_inspection_release = None
         self.model_manager.clear_cache(product, area, inference_type)
         self._base_config = self.load_config(self.config_path)
         self.config = copy.deepcopy(self._base_config)
@@ -389,21 +460,33 @@ class DetectionSystem:
         return bool(self.camera and getattr(self.camera, "is_initialized", False))
 
     def load_model_configs(self, product: str, area: str, inference_type: str) -> None:
-        """Switch to a specific (product, area, type) model configuration.
-
-        ModelManager.switch never mutates the base config; it returns a
-        merged copy which becomes the new active ``self.config`` via a
-        single reference assignment.
-        """
-        if inference_type.lower() == "fusion":
-            # Merge both backends' configs: YOLO drives the pipeline steps,
-            # but the anomalib_config section must come from the anomalib
-            # model bundle.
-            _, ano_merged = self.model_manager.switch(
-                self._base_config, product, area, "anomalib"
+        """Resolve one release snapshot and switch all model components."""
+        release = (
+            self._inspection_release_resolver.resolve(product, area, inference_type)
+            if self._inspection_release_resolver is not None
+            else None
+        )
+        self._active_inspection_release = release
+        config_overrides = release.model_config_overrides() if release else {}
+        if release is not None:
+            self.logger.logger.info(
+                "Resolved inspection release: product=%s, area=%s, type=%s, "
+                "release=%s, version=%s",
+                product,
+                area,
+                inference_type,
+                release.release_id,
+                release.display_version,
             )
-            _, merged = self.model_manager.switch(
-                self._base_config, product, area, "yolo"
+
+        if inference_type.lower() == "fusion":
+            # The release snapshot is resolved once above. Both backends are
+            # loaded from that same immutable combination.
+            _, ano_merged = self._switch_model_component(
+                product, area, "anomalib", config_overrides.get("anomalib")
+            )
+            _, merged = self._switch_model_component(
+                product, area, "yolo", config_overrides.get("yolo")
             )
             if ano_merged.anomalib_config is not None:
                 merged.anomalib_config = ano_merged.anomalib_config
@@ -411,14 +494,37 @@ class DetectionSystem:
             self.inference_engine = None
             self.current_inference_type = "fusion"
         else:
-            engine, merged = self.model_manager.switch(
-                self._base_config, product, area, inference_type
+            engine, merged = self._switch_model_component(
+                product,
+                area,
+                inference_type,
+                config_overrides.get(inference_type.lower()),
             )
             self.config = merged
             self.inference_engine = engine
             self.current_inference_type = inference_type.lower()
         self._refresh_result_sink()
         self._apply_camera_settings_from_config()
+
+    def _switch_model_component(
+        self,
+        product: str,
+        area: str,
+        inference_type: str,
+        config_override: Path | None,
+    ):
+        """Preserve the legacy manager contract when no release is active."""
+        if config_override is None:
+            return self.model_manager.switch(
+                self._base_config, product, area, inference_type
+            )
+        return self.model_manager.switch(
+            self._base_config,
+            product,
+            area,
+            inference_type,
+            config_path_override=config_override,
+        )
 
     def prepare_auto_inspection(
         self, product: str, area: str, inference_type: str
@@ -584,23 +690,44 @@ class DetectionSystem:
             self._validate_runtime_for_current_model(
                 product, area, inference_type, run_logger
             )
-        if self.config.enable_color_check and self.config.color_model_path:
+        color_model_path = self.config.color_model_path
+        if self._active_inspection_release is not None:
+            color_model_path = (
+                self._active_inspection_release.color_model_override()
+                or color_model_path
+            )
+        if self.config.enable_color_check and color_model_path:
             try:
-                overrides, rules_over, decision_tuning = (
-                    self.color_override_loader.load(
-                        self.config,
-                        product,
-                        area,
-                        inference_type,
-                        self.logger.logger,
+                if self._active_inspection_release is None:
+                    overrides, rules_over, decision_tuning = (
+                        self.color_override_loader.load(
+                            self.config,
+                            product,
+                            area,
+                            inference_type,
+                            self.logger.logger,
+                        )
                     )
-                )
+                else:
+                    overrides, rules_over, decision_tuning = (
+                        self.color_override_loader.load(
+                            self.config,
+                            product,
+                            area,
+                            inference_type,
+                            self.logger.logger,
+                            revision_overrides=(
+                                self._active_inspection_release.color_revision_overrides()
+                            ),
+                            include_active_revisions=False,
+                        )
+                    )
                 checker_type = (
                     getattr(self.config, "color_checker_type", "color_qc") or "color_qc"
                 )
                 default_threshold = getattr(self.config, "color_score_threshold", None)
                 self.color_service.ensure_loaded(
-                    self.config.color_model_path,
+                    color_model_path,
                     overrides=overrides,
                     rules_overrides=rules_over,
                     checker_type=checker_type,
@@ -610,7 +737,7 @@ class DetectionSystem:
                 revision_ids = self.color_override_loader.last_active_revision_ids
                 if revision_ids:
                     run_logger.info(
-                        "Applied active color calibration revisions: %s",
+                        "Applied color calibration revisions: %s",
                         ", ".join(revision_ids),
                     )
                 run_logger.info(f"Color checker loaded ({checker_type})")
@@ -694,7 +821,7 @@ class DetectionSystem:
 
         if not self.inference_engine:
             return {"status": "INFERENCE_ERROR", "error": "Model not loaded"}
-        
+
         inference_type_name = inference_type.lower()
         output_path = None
         if inference_type_name == "anomalib":
@@ -893,8 +1020,21 @@ class DetectionSystem:
         inference_type: str,
         frame: np.ndarray | None = None,
         cancel_cb=None,
+        *,
+        persist: bool = True,
     ) -> DetectionResult:
-        """Run one complete inspection without overlapping shared backends."""
+        """Run one complete inspection without overlapping shared backends.
+
+        Args:
+            product: Product identifier used to select the model bundle.
+            area: Inspection area used to select the model bundle.
+            inference_type: Runtime backend such as ``yolo``.
+            frame: Optional pre-acquired BGR image.
+            cancel_cb: Optional cooperative cancellation callback.
+            persist: When ``False``, run the production verdict pipeline without
+                its storage steps. This is intended for read-only acceptance
+                and diagnostic tools that must not write production results.
+        """
         if self.pipeline_running:
             return self._build_result(
                 product,
@@ -918,6 +1058,7 @@ class DetectionSystem:
                 inference_type,
                 frame=frame,
                 cancel_cb=cancel_cb,
+                persist=persist,
             )
         finally:
             self._inference_lock.release()
@@ -929,6 +1070,8 @@ class DetectionSystem:
         inference_type: str,
         frame: np.ndarray | None = None,
         cancel_cb=None,
+        *,
+        persist: bool = True,
     ) -> DetectionResult:
         """Runs the complete detection pipeline for a specific product and area.
 
@@ -941,6 +1084,7 @@ class DetectionSystem:
             inference_type: Type of model to run ('yolo' or 'anomalib').
             frame: Optional pre-acquired image frame. If None, captures from camera.
             cancel_cb: Optional callback that returns True to abort execution.
+            persist: Whether to execute production storage steps.
 
         Returns:
             DetectionResult: Strongly-typed result containing status, detections,
@@ -985,7 +1129,10 @@ class DetectionSystem:
                 config=self.config,
             )
 
-            self._execute_pipeline(ctx, run_logger, cancel_cb)
+            if persist:
+                self._execute_pipeline(ctx, run_logger, cancel_cb)
+            else:
+                self.finalize_detection(ctx, run_logger)
             if ctx.status == "CANCELED":
                 return self._build_result(
                     product, area, inference_type, "CANCELED"
@@ -1032,6 +1179,7 @@ class DetectionSystem:
                 color_check=ctx.color_result,
                 sequence_check=ctx.result.get("sequence_check"),
                 result_frame=result.get("result_frame"),
+                processed_image=ctx.processed_image,
                 metadata={
                     "decision": result.get("decision"),
                     "model_info": result.get("model_info"),
@@ -1047,6 +1195,16 @@ class DetectionSystem:
                         result.get("raw_detections")
                         or result.get("detections")
                         or []
+                    ),
+                    "inspection_release_id": (
+                        self._active_inspection_release.release_id
+                        if self._active_inspection_release is not None
+                        else ""
+                    ),
+                    "inspection_release_version": (
+                        self._active_inspection_release.display_version
+                        if self._active_inspection_release is not None
+                        else ""
                     ),
                 },
             )

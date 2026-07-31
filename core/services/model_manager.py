@@ -5,7 +5,7 @@ import hashlib
 import json
 import threading
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -65,6 +65,11 @@ class ModelManager:
         logger: DetectionLogger,
         max_cache_size: int = 3,
         engine_factory: EngineFactory | None = None,
+        models_root: str | Path | None = None,
+        model_config_overrides: Mapping[
+            tuple[str, str, str], str | Path
+        ]
+        | None = None,
     ) -> None:
         """Create a model manager.
 
@@ -74,10 +79,25 @@ class ModelManager:
             engine_factory: Optional inference-engine constructor. Production
                 uses the real engine lazily; tests can inject a lightweight
                 implementation without importing native ML runtimes.
+            models_root: Optional explicit models directory. Offline candidate
+                validation uses a job-scoped root so it never reads or mutates
+                the deployed station bundle.
+            model_config_overrides: Optional exact config paths keyed by
+                ``(product, area, inference_type)``. Acceptance matrices use
+                immutable historical config snapshots without changing the
+                deployed ``config.yaml`` pointer.
         """
         self.logger = logger
         self.max_cache_size = max_cache_size
         self._engine_factory = engine_factory
+        self._models_root = (
+            Path(models_root).expanduser().resolve()
+            if models_root is not None
+            else None
+        )
+        self._model_config_overrides = self._validate_config_overrides(
+            model_config_overrides or {}
+        )
         self._cache_lock = threading.Lock()
         # Engine construction may load native runtimes and must not run while
         # holding the cache lock. Serializing the rare activation path avoids
@@ -90,6 +110,34 @@ class ModelManager:
         self._cache_signatures: dict[
             tuple[str, str, str], str
         ] = {}
+
+    @staticmethod
+    def _validate_config_overrides(
+        overrides: Mapping[tuple[str, str, str], str | Path],
+    ) -> dict[tuple[str, str, str], Path]:
+        validated: dict[tuple[str, str, str], Path] = {}
+        for raw_key, raw_path in overrides.items():
+            if not isinstance(raw_key, tuple) or len(raw_key) != 3:
+                raise ModelConfigError(
+                    "Model config override keys must be "
+                    "(product, area, inference_type)."
+                )
+            product, area, inference_type = (
+                safe_segment(str(value), field_name=label)
+                for value, label in zip(
+                    raw_key,
+                    ("product", "area", "inference_type"),
+                    strict=True,
+                )
+            )
+            key = (product, area, inference_type.lower())
+            path = Path(raw_path).expanduser().resolve()
+            if not path.is_file() or path.is_symlink():
+                raise ModelConfigError(
+                    f"Model config override is unavailable: {path}"
+                )
+            validated[key] = path
+        return validated
 
     @staticmethod
     def _engine_config_signature(
@@ -275,8 +323,13 @@ class ModelManager:
         merged_steps.update(steps_cfg)
         base_config.steps = merged_steps
 
-    @staticmethod
-    def _locate_model_config(product: str, area: str, inference_type: str) -> str:
+    def _locate_model_config(
+        self,
+        product: str,
+        area: str,
+        inference_type: str,
+        config_path_override: str | Path | None = None,
+    ) -> str:
         """Locate models/<product>/<area>/<type>/config.yaml.
 
         Search order: current working directory first (backward compatible
@@ -287,8 +340,27 @@ class ModelManager:
         Raises:
             FileNotFoundError: If the config exists in neither location.
         """
-        relative = Path("models") / product / area / inference_type / "config.yaml"
-        candidates = [Path.cwd() / relative, PROJECT_ROOT / relative]
+        relative = Path(product) / area / inference_type / "config.yaml"
+        if config_path_override is not None:
+            exact = Path(config_path_override).expanduser().resolve()
+            if exact.is_symlink() or not exact.is_file():
+                raise ModelConfigError(
+                    f"Model config override is unavailable: {exact}"
+                )
+            return str(exact)
+        override = self._model_config_overrides.get(
+            (product, area, inference_type)
+        )
+        if override is not None:
+            return str(override)
+        candidates = (
+            [self._models_root / relative]
+            if self._models_root is not None
+            else [
+                Path.cwd() / "models" / relative,
+                PROJECT_ROOT / "models" / relative,
+            ]
+        )
         for candidate in candidates:
             if candidate.exists():
                 return str(candidate)
@@ -298,7 +370,13 @@ class ModelManager:
         )
 
     def switch(
-        self, base_config: DetectionConfig, product: str, area: str, inference_type: str
+        self,
+        base_config: DetectionConfig,
+        product: str,
+        area: str,
+        inference_type: str,
+        *,
+        config_path_override: str | Path | None = None,
     ) -> tuple[InferenceEngine, DetectionConfig]:
         """Switch engine to (product, area, type), with LRU cache.
 
@@ -318,7 +396,10 @@ class ModelManager:
         )
         key = (safe_product, safe_area)
         model_config_path = self._locate_model_config(
-            safe_product, safe_area, safe_inference_type
+            safe_product,
+            safe_area,
+            safe_inference_type,
+            config_path_override=config_path_override,
         )
         signature_key = (safe_product, safe_area, safe_inference_type)
 

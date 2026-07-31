@@ -160,7 +160,20 @@ python -m tools.production_preflight `
 - `開啟補訓資料與送出`：複核、補標、設定參數與建立工作。
 - `補訓進度`：查看、續訓、安全停止或清除已終止的畫面紀錄。
 
-### 5.2 相機
+### 5.2 檢測評估版本
+
+此工作區統一管理`元件版本`、`候選組合`、`組合驗證`與`上線紀錄`：
+
+- 元件可包含 YOLO、Anomalib、完整顏色基準與顏色方案；
+- 候選組合可自由選擇 Pipeline Template 允許的元件，不直接影響產線；
+- 組合驗證使用獨立且已人工確認的驗收照片；
+- 上線與回滾以完整組合為原子單位，不個別切換 YOLO 或顏色檔；
+- 有驗證警告的候選只能限定試用或具名接受風險，`BLOCKED`不得啟用。
+
+五色基準重建、YOLO × 顏色矩陣、指標與啟用規則見
+[模型組合驗收與發布](MODEL_COMBINATION_ACCEPTANCE.md)。
+
+### 5.3 相機
 
 - 使用／停用相機；
 - 重新連接或中斷；
@@ -181,7 +194,7 @@ python -m tools.production_preflight `
 若 GUI 顯示已連線但長時間無法進入就緒，先確認沒有其他程式占用相機，
 再依[相機診斷](CAMERA_RUNTIME_DIAGNOSTICS.md)執行硬體擷取預檢。
 
-### 5.3 除錯／設定
+### 5.4 除錯／設定
 
 - 編輯目前模型設定；
 - 模型版本／還原；
@@ -210,7 +223,7 @@ python tools/audit_cross_class_duplicates.py Result\20260729\Cable1\A
 Cable1/A 1.0.6 的現行設定與版本設定快照都包含相同 policy，避免切換版本後
 遺失本次修正。
 
-### 5.4 自動觸發校正
+### 5.5 自動觸發校正
 
 1. 選好產品與工位。
 2. 連接相機並啟動自動模式預覽。
@@ -418,17 +431,17 @@ waiting_annotation、failed 或 cancelled 等可處理狀態啟用。
 | 品質比較未通過 | 保留 incumbent；分析 precision/recall/mAP 與案例 |
 | 缺少 PT／部署紀錄 | ONNX 沒有配對 training PT；禁止冒用基礎模型續訓 |
 
-## 10. 模型版本、切換與回滾
+## 10. 檢測組合版本、切換與回滾
 
-模型版本頁只在停止檢測後操作。切換時：
+檢測評估版本頁只在停止檢測後操作。正式切換以完整組合為單位：
 
-1. 選產品、工位與模型類型。
-2. 核對版本、來源、checksum、設定快照與部署紀錄。
-3. 啟用目標版本。
+1. 選產品、工位與 Pipeline Template。
+2. 核對每個元件版本、來源、checksum、驗收報告與啟用限制。
+3. 依驗證結果選擇完整上線、限定試用或具名風險接受。
 4. 清除模型 cache 並重新載入。
 5. 以 Golden OK 與已知 NG 驗證。
 
-位置模型回滾必須同時回復：
+回滾必須退回前一完整發布組合。位置檢測組合至少同時包含：
 
 - runtime weight；
 - training PT；
@@ -438,6 +451,7 @@ waiting_annotation、failed 或 cancelled 等可處理狀態啟用。
 - Position Gate／validation 報告。
 
 不可只把檔名改回 `best.pt`。完整程序見
+[模型組合驗收與發布](MODEL_COMBINATION_ACCEPTANCE.md)、
 [模型版本指南](MODEL_VERSION_GUIDE.md)及
 [發布與回滾 SOP](RELEASE_ROLLBACK_SOP.md)。
 
@@ -679,6 +693,7 @@ python -m tools.production_preflight `
 - [相機診斷](CAMERA_RUNTIME_DIAGNOSTICS.md)
 - [誤判與漏檢處理](MISJUDGE_TRIAGE_SOP.md)
 - [顏色覆核與校正](COLOR_REVIEW_CALIBRATION.md)
+- [模型組合驗收與發布](MODEL_COMBINATION_ACCEPTANCE.md)
 - [模型版本指南](MODEL_VERSION_GUIDE.md)
 - [補訓閉環](../../Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md)
 - [位置補訓與部署](../../Yolo11_auto_train/docs/POSITION_RETRAINING_DEPLOYMENT.md)

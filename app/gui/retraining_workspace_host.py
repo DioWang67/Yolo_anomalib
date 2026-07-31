@@ -84,6 +84,7 @@ class RetrainingWorkspaceHost(QWidget):
     back_to_inspection_requested = pyqtSignal()
     workspace_ready = pyqtSignal(int)
     workspace_failed = pyqtSignal(str)
+    color_configuration_changed = pyqtSignal(str, str, str)
 
     def __init__(
         self,
@@ -407,6 +408,9 @@ class RetrainingWorkspaceHost(QWidget):
             return
         workspace.back_to_inspection_requested.connect(
             self.back_to_inspection_requested.emit
+        )
+        workspace.color_configuration_changed.connect(
+            self.color_configuration_changed.emit
         )
         self.stack.addWidget(workspace)
         self._workspace = workspace

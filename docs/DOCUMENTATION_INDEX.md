@@ -29,6 +29,7 @@ Get-Content -Encoding utf8 <file>
 | 補訓、續訓、安全停止 | [工程手冊：補訓](ENGINEERING_MANUAL.md#7-補訓閉環) | [補訓閉環](../../Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md) |
 | 位置補訓與首次啟用 | [工程手冊：位置檢測](ENGINEERING_MANUAL.md#8-位置檢測補訓) | [位置補訓部署](../../Yolo11_auto_train/docs/POSITION_RETRAINING_DEPLOYMENT.md) |
 | 顏色誤殺與門檻校正 | [顏色覆核與校正](COLOR_REVIEW_CALIBRATION.md) | [誤判 SOP](MISJUDGE_TRIAGE_SOP.md) |
+| 模型／顏色組合驗收與上線 | [模型組合驗收與發布](MODEL_COMBINATION_ACCEPTANCE.md) | [發布與回滾 SOP](RELEASE_ROLLBACK_SOP.md) |
 | Windows 機台部署 | [Windows 部署 SOP](WINDOWS_DEPLOYMENT_SOP.md) | [工程手冊：首次部署](ENGINEERING_MANUAL.md#4-首次部署) |
 | 相機 Runtime／取像問題 | [相機診斷](CAMERA_RUNTIME_DIAGNOSTICS.md) | `tools/diagnostics/diagnose_camera.bat` |
 | 模型版本切換或回滾 | [模型版本指南](MODEL_VERSION_GUIDE.md) | [發布與回滾 SOP](RELEASE_ROLLBACK_SOP.md) |
@@ -57,6 +58,8 @@ Get-Content -Encoding utf8 <file>
 - `MISJUDGE_TRIAGE_SOP.md`：誤殺、漏檢、原因碼與變更控制。
 - `CALIBRATION_CHANGE_LOG.md`：閾值、模型與保存政策的追加式變更紀錄。
 - `COLOR_REVIEW_CALIBRATION.md`：顏色資料路由與具名批准門檻。
+- `MODEL_COMBINATION_ACCEPTANCE.md`：獨立驗收集、組合矩陣、五色基準、
+  指標限制及完整檢測組合的啟用與回滾。
 - `CROSS_CLASS_DUPLICATE_DETECTION_PROPOSAL.md`：Cable1/A 1.0.6
   跨類別重複框的根因、保守消除規則、重播證據、設定與現場 Pilot Gate。
 - `MODEL_VERSION_GUIDE.md`：模型命名、版本與回復原則。

@@ -2097,6 +2097,10 @@ def test_color_submission_shows_same_window_result_and_clear_semantics(
     assert "加入顏色校正樣本庫" in result_text
     assert "不會啟動 YOLO 模型訓練" in result_text
     assert "不會立即改變門檻" in result_text
+    experimental_button = result_page.findChild(
+        QPushButton, "ExperimentalColorVersionButton"
+    )
+    assert experimental_button.isHidden() is True
 
     back_button = next(
         button
@@ -2105,6 +2109,40 @@ def test_color_submission_shows_same_window_result_and_clear_semantics(
     )
     qtbot.mouseClick(back_button, Qt.LeftButton)
     assert dialog.workflow_stack.currentWidget() is dialog.classification_page
+
+
+def test_color_submission_offers_ok_only_version_when_scope_is_eligible(
+    tmp_path, qtbot, monkeypatch
+):
+    dialog = ReviewCasesDialog(
+        result_root=tmp_path / "Result",
+        manifest_path=tmp_path / "review.csv",
+        training_data_dir=tmp_path / "training-data",
+        language="zh_TW",
+        embedded=True,
+    )
+    qtbot.addWidget(dialog)
+    monkeypatch.setattr(
+        dialog,
+        "_eligible_experimental_color_scopes",
+        lambda _report: (SimpleNamespace(),),
+    )
+
+    dialog._show_color_submission_result(
+        "顏色校正回饋：40 項",
+        report=SimpleNamespace(color_manifest_paths=("feedback.csv",)),
+    )
+
+    result_page = dialog.workflow_stack.currentWidget()
+    experimental_button = result_page.findChild(
+        QPushButton, "ExperimentalColorVersionButton"
+    )
+    rollback_button = result_page.findChild(
+        QPushButton, "ExperimentalColorRollbackButton"
+    )
+    assert experimental_button.isHidden() is False
+    assert experimental_button.text() == "建立 OK-only 實驗版本"
+    assert rollback_button.isHidden() is True
 
 
 def test_successful_color_submission_routes_to_visible_result_page(
