@@ -49,7 +49,9 @@ def _release(
     status: ReleaseStatus = ReleaseStatus.TESTED,
 ) -> InspectionRelease:
     model_path, model_sha = _write(tmp_path / "model.onnx", b"model")
-    config_path, config_sha = _write(tmp_path / "model.config.yaml", b"weights: model.onnx")
+    config_path, config_sha = _write(
+        tmp_path / "model.config.yaml", b"weights: model.onnx"
+    )
     color_path, color_sha = _write(tmp_path / "color.json", b'{"black": 0.6}')
     report_path, report_sha = _write(tmp_path / "report.json", b'{"run": 1}')
     return InspectionRelease(
@@ -152,6 +154,79 @@ def test_store_commit_load_and_checksum_tamper_detection(tmp_path):
         store.load(release.scope, release.release_id)
 
 
+def test_store_relocates_legacy_station_paths_without_rewriting_release(
+    tmp_path: Path,
+) -> None:
+    inference_root = tmp_path / "inference"
+    inference_root.mkdir()
+    (tmp_path / "workspace.yaml").write_text(
+        """\
+schema_version: 1
+projects:
+  training: training
+  inference: inference
+paths:
+  training_data: training/data
+  inference_models: inference/models
+  station_data: station/inference
+  inference_artifacts: artifacts/inference
+""",
+        encoding="utf-8",
+    )
+    station_root = tmp_path / "station" / "inference"
+    legacy_color_path = (
+        inference_root / ".color_revisions" / "scope" / "revision" / "config.json"
+    )
+    color_path, color_sha = _write(
+        station_root / legacy_color_path.relative_to(inference_root),
+        b'{"schema_version": 1}',
+    )
+    legacy_report_path = inference_root / "acceptance_reports" / "report.json"
+    report_path, report_sha = _write(
+        station_root / legacy_report_path.relative_to(inference_root),
+        b'{"run": "relocated"}',
+    )
+    release = _release(tmp_path / "evidence")
+    components = tuple(
+        replace(
+            component,
+            config_path=str(legacy_color_path),
+            config_sha256=color_sha,
+        )
+        if component.kind == "stats_color"
+        else component
+        for component in release.components
+    )
+    legacy_release = replace(
+        release,
+        components=components,
+        validation=replace(
+            release.validation,
+            report_path=str(legacy_report_path),
+            report_sha256=report_sha,
+        ),
+    )
+    store = InspectionReleaseStore(station_root / ".inspection_releases")
+
+    loaded = store.commit(legacy_release)
+
+    color_component = next(
+        component for component in loaded.components if component.kind == "stats_color"
+    )
+    assert color_component.config_path == color_path
+    assert loaded.validation.report_path == report_path
+    raw_payload = json.loads(
+        (store.release_dir(legacy_release) / "release.json").read_text(encoding="utf-8")
+    )
+    raw_color = next(
+        component
+        for component in raw_payload["components"]
+        if component["kind"] == "stats_color"
+    )
+    assert raw_color["config_path"] == str(legacy_color_path)
+    assert raw_payload["validation"]["report_path"] == str(legacy_report_path)
+
+
 def test_validation_attestation_projects_same_draft_as_tested(tmp_path):
     draft = _release(
         tmp_path / "artifacts",
@@ -202,12 +277,9 @@ def test_validation_attestation_projects_same_draft_as_tested(tmp_path):
     )
     assert raw_payload["status"] == "DRAFT"
     attestations = tuple(
-        (
-            store.root
-            / "validations"
-            / draft.scope.scope_hash
-            / draft.release_id
-        ).glob("*.json")
+        (store.root / "validations" / draft.scope.scope_hash / draft.release_id).glob(
+            "*.json"
+        )
     )
     assert len(attestations) == 1
 
@@ -226,10 +298,7 @@ def test_validation_attestation_checksum_tamper_is_rejected(tmp_path):
         reason="completed",
     )
     validation_root = (
-        store.root
-        / "validations"
-        / draft.scope.scope_hash
-        / draft.release_id
+        store.root / "validations" / draft.scope.scope_hash / draft.release_id
     )
     attestation_path = next(validation_root.glob("*.json"))
     payload = json.loads(attestation_path.read_text(encoding="utf-8"))
@@ -289,8 +358,14 @@ def test_false_negative_or_draft_remains_available_with_visible_risk(tmp_path):
     )
     assert store.policy.allowed_modes(failing) == expected
     assert store.policy.allowed_modes(draft) == expected
-    assert any("false negatives" in warning for warning in store.policy.validation_warnings(failing))
-    assert any("draft" in warning.lower() for warning in store.policy.validation_warnings(draft))
+    assert any(
+        "false negatives" in warning
+        for warning in store.policy.validation_warnings(failing)
+    )
+    assert any(
+        "draft" in warning.lower()
+        for warning in store.policy.validation_warnings(draft)
+    )
 
 
 def test_risk_accepted_activation_is_audited_in_pointer(tmp_path):
@@ -330,7 +405,9 @@ def test_explicitly_blocked_release_cannot_be_activated(tmp_path):
 def test_atomic_activation_compare_and_swap_and_rollback(tmp_path):
     store = InspectionReleaseStore(tmp_path / "store")
     baseline = store.commit(_release(tmp_path / "baseline"))
-    candidate = store.commit(_release(tmp_path / "candidate", display_version="inspection-v1.0.2"))
+    candidate = store.commit(
+        _release(tmp_path / "candidate", display_version="inspection-v1.0.2")
+    )
     first = store.activate(
         baseline,
         mode=ActivationMode.LIMITED_TRIAL,
@@ -353,7 +430,9 @@ def test_atomic_activation_compare_and_swap_and_rollback(tmp_path):
         reason="trial",
         expected_release_id=first["release_id"],
     )
-    restored = store.rollback(baseline.scope, operator="tester", reason="trial rejected")
+    restored = store.rollback(
+        baseline.scope, operator="tester", reason="trial rejected"
+    )
     assert restored["release_id"] == baseline.release_id
     assert restored["previous_release_id"] == candidate.release_id
 
@@ -377,9 +456,25 @@ def test_resolver_caches_unchanged_release_and_revalidates_changed_artifact(tmp_
 
 
 def test_builder_binds_exact_matrix_combination(tmp_path):
+    (tmp_path / "workspace.yaml").write_text(
+        """\
+schema_version: 1
+projects:
+  training: training
+  inference: .
+paths:
+  training_data: training/data
+  inference_models: models
+  station_data: .
+  inference_artifacts: artifacts
+""",
+        encoding="utf-8",
+    )
     models_root = tmp_path / "models"
     model_path, model_sha = _write(models_root / "model.onnx", b"model")
-    config_path, config_sha = _write(models_root / "v1.config.yaml", b"weights: model.onnx")
+    config_path, config_sha = _write(
+        models_root / "v1.config.yaml", b"weights: model.onnx"
+    )
     scope_hash = "0123456789abcdef01234567"
     revision_id = str(uuid4())
     color_path, _ = _write(
@@ -557,7 +652,9 @@ def test_builder_binds_exact_full_color_baseline_from_matrix(tmp_path):
 
     assert release.components[1].artifact_sha256 == candidate_sha
     assert release.components[1].artifact_path != str(candidate_path)
-    assert Path(release.components[1].artifact_path).read_bytes() == (candidate_path.read_bytes())
+    assert Path(release.components[1].artifact_path).read_bytes() == (
+        candidate_path.read_bytes()
+    )
 
 
 def test_builder_rejects_symbolic_active_color_pointer(tmp_path):

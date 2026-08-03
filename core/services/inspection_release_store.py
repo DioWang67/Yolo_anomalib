@@ -26,6 +26,7 @@ from core.services.inspection_release_models import (
     ReleaseValidationAttestation,
     template_for_inference_type,
 )
+from core.station_data import StationDataPaths, load_station_data_paths
 
 
 def sha256_file(path: Path) -> str:
@@ -101,9 +102,7 @@ class InspectionReleasePolicy:
             warnings.append("Color NG truth is missing; color escape rate is unknown.")
         return tuple(warnings)
 
-    def require_allowed(
-        self, release: InspectionRelease, mode: ActivationMode
-    ) -> None:
+    def require_allowed(self, release: InspectionRelease, mode: ActivationMode) -> None:
         allowed = self.allowed_modes(release)
         if mode in allowed:
             return
@@ -132,6 +131,12 @@ class InspectionReleaseStore:
         self.policy = policy or InspectionReleasePolicy()
         self._locks_guard = threading.Lock()
         self._scope_locks: dict[str, threading.Lock] = {}
+        discovered_paths = load_station_data_paths(self.root)
+        self._station_paths: StationDataPaths | None = (
+            discovered_paths
+            if discovered_paths.inspection_releases == self.root
+            else None
+        )
 
     def _lock_for(self, scope_hash: str) -> threading.Lock:
         with self._locks_guard:
@@ -182,19 +187,16 @@ class InspectionReleaseStore:
             handle.close()
 
     def release_dir(self, release: InspectionRelease) -> Path:
-        return (
-            self.root
-            / "releases"
-            / release.scope.scope_hash
-            / release.release_id
-        )
+        return self.root / "releases" / release.scope.scope_hash / release.release_id
 
     def commit(self, release: InspectionRelease) -> InspectionRelease:
         """Commit one immutable release after validating all referenced files."""
         self._verify_external_evidence(release)
         destination = self.release_dir(release)
         if destination.exists():
-            loaded = self._load_base(release.scope, release.release_id)
+            loaded = self._relocate_external_paths(
+                self._load_base(release.scope, release.release_id)
+            )
             if loaded.to_dict() != release.to_dict():
                 raise InspectionReleaseConflictError(
                     "Release ID already exists with different content."
@@ -226,7 +228,10 @@ class InspectionReleaseStore:
             raise InspectionReleasePolicyError(
                 "Validation operator and reason are required."
             )
-        if validated_release.status not in {ReleaseStatus.TESTED, ReleaseStatus.BLOCKED}:
+        if validated_release.status not in {
+            ReleaseStatus.TESTED,
+            ReleaseStatus.BLOCKED,
+        }:
             raise InspectionReleasePolicyError(
                 "Only a TESTED or BLOCKED validation result can be attested."
             )
@@ -243,7 +248,7 @@ class InspectionReleaseStore:
                     "Only an immutable DRAFT release can receive validation evidence."
                 )
             expected_projection = replace(
-                base,
+                self._relocate_external_paths(base),
                 status=validated_release.status,
                 validation=validated_release.validation,
             )
@@ -314,19 +319,21 @@ class InspectionReleaseStore:
         base = self._load_base(scope, release_id)
         attestation = self._latest_validation_attestation(base)
         if attestation is None:
-            return base
+            return self._relocate_external_paths(base)
         projected = replace(
             base,
             status=attestation.status,
             validation=attestation.validation,
         )
         self._verify_external_evidence(projected)
-        return projected
+        return self._relocate_external_paths(projected)
 
     def _load_base(self, scope: InspectionScope, release_id: str) -> InspectionRelease:
         release_dir = self.root / "releases" / scope.scope_hash / release_id
         if release_dir.is_symlink() or not release_dir.is_dir():
-            raise InspectionReleaseError(f"Inspection release is unavailable: {release_id}")
+            raise InspectionReleaseError(
+                f"Inspection release is unavailable: {release_id}"
+            )
         release_path = release_dir / "release.json"
         checksums_path = release_dir / "checksums.json"
         try:
@@ -351,10 +358,7 @@ class InspectionReleaseStore:
         base: InspectionRelease,
     ) -> ReleaseValidationAttestation | None:
         validation_root = (
-            self.root
-            / "validations"
-            / base.scope.scope_hash
-            / base.release_id
+            self.root / "validations" / base.scope.scope_hash / base.release_id
         )
         if not validation_root.is_dir() or validation_root.is_symlink():
             return None
@@ -392,8 +396,7 @@ class InspectionReleaseStore:
         if (
             attestation.release_id != base.release_id
             or attestation.scope_hash != base.scope.scope_hash
-            or attestation.base_release_sha256
-            != _canonical_sha256(base.to_dict())
+            or attestation.base_release_sha256 != _canonical_sha256(base.to_dict())
             or path.stem != attestation.attestation_id
         ):
             raise InspectionReleaseError(
@@ -429,7 +432,12 @@ class InspectionReleaseStore:
                     if area and scope.area != area:
                         continue
                     releases.append(self.load(scope, release_dir.name))
-                except (InspectionReleaseError, OSError, KeyError, json.JSONDecodeError):
+                except (
+                    InspectionReleaseError,
+                    OSError,
+                    KeyError,
+                    json.JSONDecodeError,
+                ):
                     continue
         return tuple(
             sorted(
@@ -523,13 +531,17 @@ class InspectionReleaseStore:
     ) -> dict[str, Any]:
         current = self.active_pointer(scope)
         if current is None or not current.get("previous_release_id"):
-            raise InspectionReleasePolicyError("No previous inspection release to restore.")
+            raise InspectionReleasePolicyError(
+                "No previous inspection release to restore."
+            )
         previous = self.load(scope, str(current["previous_release_id"]))
         previous_pointer = self._pointer_for_release(scope, previous.release_id)
         previous_mode = (
             ActivationMode(previous_pointer["mode"])
             if previous_pointer is not None
-            else next(iter(self.policy.allowed_modes(previous)), ActivationMode.LIMITED_TRIAL)
+            else next(
+                iter(self.policy.allowed_modes(previous)), ActivationMode.LIMITED_TRIAL
+            )
         )
         return self.activate(
             previous,
@@ -554,13 +566,56 @@ class InspectionReleaseStore:
                 return payload
         return None
 
-    @staticmethod
-    def _verify_file(path_value: str, expected_sha256: str, label: str) -> None:
-        path = Path(path_value).expanduser().resolve()
+    def _resolve_external_path(self, path_value: str) -> Path:
+        path = Path(path_value).expanduser()
+        if path.exists() or self._station_paths is None:
+            return path.resolve()
+        return self._station_paths.relocate_legacy_path(path)
+
+    def _relocate_external_paths(
+        self,
+        release: InspectionRelease,
+    ) -> InspectionRelease:
+        if self._station_paths is None:
+            return release
+        components = tuple(
+            replace(
+                component,
+                artifact_path=(
+                    str(self._resolve_external_path(component.artifact_path))
+                    if component.artifact_path
+                    else ""
+                ),
+                config_path=(
+                    str(self._resolve_external_path(component.config_path))
+                    if component.config_path
+                    else ""
+                ),
+            )
+            for component in release.components
+        )
+        validation = replace(
+            release.validation,
+            report_path=(
+                str(self._resolve_external_path(release.validation.report_path))
+                if release.validation.report_path
+                else ""
+            ),
+        )
+        return replace(release, components=components, validation=validation)
+
+    def _verify_file(
+        self,
+        path_value: str,
+        expected_sha256: str,
+        label: str,
+    ) -> Path:
+        path = self._resolve_external_path(path_value)
         if path.is_symlink() or not path.is_file():
             raise InspectionReleaseError(f"{label} is unavailable: {path}")
         if sha256_file(path) != expected_sha256.lower():
             raise InspectionReleaseError(f"{label} checksum mismatch: {path}")
+        return path
 
     def _verify_external_evidence(self, release: InspectionRelease) -> None:
         if release.validation.report_path:
@@ -589,7 +644,7 @@ class InspectionReleaseStore:
             ):
                 from core.services.color_profile_store import ColorProfileStore
 
-                manifest = Path(component.config_path).resolve()
+                manifest = self._resolve_external_path(component.config_path)
                 ColorProfileStore(manifest.parents[1]).load(manifest)
 
 
@@ -605,7 +660,8 @@ class InspectionReleaseResolver:
         self.store = store
         self._lock = threading.Lock()
         self._cache: dict[
-            str, tuple[tuple[int, int], tuple[tuple[str, int, int], ...], InspectionRelease]
+            str,
+            tuple[tuple[int, int], tuple[tuple[str, int, int], ...], InspectionRelease],
         ] = {}
 
     def resolve(
@@ -641,14 +697,12 @@ class InspectionReleaseResolver:
             )
         return release
 
-    @staticmethod
     def _external_identity(
+        self,
         release: InspectionRelease,
     ) -> tuple[tuple[str, int, int], ...]:
         paths = (
-            [release.validation.report_path]
-            if release.validation.report_path
-            else []
+            [release.validation.report_path] if release.validation.report_path else []
         )
         for component in release.components:
             paths.extend(
@@ -663,12 +717,10 @@ class InspectionReleaseResolver:
             ):
                 try:
                     payload = json.loads(
-                        Path(component.config_path).read_text(
-                            encoding="utf-8"
-                        )
+                        Path(component.config_path).read_text(encoding="utf-8")
                     )
                     paths.extend(
-                        str(item["config_path"])
+                        str(self.store._resolve_external_path(str(item["config_path"])))
                         for item in payload.get("revisions") or ()
                     )
                 except (OSError, KeyError, TypeError, json.JSONDecodeError):

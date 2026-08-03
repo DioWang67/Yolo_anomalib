@@ -10,8 +10,14 @@ import yaml
 
 from core.services.color_profile_store import ColorProfileStore
 from core.services.inspection_release_builder import build_draft_release
-from core.services.inspection_release_models import InspectionReleaseError
-from core.services.inspection_release_store import InspectionReleaseStore
+from core.services.inspection_release_models import (
+    ActivationMode,
+    InspectionReleaseError,
+)
+from core.services.inspection_release_store import (
+    InspectionReleaseResolver,
+    InspectionReleaseStore,
+)
 from core.services.model_version_registry import ModelVersionRecord
 from tools.color_calibration_service import (
     COLOR_CONFIG_SCHEMA_VERSION,
@@ -116,7 +122,9 @@ def test_profile_snapshots_five_color_baseline_and_multiple_revisions(
     assert profile is not None
     assert profile.colors == ("Black", "Green", "Orange", "Red", "Yellow")
     assert profile.revision_overrides == tuple(
-        sorted((revision.scope.scope_hash, revision.revision_id) for revision in revisions)
+        sorted(
+            (revision.scope.scope_hash, revision.revision_id) for revision in revisions
+        )
     )
     assert "black: color-v1.0.1" in profile.summary
     assert profile.color_model_path != source_model
@@ -154,8 +162,114 @@ def test_profile_can_snapshot_an_explicit_baseline_candidate(
     )
 
     assert profile is not None
-    assert json.loads(profile.color_model_path.read_text(encoding="utf-8"))["summary"]["Black"]["count"] == 120
-    assert profile.color_model_sha256 != hashlib.sha256(source_model.read_bytes()).hexdigest()
+    assert (
+        json.loads(profile.color_model_path.read_text(encoding="utf-8"))["summary"][
+            "Black"
+        ]["count"]
+        == 120
+    )
+    assert (
+        profile.color_model_sha256
+        != hashlib.sha256(source_model.read_bytes()).hexdigest()
+    )
+
+
+def test_profile_relocates_legacy_revision_path_without_rewriting_manifest(
+    tmp_path: Path,
+) -> None:
+    inference_root = tmp_path / "inference"
+    inference_root.mkdir()
+    (tmp_path / "workspace.yaml").write_text(
+        """\
+schema_version: 1
+projects:
+  training: training
+  inference: inference
+paths:
+  training_data: training/data
+  inference_models: inference/models
+  station_data: station/inference
+  inference_artifacts: artifacts/inference
+""",
+        encoding="utf-8",
+    )
+    station_root = tmp_path / "station" / "inference"
+    _source_model, config, revisions = _fixture(station_root)
+    store = ColorProfileStore(station_root / ".color_profiles")
+    profile = store.create(
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        model_config_path=config,
+        project_root=station_root,
+        revisions=revisions,
+    )
+    assert profile is not None
+    manifest_payload = json.loads(profile.manifest_path.read_text(encoding="utf-8"))
+    expected_paths: dict[str, Path] = {}
+    for revision_payload, revision in zip(
+        manifest_payload["revisions"],
+        revisions,
+        strict=True,
+    ):
+        legacy_path = inference_root / revision.config_path.relative_to(station_root)
+        revision_payload["config_path"] = str(legacy_path)
+        expected_paths[revision.revision_id] = revision.config_path.resolve()
+    profile.manifest_path.write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = store.load(profile.manifest_path)
+
+    assert {
+        binding.revision_id: Path(binding.config_path) for binding in loaded.revisions
+    } == expected_paths
+    persisted_payload = json.loads(profile.manifest_path.read_text(encoding="utf-8"))
+    assert all(
+        Path(item["config_path"]).is_relative_to(inference_root)
+        for item in persisted_payload["revisions"]
+    )
+
+    weight = config.parent / "weights" / "model.onnx"
+    weight.parent.mkdir()
+    weight.write_bytes(b"model")
+    model = ModelVersionRecord(
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        version="1.0.6",
+        weight_path=weight,
+        is_current=True,
+        trained_at=None,
+        deployed_at=None,
+        activated_at=None,
+        training_time_inferred=False,
+        config_snapshot_path=config,
+        file_size=weight.stat().st_size,
+        weight_sha256=hashlib.sha256(weight.read_bytes()).hexdigest(),
+    )
+    release = build_draft_release(
+        model,
+        display_version="inspection-v1.0.1",
+        operator="engineer",
+        reason="relocation cache test",
+        color_profile=loaded,
+    )
+    release_store = InspectionReleaseStore(station_root / ".inspection_releases")
+    committed = release_store.commit(release)
+    release_store.activate(
+        committed,
+        mode=ActivationMode.LIMITED_TRIAL,
+        operator="engineer",
+        reason="verify relocated immutable evidence",
+        expected_release_id=None,
+    )
+    resolver = InspectionReleaseResolver(release_store)
+    assert resolver.resolve("Cable1", "A", "yolo") == committed
+    revisions[0].config_path.write_text("{}", encoding="utf-8")
+    with pytest.raises(InspectionReleaseError, match="checksum|SHA|完整性"):
+        resolver.resolve("Cable1", "A", "yolo")
 
 
 def test_release_binds_profile_baseline_and_detects_tampering(

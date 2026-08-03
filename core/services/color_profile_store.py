@@ -16,6 +16,7 @@ import yaml
 
 from core.services.inspection_release_models import InspectionReleaseError
 from core.services.inspection_release_store import sha256_file
+from core.station_data import StationDataPaths, load_station_data_paths
 from tools.color_calibration_service import canonical_sha256
 from tools.color_configuration_revisions import ColorConfigurationRevision
 
@@ -77,11 +78,17 @@ class ColorProfilePackage:
 
     @property
     def revision_overrides(self) -> tuple[tuple[str, str], ...]:
-        return tuple(sorted((binding.scope_hash, binding.revision_id) for binding in self.revisions))
+        return tuple(
+            sorted(
+                (binding.scope_hash, binding.revision_id) for binding in self.revisions
+            )
+        )
 
     @property
     def summary(self) -> str:
-        overrides = ", ".join(f"{item.threshold_key}: {item.display_version}" for item in self.revisions)
+        overrides = ", ".join(
+            f"{item.threshold_key}: {item.display_version}" for item in self.revisions
+        )
         base = f"{len(self.colors)} 色基準"
         return f"{base}｜{overrides}" if overrides else base
 
@@ -91,6 +98,10 @@ class ColorProfileStore:
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root).expanduser().resolve()
+        discovered_paths = load_station_data_paths(self.root)
+        self._station_paths: StationDataPaths | None = (
+            discovered_paths if discovered_paths.color_profiles == self.root else None
+        )
 
     def create(
         self,
@@ -115,7 +126,9 @@ class ColorProfileStore:
         else:
             color_model_value = str(config.get("color_model_path") or "").strip()
             if not color_model_value:
-                raise InspectionReleaseError("顏色檢查已啟用，但模型設定缺少 color_model_path。")
+                raise InspectionReleaseError(
+                    "顏色檢查已啟用，但模型設定缺少 color_model_path。"
+                )
             color_model = self._resolve_color_model(
                 color_model_value,
                 config_path=config_path,
@@ -162,7 +175,9 @@ class ColorProfileStore:
             manifest_payload = {
                 **identity,
                 "package_id": package_id,
-                "display_version": (f"{checker_type}-{len(colors)}color-{package_id[:8]}"),
+                "display_version": (
+                    f"{checker_type}-{len(colors)}color-{package_id[:8]}"
+                ),
                 "source_color_model_path": str(color_model),
                 "color_model_path": "color_model.json",
                 "revisions": [item.to_dict() for item in revision_bindings],
@@ -230,7 +245,7 @@ class ColorProfileStore:
                 threshold_key=str(item["threshold_key"]),
                 revision_id=str(item["revision_id"]),
                 display_version=str(item["display_version"]),
-                config_path=str(item["config_path"]),
+                config_path=str(self._resolve_external_path(str(item["config_path"]))),
                 config_sha256=str(item["config_sha256"]),
                 canonical_config_sha256=str(item["canonical_config_sha256"]),
             )
@@ -238,7 +253,9 @@ class ColorProfileStore:
         )
         for binding in revisions:
             if sha256_file(Path(binding.config_path)) != binding.config_sha256:
-                raise InspectionReleaseError(f"{binding.threshold_key} 校正修訂完整性驗證失敗。")
+                raise InspectionReleaseError(
+                    f"{binding.threshold_key} 校正修訂完整性驗證失敗。"
+                )
         return ColorProfilePackage(
             package_id=package_id,
             display_version=str(payload.get("display_version") or package_id),
@@ -253,6 +270,12 @@ class ColorProfileStore:
             manifest_sha256=sha256_file(manifest),
             revisions=revisions,
         )
+
+    def _resolve_external_path(self, path_value: str) -> Path:
+        path = Path(path_value).expanduser()
+        if path.exists() or self._station_paths is None:
+            return path.resolve()
+        return self._station_paths.relocate_legacy_path(path)
 
     @staticmethod
     def _read_model_config(path: Path) -> dict[str, Any]:
@@ -323,19 +346,27 @@ class ColorProfileStore:
                 scope.area,
                 scope.model_type,
             ) != (product, area, model_type):
-                raise InspectionReleaseError("校正修訂與模型的產品、區域或推論類型不一致。")
+                raise InspectionReleaseError(
+                    "校正修訂與模型的產品、區域或推論類型不一致。"
+                )
             if scope.checker_type != checker_type:
                 raise InspectionReleaseError("校正修訂與顏色檢查器類型不一致。")
             key = scope.threshold_key.casefold()
             if key in seen_thresholds:
-                raise InspectionReleaseError(f"{scope.threshold_key} 同時選取了多個校正修訂。")
+                raise InspectionReleaseError(
+                    f"{scope.threshold_key} 同時選取了多個校正修訂。"
+                )
             seen_thresholds.add(key)
             try:
                 payload = json.loads(revision.config_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
-                raise InspectionReleaseError(f"{scope.threshold_key} 校正修訂無法讀取。") from exc
+                raise InspectionReleaseError(
+                    f"{scope.threshold_key} 校正修訂無法讀取。"
+                ) from exc
             if canonical_sha256(payload) != revision.new_config_sha256:
-                raise InspectionReleaseError(f"{scope.threshold_key} 校正修訂 checksum 不一致。")
+                raise InspectionReleaseError(
+                    f"{scope.threshold_key} 校正修訂 checksum 不一致。"
+                )
             bindings.append(
                 ColorRevisionBinding(
                     scope_hash=scope.scope_hash,
