@@ -40,7 +40,7 @@ from core.pipeline.registry import PipelineEnv, build_pipeline, default_pipeline
 from core.pipeline.steps import SaveResultsStep
 from core.result_adapter import normalize_result
 from core.runtime_preflight import validate_runtime_for_model
-from core.security import ensure_subpath, resolve_output_dir
+from core.security import ensure_subpath, resolve_result_output_dir
 from core.services.color_checker import ColorCheckerService
 from core.services.color_override_loader import ColorOverrideLoader
 from core.services.inspection_release_models import InspectionRelease
@@ -140,7 +140,7 @@ class DetectionSystem:
         )
         manager_kwargs: dict[str, Any] = {
             "models_root": self.models_root,
-            "output_root": self.data_paths.root,
+            "results_root": self.data_paths.results,
         }
         if model_config_overrides is not None:
             manager_kwargs["model_config_overrides"] = model_config_overrides
@@ -179,10 +179,9 @@ class DetectionSystem:
             self.initialize_camera()
 
     def _resolve_output_dir(self) -> Path:
-        output_dir = resolve_output_dir(
+        output_dir = resolve_result_output_dir(
             self.config.output_dir,
-            base_dir=self.data_paths.root,
-            allowed_root=self.data_paths.root,
+            result_root=self.data_paths.results,
         )
         self.config.output_dir = str(output_dir)
         return output_dir

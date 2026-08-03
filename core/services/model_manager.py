@@ -16,7 +16,7 @@ from core.config_validation import validate_model_cfg
 from core.exceptions import ModelConfigError
 from core.logging_config import DetectionLogger
 from core.path_utils import project_root, resolve_path
-from core.security import resolve_output_dir, safe_segment
+from core.security import resolve_result_output_dir, safe_segment
 from core.version_utils import (
     ModelVersionError,
     check_compatibility,
@@ -66,7 +66,7 @@ class ModelManager:
         max_cache_size: int = 3,
         engine_factory: EngineFactory | None = None,
         models_root: str | Path | None = None,
-        output_root: str | Path | None = None,
+        results_root: str | Path | None = None,
         model_config_overrides: Mapping[
             tuple[str, str, str], str | Path
         ]
@@ -83,10 +83,9 @@ class ModelManager:
             models_root: Optional explicit models directory. Offline candidate
                 validation uses a job-scoped root so it never reads or mutates
                 the deployed station bundle.
-            output_root: Writable root used to resolve and validate model-level
-                result paths. Production injects the station-data root; the
-                project root remains the compatibility default for callers
-                that do not persist station results.
+            results_root: Dedicated writable result root used to resolve and
+                validate model-level output paths. Production injects the
+                workspace-configured location.
             model_config_overrides: Optional exact config paths keyed by
                 ``(product, area, inference_type)``. Acceptance matrices use
                 immutable historical config snapshots without changing the
@@ -100,10 +99,10 @@ class ModelManager:
             if models_root is not None
             else None
         )
-        self._output_root = (
-            Path(output_root).expanduser().resolve()
-            if output_root is not None
-            else PROJECT_ROOT
+        self._results_root = (
+            Path(results_root).expanduser().resolve()
+            if results_root is not None
+            else PROJECT_ROOT / "Result"
         )
         self._model_config_overrides = self._validate_config_overrides(
             model_config_overrides or {}
@@ -287,10 +286,9 @@ class ModelManager:
             if raw_output_dir:
                 path_str = str(raw_output_dir).strip()
                 if path_str:
-                    resolved = resolve_output_dir(
+                    resolved = resolve_result_output_dir(
                         path_str,
-                        base_dir=self._output_root,
-                        allowed_root=self._output_root,
+                        result_root=self._results_root,
                     )
                     base_config.output_dir = str(resolved)
                 else:

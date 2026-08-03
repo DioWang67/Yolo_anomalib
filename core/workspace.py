@@ -31,6 +31,7 @@ class WorkspacePaths:
     training_data: Path
     inference_models: Path
     station_data: Path
+    inference_results: Path
     inference_artifacts: Path
     manifest_path: Path | None = None
 
@@ -108,17 +109,24 @@ def _load_manifest(manifest_path: Path) -> WorkspacePaths:
     paths = _require_mapping(raw, "paths")
     root = manifest_path.parent.resolve()
     inference_project = _resolve_workspace_member(root, projects, "inference")
+    station_data = _resolve_optional_workspace_member(
+        root,
+        paths,
+        "station_data",
+        default=inference_project,
+    )
     return WorkspacePaths(
         root=root,
         training_project=_resolve_workspace_member(root, projects, "training"),
         inference_project=inference_project,
         training_data=_resolve_workspace_member(root, paths, "training_data"),
         inference_models=_resolve_workspace_member(root, paths, "inference_models"),
-        station_data=_resolve_optional_workspace_member(
+        station_data=station_data,
+        inference_results=_resolve_optional_workspace_member(
             root,
             paths,
-            "station_data",
-            default=inference_project,
+            "inference_results",
+            default=station_data / "Result",
         ),
         inference_artifacts=_resolve_optional_workspace_member(
             root,
@@ -185,6 +193,7 @@ def _legacy_workspace_paths(
         training_data=(training_project / "data").resolve(),
         inference_models=(inference_project / "models").resolve(),
         station_data=inference_project.resolve(),
+        inference_results=(inference_project / "Result").resolve(),
         inference_artifacts=inference_project.resolve(),
     )
 

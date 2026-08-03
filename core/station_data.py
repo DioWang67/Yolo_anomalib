@@ -15,7 +15,6 @@ _MUTABLE_TOP_LEVEL_NAMES = frozenset(
         ".inspection_releases",
         ".processing_runs",
         ".review_repairs",
-        "Result",
         "acceptance",
         "acceptance_reports",
         "logs",
@@ -62,7 +61,9 @@ class StationDataPaths:
             return path
 
         top_level = relative.parts[0]
-        if top_level in _MUTABLE_TOP_LEVEL_NAMES:
+        if top_level == "Result":
+            return self.relocate_legacy_result_path(path)
+        elif top_level in _MUTABLE_TOP_LEVEL_NAMES:
             candidate = self.root / relative
         elif top_level == "dist":
             candidate = self.artifacts_root / relative
@@ -74,6 +75,26 @@ class StationDataPaths:
             return path
         return candidate.resolve() if candidate.exists() else path
 
+    def relocate_legacy_result_path(self, value: str | Path) -> Path:
+        """Map source- or station-era Result paths to the configured root."""
+        path = Path(value).expanduser()
+        if path.exists():
+            return path.resolve()
+        if not path.is_absolute():
+            return path
+        legacy_roots = (
+            self.source_root / "Result",
+            self.root / "Result",
+        )
+        for legacy_root in legacy_roots:
+            try:
+                relative = path.resolve().relative_to(legacy_root.resolve())
+            except (OSError, ValueError):
+                continue
+            candidate = self.results / relative
+            return candidate.resolve() if candidate.exists() else path
+        return path
+
 
 def station_data_paths_from_workspace(workspace: WorkspacePaths) -> StationDataPaths:
     root = workspace.station_data.resolve()
@@ -82,7 +103,7 @@ def station_data_paths_from_workspace(workspace: WorkspacePaths) -> StationDataP
         root=root,
         artifacts_root=workspace.inference_artifacts.resolve(),
         models=workspace.inference_models.resolve(),
-        results=root / "Result",
+        results=workspace.inference_results.resolve(),
         logs=root / "logs",
         acceptance=root / "acceptance",
         acceptance_reports=root / "acceptance_reports",

@@ -105,11 +105,11 @@ def test_model_overrides_resolve_relative_paths_and_keep_globals(tmp_path, monke
 
     base_config = DetectionConfig.from_yaml(str(global_cfg_path))
     logger = DetectionLogger()
-    station_root = tmp_path / "station"
+    result_root = tmp_path / "Result"
     manager = ModelManager(
         logger,
         engine_factory=_FakeInferenceEngine,
-        output_root=station_root,
+        results_root=result_root,
     )
 
     # Act
@@ -118,7 +118,7 @@ def test_model_overrides_resolve_relative_paths_and_keep_globals(tmp_path, monke
     )
 
     # Result output paths stay station-relative, not under the model bundle.
-    expected_output_dir = str((station_root / "outputs").resolve())
+    expected_output_dir = str((result_root / "outputs").resolve())
     assert cfg_snapshot.output_dir == expected_output_dir
 
     # Model resources still resolve relative to the model config folder.
@@ -567,7 +567,7 @@ def test_model_manager_rejects_output_dir_outside_injected_root(
     base_config = DetectionConfig.from_yaml(str(global_cfg_path))
     manager = ModelManager(
         DetectionLogger(),
-        output_root=tmp_path / "station",
+        results_root=tmp_path / "Result",
     )
 
     with pytest.raises(SecurityError):

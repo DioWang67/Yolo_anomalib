@@ -10,6 +10,7 @@ from core.security import (
     SecurityError,
     ensure_subpath,
     resolve_output_dir,
+    resolve_result_output_dir,
     safe_segment,
 )
 
@@ -207,6 +208,35 @@ class TestSharedSecurityApi:
         resolved = resolve_output_dir("Result", base_dir=root, allowed_root=root)
 
         assert resolved == (root / "Result").resolve()
+
+    def test_result_output_alias_resolves_to_dedicated_root(self, tmp_path):
+        result_root = tmp_path / "Result"
+
+        assert resolve_result_output_dir(
+            "Result",
+            result_root=result_root,
+        ) == result_root.resolve()
+        assert resolve_result_output_dir(
+            "exports",
+            result_root=result_root,
+        ) == (result_root / "exports").resolve()
+
+    @pytest.mark.parametrize(
+        "value",
+        ("../Result", "Result/../../outside", "C:relative"),
+    )
+    def test_result_output_rejects_traversal(self, tmp_path, value):
+        with pytest.raises(SecurityError, match="not allowed"):
+            resolve_result_output_dir(value, result_root=tmp_path / "Result")
+
+    def test_result_output_rejects_absolute_path_outside_root(self, tmp_path):
+        result_root = tmp_path / "Result"
+
+        with pytest.raises(SecurityError):
+            resolve_result_output_dir(
+                tmp_path / "outside",
+                result_root=result_root,
+            )
 
 
 class TestGlobalPathValidator:

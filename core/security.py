@@ -20,11 +20,11 @@ class SecurityError(Exception):
 
 class PathValidator:
     """Validate file paths to prevent directory traversal attacks.
-    
+
     This validator ensures that all file paths accessed by the application
     are within allowed root directories, preventing attackers from accessing
     sensitive files outside the intended scope.
-    
+
     Example:
         >>> validator = PathValidator(allowed_roots=[Path("/app/data")])
         >>> safe_path = validator.validate_path("/app/data/config.yaml")
@@ -34,7 +34,7 @@ class PathValidator:
 
     def __init__(self, allowed_roots: list[Path]) -> None:
         """Initialize the path validator.
-        
+
         Args:
             allowed_roots: List of root directories that are allowed to be accessed.
         """
@@ -55,7 +55,7 @@ class PathValidator:
         Raises:
             SecurityError: If path is outside allowed root directories
             FileNotFoundError: If must_exist=True and path doesn't exist
-            
+
         Example:
             >>> validator = PathValidator(allowed_roots=[Path("/app")])
             >>> # Safe path
@@ -87,14 +87,14 @@ class PathValidator:
     @staticmethod
     def _is_relative_to(path: Path, parent: Path) -> bool:
         """Check if path is relative to parent directory.
-        
+
         This is a compatibility shim for Python < 3.9 which doesn't have
         Path.is_relative_to() built-in.
-        
+
         Args:
             path: Path to check
             parent: Parent directory
-            
+
         Returns:
             True if path is under parent, False otherwise
         """
@@ -190,6 +190,34 @@ def resolve_output_dir(
         base = Path(base_dir).resolve() if base_dir is not None else root
         candidate = base / candidate
     return ensure_subpath(candidate, root, must_exist=False)
+
+
+def resolve_result_output_dir(
+    value: str | Path | None,
+    *,
+    result_root: str | Path,
+) -> Path:
+    """Resolve a configured result path under one dedicated result root.
+
+    The historical ``Result`` prefix is treated as an alias for the configured
+    root. Other relative values become subdirectories of that root. Traversal
+    components are rejected even when normalization would land back inside it.
+    """
+    root = Path(result_root).expanduser().resolve()
+    raw = str(value or "").strip() or root.name
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        return ensure_subpath(candidate, root, must_exist=False)
+    if candidate.drive or candidate.root:
+        raise SecurityError("Drive-relative Result output paths are not allowed")
+    if ".." in candidate.parts:
+        raise SecurityError("Result output path traversal is not allowed")
+    base = (
+        root.parent
+        if candidate.parts and candidate.parts[0].casefold() == root.name.casefold()
+        else root
+    )
+    return ensure_subpath(base / candidate, root, must_exist=False)
 
 
 # Global path validator instance

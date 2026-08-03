@@ -56,12 +56,18 @@ def build_migration_plan(
     source_root: str | Path,
     station_root: str | Path,
     artifacts_root: str | Path,
+    results_root: str | Path | None = None,
 ) -> tuple[MigrationEntry, ...]:
     """Return deterministic allowlisted moves without changing the filesystem."""
     source = Path(source_root).expanduser().resolve()
     station = Path(station_root).expanduser().resolve()
     artifacts = Path(artifacts_root).expanduser().resolve()
-    if source in {station, artifacts}:
+    results = (
+        Path(results_root).expanduser().resolve()
+        if results_root is not None
+        else station / "Result"
+    )
+    if source in {station, artifacts, results}:
         raise StationDataMigrationError(
             "Station data and release artifacts must be outside the source root."
         )
@@ -82,9 +88,9 @@ def build_migration_plan(
             continue
         entries.extend(
             MigrationEntry(
-                "station_data",
+                "result_data",
                 child,
-                station / name / child.relative_to(candidate),
+                results / child.relative_to(candidate),
             )
             for child in sorted(
                 (path for path in candidate.rglob("*") if path.is_file()),
@@ -271,7 +277,12 @@ def main() -> int:
             entries = rollback_migration(manifest)
             print(f"Rolled back {len(entries)} path(s).")
             return 0
-        entries = build_migration_plan(source_root, paths.root, paths.artifacts_root)
+        entries = build_migration_plan(
+            source_root,
+            paths.root,
+            paths.artifacts_root,
+            paths.results,
+        )
         _print_plan(entries)
         if not args.apply:
             print(f"Dry run only: {len(entries)} path(s). Use --apply to migrate.")

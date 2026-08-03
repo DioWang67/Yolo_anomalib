@@ -48,3 +48,18 @@ def test_migration_manifest_supports_full_rollback(tmp_path: Path) -> None:
     assert (source / "Result" / "record.json").is_file()
     assert (source / "dist" / "app.exe").is_file()
     assert not manifest.exists()
+
+
+def test_plan_routes_result_files_to_dedicated_result_root(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    station = tmp_path / "station"
+    artifacts = tmp_path / "artifacts"
+    results = tmp_path / "Result"
+    result_file = source / "Result" / "20260803" / "record.json"
+    result_file.parent.mkdir(parents=True)
+    result_file.write_text("{}", encoding="utf-8")
+
+    plan = build_migration_plan(source, station, artifacts, results)
+
+    assert len(plan) == 1
+    assert plan[0].destination == results / "20260803" / "record.json"
