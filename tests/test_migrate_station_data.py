@@ -21,7 +21,7 @@ def test_plan_moves_only_allowlisted_runtime_data(tmp_path: Path) -> None:
     plan = build_migration_plan(source, station, artifacts)
 
     moved_names = {entry.source.name for entry in plan}
-    assert moved_names == {"Result", "acceptance", "review_manifest.csv"}
+    assert moved_names == {"acceptance", "review_manifest.csv"}
     assert all(entry.destination.parent == station for entry in plan)
 
 

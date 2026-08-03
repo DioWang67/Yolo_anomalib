@@ -30,8 +30,8 @@ DATA_DIRECTORIES = (
     "acceptance",
     "acceptance_reports",
     "logs",
-    "Result",
 )
+CONTENT_DIRECTORIES = ("Result",)
 REVIEW_FILE_PATTERNS = ("review_manifest*", ".review_manifest*")
 ARTIFACT_DIRECTORIES = ("dist",)
 MIGRATION_MANIFEST_NAME = "migration_manifest.json"
@@ -71,6 +71,26 @@ def build_migration_plan(
         candidate = source / name
         if candidate.exists():
             entries.append(MigrationEntry("station_data", candidate, station / name))
+
+    # Long-lived Explorer or background-process directory handles can prevent
+    # renaming Result and individual date directories on Windows even when no
+    # file is locked. Moving files preserves rollback guarantees and avoids a
+    # multi-gigabyte copy.
+    for name in CONTENT_DIRECTORIES:
+        candidate = source / name
+        if not candidate.is_dir():
+            continue
+        entries.extend(
+            MigrationEntry(
+                "station_data",
+                child,
+                station / name / child.relative_to(candidate),
+            )
+            for child in sorted(
+                (path for path in candidate.rglob("*") if path.is_file()),
+                key=lambda item: str(item.relative_to(candidate)).casefold(),
+            )
+        )
 
     review_files: set[Path] = set()
     for pattern in REVIEW_FILE_PATTERNS:
@@ -232,6 +252,14 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_plan(entries: Sequence[MigrationEntry]) -> None:
+    display_limit = 40
+    for entry in entries[:display_limit]:
+        print(f"[{entry.kind}] {entry.source} -> {entry.destination}")
+    if len(entries) > display_limit:
+        print(f"... {len(entries) - display_limit} additional file move(s) omitted ...")
+
+
 def main() -> int:
     args = _parser().parse_args()
     source_root = args.source_root.expanduser().resolve()
@@ -244,8 +272,7 @@ def main() -> int:
             print(f"Rolled back {len(entries)} path(s).")
             return 0
         entries = build_migration_plan(source_root, paths.root, paths.artifacts_root)
-        for entry in entries:
-            print(f"[{entry.kind}] {entry.source} -> {entry.destination}")
+        _print_plan(entries)
         if not args.apply:
             print(f"Dry run only: {len(entries)} path(s). Use --apply to migrate.")
             return 0
