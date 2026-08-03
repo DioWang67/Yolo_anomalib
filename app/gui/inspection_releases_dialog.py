@@ -74,7 +74,7 @@ class InspectionReleasesDialog(QDialog):
         self.is_inspection_running = is_inspection_running or (lambda: False)
         self.on_activated = on_activated
         self._releases: tuple[InspectionRelease, ...] = ()
-        self.setWindowTitle("檢測組合管理")
+        self.setWindowTitle("檢測組合與上線")
         self.resize(1180, 620)
         self._build_ui()
         self.refresh()
@@ -104,7 +104,7 @@ class InspectionReleasesDialog(QDialog):
         self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table, 1)
 
-        self.details = QLabel("選取發布版本以查看驗證規則。")
+        self.details = QLabel("選取組合版本以查看驗收規則。")
         self.details.setWordWrap(True)
         self.details.setStyleSheet("background: #f3f4f6; padding: 8px;")
         layout.addWidget(self.details)
@@ -114,11 +114,11 @@ class InspectionReleasesDialog(QDialog):
         self.refresh_btn.clicked.connect(self.refresh)
         self.compose_btn = QPushButton("建立檢測組合")
         self.compose_btn.clicked.connect(self._create_combination)
-        self.report_btn = QPushButton("開啟驗證報告資料夾")
+        self.report_btn = QPushButton("開啟驗收報告資料夾")
         self.report_btn.clicked.connect(self._open_report)
-        self.activate_btn = QPushButton("啟用選取版本")
+        self.activate_btn = QPushButton("發布並啟用選取組合")
         self.activate_btn.clicked.connect(self._activate_selected)
-        self.rollback_btn = QPushButton("退回前一版本")
+        self.rollback_btn = QPushButton("回退至前一正式組合")
         self.rollback_btn.clicked.connect(self._rollback)
         actions.addWidget(self.refresh_btn)
         actions.addWidget(self.compose_btn)
@@ -213,13 +213,13 @@ class InspectionReleasesDialog(QDialog):
         allowed = self.store.policy.allowed_modes(release)
         warnings = self.store.policy.validation_warnings(release)
         if ActivationMode.FULL in allowed:
-            policy = "驗證完整；可正式啟用，也可先有限試跑。"
-            self.activate_btn.setText("選擇啟用模式")
+            policy = "驗收完整；可正式上線，也可先有限試跑。"
+            self.activate_btn.setText("選擇上線模式")
         elif ActivationMode.RISK_ACCEPTED in allowed:
             policy = (
-                "驗證資料有風險；你仍可選擇有限試跑，或記錄風險接受後套用。"
+                "驗收資料有風險；你仍可選擇有限試跑，或記錄風險接受後套用。"
             )
-            self.activate_btn.setText("選擇啟用模式")
+            self.activate_btn.setText("選擇上線模式")
         else:
             policy = "此版本已被明確封鎖，不能啟用。"
             self.activate_btn.setText("不可啟用")
@@ -246,12 +246,12 @@ class InspectionReleasesDialog(QDialog):
                 translated.append("缺少顏色 NG 真值，顏色逃逸率未知")
             elif warning.startswith("Validation false negatives"):
                 translated.append(
-                    f"驗證有漏檢（{warning.split(':', 1)[-1].strip()}）"
+                    f"驗收有漏檢（{warning.split(':', 1)[-1].strip()}）"
                 )
             elif warning.startswith("Validation inference errors"):
-                translated.append(f"驗證有推論錯誤（{warning.split(':', 1)[-1].strip()}）")
+                translated.append(f"驗收有推論錯誤（{warning.split(':', 1)[-1].strip()}）")
             elif warning.startswith("Release is a draft"):
-                translated.append("仍是草稿，尚未完成驗證")
+                translated.append("仍是草稿，尚未完成驗收")
             else:
                 translated.append(warning)
         return "；".join(translated)
@@ -452,15 +452,15 @@ class InspectionReleasesDialog(QDialog):
         if not allowed:
             return
         labels = {
-            ActivationMode.FULL: "正式啟用（驗證完整）",
+            ActivationMode.FULL: "正式上線（驗收完整）",
             ActivationMode.LIMITED_TRIAL: "有限試跑",
             ActivationMode.RISK_ACCEPTED: "風險接受後套用",
         }
         label_to_mode = {labels[mode]: mode for mode in allowed}
         selected_label, ok = QInputDialog.getItem(
             self,
-            "選擇啟用模式",
-            "啟用方式：",
+            "選擇上線模式",
+            "上線方式：",
             list(label_to_mode),
             editable=False,
         )
@@ -473,8 +473,8 @@ class InspectionReleasesDialog(QDialog):
             if (
                 QMessageBox.question(
                     self,
-                    "接受驗證風險",
-                    f"此操作會套用尚未完整驗證的組合。\n"
+                    "接受驗收風險",
+                    f"此操作會套用尚未完整驗收的組合。\n"
                     f"已知風險：{risk_text}\n\n仍要繼續嗎？",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.No,

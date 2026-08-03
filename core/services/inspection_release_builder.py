@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -117,6 +118,68 @@ def build_release_from_matrix(
         reason=reason,
         validation=validation,
     )
+
+
+def build_validated_release_from_matrix(
+    draft: InspectionRelease,
+    report_path: str | Path,
+    *,
+    combination_id: str,
+    status: ReleaseStatus = ReleaseStatus.TESTED,
+) -> InspectionRelease:
+    """Project exact matrix evidence onto the same immutable draft identity."""
+    if draft.status is not ReleaseStatus.DRAFT:
+        raise InspectionReleaseError("只有 DRAFT 組合可以套用快速驗收結果。")
+    if status not in {ReleaseStatus.TESTED, ReleaseStatus.BLOCKED}:
+        raise InspectionReleaseError("驗收結果狀態必須是 TESTED 或 BLOCKED。")
+    report = Path(report_path).expanduser().resolve()
+    if report.is_symlink() or not report.is_file():
+        raise InspectionReleaseError(f"驗收報告不存在或不安全：{report}")
+    try:
+        payload = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InspectionReleaseError("驗收報告無法讀取。") from exc
+    if not isinstance(payload, Mapping) or payload.get("schema_version") != 1:
+        raise InspectionReleaseError("不支援的驗收矩陣格式。")
+    report_scope = InspectionScope(
+        str(payload.get("product") or ""),
+        str(payload.get("area") or ""),
+        template_for_inference_type(str(payload.get("inference_type") or "")).template_id,
+    )
+    if report_scope != draft.scope:
+        raise InspectionReleaseError("驗收報告的產品、區域或檢測類型不符。")
+    combination = _find(payload.get("combinations"), "combination_id", combination_id)
+    model = _find(
+        payload.get("model_variants"),
+        "variant_id",
+        str(combination.get("model_variant_id") or ""),
+    )
+    color = _find(
+        payload.get("color_variants"),
+        "variant_id",
+        str(combination.get("color_variant_id") or ""),
+    )
+    _verify_matrix_model_matches_draft(draft, model)
+    _verify_matrix_color_matches_draft(draft, color)
+    sample_count = int(payload.get("sample_count") or 0)
+    if sample_count <= 0:
+        raise InspectionReleaseError("驗收報告沒有已執行的人工確認樣本。")
+    metrics = combination.get("metrics") or {}
+    color_metrics = combination.get("color_metrics") or {}
+    if not isinstance(metrics, Mapping) or not isinstance(color_metrics, Mapping):
+        raise InspectionReleaseError("驗收報告的指標格式無效。")
+    validation = ValidationEvidence(
+        report_path=str(report),
+        report_sha256=sha256_file(report),
+        run_id=str(payload.get("run_id") or ""),
+        sample_count=sample_count,
+        combination_id=combination_id,
+        metrics=tuple(sorted((str(key), value) for key, value in metrics.items())),
+        color_metrics=tuple(
+            sorted((str(key), value) for key, value in color_metrics.items())
+        ),
+    )
+    return replace(draft, status=status, validation=validation)
 
 
 def build_draft_release(
@@ -242,6 +305,80 @@ def _find(items: Any, key: str, value: str) -> Mapping[str, Any]:
         if isinstance(item, Mapping) and str(item.get(key) or "") == value:
             return item
     raise InspectionReleaseError(f"Acceptance report does not contain {value!r}.")
+
+
+def _verify_matrix_model_matches_draft(
+    draft: InspectionRelease,
+    model: Mapping[str, Any],
+) -> None:
+    if draft.scope.inference_type == "fusion":
+        raise InspectionReleaseError("Fusion 組合不能使用單模型快速驗收報告。")
+    role = (
+        "primary_detector"
+        if draft.scope.inference_type == "yolo"
+        else "anomaly_detector"
+    )
+    component = draft.component_for_role(role)
+    identity = model.get("identity") or {}
+    if component is None or not isinstance(identity, Mapping):
+        raise InspectionReleaseError("驗收報告缺少選取組合的模型識別。")
+    expected = (
+        component.version,
+        component.artifact_sha256.lower(),
+        component.config_sha256.lower(),
+        str(Path(component.artifact_path).expanduser().resolve()),
+        str(Path(component.config_path).expanduser().resolve()),
+    )
+    actual = (
+        str(identity.get("version") or ""),
+        str(identity.get("sha256") or "").lower(),
+        str(identity.get("runtime_config_sha256") or "").lower(),
+        str(Path(str(model.get("weight_path") or "")).expanduser().resolve()),
+        str(Path(str(model.get("config_path") or "")).expanduser().resolve()),
+    )
+    if actual != expected:
+        raise InspectionReleaseError(
+            "驗收報告使用的模型、權重或 config 不是選取的組合版本。"
+        )
+
+
+def _verify_matrix_color_matches_draft(
+    draft: InspectionRelease,
+    color: Mapping[str, Any],
+) -> None:
+    if bool(color.get("include_active_revisions")):
+        raise InspectionReleaseError("快速驗收不得使用執行當下的 Active 顏色指標。")
+    raw_overrides = color.get("revision_overrides") or {}
+    if not isinstance(raw_overrides, Mapping):
+        raise InspectionReleaseError("驗收報告的逐色修訂格式無效。")
+    actual_overrides = {
+        str(key): str(value) for key, value in raw_overrides.items()
+    }
+    component = draft.component_for_role("color_check")
+    raw_color_path = str(color.get("color_model_path") or "").strip()
+    actual_color_path = (
+        str(Path(raw_color_path).expanduser().resolve()) if raw_color_path else ""
+    )
+    actual_color_sha256 = str(color.get("color_model_sha256") or "").lower()
+    if component is None:
+        if actual_overrides or actual_color_path or actual_color_sha256:
+            raise InspectionReleaseError(
+                "驗收報告套用了選取組合未綁定的顏色版本。"
+            )
+        return
+    expected_color_path = (
+        str(Path(component.artifact_path).expanduser().resolve())
+        if component.artifact_path
+        else ""
+    )
+    if (
+        actual_overrides != dict(component.revision_overrides)
+        or actual_color_path != expected_color_path
+        or actual_color_sha256 != component.artifact_sha256.lower()
+    ):
+        raise InspectionReleaseError(
+            "驗收報告使用的顏色基準或逐色修訂不是選取的組合版本。"
+        )
 
 
 def _model_components(model: Mapping[str, Any], inference_type: str) -> list[ComponentBinding]:

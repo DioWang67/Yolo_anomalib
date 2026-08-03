@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -11,6 +12,7 @@ import pytest
 from core.services.inspection_release_builder import (
     build_draft_release,
     build_release_from_matrix,
+    build_validated_release_from_matrix,
 )
 from core.services.inspection_release_models import (
     PIPELINE_TEMPLATES,
@@ -148,6 +150,115 @@ def test_store_commit_load_and_checksum_tamper_detection(tmp_path):
     release_path.write_text("{}", encoding="utf-8")
     with pytest.raises(InspectionReleaseError, match="checksum"):
         store.load(release.scope, release.release_id)
+
+
+def test_validation_attestation_projects_same_draft_as_tested(tmp_path):
+    draft = _release(
+        tmp_path / "artifacts",
+        status=ReleaseStatus.DRAFT,
+    )
+    store = InspectionReleaseStore(tmp_path / "store")
+    store.commit(draft)
+    report_path, report_sha = _write(
+        tmp_path / "validation" / "report.json",
+        b'{"run": "quick-validation"}',
+    )
+    validation = ValidationEvidence(
+        report_path=report_path,
+        report_sha256=report_sha,
+        run_id="quick-validation",
+        sample_count=250,
+        metrics=(("errors", 0), ("fn", 0), ("fp", 9)),
+        color_metrics=(("escape_rate", None), ("overkill_rate", 0.0347)),
+        combination_id="exact-release-combination",
+    )
+    validated = replace(
+        draft,
+        status=ReleaseStatus.TESTED,
+        validation=validation,
+    )
+
+    projected = store.commit_validation(
+        validated,
+        validator="reviewer",
+        reason="single exact combination completed",
+    )
+    repeated = store.commit_validation(
+        validated,
+        validator="reviewer",
+        reason="idempotent retry",
+    )
+
+    assert projected == repeated
+    assert projected.release_id == draft.release_id
+    assert projected.display_version == draft.display_version
+    assert projected.components == draft.components
+    assert projected.status is ReleaseStatus.TESTED
+    assert projected.validation == validation
+    assert store.commit(draft) == projected
+    assert store.list_releases()[0] == projected
+    raw_payload = json.loads(
+        (store.release_dir(draft) / "release.json").read_text(encoding="utf-8")
+    )
+    assert raw_payload["status"] == "DRAFT"
+    attestations = tuple(
+        (
+            store.root
+            / "validations"
+            / draft.scope.scope_hash
+            / draft.release_id
+        ).glob("*.json")
+    )
+    assert len(attestations) == 1
+
+
+def test_validation_attestation_checksum_tamper_is_rejected(tmp_path):
+    draft = _release(
+        tmp_path / "artifacts",
+        status=ReleaseStatus.DRAFT,
+    )
+    store = InspectionReleaseStore(tmp_path / "store")
+    store.commit(draft)
+    validated = replace(draft, status=ReleaseStatus.TESTED)
+    store.commit_validation(
+        validated,
+        validator="reviewer",
+        reason="completed",
+    )
+    validation_root = (
+        store.root
+        / "validations"
+        / draft.scope.scope_hash
+        / draft.release_id
+    )
+    attestation_path = next(validation_root.glob("*.json"))
+    payload = json.loads(attestation_path.read_text(encoding="utf-8"))
+    payload["reason"] = "tampered"
+    attestation_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(InspectionReleaseError, match="checksum"):
+        store.load(draft.scope, draft.release_id)
+
+
+def test_validation_attestation_rejects_changed_draft_identity(tmp_path):
+    draft = _release(
+        tmp_path / "artifacts",
+        status=ReleaseStatus.DRAFT,
+    )
+    store = InspectionReleaseStore(tmp_path / "store")
+    store.commit(draft)
+    changed = replace(
+        draft,
+        display_version="inspection-v9.9.9",
+        status=ReleaseStatus.TESTED,
+    )
+
+    with pytest.raises(InspectionReleaseConflictError, match="does not match"):
+        store.commit_validation(
+            changed,
+            validator="reviewer",
+            reason="must not rebind a version",
+        )
 
 
 def test_unknown_color_escape_allows_trial_or_explicit_risk_acceptance(tmp_path):
@@ -328,6 +439,41 @@ def test_builder_binds_exact_matrix_combination(tmp_path):
     assert release.components[1].config_path == str(Path(color_path).resolve())
     assert release.color_revision_overrides() == {scope_hash: revision_id}
     assert release.validation.color_escape_known is False
+
+    draft = replace(
+        release,
+        status=ReleaseStatus.DRAFT,
+        validation=ValidationEvidence(
+            report_path="",
+            report_sha256="",
+            run_id="UNVALIDATED",
+            sample_count=0,
+            metrics=(("errors", None), ("fn", None), ("fp", None)),
+            color_metrics=(("escape_rate", None),),
+        ),
+    )
+    validated = build_validated_release_from_matrix(
+        draft,
+        report_path,
+        combination_id="combo-1",
+    )
+
+    assert validated.release_id == draft.release_id
+    assert validated.display_version == draft.display_version
+    assert validated.components == draft.components
+    assert validated.status is ReleaseStatus.TESTED
+    assert validated.validation.sample_count == 250
+
+    mismatched_report = tmp_path / "mismatched-report.json"
+    mismatched_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    mismatched_payload["model_variants"][0]["identity"]["version"] = "9.9.9"
+    mismatched_report.write_text(json.dumps(mismatched_payload), encoding="utf-8")
+    with pytest.raises(InspectionReleaseError, match="不是選取的組合版本"):
+        build_validated_release_from_matrix(
+            draft,
+            mismatched_report,
+            combination_id="combo-1",
+        )
 
 
 def test_builder_binds_exact_full_color_baseline_from_matrix(tmp_path):

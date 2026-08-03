@@ -20,6 +20,7 @@ from typing import Any
 from core.security import safe_segment
 
 INSPECTION_RELEASE_SCHEMA_VERSION = 1
+RELEASE_VALIDATION_ATTESTATION_SCHEMA_VERSION = 1
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 
@@ -353,6 +354,81 @@ class ValidationEvidence:
             color_metrics=tuple(
                 sorted((str(key), value) for key, value in color_metrics.items())
             ),
+        )
+
+
+@dataclass(frozen=True)
+class ReleaseValidationAttestation:
+    """Append-only proof that one immutable draft completed validation."""
+
+    attestation_id: str
+    release_id: str
+    scope_hash: str
+    base_release_sha256: str
+    status: ReleaseStatus
+    validated_at: str
+    validator: str
+    reason: str
+    validation: ValidationEvidence
+
+    def __post_init__(self) -> None:
+        if not _SHA256_RE.fullmatch(self.attestation_id.lower()):
+            raise InspectionReleaseError("Validation attestation ID is invalid.")
+        if not re.fullmatch(r"[0-9a-f-]{36}", self.release_id.lower()):
+            raise InspectionReleaseError("Validation attestation release ID is invalid.")
+        if not re.fullmatch(r"[0-9a-f]{24}", self.scope_hash.lower()):
+            raise InspectionReleaseError("Validation attestation scope is invalid.")
+        if not _SHA256_RE.fullmatch(self.base_release_sha256.lower()):
+            raise InspectionReleaseError("Validation base release checksum is invalid.")
+        if self.status not in {ReleaseStatus.TESTED, ReleaseStatus.BLOCKED}:
+            raise InspectionReleaseError("Validation attestation must be TESTED or BLOCKED.")
+        if not self.validated_at.strip() or not self.validator.strip() or not self.reason.strip():
+            raise InspectionReleaseError(
+                "Validation timestamp, validator, and reason are required."
+            )
+        if self.validation.sample_count <= 0 or not self.validation.combination_id:
+            raise InspectionReleaseError(
+                "Validation attestation requires samples and an exact combination."
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": RELEASE_VALIDATION_ATTESTATION_SCHEMA_VERSION,
+            "attestation_id": self.attestation_id.lower(),
+            "release_id": self.release_id,
+            "scope_hash": self.scope_hash.lower(),
+            "base_release_sha256": self.base_release_sha256.lower(),
+            "status": self.status.value,
+            "validated_at": self.validated_at,
+            "validator": self.validator,
+            "reason": self.reason,
+            "validation": self.validation.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> ReleaseValidationAttestation:
+        if payload.get("schema_version") != RELEASE_VALIDATION_ATTESTATION_SCHEMA_VERSION:
+            raise InspectionReleaseError("Unsupported validation attestation schema.")
+        validation_payload = payload.get("validation")
+        if not isinstance(validation_payload, Mapping):
+            raise InspectionReleaseError("Validation attestation evidence is invalid.")
+        try:
+            status = ReleaseStatus(str(payload.get("status") or ""))
+        except ValueError as exc:
+            raise InspectionReleaseError("Validation attestation status is invalid.") from exc
+        return cls(
+            attestation_id=str(payload.get("attestation_id") or "").lower(),
+            release_id=str(payload.get("release_id") or ""),
+            scope_hash=str(payload.get("scope_hash") or "").lower(),
+            base_release_sha256=str(payload.get("base_release_sha256") or "").lower(),
+            status=status,
+            validated_at=str(payload.get("validated_at") or ""),
+            validator=str(payload.get("validator") or ""),
+            reason=str(payload.get("reason") or ""),
+            validation=ValidationEvidence.from_dict(validation_payload),
         )
 
 

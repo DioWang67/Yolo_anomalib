@@ -1,4 +1,4 @@
-"""Rebuild immutable Stats Color baselines from confirmed acceptance evidence.
+"""Rebuild immutable Stats Color baselines from verified human-reviewed OK evidence.
 
 The module intentionally separates numerical rebuilding from append-only
 persistence.  It never changes a model config, an active color revision, or an
@@ -39,8 +39,21 @@ class ColorBaselineCancelled(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ColorBaselineImageSample:
+    """One verified OK image selected from an auditable evidence source."""
+
+    sample_id: str
+    image_path: Path
+    image_sha256: str
+    product: str
+    area: str
+    source_kind: str
+    source_manifest: str = ""
+
+
+@dataclass(frozen=True)
 class ColorCropEvidence:
-    """One component crop tied to a confirmed acceptance sample."""
+    """One component crop tied to a verified OK image."""
 
     sample_id: str
     color: str
@@ -156,6 +169,7 @@ class StatsColorBaselineRebuilder:
         base_model_path: str | Path,
         evidence: Sequence[ColorCropEvidence],
         expected_colors: Sequence[str] = DEFAULT_COLORS,
+        evidence_metadata: Mapping[str, Any] | None = None,
         cancel_callback: Callable[[], bool] | None = None,
     ) -> ColorBaselineBuild:
         base_path = Path(base_model_path).expanduser().resolve()
@@ -166,7 +180,8 @@ class StatsColorBaselineRebuilder:
             base_summary,
         )
         grouped = _validate_and_group_evidence(evidence, canonical_colors)
-        evidence_sha256 = _evidence_digest(evidence)
+        normalized_metadata = _normalized_evidence_metadata(evidence_metadata)
+        evidence_sha256 = _evidence_digest(evidence, normalized_metadata)
         candidate_summary = json.loads(json.dumps(base_summary))
         split_by_color: dict[str, tuple[tuple[ColorCropEvidence, ...], tuple[ColorCropEvidence, ...]]] = {}
         preliminary_states: dict[str, tuple[str, str]] = {}
@@ -200,6 +215,13 @@ class StatsColorBaselineRebuilder:
             "minimum_holdout_crops": self.minimum_holdout_crops,
             "holdout_fraction": self.holdout_fraction,
         }
+        if normalized_metadata:
+            model_payload["recalibration"]["evidence_lineage_sha256"] = (
+                hashlib.sha256(_canonical_json(normalized_metadata)).hexdigest()
+            )
+            model_payload["recalibration"]["evidence_source_counts"] = dict(
+                normalized_metadata.get("counts") or {}
+            )
 
         candidate_checker = _checker_from_payload(model_payload)
         previous_checker = StatsColorChecker.from_json(base_path)
@@ -265,6 +287,8 @@ class StatsColorBaselineRebuilder:
                 "候選仍須用既有驗收矩陣測試，通過後才能建立與啟用發布組合。",
             ],
         }
+        if normalized_metadata:
+            report_payload["evidence_sources"] = normalized_metadata
         return ColorBaselineBuild(
             status=status,
             model_payload=model_payload,
@@ -486,17 +510,50 @@ def collect_confirmed_ok_evidence(
     progress_callback: Callable[[int, int, str], None] | None = None,
     cancel_callback: Callable[[], bool] | None = None,
 ) -> tuple[ColorCropEvidence, ...]:
-    """Rerun a selected detector and crop known colors from confirmed OK images."""
-    selected = tuple(
+    """Compatibility wrapper for acceptance-only baseline evidence."""
+    selected_records = tuple(
         record
         for record in records
         if str(record.review_status).casefold() == "confirmed" and str(record.expected_verdict).upper() == "OK"
     )
+    samples = tuple(
+        ColorBaselineImageSample(
+            sample_id=str(record.sample_id),
+            image_path=Path(repository.image_file(record)).resolve(),
+            image_sha256=str(record.image_sha256),
+            product=str(getattr(record, "product", "")),
+            area=str(getattr(record, "area", "")),
+            source_kind="acceptance",
+            source_manifest=str(getattr(repository, "manifest_path", "")),
+        )
+        for record in selected_records
+    )
+    return collect_color_baseline_evidence(
+        inference_service=inference_service,
+        samples=samples,
+        inference_type=inference_type,
+        expected_colors=expected_colors,
+        progress_callback=progress_callback,
+        cancel_callback=cancel_callback,
+    )
+
+
+def collect_color_baseline_evidence(
+    *,
+    inference_service: Any,
+    samples: Sequence[ColorBaselineImageSample],
+    inference_type: str,
+    expected_colors: Sequence[str] = DEFAULT_COLORS,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
+) -> tuple[ColorCropEvidence, ...]:
+    """Rerun the selected detector and crop known colors from verified OK images."""
+    selected = tuple(samples)
     color_lookup = {str(color).casefold(): str(color) for color in expected_colors}
     evidence: list[ColorCropEvidence] = []
     for index, record in enumerate(selected, start=1):
         _raise_if_cancelled(cancel_callback)
-        image_path = repository.image_file(record)
+        image_path = record.image_path
         _frame, result = inference_service.detect_raw(
             record,
             image_path,
@@ -683,7 +740,10 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _evidence_digest(evidence: Sequence[ColorCropEvidence]) -> str:
+def _evidence_digest(
+    evidence: Sequence[ColorCropEvidence],
+    metadata: Mapping[str, Any] | None = None,
+) -> str:
     digest = hashlib.sha256()
     for item in sorted(
         evidence,
@@ -701,7 +761,30 @@ def _evidence_digest(evidence: Sequence[ColorCropEvidence]) -> str:
         digest.update(item.source_sha256.encode("ascii", errors="ignore"))
         digest.update(b"\0")
         digest.update(hashlib.sha256(np.ascontiguousarray(item.image_bgr).tobytes()).digest())
+    if metadata:
+        digest.update(b"\0lineage\0")
+        digest.update(_canonical_json(metadata))
     return digest.hexdigest()
+
+
+def _normalized_evidence_metadata(
+    metadata: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if metadata is None:
+        return {}
+    try:
+        encoded = json.dumps(
+            dict(metadata),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        normalized = json.loads(encoded)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ColorBaselineError("Color baseline evidence metadata is not JSON-safe.") from exc
+    if not isinstance(normalized, dict):
+        raise ColorBaselineError("Color baseline evidence metadata must be a mapping.")
+    return normalized
 
 
 def _payload_sha256(payload: Mapping[str, Any]) -> str:

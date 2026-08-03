@@ -72,6 +72,10 @@ from app.gui.training_batch_dialog import (
 )
 from core.retraining_options import RetrainingOptions
 from core.services.inspection_repository import InspectionRepository
+from core.training_batch_version import (
+    TrainingBatchVersionError,
+    validate_training_batch_version,
+)
 from core.workspace import load_workspace_paths
 from tools.annotation_packages import load_annotation_package
 from tools.annotation_resume import AnnotationResumeService
@@ -108,6 +112,11 @@ from tools.processing_plan_validation import (
     build_validation_context_from_manifest,
 )
 from tools.processing_run_store import ProcessingRunStore
+from tools.retraining_workspaces import (
+    RetrainingWorkspace,
+    load_retraining_workspace,
+    mark_retraining_workspace_submitted,
+)
 from tools.review_action_planner import (
     DETECTION_PRESENT,
     DETECTION_UNKNOWN,
@@ -153,7 +162,12 @@ from tools.review_workflow import (
     record_identity,
     validate_record_consistency,
 )
-from tools.submission_history import record_submission_history
+from tools.submission_history import (
+    DuplicateTrainingBatchVersionError,
+    ensure_training_batch_version_available,
+    record_submission_history,
+    suggest_next_training_batch_version,
+)
 
 logger = logging.getLogger(__name__)
 LEGACY_SELECTED_PAGE_ENV = "YOLO_REVIEW_LEGACY_SELECTED_PAGE"
@@ -901,6 +915,8 @@ class ReviewCasesDialog(QDialog):
         show_embedded_navigation: bool = True,
         manifest_prepared: bool = False,
         prepared_rows: list[dict[str, str]] | None = None,
+        batch_version: str = "",
+        batch_workspace_dir: str | Path | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -910,6 +926,23 @@ class ReviewCasesDialog(QDialog):
         self.language = language
         self.product = product
         self.area = area
+        self.batch_workspace: RetrainingWorkspace | None = (
+            load_retraining_workspace(batch_workspace_dir)
+            if batch_workspace_dir is not None
+            else None
+        )
+        self.batch_version = str(batch_version or "").strip()
+        if self.batch_workspace is not None:
+            if self.batch_version and (
+                self.batch_version != self.batch_workspace.batch_version
+            ):
+                raise ValueError("補訓資料夾與批次版本不一致。")
+            self.batch_version = self.batch_workspace.batch_version
+            if product and area and (
+                self.batch_workspace.product,
+                self.batch_workspace.area,
+            ) != (product, area):
+                raise ValueError("補訓資料夾與目前產品／工位不一致。")
         self.current_index = 0
         self.visible_indices: list[int] = []
         self._filtered_indices: list[int] = []
@@ -953,7 +986,13 @@ class ReviewCasesDialog(QDialog):
         self.visible_indices = list(range(len(self.store.rows)))
         self.image_service = AsyncImageService.from_environment(parent=self)
 
-        self.setWindowTitle(self._text("產線模型補訓｜資料複核", "Production Retraining | Data Review"))
+        workspace_suffix = f"｜{self.batch_version}" if self.batch_version else ""
+        self.setWindowTitle(
+            self._text(
+                f"產線模型補訓｜資料複核{workspace_suffix}",
+                f"Production Retraining | Data Review{workspace_suffix}",
+            )
+        )
         if embedded:
             self.setWindowFlags(Qt.Widget)
         else:
@@ -1050,6 +1089,20 @@ class ReviewCasesDialog(QDialog):
 
     def _reconcile_handed_off_selection(self) -> None:
         """Exclude legacy rows that already exist in ready or pending data."""
+        batch_workspace = getattr(self, "batch_workspace", None)
+        if batch_workspace is not None:
+            if batch_workspace.state == "submitted":
+                handed_off_indices = {
+                    index
+                    for index, row in enumerate(self.store.rows)
+                    if str(row.get("training_selected") or "0") == "1"
+                    and _is_trainable_review(row)
+                }
+                self._handed_off_indices = handed_off_indices
+                self.store.mark_submitted_indices(handed_off_indices)
+            else:
+                self._handed_off_indices = set()
+            return
         handed_off_artifacts = _load_handed_off_artifacts(
             self.training_data_dir,
             self.store.rows,
@@ -1147,8 +1200,18 @@ class ReviewCasesDialog(QDialog):
             ),
             object_name="reviewSelectionHeading",
             context_text=self._text(
-                f"{self.product or '未選擇'}／{self.area or '未選擇'}",
-                f"{self.product or 'Not selected'} / {self.area or 'Not selected'}",
+                (
+                    f"{self.batch_version}｜"
+                    if self.batch_version
+                    else ""
+                )
+                + f"{self.product or '未選擇'}／{self.area or '未選擇'}",
+                (
+                    f"{self.batch_version} | "
+                    if self.batch_version
+                    else ""
+                )
+                + f"{self.product or 'Not selected'} / {self.area or 'Not selected'}",
             ),
             context_tooltip=self._text(
                 "本頁只顯示這個機種與區域，不會混入其他機種。",
@@ -1461,7 +1524,7 @@ class ReviewCasesDialog(QDialog):
 
         self.batch_preview_button = QPushButton(self._text("待送清單", "Pending queue"))
         self.submission_history_button = QPushButton(
-            self._text("已送出紀錄", "Submitted history")
+            self._text("補訓批次紀錄", "Retraining batch history")
         )
         self.progress_button = QPushButton(self._text("補訓進度", "Training progress"))
         self.batch_preview_button.clicked.connect(self._open_selected_training_queue)
@@ -1777,7 +1840,7 @@ class ReviewCasesDialog(QDialog):
         )
         self.batch_preview_button.clicked.connect(self._open_selected_training_queue)
         self.submission_history_button = QPushButton(
-            self._text("已送出紀錄", "Submitted history")
+            self._text("補訓批次紀錄", "Retraining batch history")
         )
         self.submission_history_button.setMinimumHeight(42)
         self.submission_history_button.setStyleSheet(
@@ -2609,6 +2672,8 @@ class ReviewCasesDialog(QDialog):
 
     def _reprocessable_handed_off_indices(self) -> set[int]:
         """Return selected historical cases that can be queued again."""
+        if getattr(self, "batch_workspace", None) is not None:
+            return set()
         return {
             index
             for index in self.visible_indices
@@ -3100,7 +3165,9 @@ class ReviewCasesDialog(QDialog):
         entries = [
             (index, row)
             for index, row in enumerate(self.store.rows)
-            if str(row.get("review_label") or "") in eligible_labels and str(row.get("training_selected") or "1") != "0"
+            if str(row.get("review_label") or "") in eligible_labels
+            and str(row.get("training_selected") or "1") != "0"
+            and index not in self._handed_off_indices
         ]
         if not entries:
             QMessageBox.information(
@@ -3409,6 +3476,7 @@ class ReviewCasesDialog(QDialog):
         selected_indices: set[int],
         *,
         training_options: RetrainingOptions | None = None,
+        batch_version: str = "",
         destination: str | None = None,
     ) -> None:
         """Create a verified ZIP without starting training on the inference PC."""
@@ -3416,9 +3484,10 @@ class ReviewCasesDialog(QDialog):
             return
         if not self._selected_rows_match_target(selected_indices):
             return
+        batch_product, batch_area = self._selected_training_target(selected_indices)
         default_name = (
-            f"portable_training_{self.product or 'product'}_"
-            f"{self.area or 'area'}_{datetime.now():%Y%m%d_%H%M%S}.zip"
+            f"portable_training_{batch_product}_"
+            f"{batch_area}_{datetime.now():%Y%m%d_%H%M%S}.zip"
         )
         if destination is None:
             destination, _selected_filter = QFileDialog.getSaveFileName(
@@ -3432,6 +3501,18 @@ class ReviewCasesDialog(QDialog):
         if training_options is None:
             settings_dialog = RetrainingSettingsDialog(
                 len(selected_indices),
+                product=batch_product,
+                area=batch_area,
+                batch_version=self.batch_version,
+                suggested_batch_version=(
+                    ""
+                    if self.batch_version
+                    else suggest_next_training_batch_version(
+                        self.training_data_dir,
+                        product=batch_product,
+                        area=batch_area,
+                    )
+                ),
                 parent=self,
             )
             if self._embedded:
@@ -3440,6 +3521,7 @@ class ReviewCasesDialog(QDialog):
                     on_accepted=lambda: self._export_portable_selected_indices(
                         selected_indices,
                         training_options=settings_dialog.options(),
+                        batch_version=settings_dialog.batch_version(),
                         destination=destination,
                     ),
                 )
@@ -3447,6 +3529,27 @@ class ReviewCasesDialog(QDialog):
             if settings_dialog.exec_() != QDialog.Accepted:
                 return
             training_options = settings_dialog.options()
+            batch_version = settings_dialog.batch_version()
+        try:
+            if self.batch_workspace is not None:
+                batch_version = validate_training_batch_version(
+                    self.batch_version,
+                    product=batch_product,
+                    area=batch_area,
+                )
+            else:
+                batch_version = ensure_training_batch_version_available(
+                    self.training_data_dir,
+                    product=batch_product,
+                    area=batch_area,
+                    batch_version=batch_version,
+                )
+        except (
+            DuplicateTrainingBatchVersionError,
+            TrainingBatchVersionError,
+        ) as exc:
+            QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
         try:
             selected_manifest = self._write_selected_manifest(
                 selected_indices,
@@ -3457,6 +3560,12 @@ class ReviewCasesDialog(QDialog):
                 self.training_data_dir,
                 inference_models_dir=self.result_root.parent / "models",
                 training_options=training_options.to_dict(),
+                batch_version=batch_version,
+                batch_workspace_dir=(
+                    self.batch_workspace.root
+                    if self.batch_workspace is not None
+                    else None
+                ),
             )
             if len(handoff_report.targets) != 1:
                 raise ValueError(
@@ -3471,6 +3580,7 @@ class ReviewCasesDialog(QDialog):
                 selected_indices,
                 handoff_report,
                 action="portable",
+                training_options=training_options,
             ):
                 return
             self._remove_submitted_rows_from_queue(selected_indices)
@@ -3487,10 +3597,12 @@ class ReviewCasesDialog(QDialog):
             self,
             self.windowTitle(),
             self._text(
+                f"補訓批次：{handoff_report.batch_version}\n"
                 f"離線補訓包已建立：\n{package_report.package_path}\n\n"
                 f"檔案數：{package_report.file_count}\n"
                 f"大小：{package_report.total_bytes / (1024 * 1024):.1f} MB\n\n"
                 "請在訓練電腦執行 import_operator_training.bat 並選擇此 ZIP。",
+                f"Retraining batch: {handoff_report.batch_version}\n"
                 f"Offline package created:\n{package_report.package_path}\n\n"
                 f"Files: {package_report.file_count}\n"
                 f"Size: {package_report.total_bytes / (1024 * 1024):.1f} MB\n\n"
@@ -3503,6 +3615,7 @@ class ReviewCasesDialog(QDialog):
         selected_indices: set[int],
         *,
         training_options: RetrainingOptions | None = None,
+        batch_version: str = "",
         settings_confirmed: bool = False,
     ) -> None:
         """Export an immutable snapshot and open the shared training center."""
@@ -3518,6 +3631,7 @@ class ReviewCasesDialog(QDialog):
             return
         if not self._selected_rows_match_target(selected_indices):
             return
+        batch_product, batch_area = self._selected_training_target(selected_indices)
         feedback_only = _is_confirmation_only_submission(
             self.store.rows,
             selected_indices,
@@ -3529,6 +3643,18 @@ class ReviewCasesDialog(QDialog):
         if not feedback_only and not color_only and not settings_confirmed:
             settings_dialog = RetrainingSettingsDialog(
                 len(selected_indices),
+                product=batch_product,
+                area=batch_area,
+                batch_version=self.batch_version,
+                suggested_batch_version=(
+                    ""
+                    if self.batch_version
+                    else suggest_next_training_batch_version(
+                        self.training_data_dir,
+                        product=batch_product,
+                        area=batch_area,
+                    )
+                ),
                 parent=self,
             )
             if self._embedded:
@@ -3537,6 +3663,7 @@ class ReviewCasesDialog(QDialog):
                     on_accepted=lambda: self._submit_selected_indices(
                         selected_indices,
                         training_options=settings_dialog.options(),
+                        batch_version=settings_dialog.batch_version(),
                         settings_confirmed=True,
                     ),
                 )
@@ -3544,6 +3671,7 @@ class ReviewCasesDialog(QDialog):
             if settings_dialog.exec_() != QDialog.Accepted:
                 return
             training_options = settings_dialog.options()
+            batch_version = settings_dialog.batch_version()
             settings_confirmed = True
         output_dir = self.training_data_dir
         if not output_dir.parent.exists():
@@ -3556,6 +3684,27 @@ class ReviewCasesDialog(QDialog):
                 ),
             )
             return
+        if not feedback_only and not color_only:
+            try:
+                if self.batch_workspace is not None:
+                    batch_version = validate_training_batch_version(
+                        self.batch_version,
+                        product=batch_product,
+                        area=batch_area,
+                    )
+                else:
+                    batch_version = ensure_training_batch_version_available(
+                        self.training_data_dir,
+                        product=batch_product,
+                        area=batch_area,
+                        batch_version=batch_version,
+                    )
+            except (
+                DuplicateTrainingBatchVersionError,
+                TrainingBatchVersionError,
+            ) as exc:
+                QMessageBox.warning(self, self.windowTitle(), str(exc))
+                return
         try:
             selected_manifest = self._write_selected_manifest(
                 selected_indices,
@@ -3567,6 +3716,14 @@ class ReviewCasesDialog(QDialog):
                 inference_models_dir=self.result_root.parent / "models",
                 training_options=(
                     training_options.to_dict() if training_options is not None else None
+                ),
+                batch_version=batch_version,
+                batch_workspace_dir=(
+                    self.batch_workspace.root
+                    if self.batch_workspace is not None
+                    and not feedback_only
+                    and not color_only
+                    else None
                 ),
             )
         except (OSError, ValueError, IndexError, csv.Error) as exc:
@@ -3584,6 +3741,12 @@ class ReviewCasesDialog(QDialog):
             f"Color calibration feedback: {report.color_feedback_count} item(s)\n"
             f"Unreviewed: {report.skipped_count}",
         )
+        report_batch_version = str(getattr(report, "batch_version", "") or "")
+        if report_batch_version:
+            message = self._text(
+                f"補訓批次：{report_batch_version}\n{message}",
+                f"Retraining batch: {report_batch_version}\n{message}",
+            )
         if color_only and report.color_feedback_count > 0:
             try:
                 color_progress = self._color_feedback_progress_message(report)
@@ -3645,6 +3808,7 @@ class ReviewCasesDialog(QDialog):
             selected_indices,
             report,
             action=submission_action,
+            training_options=training_options,
         ):
             return
         if feedback_only:
@@ -3703,6 +3867,17 @@ class ReviewCasesDialog(QDialog):
             return False
         return True
 
+    def _selected_training_target(
+        self,
+        selected_indices: set[int],
+    ) -> tuple[str, str]:
+        """Return the single target already validated for this batch."""
+        row = self.store.rows[min(selected_indices)]
+        return (
+            str(row.get("product") or "").strip(),
+            str(row.get("area") or "").strip(),
+        )
+
     def _record_submission_audit(
         self,
         selected_manifest: Path,
@@ -3710,6 +3885,7 @@ class ReviewCasesDialog(QDialog):
         report: Any,
         *,
         action: str,
+        training_options: RetrainingOptions | None = None,
     ) -> bool:
         """Persist a read-only audit record before removing submitted rows."""
         if len(report.targets) != 1:
@@ -3728,7 +3904,22 @@ class ReviewCasesDialog(QDialog):
                 color_feedback_count=report.color_feedback_count,
                 job_id=report.job_id,
                 handoff_path=report.handoff_path,
+                batch_version=str(getattr(report, "batch_version", "") or ""),
+                training_options=(
+                    training_options.to_dict()
+                    if training_options is not None
+                    else None
+                ),
             )
+            if (
+                self.batch_workspace is not None
+                and str(getattr(report, "batch_version", "") or "")
+            ):
+                self.batch_workspace = mark_retraining_workspace_submitted(
+                    self.batch_workspace.root,
+                    job_id=report.job_id,
+                    handoff_path=report.handoff_path,
+                )
         except (OSError, ValueError, TypeError) as exc:
             QMessageBox.critical(
                 self,
@@ -3747,6 +3938,11 @@ class ReviewCasesDialog(QDialog):
         submitted_indices: set[int],
     ) -> None:
         """Remove a successfully handed-off snapshot from the pending queue."""
+        if self.batch_workspace is not None:
+            self._handed_off_indices.update(submitted_indices)
+            self.store.mark_submitted_indices(submitted_indices)
+            self._show_current()
+            return
         try:
             self.store.set_training_selection(submitted_indices, set())
         except (OSError, sqlite3.Error, ValueError, IndexError) as exc:
@@ -3866,7 +4062,7 @@ class ReviewCasesDialog(QDialog):
         rollback_button.setObjectName("ExperimentalColorRollbackButton")
         rollback_button.setVisible(False)
         history_button = QPushButton(
-            self._text("查看已送出紀錄", "View submission history")
+            self._text("查看補訓批次紀錄", "View retraining batch history")
         )
         back_button = QPushButton(
             self._text("返回資料複核", "Back to data review")

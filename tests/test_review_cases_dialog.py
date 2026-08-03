@@ -34,6 +34,7 @@ from app.gui.review_selection_gallery import (
     record_reason_keys,
 )
 from app.gui.training_batch_dialog import TrainingBatchDialog
+from tools.retraining_workspaces import create_retraining_workspace
 from tools.review_classification import (
     COLOR_ISSUE,
     MISSED_DETECTION,
@@ -161,6 +162,36 @@ def test_embedded_workspace_opens_training_queue_as_same_window_page(
     assert isinstance(queue_page, TrainingBatchDialog)
     queue_page.reject()
     assert dialog.workflow_stack.currentWidget() is return_page
+
+
+def test_batch_folder_keeps_its_selected_manifest_after_handoff(tmp_path, qtbot):
+    result_root = tmp_path / "Result"
+    _write_failure_cases(result_root, count=1)
+    workspace = create_retraining_workspace(
+        tmp_path / "training-data",
+        product="Cable1",
+        area="A",
+        batch_version="Cable1_A_v0.0.1",
+    )
+    dialog = ReviewCasesDialog(
+        result_root=result_root,
+        manifest_path=workspace.manifest_path,
+        training_data_dir=tmp_path / "training-data",
+        language="zh_TW",
+        product="Cable1",
+        area="A",
+        batch_version=workspace.batch_version,
+        batch_workspace_dir=workspace.root,
+        embedded=True,
+    )
+    qtbot.addWidget(dialog)
+    dialog.store.set_review(0, "verified_empty")
+
+    dialog._remove_submitted_rows_from_queue({0})
+
+    assert dialog.store.rows[0]["training_selected"] == "1"
+    assert dialog._handed_off_indices == {0}
+    assert workspace.batch_version in dialog.windowTitle()
 
 
 def test_submitted_training_starts_orchestrator_in_background(
@@ -2207,7 +2238,7 @@ def test_review_dialog_always_exposes_submission_history(tmp_path, qtbot):
     )
     qtbot.addWidget(dialog)
 
-    assert dialog.submission_history_button.text() == "已送出紀錄"
+    assert dialog.submission_history_button.text() == "補訓批次紀錄"
     assert dialog.submission_history_button.isEnabled() is True
 
 

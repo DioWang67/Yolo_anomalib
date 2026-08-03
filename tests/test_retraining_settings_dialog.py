@@ -25,6 +25,51 @@ def test_retraining_settings_dialog_exposes_job_options(qtbot):
     assert "單計本批最多形成約 60 張" in dialog.summary_label.text()
 
 
+def test_retraining_settings_dialog_identifies_target_scoped_batch(qtbot):
+    dialog = RetrainingSettingsDialog(
+        10,
+        product="Cable1",
+        area="A",
+        suggested_batch_version="Cable1_A_v0.0.2",
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog.batch_version() == "Cable1_A_v0.0.2"
+    assert "補訓批次：Cable1_A_v0.0.2" in dialog.summary_label.text()
+
+
+def test_retraining_settings_dialog_does_not_rename_precreated_folder(qtbot):
+    dialog = RetrainingSettingsDialog(
+        10,
+        product="Cable1",
+        area="A",
+        batch_version="Cable1_A_v0.0.2",
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog.batch_version_edit.isReadOnly() is True
+    assert dialog.batch_version() == "Cable1_A_v0.0.2"
+
+
+def test_retraining_settings_dialog_blocks_version_for_another_target(
+    qtbot,
+    monkeypatch,
+):
+    warnings = []
+    monkeypatch.setattr(
+        "app.gui.retraining_settings_dialog.QMessageBox.warning",
+        lambda *_args: warnings.append(_args[-1]),
+    )
+    dialog = RetrainingSettingsDialog(1, product="Cable1", area="A")
+    qtbot.addWidget(dialog)
+    dialog.batch_version_edit.setText("Cable1_B_v0.0.1")
+
+    dialog.accept()
+
+    assert warnings
+    assert dialog.result() != dialog.Accepted
+
+
 def test_retraining_settings_dialog_supports_originals_only(qtbot):
     dialog = RetrainingSettingsDialog(3, initial=RetrainingOptions())
     qtbot.addWidget(dialog)

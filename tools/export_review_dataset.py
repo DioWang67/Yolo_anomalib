@@ -28,13 +28,19 @@ from typing import Any
 from PIL import Image
 
 from core.retraining_options import RetrainingOptions
+from core.training_batch_version import validate_training_batch_version
 from tools.color_feedback import export_color_feedback
 from tools.process_liveness import is_process_active
+from tools.retraining_workspaces import load_retraining_workspace
 from tools.review_routing import action_route
 from tools.review_workflow import (
     blocking_violations,
     record_identity,
     validate_record_consistency,
+)
+from tools.submission_history import (
+    claim_training_batch_version,
+    ensure_training_batch_version_available,
 )
 
 DEFAULT_LABELS = {
@@ -156,6 +162,7 @@ class OperatorHandoffReport:
     color_feedback_count: int = 0
     color_case_count: int = 0
     color_manifest_paths: tuple[Path, ...] = ()
+    batch_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -280,6 +287,8 @@ def export_operator_handoff(
     *,
     inference_models_dir: str | Path | None = None,
     training_options: dict[str, Any] | None = None,
+    batch_version: str = "",
+    batch_workspace_dir: str | Path | None = None,
 ) -> OperatorHandoffReport:
     """Export OP-confirmed boxes and route unsafe cases to an annotation queue.
 
@@ -292,6 +301,13 @@ def export_operator_handoff(
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
     selected_training_options = RetrainingOptions.from_mapping(training_options)
+    requested_batch_version = str(batch_version or "").strip()
+    requested_workspace_dir = (
+        Path(batch_workspace_dir).expanduser().resolve()
+        if batch_workspace_dir is not None
+        else None
+    )
+    selected_workspace = None
     updates: list[tuple[str, ExportedReviewItem | dict[str, str]]] = []
     skipped_count = 0
 
@@ -304,6 +320,68 @@ def export_operator_handoff(
         review_rows = _enrich_legacy_class_contracts(review_rows, output_root)
         _preflight_review_workflow(review_rows)
         _preflight_operator_class_contracts(review_rows)
+        normalized_batch_version = ""
+        version_target: tuple[str, str] | None = None
+        if requested_batch_version:
+            version_targets = {
+                (
+                    str(row.get("product") or "").strip(),
+                    str(row.get("area") or "").strip(),
+                )
+                for row in review_rows
+                if str(row.get("review_label") or "").strip()
+                and str(row.get("training_selected") or "1") != "0"
+                and action_route(row) != "color"
+            }
+            if len(version_targets) != 1:
+                raise ValueError(
+                    "具名補訓批次只能包含一個產品與工位。請分開送訓。"
+                )
+            version_target = next(iter(version_targets))
+            if not all(version_target):
+                raise ValueError(
+                    "具名補訓批次的產品與工位不可為空白。"
+                )
+            version_product, version_area = version_target
+            if requested_workspace_dir is not None:
+                workspace = load_retraining_workspace(requested_workspace_dir)
+                selected_workspace = workspace
+                expected_workspace_parent = (
+                    output_root / ".operator_handoff" / "jobs"
+                ).resolve()
+                if workspace.root.parent != expected_workspace_parent:
+                    raise ValueError(
+                        "補訓資料夾不在目前訓練中心內。"
+                    )
+                if (workspace.product, workspace.area) != version_target:
+                    raise ValueError(
+                        "補訓資料夾與所選照片的產品／工位不一致。"
+                    )
+                normalized_batch_version = validate_training_batch_version(
+                    requested_batch_version,
+                    product=workspace.product,
+                    area=workspace.area,
+                )
+                if normalized_batch_version != workspace.batch_version:
+                    raise ValueError(
+                        "補訓資料夾名稱與送訓版本不一致。"
+                    )
+                claim_training_batch_version(
+                    output_root,
+                    batch_version=normalized_batch_version,
+                    product=workspace.product,
+                    area=workspace.area,
+                    submission_hash=f"workspace:{normalized_batch_version.casefold()}",
+                    owner_job_id=normalized_batch_version,
+                    record_path=workspace.metadata_path,
+                )
+            else:
+                normalized_batch_version = ensure_training_batch_version_available(
+                    output_root,
+                    product=version_product,
+                    area=version_area,
+                    batch_version=requested_batch_version,
+                )
         allowed_ready_rows, deduplication_records = (
             _preflight_ready_canonical_selection(
                 review_rows,
@@ -454,9 +532,14 @@ def export_operator_handoff(
         }
         total_ready_count = sum(total_ready_by_target.values())
         total_pending_count = sum(total_pending_by_target.values())
+        if normalized_batch_version and targets != [version_target]:
+            raise ValueError(
+                "補訓批次目標與可訓練資料不一致，已停止送訓。"
+            )
         submission_hash = _operator_submission_hash(
             final_updates,
             selected_training_options,
+            normalized_batch_version,
         )
         existing_handoff = _find_active_operator_job(output_root, submission_hash)
         if existing_handoff is not None:
@@ -478,10 +561,25 @@ def export_operator_handoff(
                 color_feedback_count=color_feedback.item_count,
                 color_case_count=color_feedback.case_count,
                 color_manifest_paths=color_feedback.manifest_paths,
+                batch_version=str(existing_payload.get("batch_version") or ""),
             )
 
-        job_id = _new_operator_job_id()
-        job_dir = output_root / ".operator_handoff" / "jobs" / job_id
+        if selected_workspace is not None and selected_workspace.state != "draft":
+            raise ValueError(
+                f"補訓資料夾已送出：{selected_workspace.batch_version}。"
+                "請建立下一個版本資料夾。"
+            )
+
+        job_id = (
+            normalized_batch_version
+            if requested_workspace_dir is not None
+            else _new_operator_job_id()
+        )
+        job_dir = (
+            requested_workspace_dir
+            if requested_workspace_dir is not None
+            else output_root / ".operator_handoff" / "jobs" / job_id
+        )
         handoff_path = job_dir / "handoff.json"
         status_path = job_dir / "status.json"
         handoff_payload = {
@@ -489,6 +587,8 @@ def export_operator_handoff(
             "job_id": job_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "submission_hash": submission_hash,
+            "batch_version": normalized_batch_version,
+            "batch_workspace_dir": str(requested_workspace_dir or ""),
             "source_manifest": str(manifest_path.resolve()),
             "data_root": str(output_root.resolve()),
             "status_path": str(status_path.resolve()),
@@ -537,6 +637,16 @@ def export_operator_handoff(
                 for product, area in targets
             ],
         }
+        if normalized_batch_version:
+            claim_training_batch_version(
+                output_root,
+                batch_version=normalized_batch_version,
+                product=targets[0][0],
+                area=targets[0][1],
+                submission_hash=submission_hash,
+                owner_job_id=job_id,
+                record_path=handoff_path,
+            )
         _write_json_atomic(handoff_path, handoff_payload)
         # ``latest.json`` remains a compatibility view only. The launched
         # training process always receives the immutable job-specific path.
@@ -559,6 +669,7 @@ def export_operator_handoff(
             ready_count=total_ready_count,
             pending_count=len(pending_rows),
             progress=0,
+            batch_version=normalized_batch_version,
         )
 
     return OperatorHandoffReport(
@@ -574,6 +685,7 @@ def export_operator_handoff(
         color_feedback_count=color_feedback.item_count,
         color_case_count=color_feedback.case_count,
         color_manifest_paths=color_feedback.manifest_paths,
+        batch_version=normalized_batch_version,
     )
 
 
@@ -2620,6 +2732,7 @@ def _new_operator_job_id() -> str:
 def _operator_submission_hash(
     updates: list[tuple[str, ExportedReviewItem | dict[str, str]]],
     training_options: RetrainingOptions | None = None,
+    batch_version: str = "",
 ) -> str:
     fingerprint: list[dict[str, str]] = []
     for state, payload in updates:
@@ -2637,19 +2750,22 @@ def _operator_submission_hash(
                 "class_schema_hash": str(values.get("class_schema_hash") or ""),
             }
         )
-    serialized = json.dumps(
-        {
-            "samples": sorted(
-                fingerprint,
-                key=lambda item: (
-                    item["product"],
-                    item["area"],
-                    item["sample_id"],
-                    item["state"],
-                ),
+    submission_payload: dict[str, Any] = {
+        "samples": sorted(
+            fingerprint,
+            key=lambda item: (
+                item["product"],
+                item["area"],
+                item["sample_id"],
+                item["state"],
             ),
-            "training_options": (training_options or RetrainingOptions()).to_dict(),
-        },
+        ),
+        "training_options": (training_options or RetrainingOptions()).to_dict(),
+    }
+    if batch_version:
+        submission_payload["batch_version"] = batch_version
+    serialized = json.dumps(
+        submission_payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

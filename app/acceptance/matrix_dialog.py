@@ -32,8 +32,14 @@ from core.services.acceptance_matrix import (
     AcceptanceModelVariant,
     build_model_variant,
     build_registered_model_variant,
+    build_release_acceptance_variants,
     discover_color_variants,
     run_acceptance_matrix,
+)
+from core.services.inspection_release_models import (
+    InspectionRelease,
+    InspectionReleaseError,
+    ReleaseStatus,
 )
 from core.services.model_acceptance import AcceptanceRepository
 from core.services.model_version_registry import (
@@ -93,6 +99,8 @@ class AcceptanceMatrixWorker(QThread):
 class AcceptanceMatrixDialog(QDialog):
     """Select model/config columns and inspect the append-only matrix result."""
 
+    release_validated = pyqtSignal(object)
+
     def __init__(
         self,
         *,
@@ -101,6 +109,7 @@ class AcceptanceMatrixDialog(QDialog):
         product: str,
         area: str,
         inference_type: str,
+        target_release: InspectionRelease | None = None,
         runner: Callable[..., AcceptanceMatrixResult] = run_acceptance_matrix,
         parent=None,
     ) -> None:
@@ -110,24 +119,47 @@ class AcceptanceMatrixDialog(QDialog):
         self.product = product.strip()
         self.area = area.strip()
         self.inference_type = inference_type.strip()
+        self.target_release = target_release
+        if target_release is not None:
+            expected_scope = (
+                target_release.scope.product,
+                target_release.scope.area,
+                target_release.scope.inference_type,
+            )
+            if expected_scope != (self.product, self.area, self.inference_type):
+                raise InspectionReleaseError(
+                    "快速驗收目標與目前產品、區域或檢測類型不符。"
+                )
+            if target_release.status is not ReleaseStatus.DRAFT:
+                raise InspectionReleaseError("只有 DRAFT 組合可以進行快速驗收。")
         self._runner = runner
         self._worker: AcceptanceMatrixWorker | None = None
         self._result: AcceptanceMatrixResult | None = None
         self._close_when_finished = False
-        self.setWindowTitle("YOLO × 顏色版本｜驗收矩陣")
+        self.setWindowTitle(
+            f"快速驗收｜{target_release.display_version}"
+            if target_release is not None
+            else "檢測組合驗收"
+        )
         self.resize(1220, 760)
         self._build_ui()
         self._load_initial_variants()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        description = QLabel(
+        self.description = QLabel(
             "每個勾選的 YOLO 會和每個勾選的顏色設定配對，使用相同且已確認的"
             "驗收照片重新推論。此功能不會切換正式模型、不會改 Active 顏色版本，"
             "也不會覆寫人工標註。"
         )
-        description.setWordWrap(True)
-        layout.addWidget(description)
+        if self.target_release is not None:
+            self.description.setText(
+                f"只驗收 {self.target_release.display_version} 綁定的模型、config、"
+                "完整顏色基準與逐色修訂。原始候選版本不覆寫；完成後會以驗收證明"
+                "讓同一版本顯示為 TESTED。"
+            )
+        self.description.setWordWrap(True)
+        layout.addWidget(self.description)
 
         layout.addWidget(QLabel("1. 選擇 YOLO 模型 Bundle"))
         self.model_table = QTableWidget(0, 4)
@@ -164,13 +196,17 @@ class AcceptanceMatrixDialog(QDialog):
 
         controls = QHBoxLayout()
         self.workload_label = QLabel()
-        self.run_button = QPushButton("開始組合測試")
+        self.run_button = QPushButton("開始驗收")
         self.run_button.setStyleSheet("QPushButton { background: #006f5f; color: white; padding: 8px 18px; }")
         self.cancel_button = QPushButton("取消")
         self.cancel_button.setEnabled(False)
         self.open_report_button = QPushButton("開啟報告資料夾")
         self.open_report_button.setEnabled(False)
-        self.create_release_button = QPushButton("建立檢測發布版本")
+        self.create_release_button = QPushButton("建立候選組合版本")
+        if self.target_release is not None:
+            self.create_release_button.setText(
+                f"確認驗收 {self.target_release.display_version}"
+            )
         self.create_release_button.setEnabled(False)
         self.close_button = QPushButton("關閉")
         controls.addWidget(self.workload_label, 1)
@@ -231,6 +267,22 @@ class AcceptanceMatrixDialog(QDialog):
 
     def _load_initial_variants(self) -> None:
         try:
+            if self.target_release is not None:
+                model_variant, color_variant = build_release_acceptance_variants(
+                    self.target_release,
+                    project_root=self.project_root,
+                )
+                self._append_model_variant(model_variant)
+                self._append_color_variant(color_variant)
+                self.model_table.setEnabled(False)
+                self.color_table.setEnabled(False)
+                self.add_model_button.setEnabled(False)
+                self.remove_model_button.setEnabled(False)
+                self.progress_detail.setText(
+                    "已鎖定選取版本；本次固定執行 1 組，不讀取目前 Active 版本。"
+                )
+                self._update_workload()
+                return
             models_root = self.project_root / "models"
             registry = ModelVersionRegistry(models_root)
             records = registry.list_versions(
@@ -393,6 +445,15 @@ class AcceptanceMatrixDialog(QDialog):
             return
         models = self._selected_models()
         colors = self._selected_colors()
+        if self.target_release is not None and (
+            len(models) != 1 or len(colors) != 1
+        ):
+            QMessageBox.critical(
+                self,
+                "快速驗收組合無效",
+                "快速驗收必須精確鎖定一個模型與一個顏色設定。",
+            )
+            return
         if not models or not colors:
             QMessageBox.warning(
                 self,
@@ -500,7 +561,7 @@ class AcceptanceMatrixDialog(QDialog):
 
     def _failed(self, message: str) -> None:
         self.progress_detail.setText(f"失敗：{message}")
-        QMessageBox.critical(self, "驗收矩陣失敗", message)
+        QMessageBox.critical(self, "組合驗收失敗", message)
 
     def _cancelled(self) -> None:
         self.progress_detail.setText("已取消；未建立半份報告。")
@@ -516,10 +577,11 @@ class AcceptanceMatrixDialog(QDialog):
             self.close()
 
     def _set_running(self, running: bool) -> None:
-        self.model_table.setEnabled(not running)
-        self.color_table.setEnabled(not running)
-        self.add_model_button.setEnabled(not running)
-        self.remove_model_button.setEnabled(not running)
+        variants_editable = not running and self.target_release is None
+        self.model_table.setEnabled(variants_editable)
+        self.color_table.setEnabled(variants_editable)
+        self.add_model_button.setEnabled(variants_editable)
+        self.remove_model_button.setEnabled(variants_editable)
         self.run_button.setEnabled(not running)
         self.cancel_button.setEnabled(running)
         self.close_button.setEnabled(not running)
@@ -539,6 +601,9 @@ class AcceptanceMatrixDialog(QDialog):
         combination_id = str(item.data(VARIANT_ROLE) or "") if item else ""
         if not combination_id:
             QMessageBox.warning(self, "建立發布版本", "找不到選取的組合識別碼。")
+            return
+        if self.target_release is not None:
+            self._attest_target_release(combination_id)
             return
         try:
             from core.services.inspection_release_builder import (
@@ -576,9 +641,9 @@ class AcceptanceMatrixDialog(QDialog):
             store.commit(release)
             allowed = store.policy.allowed_modes(release)
             if ActivationMode.FULL in allowed:
-                policy = "驗證完整，可正式啟用或先有限試跑。"
+                policy = "驗收完整，可正式上線或先有限試跑。"
             else:
-                policy = "驗證資料仍有風險；工程設定中可選有限試跑，也可記錄風險接受後套用。"
+                policy = "驗收資料仍有風險；工程控制台中可選有限試跑，也可記錄風險接受後套用。"
             QMessageBox.information(
                 self,
                 "發布版本已建立",
@@ -586,6 +651,58 @@ class AcceptanceMatrixDialog(QDialog):
             )
         except (OSError, RuntimeError, ValueError) as exc:
             QMessageBox.critical(self, "建立發布版本失敗", str(exc))
+
+    def _attest_target_release(self, combination_id: str) -> None:
+        if self._result is None or self.target_release is None:
+            return
+        operator, ok = QInputDialog.getText(
+            self,
+            "確認快速驗收",
+            "驗收人員：",
+        )
+        if not ok or not operator.strip():
+            return
+        reason, ok = QInputDialog.getMultiLineText(
+            self,
+            "確認快速驗收",
+            "驗收說明：",
+            text=f"完成 {self.target_release.display_version} 單一組合驗收",
+        )
+        if not ok or not reason.strip():
+            return
+        try:
+            from core.services.inspection_release_builder import (
+                build_validated_release_from_matrix,
+            )
+            from core.services.inspection_release_store import (
+                InspectionReleaseStore,
+            )
+
+            validated = build_validated_release_from_matrix(
+                self.target_release,
+                self._result.report_path,
+                combination_id=combination_id,
+            )
+            store = InspectionReleaseStore(
+                self.project_root / ".inspection_releases"
+            )
+            committed = store.commit_validation(
+                validated,
+                validator=operator.strip(),
+                reason=reason.strip(),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, "快速驗收失敗", str(exc))
+            return
+        self.target_release = committed
+        self.release_validated.emit(committed)
+        QMessageBox.information(
+            self,
+            "快速驗收完成",
+            f"{committed.display_version} 已保留原版本編號並更新為 TESTED。\n"
+            f"驗收樣本：{committed.validation.sample_count} 張。",
+        )
+        self.accept()
 
     def _open_report_folder(self) -> None:
         if self._result is None:

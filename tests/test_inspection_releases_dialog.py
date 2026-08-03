@@ -153,7 +153,7 @@ def test_dialog_displays_combination_and_enforces_limited_trial(tmp_path, qapp):
         assert dialog.table.item(0, 1).text() == "inspection-v1.0.2"
         assert "yolo 1.0.6" in dialog.table.item(0, 3).text()
         assert dialog.table.item(0, 4).text() == "94.40%"
-        assert dialog.activate_btn.text() == "選擇啟用模式"
+        assert dialog.activate_btn.text() == "選擇上線模式"
         assert store.policy.allowed_modes(release) == (
             ActivationMode.LIMITED_TRIAL,
             ActivationMode.RISK_ACCEPTED,
@@ -185,7 +185,7 @@ def test_control_panel_emits_release_manager_request(qapp, tmp_path):
         assert [
             panel.engineering_tabs.tabText(index)
             for index in range(panel.engineering_tabs.count())
-        ] == ["檢測版本", "資料改善", "設備與系統"]
+        ] == ["版本與上線", "資料與補訓", "設備與系統"]
     finally:
         panel.close()
 
@@ -344,10 +344,10 @@ def test_embedded_version_workspace_replaces_legacy_launchers(tmp_path, qapp):
         assert panel.debug_group.isHidden()
         assert panel.version_workspace.isAncestorOf(workspace)
         assert [button.text() for button in workspace.stage_buttons] == [
-            "1  元件版本",
+            "1  模型與顏色版本",
             "2  候選組合",
-            "3  組合驗證",
-            "4  上線紀錄",
+            "3  組合驗收",
+            "4  上線與回退",
         ]
     finally:
         panel.close()

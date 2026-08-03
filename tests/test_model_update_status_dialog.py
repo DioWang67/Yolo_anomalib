@@ -11,6 +11,7 @@ from app.gui.model_update_status_dialog import (
     load_model_update_jobs,
     workflow_step_index,
 )
+from tools.retraining_workspaces import create_retraining_workspace
 
 
 def _write_job(
@@ -20,6 +21,7 @@ def _write_job(
     state: str,
     product: str = "Cable1",
     area: str = "A",
+    batch_version: str = "",
     training_options: dict[str, int | str] | None = None,
     status_values: dict[str, object] | None = None,
 ) -> None:
@@ -29,6 +31,7 @@ def _write_job(
         json.dumps(
             {
                 "job_id": job_id,
+                "batch_version": batch_version,
                 "created_at": "2026-07-15T10:00:00+08:00",
                 "targets": [{"product": product, "area": area}],
                 "training_options": training_options or {},
@@ -85,9 +88,28 @@ def test_load_model_update_jobs_keeps_corrupt_status_visible(tmp_path: Path) -> 
     assert next(job for job in jobs if job.job_id == "job-bad").state == "invalid"
 
 
+def test_draft_retraining_folder_is_not_shown_as_failed_training_job(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    create_retraining_workspace(
+        data_root,
+        product="Cable1",
+        area="A",
+        batch_version="Cable1_A_v0.0.1",
+    )
+
+    assert load_model_update_jobs(data_root) == []
+
+
 def test_status_dialog_filters_by_state(tmp_path: Path, qtbot) -> None:
     data_root = tmp_path / "data"
-    _write_job(data_root, "job-training", state="training")
+    _write_job(
+        data_root,
+        "job-training",
+        state="training",
+        batch_version="Cable1_A_v0.0.1",
+    )
     _write_job(data_root, "job-done", state="deployed")
     dialog = ModelUpdateStatusDialog(data_root=data_root, language="zh_TW")
     qtbot.addWidget(dialog)
@@ -95,7 +117,9 @@ def test_status_dialog_filters_by_state(tmp_path: Path, qtbot) -> None:
     dialog.state_filter.setCurrentIndex(dialog.state_filter.findData("training"))
 
     assert dialog.table.rowCount() == 1
-    assert dialog.table.item(0, 9).text() == "job-training"
+    assert dialog.table.item(0, 1).text() == "Cable1_A_v0.0.1"
+    assert dialog.table.item(0, 10).text() == "job-training"
+    assert "補訓批次：Cable1_A_v0.0.1" in dialog.details_label.text()
 
 
 def test_operator_workflow_uses_the_same_five_step_contract() -> None:

@@ -419,6 +419,11 @@ class DetectionSystemGUI(
                 self.open_model_acceptance
             )
         )
+        self.inspection_version_workspace.quick_validation_requested.connect(
+            lambda release: self._run_engineering_action(
+                lambda: self.open_quick_release_acceptance(release)
+            )
+        )
         self.inspection_version_workspace.advanced_settings_requested.connect(
             lambda: self._run_engineering_action(
                 self.edit_current_model_config
@@ -667,7 +672,42 @@ class DetectionSystemGUI(
             self._acceptance_window = window
             window.show()
         except (OSError, RuntimeError, ValueError) as exc:
-            QMessageBox.critical(self, "組合驗證", str(exc))
+            QMessageBox.critical(self, "組合驗收", str(exc))
+
+    def open_quick_release_acceptance(self, release) -> None:
+        """Validate exactly one selected draft without creating a new version."""
+        try:
+            from app.acceptance.matrix_dialog import AcceptanceMatrixDialog
+            from core.services.inspection_release_models import InspectionRelease
+            from core.services.model_acceptance import AcceptanceRepository
+
+            if not isinstance(release, InspectionRelease):
+                raise ValueError("選取的檢測組合資料無效，請重新整理後再試。")
+            repository = AcceptanceRepository(
+                self._project_root
+                / "acceptance"
+                / release.scope.product
+                / release.scope.area
+            )
+            dialog = AcceptanceMatrixDialog(
+                project_root=self._project_root,
+                repository=repository,
+                product=release.scope.product,
+                area=release.scope.area,
+                inference_type=release.scope.inference_type,
+                target_release=release,
+                parent=self,
+            )
+            dialog.release_validated.connect(
+                self._on_quick_release_validated
+            )
+            dialog.exec_()
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, "快速驗收", str(exc))
+
+    def _on_quick_release_validated(self, _release) -> None:
+        self.inspection_version_workspace.refresh()
+        self.refresh_engineering_version_summary()
 
     def show_inspection_history(self) -> None:
         """Show persisted records for the currently selected target."""

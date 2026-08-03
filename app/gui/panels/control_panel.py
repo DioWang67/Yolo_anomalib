@@ -1087,8 +1087,8 @@ class ControlPanel(QGroupBox):
         self.version_workspace = QWidget()
         self.improvement_workspace = QWidget()
         self.equipment_workspace = QWidget()
-        self.engineering_tabs.addTab(self.version_workspace, "檢測版本")
-        self.engineering_tabs.addTab(self.improvement_workspace, "資料改善")
+        self.engineering_tabs.addTab(self.version_workspace, "版本與上線")
+        self.engineering_tabs.addTab(self.improvement_workspace, "資料與補訓")
         self.engineering_tabs.addTab(self.equipment_workspace, "設備與系統")
         root_layout.addWidget(self.engineering_tabs)
 
@@ -1146,14 +1146,14 @@ class ControlPanel(QGroupBox):
         equipment_layout.addWidget(camera_group, 0, 0)
 
         # Version and release workflow
-        debug_group = QGroupBox("檢測版本工作流")
+        debug_group = QGroupBox("檢測組合管理")
         self.debug_group = debug_group
         debug_layout = QVBoxLayout()
         debug_layout.setSpacing(6)
 
         self.version_workflow_label = QLabel(
-            "① 檢測元件版本  →  ② 建立候選組合  →  "
-            "③ 組合驗證  →  ④ 啟用或回退"
+            "① 模型與顏色版本  →  ② 候選組合  →  "
+            "③ 組合驗收  →  ④ 上線與回退"
         )
         self.version_workflow_label.setWordWrap(True)
         self.version_workflow_label.setStyleSheet(
@@ -1170,7 +1170,7 @@ class ControlPanel(QGroupBox):
         )
         debug_layout.addWidget(self.current_combination_label)
 
-        self.model_versions_btn = QPushButton("檢測元件版本")
+        self.model_versions_btn = QPushButton("模型與顏色版本")
         self.model_versions_btn.setObjectName("secondaryAction")
         self.model_versions_btn.clicked.connect(self.model_versions_requested.emit)
         debug_layout.addWidget(self.model_versions_btn)
@@ -1182,12 +1182,12 @@ class ControlPanel(QGroupBox):
         )
         debug_layout.addWidget(self.inspection_releases_btn)
 
-        self.acceptance_btn = QPushButton("組合驗證")
+        self.acceptance_btn = QPushButton("組合驗收")
         self.acceptance_btn.setObjectName("primaryAction")
         self.acceptance_btn.clicked.connect(self.acceptance_requested.emit)
         debug_layout.addWidget(self.acceptance_btn)
 
-        self.edit_model_config_btn = QPushButton("進階模型設定")
+        self.edit_model_config_btn = QPushButton("編輯目前檢測參數")
         self.edit_model_config_btn.setObjectName("secondaryAction")
         self.edit_model_config_btn.clicked.connect(self.edit_model_config_requested.emit)
         debug_layout.addWidget(self.edit_model_config_btn)
@@ -1235,7 +1235,7 @@ class ControlPanel(QGroupBox):
         retraining_layout.setSpacing(6)
 
         self.improvement_workflow_label = QLabel(
-            "資料複核  →  模型補訓／顏色校正  →  新元件版本"
+            "資料複核  →  模型補訓／顏色校正  →  新模型／顏色版本"
         )
         self.improvement_workflow_label.setWordWrap(True)
         self.improvement_workflow_label.setStyleSheet(
@@ -1690,26 +1690,26 @@ class ControlPanel(QGroupBox):
         self.model_label.setText(tr(self._language, "model"))
         zh = self._language.lower().startswith("zh")
         self.engineering_tabs.setTabText(
-            0, "檢測版本" if zh else "Inspection Versions"
+            0, "版本與上線" if zh else "Versions & Deployment"
         )
         self.engineering_tabs.setTabText(
-            1, "資料改善" if zh else "Data Improvement"
+            1, "資料與補訓" if zh else "Data & Retraining"
         )
         self.engineering_tabs.setTabText(
             2, "設備與系統" if zh else "Equipment & System"
         )
         self.debug_group.setTitle(
-            "檢測版本工作流" if zh else "Inspection Version Workflow"
+            "檢測組合管理" if zh else "Inspection Combination Management"
         )
         self.version_workflow_label.setText(
             (
-                "① 檢測元件版本  →  ② 建立候選組合  →  "
-                "③ 組合驗證  →  ④ 啟用或回退"
+                "① 模型與顏色版本  →  ② 候選組合  →  "
+                "③ 組合驗收  →  ④ 上線與回退"
             )
             if zh
             else (
-                "1. Component versions  →  2. Candidate combination  →  "
-                "3. Validation  →  4. Activate or roll back"
+                "1. Model & color versions  →  2. Candidate combination  →  "
+                "3. Acceptance  →  4. Deploy or roll back"
             )
         )
         if self.current_combination_label.text() in {
@@ -1720,16 +1720,16 @@ class ControlPanel(QGroupBox):
                 "目前正式組合：—" if zh else "Production combination: —"
             )
         self.model_versions_btn.setText(
-            "檢測元件版本" if zh else "Inspection Component Versions"
+            "模型與顏色版本" if zh else "Model & Color Versions"
         )
         self.inspection_releases_btn.setText(
             "檢測組合管理" if zh else "Inspection Combinations"
         )
         self.acceptance_btn.setText(
-            "組合驗證" if zh else "Combination Validation"
+            "組合驗收" if zh else "Combination Acceptance"
         )
         self.edit_model_config_btn.setText(
-            "進階模型設定" if zh else "Advanced Model Settings"
+            "編輯目前檢測參數" if zh else "Edit Active Inspection Parameters"
         )
         self.model_update_status_btn.setText(
             "模型補訓進度"
@@ -1753,10 +1753,10 @@ class ControlPanel(QGroupBox):
             "顯示與輸出" if zh else "Display & Output"
         )
         self.retraining_group.setTitle(
-            "資料改善工作流" if zh else "Data Improvement Workflow"
+            "資料與補訓工作流" if zh else "Data & Retraining Workflow"
         )
         self.improvement_workflow_label.setText(
-            "資料複核  →  模型補訓／顏色校正  →  新元件版本"
+            "資料複核  →  模型補訓／顏色校正  →  新模型／顏色版本"
             if zh
             else (
                 "Data review  →  Model retraining / color calibration  →  "

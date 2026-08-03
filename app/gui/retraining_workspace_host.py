@@ -13,7 +13,9 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -21,6 +23,14 @@ from PyQt5.QtWidgets import (
 )
 
 from app.gui.hover_help import HoverHelpBadge
+from tools.retraining_workspaces import (
+    RetrainingWorkspace,
+    RetrainingWorkspaceError,
+    create_retraining_workspace,
+    list_retraining_workspaces,
+    load_retraining_workspace,
+)
+from tools.submission_history import suggest_next_training_batch_version
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +49,7 @@ class ReviewManifestPreloadWorker(QThread):
         manifest_path: Path,
         product: str | None,
         area: str | None,
+        freeze_existing: bool = False,
     ) -> None:
         super().__init__()
         self._generation = generation
@@ -46,17 +57,36 @@ class ReviewManifestPreloadWorker(QThread):
         self._manifest_path = manifest_path
         self._product = product
         self._area = area
+        self._freeze_existing = freeze_existing
 
     def run(self) -> None:
         try:
-            from app.gui.review_cases_dialog import prepare_review_manifest
-
-            _target_path, rows = prepare_review_manifest(
-                result_root=self._result_root,
-                manifest_path=self._manifest_path,
-                product=self._product,
-                area=self._area,
+            from app.gui.review_cases_dialog import (
+                ReviewManifestStore,
+                _target_manifest_path,
+                prepare_review_manifest,
             )
+
+            if self._freeze_existing:
+                target_path = _target_manifest_path(
+                    self._manifest_path,
+                    product=self._product,
+                    area=self._area,
+                )
+                rows = [
+                    dict(row)
+                    for row in ReviewManifestStore(
+                        target_path,
+                        synchronize_repository=False,
+                    ).rows
+                ]
+            else:
+                _target_path, rows = prepare_review_manifest(
+                    result_root=self._result_root,
+                    manifest_path=self._manifest_path,
+                    product=self._product,
+                    area=self._area,
+                )
         except (OSError, RuntimeError, ValueError, csv.Error, sqlite3.Error) as exc:
             self.manifest_failed.emit(self._generation, str(exc))
             return
@@ -135,6 +165,8 @@ class RetrainingWorkspaceHost(QWidget):
         self._closed = False
         self._pending_progress_page = False
         self._pending_target: tuple[str, str] | None = None
+        self._pending_workspace: RetrainingWorkspace | None = None
+        self.active_workspace: RetrainingWorkspace | None = None
         self._worker: ReviewManifestPreloadWorker | None = None
         self._workspace = None
 
@@ -146,7 +178,7 @@ class RetrainingWorkspaceHost(QWidget):
         self.loading_page = self._build_loading_page()
         self.stack.addWidget(self.loading_page)
         self.stack.setCurrentWidget(self.loading_page)
-        self._start_loading()
+        self._refresh_batch_filter()
 
     @staticmethod
     def _normalize_targets(
@@ -206,6 +238,25 @@ class RetrainingWorkspaceHost(QWidget):
         self.area_filter.setObjectName("retrainingAreaFilter")
         self.area_filter.setMinimumWidth(120)
         layout.addWidget(self.area_filter)
+        layout.addWidget(
+            QLabel(
+                "補訓資料夾"
+                if self.language.lower().startswith("zh")
+                else "Training folder"
+            )
+        )
+        self.batch_filter = QComboBox(panel)
+        self.batch_filter.setObjectName("retrainingBatchFilter")
+        self.batch_filter.setMinimumWidth(220)
+        layout.addWidget(self.batch_filter)
+        self.create_batch_button = QPushButton(
+            "＋ 建立資料夾"
+            if self.language.lower().startswith("zh")
+            else "+ Create folder"
+        )
+        self.create_batch_button.setObjectName("createRetrainingBatchButton")
+        self.create_batch_button.clicked.connect(self._create_batch_workspace)
+        layout.addWidget(self.create_batch_button)
         self.target_scope_label = HoverHelpBadge(
             self._target_scope_help_text(),
             language=self.language,
@@ -225,6 +276,7 @@ class RetrainingWorkspaceHost(QWidget):
         self._populate_area_filter(self.product or "")
         self.product_filter.currentTextChanged.connect(self._on_product_changed)
         self.area_filter.currentTextChanged.connect(self._on_area_changed)
+        self.batch_filter.currentIndexChanged.connect(self._on_batch_changed)
         self._update_target_scope_label()
         return panel
 
@@ -255,6 +307,132 @@ class RetrainingWorkspaceHost(QWidget):
             str(area).strip(),
         )
 
+    def _refresh_batch_filter(self, *, preferred_version: str = "") -> None:
+        """Refresh folders for the active target and open the selected one."""
+        workspaces = list_retraining_workspaces(
+            self.training_data_dir,
+            product=self.product,
+            area=self.area,
+        )
+        self.batch_filter.blockSignals(True)
+        try:
+            self.batch_filter.clear()
+            for workspace in workspaces:
+                state_label = (
+                    "已送訓"
+                    if workspace.state == "submitted"
+                    and self.language.lower().startswith("zh")
+                    else (
+                        "編輯中"
+                        if self.language.lower().startswith("zh")
+                        else (
+                            "Submitted"
+                            if workspace.state == "submitted"
+                            else "Draft"
+                        )
+                    )
+                )
+                self.batch_filter.addItem(
+                    f"{workspace.batch_version}｜{state_label}",
+                    str(workspace.root),
+                )
+            preferred_index = next(
+                (
+                    index
+                    for index, workspace in enumerate(workspaces)
+                    if workspace.batch_version == preferred_version
+                ),
+                0,
+            )
+            if workspaces:
+                self.batch_filter.setCurrentIndex(preferred_index)
+        finally:
+            self.batch_filter.blockSignals(False)
+        if not workspaces:
+            self.active_workspace = None
+            self._dispose_workspace()
+            self.retry_button.setVisible(False)
+            self.status_label.setText(
+                "請先建立補訓資料夾，再進入選照片與複核。"
+                if self.language.lower().startswith("zh")
+                else "Create a training folder before selecting and reviewing images."
+            )
+            self.stack.setCurrentWidget(self.loading_page)
+            return
+        self._activate_workspace(workspaces[preferred_index])
+
+    def _on_batch_changed(self, index: int) -> None:
+        path = str(self.batch_filter.itemData(index) or "")
+        if not path:
+            return
+        try:
+            workspace = load_retraining_workspace(path)
+        except (OSError, RetrainingWorkspaceError) as exc:
+            self._show_failure(str(exc))
+            return
+        self._activate_workspace(workspace)
+
+    def _activate_workspace(self, workspace: RetrainingWorkspace) -> None:
+        if (workspace.product, workspace.area) != (self.product, self.area):
+            self._show_failure("補訓資料夾與目前產品／工位不一致。")
+            return
+        if (
+            self.active_workspace is not None
+            and self.active_workspace.root == workspace.root
+            and self._workspace is not None
+        ):
+            return
+        self._generation += 1
+        self._dispose_workspace()
+        self.active_workspace = workspace
+        self._update_target_scope_label()
+        self.stack.setCurrentWidget(self.loading_page)
+        if self._worker is not None and self._worker.isRunning():
+            self._pending_workspace = workspace
+            self._worker.requestInterruption()
+            return
+        self._pending_workspace = None
+        self._start_loading()
+
+    def _create_batch_workspace(self) -> None:
+        product = str(self.product or "").strip()
+        area = str(self.area or "").strip()
+        if not product or not area:
+            QMessageBox.warning(
+                self,
+                "建立補訓資料夾",
+                "請先選擇產品與工位。",
+            )
+            return
+        suggestion = suggest_next_training_batch_version(
+            self.training_data_dir,
+            product=product,
+            area=area,
+        )
+        version, accepted = QInputDialog.getText(
+            self,
+            "建立補訓資料夾"
+            if self.language.lower().startswith("zh")
+            else "Create training folder",
+            "資料夾版本："
+            if self.language.lower().startswith("zh")
+            else "Folder version:",
+            text=suggestion,
+        )
+        if not accepted:
+            return
+        try:
+            workspace = create_retraining_workspace(
+                self.training_data_dir,
+                product=product,
+                area=area,
+                batch_version=version,
+            )
+        except (OSError, ValueError, RetrainingWorkspaceError) as exc:
+            QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
+        self._refresh_batch_filter(preferred_version=workspace.batch_version)
+
     def _request_target(self, product: str, area: str) -> None:
         target = (product, area)
         if not all(target) or target not in self._available_targets:
@@ -281,8 +459,9 @@ class RetrainingWorkspaceHost(QWidget):
         self.product, self.area = self._pending_target
         self._pending_target = None
         self._dispose_workspace()
+        self.active_workspace = None
         self._update_target_scope_label()
-        self._start_loading()
+        self._refresh_batch_filter()
 
     def _update_target_scope_label(self) -> None:
         text = self._target_scope_help_text()
@@ -291,11 +470,21 @@ class RetrainingWorkspaceHost(QWidget):
 
     def _target_scope_help_text(self) -> str:
         if self.product and self.area:
+            batch_text = (
+                f"目前資料夾：{self.active_workspace.batch_version}。"
+                if self.active_workspace is not None
+                and self.language.lower().startswith("zh")
+                else (
+                    f"Folder: {self.active_workspace.batch_version}. "
+                    if self.active_workspace is not None
+                    else ""
+                )
+            )
             return (
-                f"目前只顯示 {self.product}/{self.area}，"
+                f"{batch_text}目前只顯示 {self.product}/{self.area}，"
                 "照片與送訓資料不會混入其他機種。"
                 if self.language.lower().startswith("zh")
-                else f"Showing only {self.product}/{self.area}; photos and "
+                else f"{batch_text}Showing only {self.product}/{self.area}; photos and "
                 "training data from other targets are excluded."
             )
         return (
@@ -344,23 +533,32 @@ class RetrainingWorkspaceHost(QWidget):
                 else "Select a product and area first."
             )
             return
+        if self.active_workspace is None:
+            self._show_failure(
+                "請先建立或選擇補訓資料夾。"
+                if self.language.lower().startswith("zh")
+                else "Create or select a training folder first."
+            )
+            return
         self._generation += 1
         generation = self._generation
         self.retry_button.setVisible(False)
         self.status_label.setText(
-            f"正在背景整理 {self.product}/{self.area} 的歷史檢測資料…\n"
+            f"正在開啟 {self.active_workspace.batch_version}，整理可選照片…\n"
             "你可以立即返回檢測，整理不會卡住畫面。"
             if self.language.lower().startswith("zh")
-            else f"Preparing {self.product}/{self.area} inspection history "
+            else f"Opening {self.active_workspace.batch_version} and preparing "
+            f"selectable {self.product}/{self.area} inspection images "
             "in the background…\n"
             "You may return to inspection without blocking the window."
         )
         worker = ReviewManifestPreloadWorker(
             generation=generation,
             result_root=self.result_root,
-            manifest_path=self.manifest_path,
+            manifest_path=self.active_workspace.manifest_path,
             product=self.product,
             area=self.area,
+            freeze_existing=self.active_workspace.state == "submitted",
         )
         self._worker = worker
         worker.finished.connect(
@@ -380,17 +578,25 @@ class RetrainingWorkspaceHost(QWidget):
             self._worker = None
         if self._pending_target is not None:
             self._activate_pending_target()
+        elif self._pending_workspace is not None:
+            pending = self._pending_workspace
+            self._pending_workspace = None
+            self.active_workspace = pending
+            self._start_loading()
 
     def _on_manifest_ready(self, generation: int, rows: object) -> None:
         if self._closed or generation != self._generation:
             return
         prepared_rows = [dict(row) for row in rows] if isinstance(rows, list) else []
+        active_workspace = self.active_workspace
+        if active_workspace is None:
+            return
         try:
             from app.gui.review_cases_dialog import ReviewCasesDialog
 
             workspace = ReviewCasesDialog(
                 result_root=self.result_root,
-                manifest_path=self.manifest_path,
+                manifest_path=active_workspace.manifest_path,
                 training_data_dir=self.training_data_dir,
                 language=self.language,
                 product=self.product,
@@ -400,6 +606,8 @@ class RetrainingWorkspaceHost(QWidget):
                 show_embedded_navigation=False,
                 manifest_prepared=True,
                 prepared_rows=prepared_rows,
+                batch_version=active_workspace.batch_version,
+                batch_workspace_dir=active_workspace.root,
                 parent=self.stack,
             )
         except (OSError, RuntimeError, ValueError, csv.Error, sqlite3.Error) as exc:

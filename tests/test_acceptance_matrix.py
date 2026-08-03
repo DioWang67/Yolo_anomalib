@@ -17,6 +17,7 @@ from core.services.acceptance_matrix import (
     AcceptanceMatrixRequest,
     AcceptanceModelVariant,
     build_registered_model_variant,
+    build_release_acceptance_variants,
     discover_color_variants,
     run_acceptance_matrix,
 )
@@ -25,6 +26,7 @@ from core.services.color_baseline_recalibration import (
     ColorBaselineCandidateStore,
 )
 from core.services.color_profile_store import ColorProfileStore
+from core.services.inspection_release_builder import build_draft_release
 from core.services.model_acceptance import (
     AcceptanceInferenceOutcome,
     AcceptanceRecord,
@@ -316,6 +318,52 @@ def test_registered_historical_model_is_read_only_and_hashes_at_run_time(
     assert variant.config_path == config_path
     assert variant.identity.sha256 == ""
     assert len(variant.identity.runtime_config_sha256) == 64
+
+
+def test_release_quick_validation_pair_uses_exact_draft_artifacts(
+    tmp_path: Path,
+) -> None:
+    weight_path = tmp_path / "history" / "Cable1_A_v1.0.5.onnx"
+    weight_path.parent.mkdir(parents=True)
+    weight_path.write_bytes(b"historical-weight")
+    config_path = weight_path.with_suffix(".config.yaml")
+    config_path.write_text(
+        f"enable_yolo: true\nweights: {weight_path.as_posix()}\n",
+        encoding="utf-8",
+    )
+    record = ModelVersionRecord(
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        version="1.0.5",
+        weight_path=weight_path,
+        is_current=False,
+        trained_at=NOW,
+        deployed_at=NOW,
+        activated_at=None,
+        training_time_inferred=False,
+        config_snapshot_path=config_path,
+        file_size=weight_path.stat().st_size,
+    )
+    draft = build_draft_release(
+        record,
+        display_version="inspection-v1.0.4",
+        operator="engineer",
+        reason="quick validation target",
+    )
+
+    model, color = build_release_acceptance_variants(
+        draft,
+        project_root=tmp_path,
+    )
+
+    assert model.weight_path == weight_path.resolve()
+    assert model.config_path == config_path.resolve()
+    assert model.identity.version == "1.0.5"
+    assert model.identity.sha256 == draft.components[0].artifact_sha256
+    assert color.revision_overrides == ()
+    assert color.color_model_path is None
+    assert color.include_active_revisions is False
 
 
 def test_color_discovery_lists_embedded_active_and_exact_revision(

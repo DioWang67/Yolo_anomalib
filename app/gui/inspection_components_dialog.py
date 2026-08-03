@@ -73,7 +73,7 @@ class InspectionComponentsDialog(QDialog):
         self.on_create_combination = on_create_combination
         self.records: tuple[InspectionComponentRecord, ...] = ()
         self.visible_records: tuple[InspectionComponentRecord, ...] = ()
-        self.setWindowTitle("檢測元件版本")
+        self.setWindowTitle("模型與顏色版本")
         configure_responsive_dialog(
             self,
             preferred=(1480, 820),
@@ -86,7 +86,7 @@ class InspectionComponentsDialog(QDialog):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         title = QLabel(
-            "集中查看 AI 模型與顏色設定版本。選取元件後可建立候選檢測組合；"
+            "集中查看 AI 模型與顏色設定版本。選取版本後可建立候選檢測組合；"
             "本頁不會直接變更正式檢測。"
         )
         title.setWordWrap(True)
@@ -100,8 +100,8 @@ class InspectionComponentsDialog(QDialog):
         self.product_filter = self._filter(filters, "產品")
         self.area_filter = self._filter(filters, "工位")
         self.inference_filter = self._filter(filters, "推論類型")
-        self.category_filter = self._filter(filters, "元件類別")
-        self.type_filter = self._filter(filters, "元件")
+        self.category_filter = self._filter(filters, "版本類別")
+        self.type_filter = self._filter(filters, "檢測類型")
         filters.addStretch(1)
         refresh_button = QPushButton("重新整理")
         refresh_button.clicked.connect(self.refresh)
@@ -110,11 +110,11 @@ class InspectionComponentsDialog(QDialog):
 
         headers = (
             "狀態",
-            "元件類別",
+            "版本類別",
             "產品",
             "工位",
             "推論類型",
-            "元件",
+            "檢測項目",
             "版本",
             "建立時間",
             "完整性",
@@ -139,7 +139,7 @@ class InspectionComponentsDialog(QDialog):
         )
         layout.addWidget(self.table, 1)
 
-        self.details_label = QLabel("請選取一個檢測元件版本。")
+        self.details_label = QLabel("請選取一個模型或顏色版本。")
         self.details_label.setWordWrap(True)
         self.details_label.setStyleSheet(
             "background:#eef2f6;border:1px solid #c8d1dc;"
@@ -283,13 +283,13 @@ class InspectionComponentsDialog(QDialog):
                     item.setBackground(background)
                 self.table.setItem(row, column, item)
         self.summary_label.setText(
-            f"顯示 {len(self.visible_records)}／{len(self.records)} 個元件版本"
+            f"顯示 {len(self.visible_records)}／{len(self.records)} 個模型與顏色版本"
         )
         if self.visible_records:
             self.table.selectRow(0)
         else:
             self.compose_button.setEnabled(False)
-            self.details_label.setText("目前篩選條件下沒有元件版本。")
+            self.details_label.setText("目前篩選條件下沒有模型或顏色版本。")
 
     def _selected_record(self) -> InspectionComponentRecord | None:
         row = self.table.currentRow()

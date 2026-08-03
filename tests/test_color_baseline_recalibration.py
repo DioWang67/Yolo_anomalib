@@ -108,6 +108,35 @@ def test_preserves_colors_that_do_not_reach_minimum(tmp_path: Path) -> None:
     assert build.model_payload["summary"]["Black"]["count"] > 6
 
 
+def test_candidate_report_preserves_evidence_source_lineage(tmp_path: Path) -> None:
+    metadata = {
+        "schema_version": 1,
+        "counts": {
+            "selected_total": 7,
+            "selected_acceptance_ok": 5,
+            "selected_color_review_ok": 2,
+        },
+        "samples": [
+            {
+                "sample_id": "color-review-1",
+                "image_sha256": "a" * 64,
+                "source_kind": "color_review",
+            }
+        ],
+    }
+
+    build = StatsColorBaselineRebuilder().build(
+        base_model_path=_base_model(tmp_path),
+        evidence=_evidence(),
+        evidence_metadata=metadata,
+    )
+
+    assert build.report_payload["evidence_sources"] == metadata
+    recalibration = build.model_payload["recalibration"]
+    assert recalibration["evidence_source_counts"]["selected_total"] == 7
+    assert len(recalibration["evidence_lineage_sha256"]) == 64
+
+
 def test_candidate_store_is_deterministic_and_detects_tampering(
     tmp_path: Path,
 ) -> None:

@@ -7,14 +7,25 @@ import hashlib
 import json
 import os
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.retraining_options import RetrainingOptions
+from core.training_batch_version import (
+    format_training_batch_version,
+    parse_training_batch_semver,
+    validate_training_batch_version,
+)
 from tools.record_visibility import load_hidden_record_ids
 
 SUBMISSION_ACTIONS = frozenset({"direct", "annotation", "color", "portable"})
+
+
+class DuplicateTrainingBatchVersionError(ValueError):
+    """A product/area already owns the requested human-readable version."""
 
 
 @dataclass(frozen=True)
@@ -34,6 +45,8 @@ class SubmissionHistoryRecord:
     source_type: str
     manifest_path: Path | None
     handoff_path: Path | None
+    batch_version: str = ""
+    training_options: tuple[tuple[str, int | str], ...] = ()
 
 
 def record_submission_history(
@@ -49,6 +62,8 @@ def record_submission_history(
     color_feedback_count: int = 0,
     job_id: str = "",
     handoff_path: str | Path | None = None,
+    batch_version: str = "",
+    training_options: Mapping[str, Any] | None = None,
 ) -> SubmissionHistoryRecord:
     """Persist an idempotent immutable copy of one submitted review manifest."""
     normalized_action = str(action or "").strip().lower()
@@ -58,11 +73,28 @@ def record_submission_history(
     if not manifest.is_file():
         raise FileNotFoundError(f"Submission manifest not found: {manifest}")
     manifest_bytes = manifest.read_bytes()
+    normalized_batch_version = (
+        validate_training_batch_version(
+            batch_version,
+            product=product,
+            area=area,
+        )
+        if str(batch_version or "").strip()
+        else ""
+    )
+    normalized_training_options = (
+        RetrainingOptions.from_mapping(training_options).to_dict()
+        if training_options is not None
+        else {}
+    )
     digest = hashlib.sha256()
     digest.update(normalized_action.encode("utf-8"))
     digest.update(b"\0")
     digest.update(str(job_id or "").encode("utf-8"))
     digest.update(b"\0")
+    if normalized_batch_version:
+        digest.update(normalized_batch_version.encode("utf-8"))
+        digest.update(b"\0")
     digest.update(manifest_bytes)
     submission_hash = digest.hexdigest()
     submission_id = submission_hash[:24]
@@ -76,6 +108,17 @@ def record_submission_history(
     existing = _read_json(record_path)
     if existing.get("submission_hash") == submission_hash:
         return _record_from_payload(existing, record_path)
+
+    if normalized_batch_version:
+        claim_training_batch_version(
+            Path(data_root).expanduser().resolve(),
+            batch_version=normalized_batch_version,
+            product=product,
+            area=area,
+            submission_hash=submission_hash,
+            owner_job_id=str(job_id or ""),
+            record_path=record_path,
+        )
 
     history_dir.mkdir(parents=True, exist_ok=True)
     immutable_manifest = history_dir / "manifest.csv"
@@ -94,6 +137,8 @@ def record_submission_history(
         "pending_count": max(0, int(pending_count)),
         "color_feedback_count": max(0, int(color_feedback_count)),
         "job_id": str(job_id or ""),
+        "batch_version": normalized_batch_version,
+        "training_options": normalized_training_options,
         "manifest_path": str(immutable_manifest.resolve()),
         "handoff_path": (
             str(Path(handoff_path).expanduser().resolve()) if handoff_path else ""
@@ -153,6 +198,10 @@ def load_submission_history(data_root: str | Path) -> list[SubmissionHistoryReco
                     source_type="legacy_job",
                     manifest_path=None,
                     handoff_path=handoff_path.resolve(),
+                    batch_version=str(handoff.get("batch_version") or ""),
+                    training_options=_training_options_tuple(
+                        handoff.get("training_options")
+                    ),
                 )
             )
 
@@ -169,7 +218,7 @@ def load_submission_history(data_root: str | Path) -> list[SubmissionHistoryReco
         area = str(rows[0].get("area") or "")
         if (product, area) in represented_color_targets:
             continue
-        sample_ids = {
+        color_sample_ids = {
             str(row.get("sample_id") or "") for row in rows if row.get("sample_id")
         }
         submission_id = f"legacy-color-{product}-{area}"
@@ -184,7 +233,7 @@ def load_submission_history(data_root: str | Path) -> list[SubmissionHistoryReco
                 action="color",
                 product=product,
                 area=area,
-                case_count=len(sample_ids),
+                case_count=len(color_sample_ids),
                 ready_count=0,
                 pending_count=0,
                 color_feedback_count=len(rows),
@@ -192,6 +241,8 @@ def load_submission_history(data_root: str | Path) -> list[SubmissionHistoryReco
                 source_type="color_feedback",
                 manifest_path=feedback_path.resolve(),
                 handoff_path=None,
+                batch_version="",
+                training_options=(),
             )
         )
 
@@ -285,7 +336,213 @@ def _record_from_payload(
         source_type="submission",
         manifest_path=Path(manifest_text).resolve() if manifest_text else None,
         handoff_path=Path(handoff_text).resolve() if handoff_text else None,
+        batch_version=str(payload.get("batch_version") or ""),
+        training_options=_training_options_tuple(payload.get("training_options")),
     )
+
+
+def suggest_next_training_batch_version(
+    data_root: str | Path,
+    *,
+    product: str,
+    area: str,
+) -> str:
+    """Suggest the next patch version for one product/area submission stream."""
+    versions = [
+        parsed
+        for record in _load_explicit_submission_records(data_root)
+        if record.product == product and record.area == area
+        if (parsed := parse_training_batch_semver(record.batch_version)) is not None
+    ]
+    versions.extend(
+        parsed
+        for claim in _load_training_batch_claims(data_root)
+        if str(claim.get("product") or "") == product
+        and str(claim.get("area") or "") == area
+        if (
+            parsed := parse_training_batch_semver(
+                str(claim.get("batch_version") or "")
+            )
+        )
+        is not None
+    )
+    latest = max(versions) if versions else None
+    next_version = (
+        (0, 0, 1)
+        if latest is None
+        else (latest[0], latest[1], latest[2] + 1)
+    )
+    return format_training_batch_version(product, area, next_version)
+
+
+def ensure_training_batch_version_available(
+    data_root: str | Path,
+    *,
+    product: str,
+    area: str,
+    batch_version: str,
+) -> str:
+    """Validate a version and reject reuse before expensive export work starts."""
+    normalized = validate_training_batch_version(
+        batch_version,
+        product=product,
+        area=area,
+    )
+    claim_path = _training_batch_claim_path(
+        Path(data_root).expanduser().resolve(),
+        product=product,
+        area=area,
+        batch_version=normalized,
+    )
+    if claim_path.is_file() or any(
+        record.product == product
+        and record.area == area
+        and record.batch_version.casefold() == normalized.casefold()
+        for record in _load_explicit_submission_records(data_root)
+    ):
+        raise DuplicateTrainingBatchVersionError(
+            f"補訓批次版本已存在：{normalized}。請使用下一個版本。"
+        )
+    return normalized
+
+
+def _load_explicit_submission_records(
+    data_root: str | Path,
+) -> list[SubmissionHistoryRecord]:
+    """Load immutable submissions, including entries hidden from the UI."""
+    submissions_root = (
+        Path(data_root).expanduser().resolve()
+        / ".operator_handoff"
+        / "submissions"
+    )
+    if not submissions_root.is_dir():
+        return []
+    records: list[SubmissionHistoryRecord] = []
+    for record_path in submissions_root.glob("*/submission.json"):
+        payload = _read_json(record_path)
+        if payload.get("schema_version") == 1:
+            records.append(_record_from_payload(payload, record_path))
+    return records
+
+
+def claim_training_batch_version(
+    data_root: str | Path,
+    *,
+    batch_version: str,
+    product: str,
+    area: str,
+    submission_hash: str,
+    owner_job_id: str = "",
+    record_path: str | Path | None = None,
+) -> None:
+    """Atomically reserve one target-scoped version across GUI processes."""
+    normalized = validate_training_batch_version(
+        batch_version,
+        product=product,
+        area=area,
+    )
+    normalized_owner_job_id = str(owner_job_id or "").strip()
+    normalized_submission_hash = str(submission_hash or "").strip()
+    if not normalized_owner_job_id and not normalized_submission_hash:
+        raise ValueError("A batch-version claim requires an owner identity.")
+    claim_path = _training_batch_claim_path(
+        Path(data_root).expanduser().resolve(),
+        product=product,
+        area=area,
+        batch_version=normalized,
+    )
+    claim_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "batch_version": normalized,
+        "product": str(product or ""),
+        "area": str(area or ""),
+        "submission_hash": normalized_submission_hash,
+        "owner_job_id": normalized_owner_job_id,
+        "record_path": (
+            str(Path(record_path).expanduser().resolve()) if record_path else ""
+        ),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    try:
+        descriptor = os.open(
+            claim_path,
+            os.O_CREAT
+            | os.O_EXCL
+            | os.O_WRONLY
+            | getattr(os, "O_BINARY", 0),
+        )
+    except FileExistsError:
+        existing = _read_json(claim_path)
+        same_job = normalized_owner_job_id and (
+            str(existing.get("owner_job_id") or "") == normalized_owner_job_id
+        )
+        same_submission = not normalized_owner_job_id and (
+            str(existing.get("submission_hash") or "")
+            == normalized_submission_hash
+        )
+        if same_job or same_submission:
+            return
+        raise DuplicateTrainingBatchVersionError(
+            f"補訓批次版本已存在：{normalized}。請使用下一個版本。"
+        ) from None
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError:
+        claim_path.unlink(missing_ok=True)
+        raise
+
+
+def _training_batch_claim_path(
+    data_root: Path,
+    *,
+    product: str,
+    area: str,
+    batch_version: str,
+) -> Path:
+    scope_digest = hashlib.sha256(
+        f"{product}\0{area}".casefold().encode("utf-8")
+    ).hexdigest()[:24]
+    version_digest = hashlib.sha256(
+        batch_version.casefold().encode("utf-8")
+    ).hexdigest()[:24]
+    return (
+        data_root
+        / ".operator_handoff"
+        / "submission_versions"
+        / scope_digest
+        / f"{version_digest}.json"
+    )
+
+
+def _load_training_batch_claims(data_root: str | Path) -> list[dict[str, Any]]:
+    claims_root = (
+        Path(data_root).expanduser().resolve()
+        / ".operator_handoff"
+        / "submission_versions"
+    )
+    if not claims_root.is_dir():
+        return []
+    return [
+        payload
+        for claim_path in claims_root.glob("*/*.json")
+        if (payload := _read_json(claim_path)).get("schema_version") == 1
+    ]
+
+
+def _training_options_tuple(
+    value: Any,
+) -> tuple[tuple[str, int | str], ...]:
+    if not isinstance(value, Mapping) or not value:
+        return ()
+    try:
+        normalized = RetrainingOptions.from_mapping(value).to_dict()
+    except ValueError:
+        return ()
+    return tuple(sorted(normalized.items()))
 
 
 def _single_target(payload: dict[str, Any]) -> dict[str, Any]:

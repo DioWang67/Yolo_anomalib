@@ -18,6 +18,7 @@ from tools.export_review_dataset import (
     export_operator_handoff,
     export_review_dataset,
 )
+from tools.retraining_workspaces import create_retraining_workspace
 from tools.review_repair import (
     apply_repair_plan,
     generate_repair_plan,
@@ -1222,6 +1223,7 @@ def test_operator_handoff_verified_empty_creates_explicit_negative_label(tmp_pat
         manifest,
         output,
         inference_models_dir=tmp_path / "models",
+        batch_version="Cable1_A_v0.0.1",
         training_options={
             "epochs": 60,
             "augmentations_per_image": 12,
@@ -1231,7 +1233,9 @@ def test_operator_handoff_verified_empty_creates_explicit_negative_label(tmp_pat
     )
 
     assert report.ready_count == 1
+    assert report.batch_version == "Cable1_A_v0.0.1"
     handoff = json.loads(report.handoff_path.read_text(encoding="utf-8"))
+    assert handoff["batch_version"] == "Cable1_A_v0.0.1"
     assert handoff["training_options"] == {
         "epochs": 60,
         "augmentations_per_image": 12,
@@ -1242,3 +1246,41 @@ def test_operator_handoff_verified_empty_creates_explicit_negative_label(tmp_pat
     }
     label = next((output / "Cable1" / "A" / "raw" / "labels").glob("*.txt"))
     assert label.read_text(encoding="utf-8") == ""
+
+    with pytest.raises(ValueError, match="補訓批次版本已存在"):
+        export_operator_handoff(
+            manifest,
+            output,
+            inference_models_dir=tmp_path / "models",
+            batch_version="Cable1_A_v0.0.1",
+        )
+
+
+def test_operator_handoff_uses_precreated_batch_workspace_folder(tmp_path):
+    processed = tmp_path / "workspace-background.jpg"
+    processed.write_bytes(b"workspace-background")
+    manifest = tmp_path / "workspace-review.csv"
+    manifest.write_text(
+        "product,area,config_snapshot_path,preprocessed_path,detections_json,class_names_json,review_label\n"
+        f'Cable1,A,case.json,{processed},[],"[""Black""]",verified_empty\n',
+        encoding="utf-8",
+    )
+    output = tmp_path / "training-data"
+    workspace = create_retraining_workspace(
+        output,
+        product="Cable1",
+        area="A",
+        batch_version="Cable1_A_v0.0.1",
+    )
+
+    report = export_operator_handoff(
+        manifest,
+        output,
+        inference_models_dir=tmp_path / "models",
+        batch_version=workspace.batch_version,
+        batch_workspace_dir=workspace.root,
+    )
+
+    assert report.job_id == "Cable1_A_v0.0.1"
+    assert report.handoff_path.parent == workspace.root
+    assert (workspace.root / "status.json").is_file()

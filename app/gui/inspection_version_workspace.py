@@ -43,10 +43,12 @@ from core.services.inspection_release_models import (
     ActivationMode,
     InspectionRelease,
     InspectionReleaseError,
+    ReleaseStatus,
 )
 from core.services.inspection_release_store import InspectionReleaseStore
 from core.services.model_acceptance import AcceptanceRepository
 from core.services.model_version_registry import ModelVersionRegistry
+from core.workspace import load_workspace_paths
 from tools.color_configuration_revisions import (
     ColorConfigurationRevision,
     ColorConfigurationRevisionStore,
@@ -83,6 +85,7 @@ class InspectionVersionWorkspace(QWidget):
     """Manage components, candidates, validation and deployment in one page."""
 
     validation_requested = pyqtSignal()
+    quick_validation_requested = pyqtSignal(object)
     advanced_settings_requested = pyqtSignal()
     release_activated = pyqtSignal(object)
 
@@ -132,7 +135,9 @@ class InspectionVersionWorkspace(QWidget):
         self.stage_group = QButtonGroup(self)
         self.stage_group.setExclusive(True)
         self.stage_buttons: list[QPushButton] = []
-        for index, text in enumerate(("1  元件版本", "2  候選組合", "3  組合驗證", "4  上線紀錄")):
+        for index, text in enumerate(
+            ("1  模型與顏色版本", "2  候選組合", "3  組合驗收", "4  上線與回退")
+        ):
             button = QPushButton(text)
             button.setCheckable(True)
             button.setMinimumHeight(38)
@@ -154,7 +159,7 @@ class InspectionVersionWorkspace(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
         filters = QHBoxLayout()
-        filters.addWidget(QLabel("元件類別"))
+        filters.addWidget(QLabel("版本類別"))
         self.component_category_filter = QComboBox()
         self.component_category_filter.addItem("全部", "")
         self.component_category_filter.addItem("AI 模型", "AI_MODEL")
@@ -163,7 +168,7 @@ class InspectionVersionWorkspace(QWidget):
         self.component_category_filter.addItem("校正修訂", "COLOR_REVISION")
         self.component_category_filter.currentIndexChanged.connect(self._render_components)
         filters.addWidget(self.component_category_filter)
-        filters.addWidget(QLabel("元件"))
+        filters.addWidget(QLabel("檢測類型"))
         self.component_type_filter = QComboBox()
         self.component_type_filter.currentIndexChanged.connect(self._render_components)
         filters.addWidget(self.component_type_filter)
@@ -173,12 +178,14 @@ class InspectionVersionWorkspace(QWidget):
         filters.addWidget(refresh_button)
         layout.addLayout(filters)
 
-        self.component_table = self._table(("狀態", "類別", "元件", "版本", "完整性", "建立時間", "來源"))
+        self.component_table = self._table(
+            ("狀態", "類別", "檢測項目", "版本", "完整性", "建立時間", "來源")
+        )
         self.component_table.itemSelectionChanged.connect(self._update_component_details)
         self.component_table.itemDoubleClicked.connect(lambda _item: self._add_selected_component())
         layout.addWidget(self.component_table, 1)
 
-        self.component_details = QLabel("請選取元件版本。")
+        self.component_details = QLabel("請選取模型或顏色版本。")
         self.component_details.setWordWrap(True)
         self.component_details.setMaximumHeight(90)
         self.component_details.setStyleSheet("background:#eef2f6;border:1px solid #c8d1dc;padding:8px;")
@@ -188,7 +195,7 @@ class InspectionVersionWorkspace(QWidget):
         self.add_component_button = QPushButton("加入候選組合")
         self.add_component_button.clicked.connect(self._add_selected_component)
         actions.addWidget(self.add_component_button)
-        self.component_settings_button = QPushButton("模型參數設定")
+        self.component_settings_button = QPushButton("編輯目前檢測參數")
         self.component_settings_button.clicked.connect(self.advanced_settings_requested.emit)
         actions.addWidget(self.component_settings_button)
         layout.addLayout(actions)
@@ -223,8 +230,10 @@ class InspectionVersionWorkspace(QWidget):
         create_button.clicked.connect(self._create_candidate)
         create_row.addWidget(create_button)
         layout.addLayout(create_row)
-        layout.addWidget(QLabel("候選與已驗證組合"))
-        self.candidate_table = self._table(("狀態", "組合版本", "元件", "樣本數", "建立時間"))
+        layout.addWidget(QLabel("候選與已驗收組合"))
+        self.candidate_table = self._table(
+            ("狀態", "組合版本", "模型與顏色", "樣本數", "建立時間")
+        )
         layout.addWidget(self.candidate_table, 1)
         return page
 
@@ -239,9 +248,19 @@ class InspectionVersionWorkspace(QWidget):
         layout.addWidget(self.acceptance_summary)
         validation_actions = QHBoxLayout()
         validation_actions.addStretch(1)
-        open_validation = QPushButton("開啟組合驗證工作區")
+        open_validation = QPushButton("開啟完整驗收工具")
         open_validation.clicked.connect(self.validation_requested.emit)
         validation_actions.addWidget(open_validation)
+        self.quick_validation_button = QPushButton("驗收選取版本")
+        self.quick_validation_button.setEnabled(False)
+        self.quick_validation_button.setStyleSheet(
+            "QPushButton { background:#006f5f;color:white;padding:7px 16px; }"
+            "QPushButton:disabled { background:#9ba8a5;color:#eef2f1; }"
+        )
+        self.quick_validation_button.clicked.connect(
+            self._request_quick_validation
+        )
+        validation_actions.addWidget(self.quick_validation_button)
         layout.addLayout(validation_actions)
         self.validation_table = self._table(
             (
@@ -254,21 +273,29 @@ class InspectionVersionWorkspace(QWidget):
                 "顏色逃逸率",
             )
         )
+        self.validation_table.itemSelectionChanged.connect(
+            self._update_validation_actions
+        )
+        self.validation_table.itemDoubleClicked.connect(
+            lambda _item: self._request_quick_validation()
+        )
         layout.addWidget(self.validation_table, 1)
         return page
 
     def _build_deployment_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        self.deployment_table = self._table(("使用中", "狀態", "組合版本", "元件", "啟用模式", "建立時間"))
+        self.deployment_table = self._table(
+            ("使用中", "狀態", "組合版本", "模型與顏色", "啟用模式", "建立時間")
+        )
         self.deployment_table.itemSelectionChanged.connect(self._update_deployment_actions)
         layout.addWidget(self.deployment_table, 1)
         actions = QHBoxLayout()
         actions.addStretch(1)
-        self.activate_button = QPushButton("啟用選取組合")
+        self.activate_button = QPushButton("發布並啟用選取組合")
         self.activate_button.clicked.connect(self._activate_selected)
         actions.addWidget(self.activate_button)
-        self.rollback_button = QPushButton("退回前一組合")
+        self.rollback_button = QPushButton("回退至前一正式組合")
         self.rollback_button.clicked.connect(self._rollback)
         actions.addWidget(self.rollback_button)
         layout.addLayout(actions)
@@ -323,7 +350,7 @@ class InspectionVersionWorkspace(QWidget):
             )
             self._index_color_revisions()
         except (OSError, RuntimeError, ValueError) as exc:
-            QMessageBox.critical(self, "檢測版本", str(exc))
+            QMessageBox.critical(self, "版本與上線", str(exc))
             return
         self._refresh_component_filters()
         self._refresh_candidate_selectors()
@@ -380,7 +407,7 @@ class InspectionVersionWorkspace(QWidget):
         else:
             self.add_component_button.setEnabled(False)
             self.component_settings_button.setEnabled(False)
-            self.component_details.setText("此篩選條件沒有可用元件。")
+            self.component_details.setText("此篩選條件沒有可用的模型或顏色版本。")
 
     def _selected_component(self) -> InspectionComponentRecord | None:
         row = self.component_table.currentRow()
@@ -392,7 +419,11 @@ class InspectionVersionWorkspace(QWidget):
         record = self._selected_component()
         self.add_component_button.setEnabled(bool(record and record.can_compose))
         self.component_settings_button.setEnabled(bool(record and record.category == "AI_MODEL"))
-        self.component_details.setText(self._component_detail_text(record) if record else "請選取元件版本。")
+        self.component_details.setText(
+            self._component_detail_text(record)
+            if record
+            else "請選取模型或顏色版本。"
+        )
 
     @staticmethod
     def _component_detail_text(
@@ -595,12 +626,29 @@ class InspectionVersionWorkspace(QWidget):
                 "選取的模型版本缺少 config 快照，不能安全重建。",
             )
             return
-        manifest = self.project_root / "acceptance" / self.product / self.area / "ground_truth.csv"
-        if not manifest.is_file():
+        acceptance_manifest = (
+            self.project_root
+            / "acceptance"
+            / self.product
+            / self.area
+            / "ground_truth.csv"
+        )
+        try:
+            color_feedback_manifest = (
+                load_workspace_paths(self.project_root).training_data
+                / self.product
+                / self.area
+                / "color_review"
+                / "feedback.csv"
+            )
+        except ValueError as exc:
+            QMessageBox.critical(self, "重建完整顏色基準", str(exc))
+            return
+        if not acceptance_manifest.is_file() and not color_feedback_manifest.is_file():
             QMessageBox.warning(
                 self,
                 "重建完整顏色基準",
-                "尚未建立這個產品與區域的驗收資料。",
+                "尚未建立這個產品與區域的驗收資料或顏色覆核資料。",
             )
             return
         dialog = ColorBaselineRebuildDialog(
@@ -805,7 +853,10 @@ class InspectionVersionWorkspace(QWidget):
 
     def _render_validation(self) -> None:
         self.validation_table.setRowCount(len(self._releases))
+        first_draft_row = -1
         for row, release in enumerate(self._releases):
+            if first_draft_row < 0 and release.status is ReleaseStatus.DRAFT:
+                first_draft_row = row
             metrics = dict(release.validation.metrics)
             color = dict(release.validation.color_metrics)
             values = (
@@ -818,6 +869,45 @@ class InspectionVersionWorkspace(QWidget):
                 self._percent(color.get("escape_rate")),
             )
             self._set_release_row(self.validation_table, row, release, values)
+        if self._releases:
+            self.validation_table.selectRow(
+                first_draft_row if first_draft_row >= 0 else 0
+            )
+        self._update_validation_actions()
+
+    def _selected_validation_release(self) -> InspectionRelease | None:
+        row = self.validation_table.currentRow()
+        item = self.validation_table.item(row, 0) if row >= 0 else None
+        value = item.data(_RELEASE_ROLE) if item else None
+        return value if isinstance(value, InspectionRelease) else None
+
+    def _update_validation_actions(self) -> None:
+        release = self._selected_validation_release()
+        enabled = bool(
+            release is not None
+            and release.status is ReleaseStatus.DRAFT
+            and not self.is_inspection_running()
+        )
+        self.quick_validation_button.setEnabled(enabled)
+        if release is None:
+            self.quick_validation_button.setToolTip("請先選取一個候選組合。")
+        elif release.status is not ReleaseStatus.DRAFT:
+            self.quick_validation_button.setToolTip("此組合已有驗收結果。")
+        elif self.is_inspection_running():
+            self.quick_validation_button.setToolTip("請先停止目前檢測。")
+        else:
+            self.quick_validation_button.setToolTip(
+                f"只驗收 {release.display_version} 綁定的模型與顏色版本。"
+            )
+
+    def _request_quick_validation(self) -> None:
+        release = self._selected_validation_release()
+        if release is None or release.status is not ReleaseStatus.DRAFT:
+            return
+        if self.is_inspection_running():
+            QMessageBox.warning(self, "快速驗收", "請先停止目前檢測。")
+            return
+        self.quick_validation_requested.emit(release)
 
     def _render_deployment(self) -> None:
         self.deployment_table.setRowCount(len(self._releases))
@@ -880,7 +970,7 @@ class InspectionVersionWorkspace(QWidget):
         self.acceptance_summary.setText(
             f"驗收資料：共 {len(records)} 張；已人工確認 {len(confirmed)} 張｜"
             f"OK {ok_count}｜NG {ng_count}｜顏色 NG {color_ng}。"
-            "驗證會讀取同一份資料，不需重新標註。"
+            "組合驗收會讀取同一份資料，不需重新標註。"
         )
 
     def _active_release(self) -> tuple[InspectionRelease, dict] | None:
@@ -924,21 +1014,21 @@ class InspectionVersionWorkspace(QWidget):
         if release is None:
             return
         if self.is_inspection_running():
-            QMessageBox.warning(self, "啟用檢測組合", "請先停止目前檢測。")
+            QMessageBox.warning(self, "上線檢測組合", "請先停止目前檢測。")
             return
         allowed = self.release_store.policy.allowed_modes(release)
         if not allowed:
-            QMessageBox.warning(self, "啟用檢測組合", "此組合目前不符合任何啟用條件。")
+            QMessageBox.warning(self, "上線檢測組合", "此組合目前不符合任何上線條件。")
             return
         labels = {
-            ActivationMode.FULL: "正式啟用",
+            ActivationMode.FULL: "正式上線",
             ActivationMode.LIMITED_TRIAL: "限定試用",
             ActivationMode.RISK_ACCEPTED: "風險接受",
         }
         selected, ok = QInputDialog.getItem(
             self,
-            "啟用檢測組合",
-            "啟用模式",
+            "上線檢測組合",
+            "上線模式",
             [labels[mode] for mode in allowed],
             editable=False,
         )
@@ -947,7 +1037,7 @@ class InspectionVersionWorkspace(QWidget):
         mode = next(mode for mode in allowed if labels[mode] == selected)
         if mode is ActivationMode.RISK_ACCEPTED:
             warnings = "\n".join(self.release_store.policy.validation_warnings(release))
-            confirmation = f"{warnings or '驗證資料尚未達正式門檻。'}\n\n仍要承擔風險並啟用嗎？"
+            confirmation = f"{warnings or '驗收資料尚未達正式門檻。'}\n\n仍要承擔風險並上線嗎？"
             if (
                 QMessageBox.question(
                     self,
@@ -959,7 +1049,7 @@ class InspectionVersionWorkspace(QWidget):
                 != QMessageBox.Yes
             ):
                 return
-        identity = self._operator_reason("啟用檢測組合")
+        identity = self._operator_reason("上線檢測組合")
         if identity is None:
             return
         pointer = self.release_store.active_pointer(release.scope)
@@ -973,7 +1063,7 @@ class InspectionVersionWorkspace(QWidget):
                 expected_release_id=expected,
             )
         except InspectionReleaseError as exc:
-            QMessageBox.critical(self, "啟用失敗", str(exc))
+            QMessageBox.critical(self, "上線失敗", str(exc))
             return
         self.release_activated.emit(release)
         self.refresh()
@@ -983,9 +1073,9 @@ class InspectionVersionWorkspace(QWidget):
         if release is None:
             return
         if self.is_inspection_running():
-            QMessageBox.warning(self, "退回前一組合", "請先停止目前檢測。")
+            QMessageBox.warning(self, "回退正式組合", "請先停止目前檢測。")
             return
-        identity = self._operator_reason("退回前一組合")
+        identity = self._operator_reason("回退正式組合")
         if identity is None:
             return
         try:

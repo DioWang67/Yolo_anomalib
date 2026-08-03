@@ -19,6 +19,7 @@ QShortcut = qt_widgets.QShortcut
 from app.gui.i18n import tr
 from app.gui.main_window import DetectionSystemGUI
 from core.types import DetectionResult, DetectionTask
+from tools.retraining_workspaces import create_retraining_workspace  # noqa: E402
 
 
 @pytest.fixture
@@ -645,6 +646,12 @@ def test_retraining_workspace_is_reused_and_can_return_to_inspection(
     gui, tmp_path, qtbot
 ):
     """Leaving retraining must switch pages without destroying its state."""
+    create_retraining_workspace(
+        tmp_path / "training-data",
+        product="Cable1",
+        area="A",
+        batch_version="Cable1_A_v0.0.1",
+    )
     arguments = {
         "result_root": tmp_path / "Result",
         "manifest_path": tmp_path / "review.csv",
@@ -668,6 +675,12 @@ def test_retraining_workspace_is_reused_and_can_return_to_inspection(
 def test_color_revision_signal_invalidates_active_model(
     gui, tmp_path, qtbot, monkeypatch
 ):
+    create_retraining_workspace(
+        tmp_path / "training-data",
+        product="Cable1",
+        area="A",
+        batch_version="Cable1_A_v0.0.1",
+    )
     calls = []
     monkeypatch.setattr(
         gui.controller,
@@ -698,6 +711,12 @@ def test_retraining_manifest_scan_does_not_block_page_switch(
     from app.gui import review_cases_dialog
 
     original_prepare = review_cases_dialog.prepare_review_manifest
+    create_retraining_workspace(
+        tmp_path / "training-data",
+        product="Cable1",
+        area="A",
+        batch_version="Cable1_A_v0.0.1",
+    )
 
     def slow_prepare(**kwargs):
         time.sleep(0.4)
@@ -725,6 +744,12 @@ def test_retraining_workspace_survives_repeated_page_switches(
     gui, tmp_path, qtbot
 ):
     """Repeated navigation must reuse one workspace and remain responsive."""
+    create_retraining_workspace(
+        tmp_path / "training-data",
+        product="Cable1",
+        area="A",
+        batch_version="Cable1_A_v0.0.1",
+    )
     arguments = {
         "result_root": tmp_path / "Result",
         "manifest_path": tmp_path / "review.csv",
@@ -751,6 +776,18 @@ def test_retraining_workspace_survives_repeated_page_switches(
 def test_retraining_photo_stage_switches_product_and_area_without_mixing(
     gui, tmp_path, qtbot
 ):
+    create_retraining_workspace(
+        tmp_path / "training-data",
+        product="Cable1",
+        area="A",
+        batch_version="Cable1_A_v0.0.1",
+    )
+    create_retraining_workspace(
+        tmp_path / "training-data",
+        product="PCBA1",
+        area="TOP",
+        batch_version="PCBA1_TOP_v0.0.1",
+    )
     host = gui.show_retraining_workspace(
         result_root=tmp_path / "Result",
         manifest_path=tmp_path / "review.csv",
@@ -796,6 +833,18 @@ def test_retraining_target_switch_discards_stale_background_result(
     from app.gui import review_cases_dialog
 
     original_prepare = review_cases_dialog.prepare_review_manifest
+    create_retraining_workspace(
+        tmp_path / "training-data",
+        product="Cable1",
+        area="A",
+        batch_version="Cable1_A_v0.0.1",
+    )
+    create_retraining_workspace(
+        tmp_path / "training-data",
+        product="PCBA1",
+        area="TOP",
+        batch_version="PCBA1_TOP_v0.0.1",
+    )
     prepared_targets: list[tuple[str | None, str | None]] = []
 
     def slow_prepare(**kwargs):

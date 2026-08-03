@@ -57,7 +57,7 @@ class SubmissionHistoryDialog(QDialog):
         self.selected_product = str(selected_product or "")
         self.selected_area = str(selected_area or "")
         self.records = load_submission_history(self.data_root)
-        self.setWindowTitle(self._text("已送出紀錄", "Submitted History"))
+        self.setWindowTitle(self._text("補訓批次紀錄", "Retraining Batch History"))
         configure_responsive_dialog(
             self,
             preferred=(1250, 760),
@@ -75,8 +75,9 @@ class SubmissionHistoryDialog(QDialog):
         layout = QVBoxLayout(self)
         title = QLabel(
             self._text(
-                "這裡是已送出的唯讀紀錄；查看照片不會重新加入清單，也不會重複送訓。",
-                "This is read-only submission history. Viewing images never queues or resubmits them.",
+                "每個版本保留當次選圖、複核結果與訓練設定；查看照片不會重新加入清單，也不會重複送訓。",
+                "Each version preserves its selected images, review results, and training settings. "
+                "Viewing images never queues or resubmits them.",
             )
         )
         title.setWordWrap(True)
@@ -104,6 +105,7 @@ class SubmissionHistoryDialog(QDialog):
 
         headers = [
             self._text("送出時間", "Submitted"),
+            self._text("批次版本", "Batch version"),
             self._text("類型", "Type"),
             self._text("產品", "Product"),
             self._text("工位", "Station"),
@@ -121,7 +123,7 @@ class SubmissionHistoryDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(9, QHeaderView.Stretch)
         self.table.itemSelectionChanged.connect(self._update_details)
         self.table.itemDoubleClicked.connect(lambda _item: self._open_selected_batch())
         layout.addWidget(self.table, 1)
@@ -221,6 +223,7 @@ class SubmissionHistoryDialog(QDialog):
             self.table.insertRow(row_index)
             values = [
                 _format_datetime(record.submitted_at),
+                record.batch_version or self._text("舊紀錄（未命名）", "Legacy (unnamed)"),
                 self._text(*ACTION_LABELS.get(record.action, (record.action, record.action))),
                 record.product or "—",
                 record.area or "—",
@@ -261,14 +264,26 @@ class SubmissionHistoryDialog(QDialog):
         if record is None:
             self.details_label.setText(self._text("尚無送訓紀錄。", "No submission history."))
             return
+        version = record.batch_version or self._text(
+            "舊紀錄（未命名）",
+            "Legacy (unnamed)",
+        )
+        training_settings = _format_training_options(
+            record.training_options,
+            language=self.language,
+        )
         self.details_label.setText(
             self._text(
+                f"批次版本：{version}｜"
                 f"類型：{self._text(*ACTION_LABELS.get(record.action, (record.action, record.action)))}｜"
                 f"產品／工位：{record.product or '—'} / {record.area or '—'}｜"
-                f"本批：{record.case_count} 張｜任務：{record.job_id or '僅校正資料'}",
+                f"本批：{record.case_count} 張｜任務：{record.job_id or '僅校正資料'}\n"
+                f"{training_settings}",
+                f"Batch version: {version} | "
                 f"Type: {self._text(*ACTION_LABELS.get(record.action, (record.action, record.action)))} | "
                 f"Target: {record.product or '—'} / {record.area or '—'} | "
-                f"Cases: {record.case_count} | Job: {record.job_id or 'calibration only'}",
+                f"Cases: {record.case_count} | Job: {record.job_id or 'calibration only'}\n"
+                f"{training_settings}",
             )
         )
 
@@ -318,13 +333,46 @@ class SubmissionHistoryDialog(QDialog):
                 ),
             )
             return
-        TrainingBatchDialog(
+        batch_dialog = TrainingBatchDialog(
             entries,
             language=self.language,
             history_mode=True,
             parent=self,
-        ).exec_()
+        )
+        if record.batch_version:
+            batch_dialog.setWindowTitle(
+                f"{record.batch_version}｜{batch_dialog.windowTitle()}"
+            )
+        batch_dialog.exec_()
 
 
 def _format_datetime(value: datetime | None) -> str:
     return value.astimezone().strftime("%Y-%m-%d %H:%M:%S") if value else "—"
+
+
+def _format_training_options(
+    options: tuple[tuple[str, int | str], ...],
+    *,
+    language: str,
+) -> str:
+    """Render the immutable settings saved with one retraining batch."""
+    is_chinese = language.lower().startswith("zh")
+    if not options:
+        return "訓練設定：舊紀錄未保存" if is_chinese else "Training settings: not saved by legacy version"
+    values = dict(options)
+    position_mode = str(values.get("position_training_mode") or "yolo_only")
+    position_enabled = position_mode == "calibrate_validate"
+    if is_chinese:
+        return (
+            f"訓練設定：Epochs {values.get('epochs', '—')}｜"
+            f"每張增強 {values.get('augmentations_per_image', '—')}｜"
+            f"Batch {values.get('batch', '—')}｜"
+            f"影像尺寸 {values.get('imgsz', '—')}｜"
+            f"位置檢測 {'啟用' if position_enabled else '停用'}"
+        )
+    return (
+        f"Training settings: epochs {values.get('epochs', '—')} | "
+        f"augmentations/image {values.get('augmentations_per_image', '—')} | "
+        f"batch {values.get('batch', '—')} | imgsz {values.get('imgsz', '—')} | "
+        f"position {'enabled' if position_enabled else 'disabled'}"
+    )

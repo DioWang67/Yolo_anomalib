@@ -151,6 +151,7 @@ class ModelUpdateJob:
     training_process_host: str
     heartbeat_at: datetime | None
     cancel_request_pending: bool
+    batch_version: str = ""
     epochs: int = 0
     augmentations_per_image: int = 0
     batch: int = 0
@@ -186,6 +187,13 @@ def load_model_update_jobs(data_root: str | Path) -> list[ModelUpdateJob]:
     jobs: list[ModelUpdateJob] = []
     for job_dir in jobs_root.iterdir():
         if not job_dir.is_dir():
+            continue
+        if (
+            (job_dir / "workspace.json").is_file()
+            and not (job_dir / "handoff.json").is_file()
+        ):
+            # Draft folders belong to the selection/review workspace, not the
+            # training-progress list yet.
             continue
         handoff, _handoff_valid = _read_json(job_dir / "handoff.json")
         status, status_valid = _read_json(job_dir / "status.json")
@@ -257,6 +265,7 @@ def load_model_update_jobs(data_root: str | Path) -> list[ModelUpdateJob]:
                 training_process_host=training_process_host,
                 heartbeat_at=heartbeat_at,
                 cancel_request_pending=cancel_request_pending,
+                batch_version=str(handoff.get("batch_version") or ""),
                 epochs=_safe_int(training_options.get("epochs"), minimum=0),
                 augmentations_per_image=_safe_int(
                     training_options.get("augmentations_per_image"), minimum=0
@@ -406,6 +415,7 @@ class ModelUpdateStatusDialog(QDialog):
 
         headers = [
             self._text("狀態", "State"),
+            self._text("批次版本", "Batch version"),
             self._text("產品", "Product"),
             self._text("工位", "Station"),
             self._text("送出時間", "Submitted"),
@@ -425,7 +435,7 @@ class ModelUpdateStatusDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(8, QHeaderView.Stretch)
+        header.setSectionResizeMode(9, QHeaderView.Stretch)
         self.table.itemSelectionChanged.connect(self._update_details)
         if self._embedded:
             self.table.setMinimumHeight(120)
@@ -697,6 +707,7 @@ class ModelUpdateStatusDialog(QDialog):
             self.table.insertRow(row)
             values = [
                 self._state_label(job.state),
+                job.batch_version or self._text("舊任務（未命名）", "Legacy (unnamed)"),
                 job.product or "—",
                 job.area or "—",
                 _format_datetime(job.created_at),
@@ -838,7 +849,15 @@ class ModelUpdateStatusDialog(QDialog):
                 else ("The retraining window is still running" if process_active else "Reopen this existing job"),
             )
         )
-        detail = job.message or self._state_label(job.state)
+        version = job.batch_version or self._text(
+            "舊任務（未命名）",
+            "Legacy (unnamed)",
+        )
+        detail = self._text(
+            f"補訓批次：{version}\n",
+            f"Retraining batch: {version}\n",
+        )
+        detail += job.message or self._state_label(job.state)
         if job.epochs and job.batch and job.imgsz:
             detail += self._text(
                 f"\n訓練設定：{job.epochs} Epochs／增強 {job.augmentations_per_image}／"

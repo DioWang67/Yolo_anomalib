@@ -21,12 +21,13 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from core.services.color_baseline_evidence import ColorBaselineEvidenceProvider
 from core.services.color_baseline_recalibration import (
     ColorBaselineCancelled,
     ColorBaselineCandidateStore,
     ColorBaselineError,
     StatsColorBaselineRebuilder,
-    collect_confirmed_ok_evidence,
+    collect_color_baseline_evidence,
 )
 from core.services.model_acceptance import (
     AcceptanceInferenceService,
@@ -34,6 +35,7 @@ from core.services.model_acceptance import (
     ModelIdentity,
 )
 from core.services.model_version_registry import ModelVersionRecord
+from core.workspace import load_workspace_paths
 
 
 class ColorBaselineRebuildWorker(QThread):
@@ -41,6 +43,7 @@ class ColorBaselineRebuildWorker(QThread):
 
     progress_changed = pyqtSignal(int, int, str)
     phase_changed = pyqtSignal(str)
+    evidence_ready = pyqtSignal(object)
     completed = pyqtSignal(object, object)
     failed = pyqtSignal(str)
     cancelled = pyqtSignal()
@@ -71,11 +74,31 @@ class ColorBaselineRebuildWorker(QThread):
                 self.project_root,
                 config_path,
             )
-            repository = AcceptanceRepository(self.project_root / "acceptance" / self.product / self.area)
-            records = tuple(
-                record for record in repository.records() if record.product == self.product and record.area == self.area
-            )
             selected_type = "yolo" if self.inference_type.casefold() == "fusion" else self.inference_type.casefold()
+            evidence_provider = ColorBaselineEvidenceProvider(
+                product=self.product,
+                area=self.area,
+                model_type=selected_type,
+            )
+            repository = AcceptanceRepository(
+                self.project_root
+                / "acceptance"
+                / evidence_provider.product
+                / evidence_provider.area
+            )
+            feedback_manifest = (
+                load_workspace_paths(self.project_root).training_data
+                / evidence_provider.product
+                / evidence_provider.area
+                / "color_review"
+                / "feedback.csv"
+            )
+            self.phase_changed.emit("正在整理驗收與顏色覆核的人工 OK 樣本…")
+            evidence_snapshot = evidence_provider.collect(
+                acceptance_repository=repository,
+                feedback_manifest=feedback_manifest,
+            )
+            self.evidence_ready.emit(evidence_snapshot)
             identity = ModelIdentity(
                 version=self.model.version,
                 sha256=self.model.weight_sha256,
@@ -95,10 +118,9 @@ class ColorBaselineRebuildWorker(QThread):
                     ): config_path
                 },
             )
-            evidence = collect_confirmed_ok_evidence(
-                repository=repository,
+            evidence = collect_color_baseline_evidence(
                 inference_service=service,
-                records=records,
+                samples=evidence_snapshot.samples,
                 inference_type=self.inference_type,
                 progress_callback=self.progress_changed.emit,
                 cancel_callback=self.isInterruptionRequested,
@@ -107,6 +129,7 @@ class ColorBaselineRebuildWorker(QThread):
             build = StatsColorBaselineRebuilder().build(
                 base_model_path=base_model_path,
                 evidence=evidence,
+                evidence_metadata=evidence_snapshot.to_report_dict(),
                 cancel_callback=self.isInterruptionRequested,
             )
             candidate = ColorBaselineCandidateStore(self.project_root / ".color_baselines").commit(
@@ -174,6 +197,13 @@ class ColorBaselineRebuildDialog(QDialog):
         self.phase_label = QLabel("準備中…")
         self.phase_label.setWordWrap(True)
         layout.addWidget(self.phase_label)
+        self.evidence_label = QLabel("證據來源會在開始重建後顯示。")
+        self.evidence_label.setWordWrap(True)
+        self.evidence_label.setStyleSheet(
+            "background:#eef6ff;color:#174f78;border:1px solid #b8d4ea;"
+            "border-radius:5px;padding:8px;"
+        )
+        layout.addWidget(self.evidence_label)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         layout.addWidget(self.progress)
@@ -210,7 +240,7 @@ class ColorBaselineRebuildDialog(QDialog):
 
         warning = QLabel(
             "限制：人工 OK 可建立正常顏色分布，但無法證明真實顏色缺陷的漏檢率。"
-            "候選建立後仍要在「組合驗證」跑既有驗收矩陣。"
+            "候選建立後仍要在「組合驗收」使用既有驗收資料確認。"
         )
         warning.setWordWrap(True)
         warning.setStyleSheet(
@@ -230,6 +260,7 @@ class ColorBaselineRebuildDialog(QDialog):
 
     def _connect_worker(self) -> None:
         self._worker.phase_changed.connect(self.phase_label.setText)
+        self._worker.evidence_ready.connect(self._show_evidence_summary)
         self._worker.progress_changed.connect(self._update_progress)
         self._worker.completed.connect(self._completed)
         self._worker.failed.connect(self._failed)
@@ -250,6 +281,21 @@ class ColorBaselineRebuildDialog(QDialog):
         self.progress.setValue(current)
         self.progress.setFormat(f"{current}/{total}｜{sample_id}" if total else sample_id)
 
+    def _show_evidence_summary(self, snapshot) -> None:
+        warnings: list[str] = []
+        if snapshot.conflict_count:
+            warnings.append(f"真值衝突 {snapshot.conflict_count} 張")
+        if snapshot.invalid_count:
+            warnings.append(f"缺圖或驗證失敗 {snapshot.invalid_count} 張")
+        warning_text = f"｜已安全排除：{'、'.join(warnings)}" if warnings else ""
+        self.evidence_label.setText(
+            f"本次選用 {snapshot.selected_count} 張：驗收 OK "
+            f"{snapshot.selected_acceptance_count} 張＋顏色覆核 OK "
+            f"{snapshot.selected_feedback_count} 張｜去重 {snapshot.duplicate_count} 張｜"
+            f"NG 不納入基準統計 {snapshot.confirmed_ng_count} 張"
+            f"{warning_text}"
+        )
+
     def _completed(self, candidate, color_reports) -> None:
         self._finished = True
         self.progress.setValue(self.progress.maximum())
@@ -262,7 +308,7 @@ class ColorBaselineRebuildDialog(QDialog):
         self.next_step_label.setText(
             f"下一步：{candidate.display_version} 已自動選回「候選組合」"
             f"（{result_text}）。關閉本視窗後，填寫組合版本、建立人員與原因，"
-            "建立候選組合；再到「組合驗證」使用同一批驗收照片比較，"
+            "建立候選組合；再到「組合驗收」使用同一批驗收照片比較，"
             "通過後才可上線。"
         )
         self.next_step_label.setVisible(True)

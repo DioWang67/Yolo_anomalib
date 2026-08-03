@@ -9,6 +9,7 @@ import shutil
 import threading
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from core.services.inspection_release_models import (
     InspectionReleasePolicyError,
     InspectionScope,
     ReleaseStatus,
+    ReleaseValidationAttestation,
     template_for_inference_type,
 )
 
@@ -45,6 +47,10 @@ def _canonical_json(payload: Mapping[str, Any]) -> bytes:
         )
         + "\n"
     ).encode("utf-8")
+
+
+def _canonical_sha256(payload: Mapping[str, Any]) -> str:
+    return hashlib.sha256(_canonical_json(payload)).hexdigest()
 
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
@@ -188,12 +194,12 @@ class InspectionReleaseStore:
         self._verify_external_evidence(release)
         destination = self.release_dir(release)
         if destination.exists():
-            loaded = self.load(release.scope, release.release_id)
+            loaded = self._load_base(release.scope, release.release_id)
             if loaded.to_dict() != release.to_dict():
                 raise InspectionReleaseConflictError(
                     "Release ID already exists with different content."
                 )
-            return loaded
+            return self.load(release.scope, release.release_id)
         staging = destination.with_name(f".{release.release_id}.{uuid4().hex}.tmp")
         staging.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -208,7 +214,116 @@ class InspectionReleaseStore:
             shutil.rmtree(staging, ignore_errors=True)
             raise
 
+    def commit_validation(
+        self,
+        validated_release: InspectionRelease,
+        *,
+        validator: str,
+        reason: str,
+    ) -> InspectionRelease:
+        """Append validation evidence and project it onto an immutable draft."""
+        if not validator.strip() or not reason.strip():
+            raise InspectionReleasePolicyError(
+                "Validation operator and reason are required."
+            )
+        if validated_release.status not in {ReleaseStatus.TESTED, ReleaseStatus.BLOCKED}:
+            raise InspectionReleasePolicyError(
+                "Only a TESTED or BLOCKED validation result can be attested."
+            )
+        self._verify_external_evidence(validated_release)
+        scope_hash = validated_release.scope.scope_hash
+        lock = self._lock_for(scope_hash)
+        with lock, self._cross_process_lock(scope_hash):
+            base = self._load_base(
+                validated_release.scope,
+                validated_release.release_id,
+            )
+            if base.status is not ReleaseStatus.DRAFT:
+                raise InspectionReleasePolicyError(
+                    "Only an immutable DRAFT release can receive validation evidence."
+                )
+            expected_projection = replace(
+                base,
+                status=validated_release.status,
+                validation=validated_release.validation,
+            )
+            if expected_projection != validated_release:
+                raise InspectionReleaseConflictError(
+                    "Validation result does not match the selected draft components."
+                )
+            base_sha256 = _canonical_sha256(base.to_dict())
+            identity_payload = {
+                "release_id": base.release_id,
+                "report_sha256": validated_release.validation.report_sha256,
+                "combination_id": validated_release.validation.combination_id,
+            }
+            attestation_id = _canonical_sha256(identity_payload)
+            destination = self.validation_attestation_path(
+                base.scope,
+                base.release_id,
+                attestation_id,
+            )
+            if destination.exists():
+                existing = self._read_validation_attestation(destination, base)
+                if (
+                    existing.validation.report_sha256
+                    != validated_release.validation.report_sha256
+                    or existing.validation.combination_id
+                    != validated_release.validation.combination_id
+                ):
+                    raise InspectionReleaseConflictError(
+                        "Validation attestation ID already exists with different evidence."
+                    )
+                return self.load(base.scope, base.release_id)
+            attestation = ReleaseValidationAttestation(
+                attestation_id=attestation_id,
+                release_id=base.release_id,
+                scope_hash=base.scope.scope_hash,
+                base_release_sha256=base_sha256,
+                status=validated_release.status,
+                validated_at=datetime.now(timezone.utc).isoformat(),
+                validator=validator.strip(),
+                reason=reason.strip(),
+                validation=validated_release.validation,
+            )
+            body = attestation.to_dict()
+            _write_json_atomic(
+                destination,
+                {
+                    **body,
+                    "payload_sha256": _canonical_sha256(body),
+                },
+            )
+            return self.load(base.scope, base.release_id)
+
+    def validation_attestation_path(
+        self,
+        scope: InspectionScope,
+        release_id: str,
+        attestation_id: str,
+    ) -> Path:
+        return (
+            self.root
+            / "validations"
+            / scope.scope_hash
+            / release_id
+            / f"{attestation_id}.json"
+        )
+
     def load(self, scope: InspectionScope, release_id: str) -> InspectionRelease:
+        base = self._load_base(scope, release_id)
+        attestation = self._latest_validation_attestation(base)
+        if attestation is None:
+            return base
+        projected = replace(
+            base,
+            status=attestation.status,
+            validation=attestation.validation,
+        )
+        self._verify_external_evidence(projected)
+        return projected
+
+    def _load_base(self, scope: InspectionScope, release_id: str) -> InspectionRelease:
         release_dir = self.root / "releases" / scope.scope_hash / release_id
         if release_dir.is_symlink() or not release_dir.is_dir():
             raise InspectionReleaseError(f"Inspection release is unavailable: {release_id}")
@@ -230,6 +345,61 @@ class InspectionReleaseStore:
             raise InspectionReleaseError("Release identity does not match its path.")
         self._verify_external_evidence(release)
         return release
+
+    def _latest_validation_attestation(
+        self,
+        base: InspectionRelease,
+    ) -> ReleaseValidationAttestation | None:
+        validation_root = (
+            self.root
+            / "validations"
+            / base.scope.scope_hash
+            / base.release_id
+        )
+        if not validation_root.is_dir() or validation_root.is_symlink():
+            return None
+        attestations = tuple(
+            self._read_validation_attestation(path, base)
+            for path in sorted(validation_root.glob("*.json"))
+            if path.is_file() and not path.is_symlink()
+        )
+        if not attestations:
+            return None
+        return max(
+            attestations,
+            key=lambda item: (item.validated_at, item.attestation_id),
+        )
+
+    @staticmethod
+    def _read_validation_attestation(
+        path: Path,
+        base: InspectionRelease,
+    ) -> ReleaseValidationAttestation:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise InspectionReleaseError(
+                "Validation attestation is unreadable."
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise InspectionReleaseError("Validation attestation is invalid.")
+        expected_payload_sha256 = str(payload.get("payload_sha256") or "").lower()
+        body = dict(payload)
+        body.pop("payload_sha256", None)
+        if expected_payload_sha256 != _canonical_sha256(body):
+            raise InspectionReleaseError("Validation attestation checksum mismatch.")
+        attestation = ReleaseValidationAttestation.from_dict(body)
+        if (
+            attestation.release_id != base.release_id
+            or attestation.scope_hash != base.scope.scope_hash
+            or attestation.base_release_sha256
+            != _canonical_sha256(base.to_dict())
+            or path.stem != attestation.attestation_id
+        ):
+            raise InspectionReleaseError(
+                "Validation attestation does not match its immutable draft."
+            )
+        return attestation
 
     def list_releases(
         self, *, product: str | None = None, area: str | None = None

@@ -53,9 +53,16 @@ picture-tool-color-calibrate apply color-threshold-report.json `
 
 ## 完整五色基準重建
 
-逐色門檻校正只調整特定顏色的接受範圍；`重建完整顏色基準`則會使用人工
-確認為 OK 的驗收照片，重新計算 Black、Green、Orange、Red、Yellow 五色
-的 HSV/Lab 統計中心。兩者不是同一功能，也不能以單純放寬門檻取代基準重建。
+逐色門檻校正只調整特定顏色的接受範圍；`重建完整顏色基準`會合併人工
+確認為 OK 的驗收照片，以及顏色覆核中確認為 `actually_ok` 的照片，重新計算
+Black、Green、Orange、Red、Yellow 五色的 HSV/Lab 統計中心。兩者不是同一
+功能，也不能以單純放寬門檻取代基準重建。
+
+合併時會依產品、區域、模型與 `stats` checker 精確篩選，以影像 SHA-256
+驗證及去重。若同一影像同時存在 OK 與 NG 真值，或圖片遺失、雜湊不符、
+路徑超出顏色覆核資料夾，該影像會 fail closed 排除。NG 覆核不會混入正常
+顏色統計。候選報告會保存本次選用的 sample ID、影像 SHA-256、來源清單、
+去重數、衝突數及排除數，供後續追溯。
 
 重建時會使用指定 YOLO 版本在處理後影像上的框裁切元件，並為每色保留
 holdout。候選只會寫入不可變的 `.color_baselines` 套件，不會直接修改正式

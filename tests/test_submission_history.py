@@ -4,13 +4,17 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
 from PyQt5.QtWidgets import QMessageBox
 
 from app.gui.submission_history_dialog import SubmissionHistoryDialog
 from tools.submission_history import (
+    DuplicateTrainingBatchVersionError,
+    ensure_training_batch_version_available,
     load_submission_entries,
     load_submission_history,
     record_submission_history,
+    suggest_next_training_batch_version,
 )
 
 
@@ -88,6 +92,100 @@ def test_submission_history_accepts_portable_package_action(tmp_path):
     assert record.action == "portable"
 
 
+def test_versioned_submission_batches_keep_independent_samples_and_settings(
+    tmp_path,
+):
+    data_root = tmp_path / "data"
+    first_manifest = tmp_path / "selected-v1.csv"
+    second_manifest = tmp_path / "selected-v2.csv"
+    _write_review_manifest(first_manifest, label="confirmed_ng")
+    _write_review_manifest(second_manifest, label="verified_empty")
+    options = {
+        "epochs": 60,
+        "augmentations_per_image": 5,
+        "batch": 4,
+        "imgsz": 960,
+        "position_training_mode": "yolo_only",
+        "position_activation": "preserve",
+    }
+
+    first = record_submission_history(
+        data_root,
+        first_manifest,
+        action="direct",
+        product="Cable1",
+        area="A",
+        case_count=1,
+        ready_count=1,
+        job_id="job-v1",
+        batch_version="Cable1_A_v0.0.1",
+        training_options=options,
+    )
+    second = record_submission_history(
+        data_root,
+        second_manifest,
+        action="direct",
+        product="Cable1",
+        area="A",
+        case_count=1,
+        ready_count=1,
+        job_id="job-v2",
+        batch_version="Cable1_A_v0.0.2",
+        training_options={**options, "epochs": 80},
+    )
+
+    assert first.submission_id != second.submission_id
+    assert dict(first.training_options)["epochs"] == 60
+    assert dict(second.training_options)["epochs"] == 80
+    assert load_submission_entries(first)[0][1]["review_label"] == "confirmed_ng"
+    assert load_submission_entries(second)[0][1]["review_label"] == "verified_empty"
+    assert (
+        suggest_next_training_batch_version(
+            data_root,
+            product="Cable1",
+            area="A",
+        )
+        == "Cable1_A_v0.0.3"
+    )
+
+
+def test_training_batch_version_cannot_be_reused_for_different_samples(tmp_path):
+    data_root = tmp_path / "data"
+    first_manifest = tmp_path / "selected-v1.csv"
+    replacement_manifest = tmp_path / "replacement-v1.csv"
+    _write_review_manifest(first_manifest, label="confirmed_ng")
+    _write_review_manifest(replacement_manifest, label="verified_empty")
+    record_submission_history(
+        data_root,
+        first_manifest,
+        action="direct",
+        product="Cable1",
+        area="A",
+        case_count=1,
+        job_id="job-v1",
+        batch_version="Cable1_A_v0.0.1",
+    )
+
+    with pytest.raises(DuplicateTrainingBatchVersionError):
+        ensure_training_batch_version_available(
+            data_root,
+            product="Cable1",
+            area="A",
+            batch_version="Cable1_A_v0.0.1",
+        )
+    with pytest.raises(DuplicateTrainingBatchVersionError):
+        record_submission_history(
+            data_root,
+            replacement_manifest,
+            action="direct",
+            product="Cable1",
+            area="A",
+            case_count=1,
+            job_id="job-replacement",
+            batch_version="Cable1_A_v0.0.1",
+        )
+
+
 def test_submission_history_reconstructs_legacy_job_images(tmp_path):
     data_root = tmp_path / "data"
     job_dir = data_root / ".operator_handoff" / "jobs" / "job-old"
@@ -161,14 +259,18 @@ def test_submission_history_dialog_lists_batches(tmp_path, qtbot):
         case_count=1,
         pending_count=1,
         job_id="job-annotation",
+        batch_version="Cable1_A_v0.0.1",
+        training_options={"epochs": 60, "batch": 4, "imgsz": 960},
     )
 
     dialog = SubmissionHistoryDialog(data_root=data_root, language="zh_TW")
     qtbot.addWidget(dialog)
 
     assert dialog.table.rowCount() == 1
-    assert dialog.table.item(0, 1).text() == "補標後訓練"
-    assert dialog.table.item(0, 4).text() == "1"
+    assert dialog.table.item(0, 1).text() == "Cable1_A_v0.0.1"
+    assert dialog.table.item(0, 2).text() == "補標後訓練"
+    assert dialog.table.item(0, 5).text() == "1"
+    assert "Epochs 60" in dialog.details_label.text()
     assert dialog.open_button.isEnabled() is True
 
 

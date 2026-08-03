@@ -117,6 +117,7 @@ Record meaningful decisions with date, reason, and trade-off.
 | 2026-07-31 | Treat YOLO, Anomalib and Stats Color as versioned components of one atomic inspection release | Prevents independently switched components from creating an untested production combination | Engineers must create and validate a new complete combination for each component change |
 | 2026-07-31 | Keep acceptance truth independent from all training datasets | Preserves an unbiased regression set and allows repeated model comparison without re-labelling | Acceptance evidence requires separate backup and cannot be used to increase training volume |
 | 2026-07-31 | Report color escape as UNKNOWN when no confirmed color NG exists | A zero would falsely claim defect coverage that was never measured | Such candidates require limited trial or explicit risk acceptance |
+| 2026-08-03 | Create a target-scoped folder before selecting images for each retraining batch | Keeps draft selection, review, annotation, and resulting job data physically separated and resumable | Adds a folder-selection step before review and forbids renaming or reusing a batch folder |
 
 ## Known Issues / Risks
 

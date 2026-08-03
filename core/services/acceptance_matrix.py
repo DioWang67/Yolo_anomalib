@@ -34,6 +34,10 @@ from core.services.color_baseline_recalibration import (
     ColorBaselineCandidateStore,
 )
 from core.services.color_profile_store import ColorProfileStore
+from core.services.inspection_release_models import (
+    InspectionRelease,
+    InspectionReleaseError,
+)
 from core.services.model_acceptance import (
     AcceptanceDataError,
     AcceptanceInferenceOutcome,
@@ -225,6 +229,61 @@ def build_registered_model_variant(
         config_path=config_path,
         weight_path=record.weight_path.resolve(),
     )
+
+
+def build_release_acceptance_variants(
+    release: InspectionRelease,
+    *,
+    project_root: str | Path,
+) -> tuple[AcceptanceModelVariant, AcceptanceColorVariant]:
+    """Build one exact model/color pair from an immutable inspection release."""
+    inference_type = release.scope.inference_type
+    if inference_type == "fusion":
+        raise InspectionReleaseError(
+            "Fusion 組合含多套模型；目前快速驗收契約無法同時鎖定全部模型，"
+            "請使用完整驗收工具。"
+        )
+    model_role = (
+        "primary_detector" if inference_type == "yolo" else "anomaly_detector"
+    )
+    model = release.component_for_role(model_role)
+    if model is None or not model.artifact_path or not model.config_path:
+        raise InspectionReleaseError("選取組合缺少可重現的模型權重或 config 快照。")
+    root = Path(project_root).expanduser().resolve()
+    model_variant = AcceptanceModelVariant(
+        variant_id=_unique_variant_id(f"release-{release.release_id}-model"),
+        label=f"{release.display_version} / {model.version}",
+        models_root=root / "models",
+        identity=ModelIdentity(
+            version=model.version,
+            sha256=model.artifact_sha256,
+            runtime_config_sha256=model.config_sha256,
+        ),
+        config_path=Path(model.config_path).expanduser().resolve(),
+        weight_path=Path(model.artifact_path).expanduser().resolve(),
+    )
+    color = release.component_for_role("color_check")
+    if color is None:
+        color_variant = AcceptanceColorVariant(
+            variant_id=_unique_variant_id(
+                f"release-{release.release_id}-color-embedded"
+            ),
+            label=f"{release.display_version} / 模型內建顏色設定",
+        )
+    else:
+        color_variant = AcceptanceColorVariant(
+            variant_id=_unique_variant_id(f"release-{release.release_id}-color"),
+            label=f"{release.display_version} / {color.version}",
+            revision_overrides=color.revision_overrides,
+            include_active_revisions=False,
+            color_model_path=(
+                Path(color.artifact_path).expanduser().resolve()
+                if color.artifact_path
+                else None
+            ),
+            color_model_sha256=color.artifact_sha256,
+        )
+    return model_variant, color_variant
 
 
 def discover_color_variants(

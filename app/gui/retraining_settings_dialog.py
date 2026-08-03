@@ -12,6 +12,8 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -34,6 +36,11 @@ from core.retraining_options import (
     POSITION_MODE_YOLO_ONLY,
     RetrainingOptions,
 )
+from core.training_batch_version import (
+    TrainingBatchVersionError,
+    format_training_batch_version,
+    validate_training_batch_version,
+)
 
 
 class RetrainingSettingsDialog(QDialog):
@@ -46,11 +53,17 @@ class RetrainingSettingsDialog(QDialog):
         source_image_count: int,
         *,
         initial: RetrainingOptions | None = None,
+        product: str = "",
+        area: str = "",
+        batch_version: str = "",
+        suggested_batch_version: str = "",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.source_image_count = max(int(source_image_count), 0)
-        self.setWindowTitle("補訓設定")
+        self.product = str(product or "").strip()
+        self.area = str(area or "").strip()
+        self.setWindowTitle("建立補訓批次")
         self.setModal(True)
         configure_responsive_dialog(
             self,
@@ -68,6 +81,38 @@ class RetrainingSettingsDialog(QDialog):
         )
         description.setWordWrap(True)
         description.setStyleSheet("color: #5b6673;")
+
+        self.batch_version_edit = QLineEdit()
+        fixed_batch_version = str(batch_version or "").strip()
+        default_batch_version = fixed_batch_version or str(
+            suggested_batch_version or ""
+        ).strip()
+        if not default_batch_version and self.product and self.area:
+            default_batch_version = format_training_batch_version(
+                self.product,
+                self.area,
+                (0, 0, 1),
+            )
+        self.batch_version_edit.setText(default_batch_version)
+        self.batch_version_edit.setReadOnly(bool(fixed_batch_version))
+        self.batch_version_edit.setPlaceholderText("Cable1_A_v0.0.1")
+        self.batch_version_edit.setToolTip(
+            (
+                "此版本由目前開啟的補訓資料夾決定；送出時不可更換。"
+                if fixed_batch_version
+                else "每個產品／工位的補訓版本必須唯一。"
+            )
+            + "送出後可從歷史紀錄重新查看本批樣本。"
+        )
+        identity_form = QFormLayout()
+        identity_form.addRow("補訓批次版本", self.batch_version_edit)
+        self.identity_card = QFrame()
+        self.identity_card.setFrameShape(QFrame.StyledPanel)
+        self.identity_card.setStyleSheet(
+            "QFrame { background:#eef6ff;border:1px solid #b7d5f2;"
+            "border-radius:8px;padding:10px; }"
+        )
+        self.identity_card.setLayout(identity_form)
 
         self.position_training_checkbox = QCheckBox("啟用位置檢測補訓")
         self.position_training_checkbox.setChecked(
@@ -187,6 +232,7 @@ class RetrainingSettingsDialog(QDialog):
         content_layout.setSpacing(14)
         content_layout.addWidget(title)
         content_layout.addWidget(description)
+        content_layout.addWidget(self.identity_card)
         content_layout.addWidget(self.position_card)
         content_layout.addWidget(self.position_note)
         content_layout.addWidget(self.summary_label)
@@ -215,6 +261,7 @@ class RetrainingSettingsDialog(QDialog):
         self.position_training_checkbox.toggled.connect(
             self._on_position_training_toggled
         )
+        self.batch_version_edit.textChanged.connect(self._update_summary)
         self.position_activation_checkbox.toggled.connect(
             self._update_summary
         )
@@ -242,7 +289,24 @@ class RetrainingSettingsDialog(QDialog):
             ),
         )
 
+    def batch_version(self) -> str:
+        """Return the validated target-scoped version for this submission."""
+        value = self.batch_version_edit.text().strip()
+        if not self.product and not self.area:
+            return value
+        return validate_training_batch_version(
+            value,
+            product=self.product,
+            area=self.area,
+        )
+
     def accept(self) -> None:
+        try:
+            self.batch_version()
+        except TrainingBatchVersionError as exc:
+            QMessageBox.warning(self, self.windowTitle(), str(exc))
+            self.batch_version_edit.setFocus()
+            return
         options = self.options()
         settings = self._settings()
         settings.beginGroup(self.SETTINGS_GROUP)
@@ -294,6 +358,7 @@ class RetrainingSettingsDialog(QDialog):
                 else "，保留現場啟用狀態"
             )
         self.summary_label.setText(
+            f"補訓批次：{self.batch_version_edit.text().strip() or '尚未設定'}\n"
             f"準備建立補訓工作｜本次 {self.source_image_count} 張新原圖\n"
             f"單計本批最多形成約 {maximum} 張；歷史樣本也會一併納入。\n"
             f"位置檢測補訓：{position_summary}{activation_summary}"
