@@ -50,6 +50,7 @@ from core.services.inspection_release_store import (
 )
 from core.services.model_manager import ModelManager
 from core.services.result_sink import ExcelImageResultSink
+from core.station_data import load_station_data_paths
 from core.types import DetectionItem, DetectionResult
 
 PROJECT_ROOT = project_root()
@@ -100,8 +101,9 @@ class DetectionSystem:
                 supplies its own exact model and color combination.
         """
 
-        self.logger = DetectionLogger()
         root_dir = project_root()
+        self.data_paths = load_station_data_paths(root_dir)
+        self.logger = DetectionLogger(log_dir=str(self.data_paths.logs))
         if config_path:
             resolved_config = Path(config_path).resolve()
         else:
@@ -134,11 +136,9 @@ class DetectionSystem:
         self.models_root = (
             Path(models_root).expanduser().resolve()
             if models_root is not None
-            else root_dir / "models"
+            else self.data_paths.models
         )
-        manager_kwargs: dict[str, Any] = {}
-        if models_root is not None:
-            manager_kwargs["models_root"] = models_root
+        manager_kwargs: dict[str, Any] = {"models_root": self.models_root}
         if model_config_overrides is not None:
             manager_kwargs["model_config_overrides"] = model_config_overrides
         self.model_manager = ModelManager(
@@ -152,7 +152,7 @@ class DetectionSystem:
             revisions_root=(
                 Path(color_revisions_root).expanduser().resolve()
                 if color_revisions_root is not None
-                else None
+                else self.data_paths.color_revisions
             ),
             revision_overrides=color_revision_overrides,
             include_active_revisions=include_active_color_revisions,
@@ -163,7 +163,7 @@ class DetectionSystem:
             release_root = (
                 Path(inspection_releases_root).expanduser().resolve()
                 if inspection_releases_root is not None
-                else root_dir / ".inspection_releases"
+                else self.data_paths.inspection_releases
             )
             self._inspection_release_resolver = InspectionReleaseResolver(
                 InspectionReleaseStore(release_root)
@@ -178,8 +178,8 @@ class DetectionSystem:
     def _resolve_output_dir(self) -> Path:
         output_dir = resolve_output_dir(
             self.config.output_dir,
-            base_dir=PROJECT_ROOT,
-            allowed_root=PROJECT_ROOT,
+            base_dir=self.data_paths.root,
+            allowed_root=self.data_paths.root,
         )
         self.config.output_dir = str(output_dir)
         return output_dir

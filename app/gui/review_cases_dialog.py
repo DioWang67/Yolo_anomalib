@@ -72,6 +72,7 @@ from app.gui.training_batch_dialog import (
 )
 from core.retraining_options import RetrainingOptions
 from core.services.inspection_repository import InspectionRepository
+from core.station_data import load_station_data_paths
 from core.training_batch_version import (
     TrainingBatchVersionError,
     validate_training_batch_version,
@@ -3280,8 +3281,9 @@ class ReviewCasesDialog(QDialog):
                 if isinstance(configured_result_root, (str, Path))
                 else self.manifest_path.parent
             )
-            production_models_root = project_root / "models"
-            production_color_revisions_root = project_root / ".color_revisions"
+            data_paths = load_station_data_paths(project_root)
+            production_models_root = data_paths.models
+            production_color_revisions_root = data_paths.color_revisions
             run_store = ProcessingRunStore(
                 self.manifest_path.parent / ".processing_runs"
             )
@@ -4101,10 +4103,10 @@ class ReviewCasesDialog(QDialog):
         self.workflow_stack.setCurrentWidget(page)
 
     def _experimental_color_service(self) -> ExperimentalColorCandidateService:
-        project_root = self.result_root.resolve().parent
+        data_paths = load_station_data_paths(self.result_root)
         return ExperimentalColorCandidateService(
-            models_root=project_root / "models",
-            revisions_root=project_root / ".color_revisions",
+            models_root=data_paths.models,
+            revisions_root=data_paths.color_revisions,
         )
 
     def _eligible_experimental_color_scopes(self, report: Any):

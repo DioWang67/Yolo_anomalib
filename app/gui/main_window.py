@@ -156,13 +156,15 @@ class DetectionSystemGUI(
         self._retraining_workspace_key: tuple[str, ...] | None = None
         # Models base path and settings
         from core.path_utils import project_root, resolve_path
+        from core.station_data import load_station_data_paths
+
         self._project_root = project_root()
-        
+        self._station_paths = load_station_data_paths(self._project_root)
+
         cfg_cand = resolve_path("config.yaml")
         self._config_path = cfg_cand if cfg_cand and cfg_cand.exists() else self._project_root / "config.yaml"
-        
-        mdl_cand = resolve_path("models")
-        self._models_base = mdl_cand if mdl_cand and mdl_cand.is_dir() else self._project_root / "models"
+
+        self._models_base = self._station_paths.models
         self.preferences = PreferencesManager(QSettings())
         self.current_language = normalize_language(self.preferences.restore_language())
         self._logger = logging.getLogger(__name__)
@@ -331,7 +333,7 @@ class DetectionSystemGUI(
             parent=self.workspace_stack,
         )
         self.inspection_history_page = InspectionHistoryPage(
-            self._project_root / "Result" / "inspection_records.sqlite3",
+            self._station_paths.results / "inspection_records.sqlite3",
             language=self.current_language,
             parent=self.workspace_stack,
         )
@@ -605,7 +607,7 @@ class DetectionSystemGUI(
             template = template_for_inference_type(inference_type)
             scope = InspectionScope(product, area, template.template_id)
             store = InspectionReleaseStore(
-                self._project_root / ".inspection_releases"
+                self._station_paths.inspection_releases
             )
             pointer = store.active_pointer(scope)
             if not pointer:
@@ -684,8 +686,7 @@ class DetectionSystemGUI(
             if not isinstance(release, InspectionRelease):
                 raise ValueError("選取的檢測組合資料無效，請重新整理後再試。")
             repository = AcceptanceRepository(
-                self._project_root
-                / "acceptance"
+                self._station_paths.acceptance
                 / release.scope.product
                 / release.scope.area
             )

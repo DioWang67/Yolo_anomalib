@@ -48,6 +48,7 @@ from core.services.inspection_release_models import (
 from core.services.inspection_release_store import InspectionReleaseStore
 from core.services.model_acceptance import AcceptanceRepository
 from core.services.model_version_registry import ModelVersionRegistry
+from core.station_data import load_station_data_paths
 from core.workspace import load_workspace_paths
 from tools.color_configuration_revisions import (
     ColorConfigurationRevision,
@@ -98,17 +99,18 @@ class InspectionVersionWorkspace(QWidget):
     ) -> None:
         super().__init__(parent)
         self.project_root = Path(project_root).resolve()
+        self.data_paths = load_station_data_paths(self.project_root)
         self.is_inspection_running = is_inspection_running or (lambda: False)
-        self.release_store = InspectionReleaseStore(self.project_root / ".inspection_releases")
+        self.release_store = InspectionReleaseStore(self.data_paths.inspection_releases)
         self.catalog = InspectionComponentCatalog(
-            models_root=self.project_root / "models",
-            color_revisions_root=self.project_root / ".color_revisions",
-            color_profiles_root=self.project_root / ".color_profiles",
-            color_baselines_root=self.project_root / ".color_baselines",
-            inspection_releases_root=self.project_root / ".inspection_releases",
+            models_root=self.data_paths.models,
+            color_revisions_root=self.data_paths.color_revisions,
+            color_profiles_root=self.data_paths.color_profiles,
+            color_baselines_root=self.data_paths.color_baselines,
+            inspection_releases_root=self.data_paths.inspection_releases,
         )
-        self.color_profile_store = ColorProfileStore(self.project_root / ".color_profiles")
-        self.color_store = ColorConfigurationRevisionStore(root=self.project_root / ".color_revisions")
+        self.color_profile_store = ColorProfileStore(self.data_paths.color_profiles)
+        self.color_store = ColorConfigurationRevisionStore(root=self.data_paths.color_revisions)
         self.product = ""
         self.area = ""
         self.inference_type = ""
@@ -627,8 +629,7 @@ class InspectionVersionWorkspace(QWidget):
             )
             return
         acceptance_manifest = (
-            self.project_root
-            / "acceptance"
+            self.data_paths.acceptance
             / self.product
             / self.area
             / "ground_truth.csv"
@@ -801,7 +802,7 @@ class InspectionVersionWorkspace(QWidget):
         return tuple(revisions)
 
     def _resolve_model(self, component: InspectionComponentRecord):
-        records = ModelVersionRegistry(self.project_root / "models").list_versions(
+        records = ModelVersionRegistry(self.data_paths.models).list_versions(
             product=component.product,
             area=component.area,
             model_type=component.inference_type,
@@ -953,7 +954,7 @@ class InspectionVersionWorkspace(QWidget):
             return "無效資料"
 
     def _refresh_acceptance_summary(self) -> None:
-        root = self.project_root / "acceptance" / self.product / self.area
+        root = self.data_paths.acceptance / self.product / self.area
         manifest = root / "ground_truth.csv"
         if not manifest.is_file():
             self.acceptance_summary.setText("驗收資料：尚未建立人工確認資料。")

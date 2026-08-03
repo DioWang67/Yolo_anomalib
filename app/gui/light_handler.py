@@ -323,10 +323,13 @@ class LightHandlerMixin:
             template_for_inference_type,
         )
         from core.services.inspection_release_store import InspectionReleaseStore
+        from core.station_data import load_station_data_paths
 
         template = template_for_inference_type(inference_type)
         scope = InspectionScope(product, area, template.template_id)
-        store = InspectionReleaseStore(project_root / ".inspection_releases")
+        store = InspectionReleaseStore(
+            load_station_data_paths(project_root).inspection_releases
+        )
         pointer = store.active_pointer(scope)
         if pointer is None:
             return None

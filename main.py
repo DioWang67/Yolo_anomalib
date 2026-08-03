@@ -7,6 +7,8 @@ import sys
 
 from app.cli import run_cli
 from core.logging_config import configure_logging
+from core.path_utils import project_root
+from core.station_data import load_station_data_paths
 
 try:
     import cv2  # type: ignore
@@ -15,7 +17,9 @@ except Exception:
 
 
 def setup_logging() -> None:
-    configure_logging()
+    configure_logging(
+        log_dir=str(load_station_data_paths(project_root()).logs)
+    )
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:

@@ -49,6 +49,7 @@ from core.services.model_acceptance import (
     calculate_acceptance_metrics,
 )
 from core.services.model_catalog import ModelCatalog
+from core.station_data import load_station_data_paths
 
 SAMPLE_ID_ROLE = Qt.UserRole
 REASON_LABELS = {
@@ -173,7 +174,8 @@ class ModelAcceptanceWindow(QMainWindow):
     def __init__(self, *, project_root: Path):
         super().__init__()
         self.project_root = project_root.resolve()
-        self.catalog = ModelCatalog(self.project_root / "models")
+        self.data_paths = load_station_data_paths(self.project_root)
+        self.catalog = ModelCatalog(self.data_paths.models)
         self.repository: AcceptanceRepository | None = None
         self._records: tuple[AcceptanceRecord, ...] = ()
         self._visible_records: tuple[AcceptanceRecord, ...] = ()
@@ -397,7 +399,9 @@ class ModelAcceptanceWindow(QMainWindow):
             self._render_records()
             return
         try:
-            self.repository = AcceptanceRepository(self.project_root / "acceptance" / product / area)
+            self.repository = AcceptanceRepository(
+                self.data_paths.acceptance / product / area
+            )
             self._reload_records()
         except (OSError, AcceptanceDataError) as exc:
             QMessageBox.critical(self, "驗收資料錯誤", str(exc))
@@ -640,7 +644,7 @@ class ModelAcceptanceWindow(QMainWindow):
         selected, _ = QFileDialog.getSaveFileName(
             self,
             "匯出驗收備份",
-            str(self.project_root / default_name),
+            str(self.data_paths.acceptance / default_name),
             "ZIP archive (*.zip)",
         )
         if not selected:

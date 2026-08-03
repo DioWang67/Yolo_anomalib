@@ -35,6 +35,7 @@ from core.services.model_acceptance import (
     ModelIdentity,
 )
 from core.services.model_version_registry import ModelVersionRecord
+from core.station_data import load_station_data_paths
 from core.workspace import load_workspace_paths
 
 
@@ -59,6 +60,7 @@ class ColorBaselineRebuildWorker(QThread):
     ) -> None:
         super().__init__()
         self.project_root = project_root.resolve()
+        self.data_paths = load_station_data_paths(self.project_root)
         self.product = product
         self.area = area
         self.inference_type = inference_type
@@ -81,8 +83,7 @@ class ColorBaselineRebuildWorker(QThread):
                 model_type=selected_type,
             )
             repository = AcceptanceRepository(
-                self.project_root
-                / "acceptance"
+                self.data_paths.acceptance
                 / evidence_provider.product
                 / evidence_provider.area
             )
@@ -107,7 +108,7 @@ class ColorBaselineRebuildWorker(QThread):
             self.phase_changed.emit("正在使用選定模型重新偵測人工確認 OK 照片…")
             service = AcceptanceInferenceService(
                 project_root=self.project_root,
-                models_root=self.project_root / "models",
+                models_root=self.data_paths.models,
                 model_identity=identity,
                 include_active_color_revisions=False,
                 model_config_overrides={
@@ -132,7 +133,7 @@ class ColorBaselineRebuildWorker(QThread):
                 evidence_metadata=evidence_snapshot.to_report_dict(),
                 cancel_callback=self.isInterruptionRequested,
             )
-            candidate = ColorBaselineCandidateStore(self.project_root / ".color_baselines").commit(
+            candidate = ColorBaselineCandidateStore(self.data_paths.color_baselines).commit(
                 product=self.product,
                 area=self.area,
                 model_type=selected_type,

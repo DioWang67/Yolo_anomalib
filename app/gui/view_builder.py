@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
 )
 
 from app.gui.i18n import tr
+from core.station_data import load_station_data_paths
 from core.workspace import load_workspace_paths
 
 if TYPE_CHECKING:
@@ -82,9 +83,10 @@ def _open_training_review(gui: DetectionSystemGUI) -> None:
         if project_root is None:
             project_root = Path.cwd()
         workspace = load_workspace_paths(project_root)
+        station_paths = load_station_data_paths(project_root)
         workspace_args = {
-            "result_root": project_root / "Result",
-            "manifest_path": project_root / "review_manifest.csv",
+            "result_root": station_paths.results,
+            "manifest_path": station_paths.default_review_manifest,
             "training_data_dir": workspace.training_data,
             "language": _lang(gui),
             "product": gui.product_combo.currentText().strip() or None,
@@ -124,11 +126,12 @@ def _open_model_versions(gui: DetectionSystemGUI) -> None:
             "_project_root",
             gui._models_base.parent,
         )
+        station_paths = load_station_data_paths(project_root)
         catalog = InspectionComponentCatalog(
             models_root=gui._models_base,
-            color_revisions_root=project_root / ".color_revisions",
-            color_profiles_root=project_root / ".color_profiles",
-            inspection_releases_root=project_root / ".inspection_releases",
+            color_revisions_root=station_paths.color_revisions,
+            color_profiles_root=station_paths.color_profiles,
+            inspection_releases_root=station_paths.inspection_releases,
         )
 
         def on_create_combination(record) -> None:
@@ -183,9 +186,8 @@ def _open_inspection_releases(
         from app.gui.inspection_releases_dialog import InspectionReleasesDialog
         from core.services.inspection_release_store import InspectionReleaseStore
 
-        store = InspectionReleaseStore(
-            gui._project_root / ".inspection_releases"
-        )
+        station_paths = load_station_data_paths(gui._project_root)
+        store = InspectionReleaseStore(station_paths.inspection_releases)
 
         def on_activated(release) -> None:
             gui.controller.reload_model_settings(
@@ -247,11 +249,13 @@ def _open_model_update_status(gui: DetectionSystemGUI) -> None:
     """Open the read-only cross-project model update status screen."""
     project_root = getattr(gui, "_project_root", Path.cwd())
     try:
-        data_root = load_workspace_paths(project_root).training_data
+        workspace = load_workspace_paths(project_root)
+        station_paths = load_station_data_paths(project_root)
+        data_root = workspace.training_data
         if hasattr(gui, "show_retraining_workspace"):
             workspace = gui.show_retraining_workspace(
-                result_root=project_root / "Result",
-                manifest_path=project_root / "review_manifest.csv",
+                result_root=station_paths.results,
+                manifest_path=station_paths.default_review_manifest,
                 training_data_dir=data_root,
                 language=_lang(gui),
                 product=gui.product_combo.currentText().strip() or None,

@@ -63,6 +63,7 @@ import time
 from datetime import datetime
 
 from core.services.results.path_manager import ResultPathManager
+from core.station_data import load_station_data_paths
 from importlib import import_module
 
 # ---- Anomalib / jsonargparse 依賴檢查與強制載入 ----
@@ -482,7 +483,9 @@ def _process_prediction(
             heatmap_path = output_path
         else:
             status_label = "FAIL" if is_anomaly else "PASS"
-            bundle = ResultPathManager("Result").build_paths(
+            bundle = ResultPathManager(
+                str(load_station_data_paths().results)
+            ).build_paths(
                 status=status_label,
                 detector="anomalib",
                 product=product,

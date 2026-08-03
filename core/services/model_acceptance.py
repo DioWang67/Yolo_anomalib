@@ -26,6 +26,7 @@ import numpy as np
 import yaml
 
 from core.detection_system import DetectionSystem
+from core.station_data import load_station_data_paths
 from core.types import DetectionResult
 
 ACCEPTANCE_REASON_CODES = (
@@ -542,8 +543,16 @@ class AcceptanceInferenceService:
         color_model_path_override: str | Path | None = None,
     ):
         self.project_root = Path(project_root).expanduser().resolve()
+        self.data_paths = load_station_data_paths(self.project_root)
         self.models_root = (
-            Path(models_root).expanduser().resolve() if models_root is not None else self.project_root / "models"
+            Path(models_root).expanduser().resolve()
+            if models_root is not None
+            else self.data_paths.models
+        )
+        resolved_color_revisions_root = (
+            Path(color_revisions_root).expanduser().resolve()
+            if color_revisions_root is not None
+            else self.data_paths.color_revisions
         )
         self._temporary_config_root: tempfile.TemporaryDirectory[str] | None = None
         config_overrides = dict(model_config_overrides or {})
@@ -599,9 +608,7 @@ class AcceptanceInferenceService:
                 ),
                 initialize_camera=False,
                 models_root=str(self.models_root),
-                color_revisions_root=(
-                    str(Path(color_revisions_root).expanduser().resolve()) if color_revisions_root is not None else None
-                ),
+                color_revisions_root=str(resolved_color_revisions_root),
                 color_revision_overrides=dict(color_revision_overrides or {}),
                 include_active_color_revisions=(include_active_color_revisions),
                 model_config_overrides=config_overrides,

@@ -46,6 +46,7 @@ from core.services.model_version_registry import (
     ModelVersionRegistry,
     ModelVersionRegistryError,
 )
+from core.station_data import load_station_data_paths
 
 VARIANT_ROLE = Qt.UserRole
 
@@ -115,6 +116,7 @@ class AcceptanceMatrixDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.project_root = project_root.resolve()
+        self.data_paths = load_station_data_paths(self.project_root)
         self.repository = repository
         self.product = product.strip()
         self.area = area.strip()
@@ -283,7 +285,7 @@ class AcceptanceMatrixDialog(QDialog):
                 )
                 self._update_workload()
                 return
-            models_root = self.project_root / "models"
+            models_root = self.data_paths.models
             registry = ModelVersionRegistry(models_root)
             records = registry.list_versions(
                 product=self.product,
@@ -318,12 +320,12 @@ class AcceptanceMatrixDialog(QDialog):
             if skipped:
                 self.progress_detail.setText("未列入不完整／不可信的歷史模型：" + "、".join(skipped))
             variants = discover_color_variants(
-                self.project_root / ".color_revisions",
+                self.data_paths.color_revisions,
                 product=self.product,
                 area=self.area,
                 model_type=("yolo" if self.inference_type.lower() == "fusion" else self.inference_type),
-                baselines_root=self.project_root / ".color_baselines",
-                profiles_root=self.project_root / ".color_profiles",
+                baselines_root=self.data_paths.color_baselines,
+                profiles_root=self.data_paths.color_profiles,
             )
             for variant in variants:
                 self._append_color_variant(variant)
@@ -464,10 +466,10 @@ class AcceptanceMatrixDialog(QDialog):
         request = AcceptanceMatrixRequest(
             project_root=self.project_root,
             global_config_path=self.project_root / "config.yaml",
-            color_revisions_root=self.project_root / ".color_revisions",
+            color_revisions_root=self.data_paths.color_revisions,
             dataset_root=self.repository.root,
             manifest_path=self.repository.manifest_path,
-            output_root=(self.project_root / "acceptance_reports" / self.product / self.area / "matrix_runs"),
+            output_root=(self.data_paths.acceptance_reports / self.product / self.area / "matrix_runs"),
             product=self.product,
             area=self.area,
             inference_type=self.inference_type,
@@ -614,7 +616,7 @@ class AcceptanceMatrixDialog(QDialog):
                 InspectionReleaseStore,
             )
 
-            store = InspectionReleaseStore(self.project_root / ".inspection_releases")
+            store = InspectionReleaseStore(self.data_paths.inspection_releases)
             existing = store.list_releases(product=self.product, area=self.area)
             suggested = _next_release_version(existing)
             version, ok = QInputDialog.getText(
@@ -684,7 +686,7 @@ class AcceptanceMatrixDialog(QDialog):
                 combination_id=combination_id,
             )
             store = InspectionReleaseStore(
-                self.project_root / ".inspection_releases"
+                self.data_paths.inspection_releases
             )
             committed = store.commit_validation(
                 validated,

@@ -30,6 +30,8 @@ class WorkspacePaths:
     inference_project: Path
     training_data: Path
     inference_models: Path
+    station_data: Path
+    inference_artifacts: Path
     manifest_path: Path | None = None
 
 
@@ -105,12 +107,25 @@ def _load_manifest(manifest_path: Path) -> WorkspacePaths:
     projects = _require_mapping(raw, "projects")
     paths = _require_mapping(raw, "paths")
     root = manifest_path.parent.resolve()
+    inference_project = _resolve_workspace_member(root, projects, "inference")
     return WorkspacePaths(
         root=root,
         training_project=_resolve_workspace_member(root, projects, "training"),
-        inference_project=_resolve_workspace_member(root, projects, "inference"),
+        inference_project=inference_project,
         training_data=_resolve_workspace_member(root, paths, "training_data"),
         inference_models=_resolve_workspace_member(root, paths, "inference_models"),
+        station_data=_resolve_optional_workspace_member(
+            root,
+            paths,
+            "station_data",
+            default=inference_project,
+        ),
+        inference_artifacts=_resolve_optional_workspace_member(
+            root,
+            paths,
+            "inference_artifacts",
+            default=inference_project,
+        ),
         manifest_path=manifest_path.resolve(),
     )
 
@@ -145,6 +160,18 @@ def _resolve_workspace_member(
     return resolved
 
 
+def _resolve_optional_workspace_member(
+    root: Path,
+    values: Mapping[str, Any],
+    key: str,
+    *,
+    default: Path,
+) -> Path:
+    if key not in values:
+        return default.resolve()
+    return _resolve_workspace_member(root, values, key)
+
+
 def _legacy_workspace_paths(
     anchor: Path,
 ) -> WorkspacePaths:
@@ -157,6 +184,8 @@ def _legacy_workspace_paths(
         inference_project=inference_project.resolve(),
         training_data=(training_project / "data").resolve(),
         inference_models=(inference_project / "models").resolve(),
+        station_data=inference_project.resolve(),
+        inference_artifacts=inference_project.resolve(),
     )
 
 

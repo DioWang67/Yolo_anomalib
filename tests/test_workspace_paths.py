@@ -14,6 +14,8 @@ projects:
 paths:
   training_data: Yolo11_auto_train/data
   inference_models: yolo11_inference/models
+  station_data: station_data/yolo11_inference
+  inference_artifacts: release_artifacts/yolo11_inference
 """
 
 
@@ -29,6 +31,10 @@ def test_workspace_manifest_is_discovered_from_ancestor(tmp_path: Path) -> None:
     assert paths.training_project == (workspace_root / "Yolo11_auto_train").resolve()
     assert paths.training_data == (workspace_root / "Yolo11_auto_train" / "data").resolve()
     assert paths.inference_models == (workspace_root / "yolo11_inference" / "models").resolve()
+    assert paths.station_data == (workspace_root / "station_data" / "yolo11_inference").resolve()
+    assert paths.inference_artifacts == (
+        workspace_root / "release_artifacts" / "yolo11_inference"
+    ).resolve()
     assert paths.manifest_path == (workspace_root / "workspace.yaml").resolve()
 
 
@@ -90,3 +96,19 @@ def test_legacy_sibling_layout_remains_supported(tmp_path: Path, monkeypatch) ->
     assert paths.manifest_path is None
     assert paths.inference_project == inference_root.resolve()
     assert paths.training_data == (tmp_path / "Yolo11_auto_train" / "data").resolve()
+    assert paths.station_data == inference_root.resolve()
+    assert paths.inference_artifacts == inference_root.resolve()
+
+
+def test_optional_station_paths_default_to_inference_project(tmp_path: Path) -> None:
+    manifest = MANIFEST.replace(
+        "  station_data: station_data/yolo11_inference\n"
+        "  inference_artifacts: release_artifacts/yolo11_inference\n",
+        "",
+    )
+    (tmp_path / "workspace.yaml").write_text(manifest, encoding="utf-8")
+
+    paths = load_workspace_paths(tmp_path)
+
+    assert paths.station_data == (tmp_path / "yolo11_inference").resolve()
+    assert paths.inference_artifacts == (tmp_path / "yolo11_inference").resolve()

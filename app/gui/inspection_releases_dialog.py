@@ -292,9 +292,11 @@ class InspectionReleasesDialog(QDialog):
             from core.services.model_version_registry import (
                 ModelVersionRegistry,
             )
+            from core.station_data import load_station_data_paths
 
             project_root = self.store.root.parent
-            registry = ModelVersionRegistry(project_root / "models")
+            data_paths = load_station_data_paths(project_root)
+            registry = ModelVersionRegistry(data_paths.models)
             models = tuple(
                 record
                 for record in registry.list_versions(
@@ -312,7 +314,7 @@ class InspectionReleasesDialog(QDialog):
                 )
                 return
             color_revisions = self._discover_color_revisions(
-                project_root / ".color_revisions"
+                data_paths.color_revisions
             )
             selected = self._selected_release()
             selected_model = None

@@ -50,6 +50,7 @@ from core.services.model_acceptance import (
     load_model_identity,
 )
 from core.services.model_version_registry import ModelVersionRecord
+from core.station_data import load_station_data_paths
 from tools.color_calibration_service import ColorCalibrationError
 from tools.color_configuration_revisions import ColorConfigurationRevisionStore
 
@@ -250,10 +251,11 @@ def build_release_acceptance_variants(
     if model is None or not model.artifact_path or not model.config_path:
         raise InspectionReleaseError("選取組合缺少可重現的模型權重或 config 快照。")
     root = Path(project_root).expanduser().resolve()
+    data_paths = load_station_data_paths(root)
     model_variant = AcceptanceModelVariant(
         variant_id=_unique_variant_id(f"release-{release.release_id}-model"),
         label=f"{release.display_version} / {model.version}",
-        models_root=root / "models",
+        models_root=data_paths.models,
         identity=ModelIdentity(
             version=model.version,
             sha256=model.artifact_sha256,

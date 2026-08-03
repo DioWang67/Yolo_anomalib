@@ -8,6 +8,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from core.path_utils import project_root
+from core.station_data import load_station_data_paths
+
 
 class SecurityError(Exception):
     """Raised when a security check fails."""
@@ -191,16 +194,17 @@ def resolve_output_dir(
 
 # Global path validator instance
 # This can be imported and used throughout the application
-from core.path_utils import project_root
 PROJECT_ROOT = project_root()
+_STATION_PATHS = load_station_data_paths(PROJECT_ROOT)
 
 path_validator = PathValidator(
     allowed_roots=[
         PROJECT_ROOT,              # Config files at project root (config.yaml)
-        PROJECT_ROOT / "models",   # Model weights directory
-        PROJECT_ROOT / "Result",   # Output directory
+        _STATION_PATHS.root,        # Mutable station data and evidence
+        _STATION_PATHS.models,      # Model weights directory
+        _STATION_PATHS.results,     # Output directory
         PROJECT_ROOT / "Runtime",  # Runtime directory
         PROJECT_ROOT / "MvImport", # Camera imports
-        PROJECT_ROOT / "logs",     # Log files
+        _STATION_PATHS.logs,        # Log files
     ]
 )

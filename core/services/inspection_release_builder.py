@@ -27,6 +27,7 @@ from core.services.inspection_release_models import (
 )
 from core.services.inspection_release_store import sha256_file
 from core.services.model_version_registry import ModelVersionRecord
+from core.station_data import load_station_data_paths
 from tools.color_calibration_service import canonical_sha256
 from tools.color_configuration_revisions import (
     ColorConfigurationRevision,
@@ -78,6 +79,7 @@ def build_release_from_matrix(
     if not isinstance(revision_overrides, Mapping):
         raise InspectionReleaseError("Color revision overrides are invalid.")
     project_root = Path(str(model.get("models_root") or "")).expanduser().resolve().parent
+    data_paths = load_station_data_paths(project_root)
     profile = _profile_from_matrix(
         model,
         product=product,
@@ -95,7 +97,7 @@ def build_release_from_matrix(
             _color_component(
                 color,
                 revision_overrides,
-                project_root / ".color_revisions",
+                data_paths.color_revisions,
             )
         )
     validation = ValidationEvidence(
@@ -452,7 +454,8 @@ def _profile_from_matrix(
         raise InspectionReleaseError("Acceptance matrix model config is unreadable.") from exc
     if not isinstance(config, Mapping) or not config.get("enable_color_check") or not config.get("color_model_path"):
         return None
-    revision_store = ColorConfigurationRevisionStore(root=project_root / ".color_revisions")
+    data_paths = load_station_data_paths(project_root)
+    revision_store = ColorConfigurationRevisionStore(root=data_paths.color_revisions)
     revisions: list[ColorConfigurationRevision] = []
     for scope_hash, revision_id in sorted(revision_overrides.items()):
         scope = revision_store.scope_for_hash(str(scope_hash))
@@ -465,7 +468,7 @@ def _profile_from_matrix(
         actual_sha256 = sha256_file(color_model_override)
         if color_model_sha256 and actual_sha256 != color_model_sha256.lower():
             raise InspectionReleaseError("Acceptance matrix color baseline checksum mismatch.")
-    return ColorProfileStore(project_root / ".color_profiles").create(
+    return ColorProfileStore(data_paths.color_profiles).create(
         product=product,
         area=area,
         model_type=inference_type,
