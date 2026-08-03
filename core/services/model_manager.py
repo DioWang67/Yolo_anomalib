@@ -66,6 +66,7 @@ class ModelManager:
         max_cache_size: int = 3,
         engine_factory: EngineFactory | None = None,
         models_root: str | Path | None = None,
+        output_root: str | Path | None = None,
         model_config_overrides: Mapping[
             tuple[str, str, str], str | Path
         ]
@@ -82,6 +83,10 @@ class ModelManager:
             models_root: Optional explicit models directory. Offline candidate
                 validation uses a job-scoped root so it never reads or mutates
                 the deployed station bundle.
+            output_root: Writable root used to resolve and validate model-level
+                result paths. Production injects the station-data root; the
+                project root remains the compatibility default for callers
+                that do not persist station results.
             model_config_overrides: Optional exact config paths keyed by
                 ``(product, area, inference_type)``. Acceptance matrices use
                 immutable historical config snapshots without changing the
@@ -94,6 +99,11 @@ class ModelManager:
             Path(models_root).expanduser().resolve()
             if models_root is not None
             else None
+        )
+        self._output_root = (
+            Path(output_root).expanduser().resolve()
+            if output_root is not None
+            else PROJECT_ROOT
         )
         self._model_config_overrides = self._validate_config_overrides(
             model_config_overrides or {}
@@ -271,7 +281,7 @@ class ModelManager:
         if "imgsz" in cfg and cfg.get("imgsz") is not None:
             base_config.imgsz = tuple(cfg["imgsz"])  # type: ignore[arg-type]
 
-        # --- output_dir: all inspection outputs should stay under project root ---
+        # --- output_dir: all inspection outputs stay under the injected root ---
         if "output_dir" in cfg:
             raw_output_dir = cfg.get("output_dir")
             if raw_output_dir:
@@ -279,8 +289,8 @@ class ModelManager:
                 if path_str:
                     resolved = resolve_output_dir(
                         path_str,
-                        base_dir=PROJECT_ROOT,
-                        allowed_root=PROJECT_ROOT,
+                        base_dir=self._output_root,
+                        allowed_root=self._output_root,
                     )
                     base_config.output_dir = str(resolved)
                 else:

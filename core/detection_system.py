@@ -138,7 +138,10 @@ class DetectionSystem:
             if models_root is not None
             else self.data_paths.models
         )
-        manager_kwargs: dict[str, Any] = {"models_root": self.models_root}
+        manager_kwargs: dict[str, Any] = {
+            "models_root": self.models_root,
+            "output_root": self.data_paths.root,
+        }
         if model_config_overrides is not None:
             manager_kwargs["model_config_overrides"] = model_config_overrides
         self.model_manager = ModelManager(

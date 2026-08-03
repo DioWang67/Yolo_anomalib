@@ -9,7 +9,6 @@ import yaml
 from core.config import DetectionConfig
 from core.exceptions import ModelConfigError
 from core.logging_config import DetectionLogger
-from core.path_utils import project_root
 from core.security import SecurityError
 from core.services.model_manager import ModelManager
 
@@ -106,15 +105,20 @@ def test_model_overrides_resolve_relative_paths_and_keep_globals(tmp_path, monke
 
     base_config = DetectionConfig.from_yaml(str(global_cfg_path))
     logger = DetectionLogger()
-    manager = ModelManager(logger, engine_factory=_FakeInferenceEngine)
+    station_root = tmp_path / "station"
+    manager = ModelManager(
+        logger,
+        engine_factory=_FakeInferenceEngine,
+        output_root=station_root,
+    )
 
     # Act
     engine, cfg_snapshot = manager.switch(
         base_config, product="Cable1", area="A", inference_type="yolo"
     )
 
-    # Result output paths stay project-root-relative, not under the model bundle.
-    expected_output_dir = str((project_root() / "outputs").resolve())
+    # Result output paths stay station-relative, not under the model bundle.
+    expected_output_dir = str((station_root / "outputs").resolve())
     assert cfg_snapshot.output_dir == expected_output_dir
 
     # Model resources still resolve relative to the model config folder.
@@ -537,7 +541,10 @@ def test_model_config_found_via_project_root_when_cwd_differs(
     assert cfg_snapshot.get_items_by_area("PCBA1", "A") == ["J5-1", "J5-2"]
 
 
-def test_model_manager_rejects_output_dir_outside_project(tmp_path, monkeypatch):
+def test_model_manager_rejects_output_dir_outside_injected_root(
+    tmp_path,
+    monkeypatch,
+):
     weights_path = tmp_path / "best.onnx"
     weights_path.write_bytes(b"")
     global_cfg_path = _write_global_config(tmp_path, weights_path)
@@ -558,7 +565,10 @@ def test_model_manager_rejects_output_dir_outside_project(tmp_path, monkeypatch)
     monkeypatch.chdir(tmp_path)
 
     base_config = DetectionConfig.from_yaml(str(global_cfg_path))
-    manager = ModelManager(DetectionLogger())
+    manager = ModelManager(
+        DetectionLogger(),
+        output_root=tmp_path / "station",
+    )
 
     with pytest.raises(SecurityError):
         manager.switch(base_config, product="PCBA1", area="A", inference_type="yolo")
