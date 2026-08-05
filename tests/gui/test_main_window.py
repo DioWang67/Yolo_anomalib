@@ -512,8 +512,8 @@ def test_calibration_apply_writes_only_the_bound_target(
     assert panel._calib_apply_btn.isEnabled() is False
 
 
-def test_engineering_page_exposes_visible_live_preview(gui, monkeypatch):
-    """Calibration must provide visual context while inspection tabs are hidden."""
+def test_engineering_equipment_tab_exposes_visible_live_preview(gui, monkeypatch):
+    """Equipment calibration must provide visual context on its owning tab."""
     monkeypatch.setattr(gui.control_panel, "_verify_pin", lambda: True)
     gui.control_panel.engineering_toggle_btn.click()
 
@@ -521,6 +521,10 @@ def test_engineering_page_exposes_visible_live_preview(gui, monkeypatch):
     assert preview.objectName() == "engineeringPreview"
     assert gui.engineering_settings_page.isAncestorOf(preview)
     assert preview.isHidden() is False
+    assert preview.isVisibleTo(gui.engineering_settings_page) is False
+
+    gui.control_panel.engineering_tabs.setCurrentIndex(2)
+
     assert preview.isVisibleTo(gui.engineering_settings_page) is True
 
 
