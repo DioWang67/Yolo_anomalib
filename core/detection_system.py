@@ -101,7 +101,7 @@ class DetectionSystem:
                 supplies its own exact model and color combination.
         """
 
-        root_dir = project_root()
+        root_dir = PROJECT_ROOT
         self.data_paths = load_station_data_paths(root_dir)
         self.logger = DetectionLogger(log_dir=str(self.data_paths.logs))
         if config_path:

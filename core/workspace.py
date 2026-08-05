@@ -202,7 +202,8 @@ def _find_legacy_inference_project(anchor: Path) -> Path:
     for candidate in _ancestors(anchor):
         if candidate.name.casefold() == "yolo11_inference":
             return candidate
-    fallback = project_root().resolve()
-    if fallback.name.casefold() == "yolo11_inference":
-        return fallback
+    # An explicit anchor outside a named checkout is a valid legacy project
+    # root (for example, an extracted deployment or an isolated test fixture).
+    # Falling back to this module's source checkout would silently mix data
+    # from two different stations.
     return anchor

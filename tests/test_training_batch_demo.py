@@ -8,6 +8,7 @@ from PIL import Image
 import pytest
 
 from app.gui.training_batch_dialog import TrainingBatchDialog
+from core.station_data import load_station_data_paths
 from tools.open_training_batch_demo import (
     _active_entries,
     _apply_demo_result,
@@ -38,9 +39,12 @@ def test_demo_contains_ten_isolated_images_in_three_routes():
     assert sum(row["review_label"] == "confirmed_ng" for row in rows) == 3
     assert sum(row["action_route"] == "color" for row in rows) == 2
     project_root = demo_root.parents[1]
+    station_paths = load_station_data_paths(project_root)
     for row in rows:
         demo_image = Path(row["original_path"])
-        source_original = project_root / row["source_original"]
+        source_original = station_paths.relocate_legacy_result_path(
+            project_root / row["source_original"]
+        )
         with Image.open(demo_image) as image:
             assert image.size == (3072, 2048)
         assert source_original.is_file()

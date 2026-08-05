@@ -103,6 +103,20 @@ def test_legacy_sibling_layout_remains_supported(tmp_path: Path, monkeypatch) ->
     assert paths.inference_artifacts == inference_root.resolve()
 
 
+def test_explicit_legacy_root_does_not_fall_back_to_source_checkout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("YOLO11_WORKSPACE_ROOT", raising=False)
+    deployment_root = tmp_path / "extracted-station"
+    deployment_root.mkdir()
+
+    paths = load_workspace_paths(deployment_root)
+
+    assert paths.inference_project == deployment_root.resolve()
+    assert paths.station_data == deployment_root.resolve()
+    assert paths.inference_results == (deployment_root / "Result").resolve()
+
+
 def test_optional_station_paths_default_to_inference_project(tmp_path: Path) -> None:
     manifest = MANIFEST.replace(
         "  station_data: station_data/yolo11_inference\n"

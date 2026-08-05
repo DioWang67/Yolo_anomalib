@@ -24,6 +24,7 @@ from core.services.acceptance_matrix import (
 from core.services.color_baseline_recalibration import (
     ColorBaselineBuild,
     ColorBaselineCandidateStore,
+    ColorBaselineOutlierFilterReport,
 )
 from core.services.color_profile_store import ColorProfileStore
 from core.services.inspection_release_builder import build_draft_release
@@ -491,6 +492,15 @@ def test_color_discovery_includes_immutable_baseline_candidate(
             },
             evidence_sha256="e" * 64,
             color_reports=(),
+            outlier_filter=ColorBaselineOutlierFilterReport(
+                status="NOT_RUN",
+                total_sample_count=0,
+                z_score_threshold=6.0,
+                maximum_auto_exclusion_fraction=0.1,
+                candidate_sample_ids=(),
+                excluded_sample_ids=(),
+                findings=(),
+            ),
         ),
     )
 

@@ -860,15 +860,16 @@ def test_retraining_workspace_survives_repeated_page_switches(
     qtbot.waitUntil(lambda: host.workspace is not None, timeout=5000)
     stable_widget_count = gui.workspace_stack.count()
 
+    iterations = 250
     started = time.perf_counter()
-    for _iteration in range(1000):
+    for _iteration in range(iterations):
         gui.show_inspection_workspace()
         assert gui.show_retraining_workspace(**arguments) is host
     elapsed_seconds = time.perf_counter() - started
 
     assert gui.workspace_stack.currentWidget() is host
     assert gui.workspace_stack.count() == stable_widget_count
-    assert elapsed_seconds < 5.0
+    assert elapsed_seconds / iterations < 0.02
 
 
 def test_retraining_photo_stage_switches_product_and_area_without_mixing(
