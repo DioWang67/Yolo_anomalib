@@ -469,7 +469,7 @@ class _PinDialog(QDialog):
         layout.addWidget(buttons)
 
     def pin_value(self) -> str:
-        return self._pin_edit.text()
+        return str(self._pin_edit.text())
 
     def show_error(self, msg: str) -> None:
         self._error_label.setText(msg)
@@ -537,10 +537,10 @@ class _ChangePinDialog(QDialog):
         self.accept()
 
     def current_pin(self) -> str:
-        return self._current.text()
+        return str(self._current.text())
 
     def new_pin(self) -> str:
-        return self._new.text()
+        return str(self._new.text())
 
 
 # ---------------------------------------------------------------------------
