@@ -27,7 +27,7 @@ releases\
   2026-07-08_PCBA1_A_pilot\
 ```
 
-Recommended model artifact naming is defined in `docs/MODEL_VERSION_GUIDE.md`.
+Recommended model artifact naming is defined in `docs/model_lifecycle/MODEL_VERSION_GUIDE.md`.
 When existing products still use `best.pt`, keep a checksum and copy of the
 validated file in the release folder until the product is migrated to versioned
 weights.

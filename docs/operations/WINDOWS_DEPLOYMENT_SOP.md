@@ -6,8 +6,8 @@ Training and dataset curation remain outside this repo.
 
 The production GUI can initiate the file-based handoff to the sibling
 `Yolo11_auto_train` project. Operator steps are documented in
-`docs/OPERATOR_MANUAL.md`; training, position gates and recovery ownership are
-documented in `docs/ENGINEERING_MANUAL.md`.
+`docs/manuals/OPERATOR_MANUAL.md`; training, position gates and recovery ownership are
+documented in `docs/manuals/ENGINEERING_MANUAL.md`.
 
 ## Scope
 
@@ -114,7 +114,7 @@ If this fails with network or no-data symptoms, run:
 tools\diagnostics\diagnose_camera.bat
 ```
 
-Then compare logs with `docs/CAMERA_RUNTIME_DIAGNOSTICS.md`.
+Then compare logs with `docs/operations/CAMERA_RUNTIME_DIAGNOSTICS.md`.
 
 ## 5. Validate Product Config
 
@@ -225,6 +225,6 @@ Deployment is ready for supervised pilot when:
 The build copies the complete `docs` folder into the release. Before handoff,
 verify both role manuals are present on the target machine:
 
-- `docs\OPERATOR_MANUAL.md`
-- `docs\ENGINEERING_MANUAL.md`
+- `docs\manuals\OPERATOR_MANUAL.md`
+- `docs\manuals\ENGINEERING_MANUAL.md`
 

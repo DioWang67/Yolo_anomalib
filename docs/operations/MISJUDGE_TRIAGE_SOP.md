@@ -60,7 +60,7 @@
    **燈光控制 → 光源校正** 對照「目前亮度」與記錄的目標值，必要時按
    **自動校正**（見第 8 節）。
 5. `INFERENCE_ERROR`：不屬誤判，直接走設備異常/當機處理流程
-   （見 `docs/CAMERA_RUNTIME_DIAGNOSTICS.md`）。
+   （見 `docs/operations/CAMERA_RUNTIME_DIAGNOSTICS.md`）。
 
 若結果圖有紫色`DUP`：
 
@@ -125,9 +125,9 @@ python tools/export_review_dataset.py `
    不需重新打包。
 3. 變更後必跑回歸集：歷史 OVERKILL/UNDERKILL 案例 + 金板（golden sample），
    確認「舊過殺不復發、舊攔截不放行」。
-4. 記錄於 `docs/CALIBRATION_CHANGE_LOG.md`：日期、變更項、新舊值、雜湊／版本、
+4. 記錄於 `docs/records/CALIBRATION_CHANGE_LOG.md`：日期、變更項、新舊值、雜湊／版本、
    回歸證據、結果、執行人與批准人。
-5. 部署到機台走 `docs/RELEASE_ROLLBACK_SOP.md`，不直接在機台上手改。
+5. 部署到機台走 `docs/operations/RELEASE_ROLLBACK_SOP.md`，不直接在機台上手改。
 
 重訓觸發條件（滿足其一）：
 
@@ -155,7 +155,7 @@ python tools/export_review_dataset.py `
 
 注意：`config.yaml` 的 `save_fail_only: true` 會停存 PASS 影像。啟用前
 必須確認該站別已無漏判回查需求，並在
-`docs/CALIBRATION_CHANGE_LOG.md` 記錄批准人。
+`docs/records/CALIBRATION_CHANGE_LOG.md` 記錄批准人。
 
 ---
 

@@ -18,6 +18,7 @@ QShortcut = qt_widgets.QShortcut
 
 from app.gui.i18n import tr
 from app.gui.main_window import DetectionSystemGUI
+from core._version import __version__ as SYSTEM_VERSION
 from core.types import DetectionResult, DetectionTask
 from tools.retraining_workspaces import create_retraining_workspace  # noqa: E402
 
@@ -34,6 +35,39 @@ def gui(qtbot):
 def test_window_title(gui):
     """Verify window title indicates correct system."""
     assert gui.windowTitle() == tr(gui.current_language, "window_title")
+
+
+def test_system_version_is_visible_and_survives_language_change(gui):
+    assert gui.system_version_label is not None
+    assert gui.system_version_label.text() == (
+        f"{tr(gui.current_language, 'system_version')}: v{SYSTEM_VERSION}"
+    )
+
+    gui.apply_language("en")
+
+    assert gui.system_version_label.text() == f"System version: v{SYSTEM_VERSION}"
+    assert "model" in gui.system_version_label.toolTip().lower()
+
+
+def test_about_dialog_uses_authoritative_system_version(gui, monkeypatch):
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        qt_widgets.QMessageBox,
+        "about",
+        lambda _parent, title, body: calls.append((title, body)),
+    )
+
+    gui.show_about()
+
+    assert calls == [
+        (
+            tr(gui.current_language, "about_title"),
+            tr(gui.current_language, "about_body").format(
+                version=SYSTEM_VERSION
+            ),
+        )
+    ]
+
 
 def test_panels_present(gui):
     """Verify all major panels are instantiated."""

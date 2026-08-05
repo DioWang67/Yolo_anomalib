@@ -2,8 +2,8 @@
 
 角色操作先閱讀：
 
-- [操作者手冊](OPERATOR_MANUAL.md)
-- [工程維運手冊](ENGINEERING_MANUAL.md)
+- [操作者手冊](../manuals/OPERATOR_MANUAL.md)
+- [工程維運手冊](../manuals/ENGINEERING_MANUAL.md)
 
 ## Station-wide preflight
 
@@ -16,7 +16,7 @@ python -m tools.production_preflight --result-root Result --config config.yaml -
 `FAIL` always blocks release. `WARN` requires a named engineering acceptance
 for a supervised pilot. When company synchronization is in rollout scope, run
 with `--strict`; it must return only `PASS`, and the offline/reconnect and
-duplicate-prevention pilot in `docs/COMPANY_SERVER_SYNC.md` is mandatory:
+duplicate-prevention pilot in `docs/data/COMPANY_SERVER_SYNC.md` is mandatory:
 
 ```powershell
 python -m tools.production_preflight --result-root Result --config config.yaml --backup-restore-drill --strict
@@ -41,7 +41,7 @@ This checklist targets controlled PCBA inspection rollout. Passing it means the 
 - [ ] Golden board images pass consistently.
 - [ ] Known NG samples fail with correct reason codes.
 - [ ] At least one shift-long dry run has review manifest output.
-- [ ] `docs/PCBA_PILOT_ACCEPTANCE_TEMPLATE.md` is filled for each product/area.
+- [ ] `docs/pilot/PCBA_PILOT_ACCEPTANCE_TEMPLATE.md` is filled for each product/area.
 - [ ] Operator review labels are defined: `confirmed_ng`, `false_positive`, `false_negative`, `uncertain`.
 - [ ] Operator and engineering owners have reviewed the current role manuals.
 - [ ] Inspection database integrity and backup/restore drill pass.
@@ -58,7 +58,7 @@ python tools\production_readiness_check.py --config config.yaml --product PCBA -
 
 Blocking `FAIL` checks should be resolved before production use. `WARN` checks can be accepted only with an explicit engineering note.
 
-The repository root `config.yaml` is a base LED-oriented config and does not currently pass the PCBA readiness gate. For PCBA pilot, create a real product config first; see `docs/PCBA_PILOT_RUNBOOK.md`.
+The repository root `config.yaml` is a base LED-oriented config and does not currently pass the PCBA readiness gate. For PCBA pilot, create a real product config first; see `docs/pilot/PCBA_PILOT_GUIDE.md`.
 
 ## Current PCBA1 Gate Result
 

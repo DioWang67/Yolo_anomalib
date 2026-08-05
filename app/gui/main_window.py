@@ -95,6 +95,7 @@ from app.gui.view_builder import (
     build_menu_bar,
 )
 from app.gui.widgets import CameraStatusIndicator
+from core._version import __version__ as SYSTEM_VERSION
 from core.auto_trigger import AutoTriggerConfig
 from core.services.model_catalog import ModelCatalog
 from core.services.model_config_editor import ModelConfigEditError, update_model_config
@@ -137,6 +138,7 @@ class DetectionSystemGUI(
         self.reconnect_camera_btn = None
         self.disconnect_camera_btn = None
         self.camera_status_indicator: CameraStatusIndicator | None = None
+        self.system_version_label: QLabel | None = None
         self.model_version_label = None  # Status bar version display
         self.show_detection_boxes_chk = None
         self.show_original_tab_chk = None
@@ -495,6 +497,13 @@ class DetectionSystemGUI(
         )
         self.statusBar().addPermanentWidget(self.camera_status_indicator)
 
+        self.system_version_label = QLabel()
+        self.system_version_label.setStyleSheet(
+            "padding: 2px 8px; color: #495057; font-size: 11px; "
+            "border-left: 1px solid #dee2e6;"
+        )
+        self.statusBar().addPermanentWidget(self.system_version_label)
+
         # Add model version label to status bar (permanent widget on the right)
         self.model_version_label = QLabel(
             f"{tr(self.current_language, 'model_version')}: --"
@@ -834,6 +843,13 @@ class DetectionSystemGUI(
         self.info_panel.set_language(self.current_language)
         if self.camera_status_indicator is not None:
             self.camera_status_indicator.set_language(self.current_language)
+        if self.system_version_label is not None:
+            self.system_version_label.setText(
+                f"{tr(self.current_language, 'system_version')}: v{SYSTEM_VERSION}"
+            )
+            self.system_version_label.setToolTip(
+                tr(self.current_language, "system_version_tooltip")
+            )
         if self.model_version_label:
             text = self.model_version_label.text()
             suffix = text.split(":", 1)[1].strip() if ":" in text else "--"
@@ -1878,7 +1894,11 @@ class DetectionSystemGUI(
 
     def show_about(self):
         """Show the about dialog."""
-        QMessageBox.about(self, self._t("about_title"), self._t("about_body"))
+        QMessageBox.about(
+            self,
+            self._t("about_title"),
+            self._t("about_body", version=SYSTEM_VERSION),
+        )
 
     # ------------------------------------------------------------------
     # Auto Mode

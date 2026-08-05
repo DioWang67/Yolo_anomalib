@@ -16,8 +16,8 @@ REQUIRED_FILES = [
 
 REQUIRED_RELEASE_DOCS = [
     "README.md",
-    "docs/OPERATOR_MANUAL.md",
-    "docs/ENGINEERING_MANUAL.md",
+    "docs/manuals/OPERATOR_MANUAL.md",
+    "docs/manuals/ENGINEERING_MANUAL.md",
     "docs/DOCUMENTATION_INDEX.md",
 ]
 

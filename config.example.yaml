@@ -181,7 +181,7 @@ inspection_sync_allow_insecure_http: false
 # optional; omitted keys keep the built-in defaults shown below. Prefer the
 # per-model models/<product>/<area>/<type>/config.yaml so tuning follows the
 # model bundle. Changing any value requires the misjudge regression set to
-# pass first (docs/MISJUDGE_TRIAGE_SOP.md section 5).
+# pass first (docs/operations/MISJUDGE_TRIAGE_SOP.md section 5).
 # color_decision_tuning:
 #   sat_threshold: 20.0          # pixels below this saturation are ignored
 #   black_s_threshold: 50.0      # S below this and V below black_v -> black

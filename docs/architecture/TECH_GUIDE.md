@@ -290,7 +290,7 @@
 ### 9.3 Docker
 
 > ⚠️ **本專案未採用**：實際部署為 Windows 工控機 + PyInstaller 可攜包
-> （見 `docs/WINDOWS_DEPLOYMENT_SOP.md`）。Hikrobot 相機 SDK 與 COM 燈控
+> （見 `docs/operations/WINDOWS_DEPLOYMENT_SOP.md`）。Hikrobot 相機 SDK 與 COM 燈控
 > 不適合容器化，本節僅為通識參考。
 
 * 基礎映像 `python:3.10`；
@@ -373,7 +373,7 @@ path_validator = PathValidator(
 
 **測試覆蓋**: `tests/test_security.py`（以 CI 實際結果為準）
 
-**詳細文檔**: 參見 `docs/SECURITY.md`
+**詳細文檔**: 參見 `docs/architecture/SECURITY.md`
 
 ### 11.2 YAML 安全載入
 

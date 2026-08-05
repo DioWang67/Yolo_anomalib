@@ -239,4 +239,4 @@ ls models/LED/A/yolo/weights/
 ## 參考資源
 - [Git LFS 官方文檔](https://git-lfs.github.com/)
 - [Semantic Versioning 2.0.0](https://semver.org/)
-- [本專案 CHANGELOG.md](../CHANGELOG.md)
+- [本專案 CHANGELOG.md](../../CHANGELOG.md)

@@ -36,7 +36,7 @@ SQLite outbox
 - GUI 背景工作透過 Qt signal/slot 回到 UI thread。
 - 資料庫短交易內只做狀態更新；HTTP 與大型 I/O 不在交易鎖內執行。
 
-架構細節見 [模組架構](MODULE_ARCHITECTURE.md)。
+架構細節見 [模組架構](../architecture/MODULE_ARCHITECTURE.md)。
 
 ## 2. 目錄與資料責任
 
@@ -106,7 +106,7 @@ dist\yolo11_inference\
 ```
 
 不可只部署 `yolo11_inference.exe`。完整程序見
-[Windows 部署 SOP](WINDOWS_DEPLOYMENT_SOP.md)。
+[Windows 部署 SOP](../operations/WINDOWS_DEPLOYMENT_SOP.md)。
 
 ### 4.2 封裝與相機預檢
 
@@ -118,7 +118,7 @@ dist\yolo11_inference\
 ```
 
 第一個命令驗證隨附 Runtime；第二個命令需要相機未被其他程式占用。
-失敗時依 [相機診斷](CAMERA_RUNTIME_DIAGNOSTICS.md)處理。
+失敗時依 [相機診斷](../operations/CAMERA_RUNTIME_DIAGNOSTICS.md)處理。
 
 ### 4.3 資料與恢復預檢
 
@@ -177,7 +177,7 @@ python -m tools.production_preflight `
 - 有驗證警告的候選只能限定試用或具名接受風險，`BLOCKED`不得啟用。
 
 五色基準重建、YOLO × 顏色矩陣、指標與啟用規則見
-[模型組合驗收與發布](MODEL_COMBINATION_ACCEPTANCE.md)。
+[模型組合驗收與發布](../model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md)。
 
 ### 5.3 相機
 
@@ -198,7 +198,7 @@ python -m tools.production_preflight `
 
 相機離線時只停用相機必要的`自動模式`，不全域鎖住單張圖片流程。
 若 GUI 顯示已連線但長時間無法進入就緒，先確認沒有其他程式占用相機，
-再依[相機診斷](CAMERA_RUNTIME_DIAGNOSTICS.md)執行硬體擷取預檢。
+再依[相機診斷](../operations/CAMERA_RUNTIME_DIAGNOSTICS.md)執行硬體擷取預檢。
 
 ### 5.4 除錯／設定
 
@@ -301,7 +301,7 @@ models/<product>/<area>/<type>/
 
 同一影像以 SHA-256 穩定識別，重複提交不重複累積；人工改判會撤銷過時的
 raw/label。詳細語意見
-[`Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md`](../../Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md)。
+[`Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md`](../../../Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md)。
 
 ### 7.3 補訓參數
 
@@ -403,7 +403,7 @@ Position golden manifest has no eligible samples in the holdout image directory
 - 權重、位置設定、報告與 manifest 的成對回滾。
 
 完整設定與輸出見
-[`POSITION_RETRAINING_DEPLOYMENT.md`](../../Yolo11_auto_train/docs/POSITION_RETRAINING_DEPLOYMENT.md)。
+[`POSITION_RETRAINING_DEPLOYMENT.md`](../../../Yolo11_auto_train/docs/POSITION_RETRAINING_DEPLOYMENT.md)。
 
 ## 9. 補訓工作狀態與恢復
 
@@ -457,9 +457,9 @@ waiting_annotation、failed 或 cancelled 等可處理狀態啟用。
 - Position Gate／validation 報告。
 
 不可只把檔名改回 `best.pt`。完整程序見
-[模型組合驗收與發布](MODEL_COMBINATION_ACCEPTANCE.md)、
-[模型版本指南](MODEL_VERSION_GUIDE.md)及
-[發布與回滾 SOP](RELEASE_ROLLBACK_SOP.md)。
+[模型組合驗收與發布](../model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md)、
+[模型版本指南](../model_lifecycle/MODEL_VERSION_GUIDE.md)及
+[發布與回滾 SOP](../operations/RELEASE_ROLLBACK_SOP.md)。
 
 ## 11. 檢測資料庫與 Excel
 
@@ -587,7 +587,7 @@ python -m tools.inspection_sync_admin --result-root Result --retry-dead
 ```
 
 不要為了清除紅色狀態直接刪除 outbox。完整伺服器契約與試點步驟見
-[公司同步文件](COMPANY_SERVER_SYNC.md)。
+[公司同步文件](../data/COMPANY_SERVER_SYNC.md)。
 
 ## 14. 日常監控
 
@@ -690,16 +690,16 @@ python -m tools.production_preflight `
 
 ## 18. 專題文件
 
-- [文件總索引](DOCUMENTATION_INDEX.md)
-- [Windows 部署 SOP](WINDOWS_DEPLOYMENT_SOP.md)
-- [發布與回滾 SOP](RELEASE_ROLLBACK_SOP.md)
-- [正式上線檢查表](PRODUCTION_GO_LIVE_CHECKLIST.md)
-- [資料庫、備份與保存](INSPECTION_DATABASE.md)
-- [公司伺服器同步](COMPANY_SERVER_SYNC.md)
-- [相機診斷](CAMERA_RUNTIME_DIAGNOSTICS.md)
-- [誤判與漏檢處理](MISJUDGE_TRIAGE_SOP.md)
-- [顏色覆核與校正](COLOR_REVIEW_CALIBRATION.md)
-- [模型組合驗收與發布](MODEL_COMBINATION_ACCEPTANCE.md)
-- [模型版本指南](MODEL_VERSION_GUIDE.md)
-- [補訓閉環](../../Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md)
-- [位置補訓與部署](../../Yolo11_auto_train/docs/POSITION_RETRAINING_DEPLOYMENT.md)
+- [文件總索引](../DOCUMENTATION_INDEX.md)
+- [Windows 部署 SOP](../operations/WINDOWS_DEPLOYMENT_SOP.md)
+- [發布與回滾 SOP](../operations/RELEASE_ROLLBACK_SOP.md)
+- [正式上線檢查表](../operations/PRODUCTION_GO_LIVE_CHECKLIST.md)
+- [資料庫、備份與保存](../data/INSPECTION_DATABASE.md)
+- [公司伺服器同步](../data/COMPANY_SERVER_SYNC.md)
+- [相機診斷](../operations/CAMERA_RUNTIME_DIAGNOSTICS.md)
+- [誤判與漏檢處理](../operations/MISJUDGE_TRIAGE_SOP.md)
+- [顏色覆核與校正](../model_lifecycle/COLOR_REVIEW_CALIBRATION.md)
+- [模型組合驗收與發布](../model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md)
+- [模型版本指南](../model_lifecycle/MODEL_VERSION_GUIDE.md)
+- [補訓閉環](../../../Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md)
+- [位置補訓與部署](../../../Yolo11_auto_train/docs/POSITION_RETRAINING_DEPLOYMENT.md)

@@ -5,8 +5,8 @@
 
 請依角色從下列文件開始：
 
-- 產線操作者／班組長：[AI 檢測系統操作手冊](docs/OPERATOR_MANUAL.md)
-- 設備、製程、AI、軟體與 IT：[工程維運手冊](docs/ENGINEERING_MANUAL.md)
+- 產線操作者／班組長：[AI 檢測系統操作手冊](docs/manuals/OPERATOR_MANUAL.md)
+- 設備、製程、AI、軟體與 IT：[工程維運手冊](docs/manuals/ENGINEERING_MANUAL.md)
 - 不確定該看哪份文件：[文件總索引](docs/DOCUMENTATION_INDEX.md)
 
 目前補訓入口在主 GUI 的`工程設定 > 模型補訓`，需要 PIN 且開始前必須
@@ -24,8 +24,8 @@
 - ⚡ **Fusion 融合檢測**: YOLO 與 Anomalib 聯合推理，支援特徵熱圖與結果雙重疊加 (GUI 限定功能)
 - 📷 **工業相機整合**: 支援海康威視 MVS SDK
 - 🎨 **LED 顏色檢測**: 統計式顏色驗證
-- 🧭 **顏色誤殺閉環**: 顏色專用覆核、校正資料分流及具名批准門檻發布（見 [操作說明](docs/COLOR_REVIEW_CALIBRATION.md)）
-- 🧪 **模型組合驗收**: 獨立人工真值、YOLO × 顏色矩陣、完整組合發布與原子回滾（見 [驗收與發布](docs/MODEL_COMBINATION_ACCEPTANCE.md)）
+- 🧭 **顏色誤殺閉環**: 顏色專用覆核、校正資料分流及具名批准門檻發布（見 [操作說明](docs/model_lifecycle/COLOR_REVIEW_CALIBRATION.md)）
+- 🧪 **模型組合驗收**: 獨立人工真值、YOLO × 顏色矩陣、完整組合發布與原子回滾（見 [驗收與發布](docs/model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md)）
 - 🖥️ **雙介面支援**: CLI 命令列 + PyQt5 GUI
 - 📊 **結果管理**: SQLite 檢測索引、GUI 查詢、篩選式 Excel 報表與證據影像
 - 🔁 **公司同步**: 本機優先 outbox、離線重試、冪等 revision 同步
@@ -72,9 +72,14 @@ yolo11_inference/
 ├── Result/                     # 輸出結果
 ├── docs/                       # 文檔
 │   ├── DOCUMENTATION_INDEX.md         # 文件入口索引
-│   ├── TECH_GUIDE.md                  # 技術深度指南 (~1300 行)
-│   ├── WINDOWS_DEPLOYMENT_SOP.md      # Windows 現場部署 SOP
-│   └── RELEASE_ROLLBACK_SOP.md        # 發版與回滾 SOP
+│   ├── manuals/                       # 操作者與工程主手冊
+│   ├── operations/                    # 部署、回滾、診斷與上線 SOP
+│   ├── data/                          # 資料庫與公司同步
+│   ├── model_lifecycle/               # 模型與顏色驗收
+│   ├── architecture/                  # 架構、安全與技術參考
+│   ├── pilot/                         # 受控試產文件
+│   ├── records/                       # 追加式工程紀錄
+│   └── archive/                       # 歷史資料
 ├── config.yaml                 # 全域配置
 ├── config.example.yaml         # 配置範本
 ├── requirements.txt            # 核心依賴
@@ -194,8 +199,8 @@ python GUI.py
 - Excel：從 GUI `檢測紀錄 > 匯出 Excel`，依目前產品、工位、狀態與日期
   篩選輸出摘要、明細與異常統計。
 
-操作方式見 [操作者手冊](docs/OPERATOR_MANUAL.md#7-檢測紀錄)，資料結構與
-恢復方式見 [資料庫文件](docs/INSPECTION_DATABASE.md)。
+操作方式見 [操作者手冊](docs/manuals/OPERATOR_MANUAL.md#7-檢測紀錄)，資料結構與
+恢復方式見 [資料庫文件](docs/data/INSPECTION_DATABASE.md)。
 
 ## 測試
 
@@ -254,8 +259,8 @@ Hikrobot 相機 DLL（`Runtime/`）已隨包附帶，目標機台**不需要**�
 請確保：
 - 模型路徑與設定檔維持與打包時的相對路徑關係。
 
-完整現場部署流程請看 `docs/WINDOWS_DEPLOYMENT_SOP.md`；
-release / rollback 流程請看 `docs/RELEASE_ROLLBACK_SOP.md`。
+完整現場部署流程請看 `docs/operations/WINDOWS_DEPLOYMENT_SOP.md`；
+release / rollback 流程請看 `docs/operations/RELEASE_ROLLBACK_SOP.md`。
 
 ## 配置說明
 
@@ -365,9 +370,9 @@ LED:
 3. 與預期位置比對，檢查是否在容差範圍內
 4. 輸出驗證報告 (JSON)
 
-操作判斷見 [操作者手冊的位置補訓章節](docs/OPERATOR_MANUAL.md#10-送出補訓與位置檢測)；
+操作判斷見 [操作者手冊的位置補訓章節](docs/manuals/OPERATOR_MANUAL.md#10-送出補訓與位置檢測)；
 工程 Gate 與故障處理見
-[工程維運手冊](docs/ENGINEERING_MANUAL.md#8-位置檢測補訓)。
+[工程維運手冊](docs/manuals/ENGINEERING_MANUAL.md#8-位置檢測補訓)。
 
 ## 從 Yolo11_auto_train 部署模型
 
@@ -393,7 +398,7 @@ cp runs/detect/<name>/auto_position_config.yaml models/<product>/<area>/yolo/pos
 
 完整的訓練→部署流程說明請參考
 [`Yolo11_auto_train/docs/INTEGRATION_GUIDE.md`](../Yolo11_auto_train/docs/INTEGRATION_GUIDE.md)
-及 [工程維運手冊](docs/ENGINEERING_MANUAL.md#7-補訓閉環)。
+及 [工程維運手冊](docs/manuals/ENGINEERING_MANUAL.md#7-補訓閉環)。
 
 ---
 
@@ -403,21 +408,20 @@ cp runs/detect/<name>/auto_position_config.yaml models/<product>/<area>/yolo/pos
 
 | 類別 | 文件 |
 |------|------|
-| 操作者／班組長 | [AI 檢測系統操作手冊](docs/OPERATOR_MANUAL.md) |
-| 工程／IT | [工程維運手冊](docs/ENGINEERING_MANUAL.md) |
-| 技術總覽 | [技術深度指南](docs/TECH_GUIDE.md) |
-| 模組責任 | [模組架構說明](docs/MODULE_ARCHITECTURE.md) |
-| Windows 現場部署 | [Windows Deployment SOP](docs/WINDOWS_DEPLOYMENT_SOP.md) |
-| 發版與回滾 | [Release and Rollback SOP](docs/RELEASE_ROLLBACK_SOP.md) |
-| PCBA pilot | [PCBA Pilot Runbook](docs/PCBA_PILOT_RUNBOOK.md) |
-| 操作員命令 | [PCBA Operator Commands](docs/PCBA_OPERATOR_COMMANDS.md) |
-| 上線檢查 | [Production Go-Live Checklist](docs/PRODUCTION_GO_LIVE_CHECKLIST.md) |
-| 相機診斷 | [Camera Runtime Diagnostics](docs/CAMERA_RUNTIME_DIAGNOSTICS.md) |
-| 模型版本 | [Model Version Management Guide](docs/MODEL_VERSION_GUIDE.md) |
-| 模型組合驗收 | [模型組合驗收與發布](docs/MODEL_COMBINATION_ACCEPTANCE.md) |
-| 檢測資料庫 | [Inspection Database](docs/INSPECTION_DATABASE.md) |
-| 公司同步 | [Company Server Sync](docs/COMPANY_SERVER_SYNC.md) |
-| 安全 | [Security Guide](docs/SECURITY.md) |
+| 操作者／班組長 | [AI 檢測系統操作手冊](docs/manuals/OPERATOR_MANUAL.md) |
+| 工程／IT | [工程維運手冊](docs/manuals/ENGINEERING_MANUAL.md) |
+| 技術總覽 | [技術深度指南](docs/architecture/TECH_GUIDE.md) |
+| 模組責任 | [模組架構說明](docs/architecture/MODULE_ARCHITECTURE.md) |
+| Windows 現場部署 | [Windows Deployment SOP](docs/operations/WINDOWS_DEPLOYMENT_SOP.md) |
+| 發版與回滾 | [Release and Rollback SOP](docs/operations/RELEASE_ROLLBACK_SOP.md) |
+| PCBA pilot 與命令 | [PCBA 受控試產指南](docs/pilot/PCBA_PILOT_GUIDE.md) |
+| 上線檢查 | [Production Go-Live Checklist](docs/operations/PRODUCTION_GO_LIVE_CHECKLIST.md) |
+| 相機診斷 | [Camera Runtime Diagnostics](docs/operations/CAMERA_RUNTIME_DIAGNOSTICS.md) |
+| 模型版本 | [Model Version Management Guide](docs/model_lifecycle/MODEL_VERSION_GUIDE.md) |
+| 模型組合驗收 | [模型組合驗收與發布](docs/model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md) |
+| 檢測資料庫 | [Inspection Database](docs/data/INSPECTION_DATABASE.md) |
+| 公司同步 | [Company Server Sync](docs/data/COMPANY_SERVER_SYNC.md) |
+| 安全 | [Security Guide](docs/architecture/SECURITY.md) |
 
 目前 PCBA 文件支援 controlled pilot；若要 unattended production，仍需完成
 golden board、known NG、dry run review、readiness WARN 接受/修正與 rollback
@@ -449,7 +453,7 @@ python main.py --product <new_product> --area <area> --type yolo
 3. **非同步管線**: 使用 `start_pipeline()` 解耦取像與推論（見下方說明）
 4. **TensorRT**: 匯出模型為 TensorRT 引擎（進階）
 
-詳見 `docs/TECH_GUIDE.md` 第 8 節「效能工程手冊」。
+詳見 `docs/architecture/TECH_GUIDE.md` 第 8 節「效能工程手冊」。
 
 ## 非同步管線 (Producer-Consumer Pipeline)
 
@@ -549,16 +553,16 @@ except SecurityError as e:
 
 ### 依賴安全
 
-- 固定版本依賴（342 行 `requirements.txt`）
-- 定期安全掃描與更新
-- 使用 `pip-compile` 確保可重現構建
+- 依賴變更須經受控環境回歸測試
+- 發布前對實際安裝環境執行弱點掃描
+- 發布 bundle 與 runtime manifest 一起保存，供追溯與回滾
 
 ### 更多資訊
 
 詳細安全指南請參考：
-- **[docs/SECURITY.md](docs/SECURITY.md)** - 完整安全指南
+- **[docs/architecture/SECURITY.md](docs/architecture/SECURITY.md)** - 安全設計與操作界線
 - **[CHANGELOG.md](CHANGELOG.md)** - 安全相關變更記錄
-- **測試**: `tests/test_security.py` (12/13 測試通過)
+- **測試**: `D:\miniconda\envs\yolo_anomalib\python.exe -m pytest tests\test_security.py -q`
 
 
 
@@ -646,6 +650,6 @@ python tools\runtime_benchmark.py `
   --runs 50
 ```
 
-See `docs/FIRMWARE_RUNTIME_PLAN.md` for the benchmark matrix and acceptance
+See `docs/architecture/FIRMWARE_RUNTIME_PLAN.md` for the benchmark matrix and acceptance
 criteria. Anomalib should remain a training/validation framework until an
 exported runtime is proven equivalent to the current Lightning baseline.

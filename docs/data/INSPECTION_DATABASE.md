@@ -1,8 +1,8 @@
 # Inspection database
 
 For role-based procedures, see
-[Operator manual](OPERATOR_MANUAL.md#7-檢測紀錄) and
-[Engineering manual](ENGINEERING_MANUAL.md#11-檢測資料庫與-excel).
+[Operator manual](../manuals/OPERATOR_MANUAL.md#7-檢測紀錄) and
+[Engineering manual](../manuals/ENGINEERING_MANUAL.md#11-檢測資料庫與-excel).
 
 Every saved inspection is indexed in `Result/inspection_records.sqlite3`.
 Images remain immutable files; SQLite stores their paths and searchable
@@ -134,4 +134,4 @@ Warnings are release blockers in `--strict` mode. Use strict mode when company
 synchronization is part of the station rollout. If synchronization is
 explicitly out of scope, run without strict mode and record a named acceptance
 for the sync-disabled warning. Company synchronization is documented in
-`docs/COMPANY_SERVER_SYNC.md`.
+`docs/data/COMPANY_SERVER_SYNC.md`.

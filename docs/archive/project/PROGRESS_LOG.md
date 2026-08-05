@@ -15,11 +15,10 @@ Move `yolo11_inference` from a YOLO inference/validation tool toward a controlle
   - current branch: `firmware-runtime-optimization`
   - local `main` is already an ancestor of the current branch
 - Added PCBA inspection planning and rollout docs:
-  - `docs/PCBA_INSPECTION_PLAN.md`
-  - `docs/PRODUCTION_GO_LIVE_CHECKLIST.md`
-  - `docs/PCBA_PILOT_RUNBOOK.md`
-  - `docs/PCBA_PILOT_ACCEPTANCE_TEMPLATE.md`
-  - `docs/PCBA_OPERATOR_COMMANDS.md`
+  - `docs/pilot/PCBA_PILOT_GUIDE.md`（已整合原 inspection plan）
+  - `docs/operations/PRODUCTION_GO_LIVE_CHECKLIST.md`
+  - `docs/pilot/PCBA_PILOT_GUIDE.md`（已整合原 runbook 與 commands）
+  - `docs/pilot/PCBA_PILOT_ACCEPTANCE_TEMPLATE.md`
 - Added production-pilot helper commands:
   - `pcba.bat`
   - `tools/pcba_pilot.py`

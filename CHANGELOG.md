@@ -20,9 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raw/effective result traceability, GUI evidence overlays and a read-only
   historical replay audit tool.
 - Role-based production documentation:
-  - `docs/OPERATOR_MANUAL.md` for daily inspection, history, Excel, review,
+  - `docs/manuals/OPERATOR_MANUAL.md` for daily inspection, history, Excel, review,
     retraining and escalation;
-  - `docs/ENGINEERING_MANUAL.md` for configuration, position gates, deployment,
+  - `docs/manuals/ENGINEERING_MANUAL.md` for configuration, position gates, deployment,
     SQLite recovery, server synchronization and release acceptance.
 - PIN-protected full-width engineering settings and in-window retraining
   workspace.
@@ -64,7 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   benchmark; retained the current GUI, packaging and camera compatibility
   entrypoints.
 - Replaced the historical project progress file as a calibration record with
-  `docs/CALIBRATION_CHANGE_LOG.md`, and moved historical evidence under
+  `docs/records/CALIBRATION_CHANGE_LOG.md`, and moved historical evidence under
   `docs/archive/`.
 - Retraining is opened from `工程設定 > 模型補訓`; legacy documentation that
   pointed to the File menu has been corrected.
@@ -181,8 +181,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Documentation
 - **README.md**: 371-line comprehensive project documentation
-- **docs/TECH_GUIDE.md**: 1153-line deep-dive technical guide (JR→SR level)
-- **docs/MODULE_ARCHITECTURE.md**: Architecture diagrams and design patterns
+- **docs/architecture/TECH_GUIDE.md**: 1153-line deep-dive technical guide (JR→SR level)
+- **docs/architecture/MODULE_ARCHITECTURE.md**: Architecture diagrams and design patterns
 - **config.example.yaml**: Full configuration template with comments
 
 #### Configuration & Flexibility

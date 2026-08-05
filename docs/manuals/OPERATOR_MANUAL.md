@@ -372,6 +372,6 @@ Position golden manifest has no eligible samples...
 相關文件：
 
 - [工程維運手冊](ENGINEERING_MANUAL.md)
-- [誤判與漏檢處理 SOP](MISJUDGE_TRIAGE_SOP.md)
-- [顏色覆核與校正](COLOR_REVIEW_CALIBRATION.md)
-- [正式上線檢查表](PRODUCTION_GO_LIVE_CHECKLIST.md)
+- [誤判與漏檢處理 SOP](../operations/MISJUDGE_TRIAGE_SOP.md)
+- [顏色覆核與校正](../model_lifecycle/COLOR_REVIEW_CALIBRATION.md)
+- [正式上線檢查表](../operations/PRODUCTION_GO_LIVE_CHECKLIST.md)

@@ -1,9 +1,9 @@
 # Company server synchronization
 
 Operator-visible status is documented in
-[Operator manual](OPERATOR_MANUAL.md#71-伺服器同步標籤). Station configuration,
+[Operator manual](../manuals/OPERATOR_MANUAL.md#71-伺服器同步標籤). Station configuration,
 monitoring and recovery ownership are documented in
-[Engineering manual](ENGINEERING_MANUAL.md#13-公司伺服器同步).
+[Engineering manual](../manuals/ENGINEERING_MANUAL.md#13-公司伺服器同步).
 
 The inspection station is local-first. Every result and operator review is
 committed to `Result/inspection_records.sqlite3` before any network request is

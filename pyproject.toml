@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yolo11-inference"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Industrial vision inspection system integrating YOLO object detection and Anomalib anomaly detection"
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
@@ -85,6 +85,9 @@ yolo11-inference = "main:main"
 
 [tool.setuptools]
 py-modules = ["main"]
+
+[tool.setuptools.dynamic]
+version = {attr = "core._version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]
