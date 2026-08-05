@@ -17,6 +17,7 @@ class CameraController:
         self.logger = DetectionLogger()
         self.camera = None
         self.is_initialized = False
+        self.is_healthy = False
 
     def initialize(self) -> bool:
         try:
@@ -27,18 +28,23 @@ class CameraController:
             if not self.camera.connect_to_camera():
                 raise CameraConnectionError("無法連接到相機：設備佔用或通訊異常")
             self.is_initialized = True
+            self.is_healthy = True
             self.logger.logger.info("相機初始化成功")
             return True
         except Exception as e:
             self.logger.logger.error(f"相機初始化失敗: {str(e)}")
             raise
 
-    def capture_frame(self) -> np.ndarray | None:
+    def capture_frame(self, timeout_ms: int | None = None) -> np.ndarray | None:
         if not self.is_initialized:
             raise HardwareError("相機未初始化，請先呼叫 initialize()")
         try:
             self.logger.logger.debug("正在拍攝圖像...")
-            frame = self.camera.get_frame()
+            frame = (
+                self.camera.get_frame()
+                if timeout_ms is None
+                else self.camera.get_frame(timeout_ms=timeout_ms)
+            )
             if frame is None:
                 self.logger.logger.warning("獲取到空幀")
                 return None
@@ -59,10 +65,15 @@ class CameraController:
                 self.logger.logger.warning("獲取到無效圖像")
                 return None
             self.logger.logger.debug(f"成功獲取圖像，尺寸: {frame.shape}")
+            self.is_healthy = True
             return frame
         except Exception as e:
             self.logger.logger.error(f"拍攝失敗: {str(e)}")
             return None
+
+    def mark_unhealthy(self) -> None:
+        """Mark the open SDK session unusable until a successful reconnect."""
+        self.is_healthy = False
 
     def clear_image_buffer(self) -> bool:
         """Best-effort clear of frames queued in the camera SDK.
@@ -237,6 +248,7 @@ class CameraController:
         camera = self.camera
         self.camera = None
         self.is_initialized = False
+        self.is_healthy = False
         try:
             if camera:
                 self.logger.logger.info("正在關閉相機...")

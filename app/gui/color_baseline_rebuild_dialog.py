@@ -21,7 +21,16 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from core.services.color_baseline_evidence import ColorBaselineEvidenceProvider
+from app.gui.color_baseline_exclusions_dialog import (
+    ColorBaselineExclusionsDialog,
+)
+from app.gui.inspection_release_presentation import (
+    format_color_baseline_summary,
+)
+from core.services.color_baseline_evidence import (
+    ColorBaselineEvidenceExclusion,
+    ColorBaselineEvidenceProvider,
+)
 from core.services.color_baseline_recalibration import (
     ColorBaselineCancelled,
     ColorBaselineCandidateStore,
@@ -45,6 +54,7 @@ class ColorBaselineRebuildWorker(QThread):
     progress_changed = pyqtSignal(int, int, str)
     phase_changed = pyqtSignal(str)
     evidence_ready = pyqtSignal(object)
+    outlier_filter_ready = pyqtSignal(object)
     completed = pyqtSignal(object, object)
     failed = pyqtSignal(str)
     cancelled = pyqtSignal()
@@ -126,13 +136,14 @@ class ColorBaselineRebuildWorker(QThread):
                 progress_callback=self.progress_changed.emit,
                 cancel_callback=self.isInterruptionRequested,
             )
-            self.phase_changed.emit("正在分割訓練與保留樣本，重算 HSV / Lab 統計…")
+            self.phase_changed.emit("正在分割建模與保留樣本，重算顏色統計…")
             build = StatsColorBaselineRebuilder().build(
                 base_model_path=base_model_path,
                 evidence=evidence,
                 evidence_metadata=evidence_snapshot.to_report_dict(),
                 cancel_callback=self.isInterruptionRequested,
             )
+            self.outlier_filter_ready.emit(build.outlier_filter)
             candidate = ColorBaselineCandidateStore(self.data_paths.color_baselines).commit(
                 product=self.product,
                 area=self.area,
@@ -181,6 +192,8 @@ class ColorBaselineRebuildDialog(QDialog):
             model=model,
         )
         self._finished = False
+        self._excluded_evidence = ()
+        self._evidence_samples_by_id = {}
         self._build_ui(model)
         self._connect_worker()
 
@@ -205,6 +218,12 @@ class ColorBaselineRebuildDialog(QDialog):
             "border-radius:5px;padding:8px;"
         )
         layout.addWidget(self.evidence_label)
+        self.excluded_evidence_button = QPushButton("查看排除照片")
+        self.excluded_evidence_button.setVisible(False)
+        self.excluded_evidence_button.clicked.connect(
+            self._show_excluded_evidence
+        )
+        layout.addWidget(self.excluded_evidence_button)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         layout.addWidget(self.progress)
@@ -262,6 +281,7 @@ class ColorBaselineRebuildDialog(QDialog):
     def _connect_worker(self) -> None:
         self._worker.phase_changed.connect(self.phase_label.setText)
         self._worker.evidence_ready.connect(self._show_evidence_summary)
+        self._worker.outlier_filter_ready.connect(self._show_outlier_summary)
         self._worker.progress_changed.connect(self._update_progress)
         self._worker.completed.connect(self._completed)
         self._worker.failed.connect(self._failed)
@@ -283,35 +303,99 @@ class ColorBaselineRebuildDialog(QDialog):
         self.progress.setFormat(f"{current}/{total}｜{sample_id}" if total else sample_id)
 
     def _show_evidence_summary(self, snapshot) -> None:
-        warnings: list[str] = []
-        if snapshot.conflict_count:
-            warnings.append(f"真值衝突 {snapshot.conflict_count} 張")
-        if snapshot.invalid_count:
-            warnings.append(f"缺圖或驗證失敗 {snapshot.invalid_count} 張")
-        warning_text = f"｜已安全排除：{'、'.join(warnings)}" if warnings else ""
+        self._excluded_evidence = tuple(snapshot.excluded_samples)
+        self._evidence_samples_by_id = {
+            sample.sample_id: sample for sample in snapshot.samples
+        }
+        excluded_count = len(self._excluded_evidence)
+        self.excluded_evidence_button.setText(
+            f"查看排除照片（{excluded_count}）"
+        )
+        self.excluded_evidence_button.setVisible(excluded_count > 0)
+        exclusion_text = f"｜已排除 {excluded_count} 張" if excluded_count else ""
         self.evidence_label.setText(
             f"本次選用 {snapshot.selected_count} 張：驗收 OK "
             f"{snapshot.selected_acceptance_count} 張＋顏色覆核 OK "
             f"{snapshot.selected_feedback_count} 張｜去重 {snapshot.duplicate_count} 張｜"
             f"NG 不納入基準統計 {snapshot.confirmed_ng_count} 張"
-            f"{warning_text}"
+            f"{exclusion_text}"
         )
+
+    def _show_outlier_summary(self, report) -> None:
+        statistical_exclusions: list[ColorBaselineEvidenceExclusion] = []
+        existing_sample_ids = {
+            exclusion.sample_id for exclusion in self._excluded_evidence
+        }
+        for sample_id in report.excluded_sample_ids:
+            if sample_id in existing_sample_ids:
+                continue
+            sample = self._evidence_samples_by_id.get(sample_id)
+            statistical_exclusions.append(
+                ColorBaselineEvidenceExclusion(
+                    sample_id=sample_id,
+                    source_kind=(sample.source_kind if sample is not None else ""),
+                    source_manifest=(
+                        sample.source_manifest if sample is not None else ""
+                    ),
+                    image_path=(
+                        str(sample.image_path) if sample is not None else ""
+                    ),
+                    image_sha256=(
+                        sample.image_sha256 if sample is not None else ""
+                    ),
+                    reason_code="STATISTICAL_COLOR_OUTLIER",
+                    reason=(
+                        "照片顏色與同批多數正常照片差異過大，已從本次基準建模排除；"
+                        "原始照片與人工真值未修改。"
+                    ),
+                )
+            )
+        if statistical_exclusions:
+            self._excluded_evidence = (
+                *self._excluded_evidence,
+                *statistical_exclusions,
+            )
+            self.excluded_evidence_button.setText(
+                f"查看排除照片（{len(self._excluded_evidence)}）"
+            )
+            self.excluded_evidence_button.setVisible(True)
+            self.evidence_label.setText(
+                self.evidence_label.text()
+                + f"｜重建前排除離群照片 {report.excluded_count} 張"
+            )
+
+    def _show_excluded_evidence(self) -> None:
+        if not self._excluded_evidence:
+            return
+        ColorBaselineExclusionsDialog(
+            self._excluded_evidence,
+            parent=self,
+        ).exec_()
 
     def _completed(self, candidate, color_reports) -> None:
         self._finished = True
         self.progress.setValue(self.progress.maximum())
-        self.phase_label.setText(f"候選已建立：{candidate.display_version}｜狀態 {candidate.status}")
+        candidate_summary = format_color_baseline_summary(
+            color_count=len(candidate.colors),
+            created_at=candidate.created_at,
+            lifecycle_status="CANDIDATE",
+            quality_status=candidate.status,
+        )
+        internal_id_tooltip = f"完整基準內部 ID：{candidate.display_version}"
+        self.phase_label.setText(f"候選已建立：{candidate_summary}")
+        self.phase_label.setToolTip(internal_id_tooltip)
         result_text = (
             "數值檢查通過"
             if candidate.status == "READY"
             else "需先比較新舊組合，不代表已核准"
         )
         self.next_step_label.setText(
-            f"下一步：{candidate.display_version} 已自動選回「候選組合」"
+            "下一步：此完整顏色基準候選已自動選回「候選組合」"
             f"（{result_text}）。關閉本視窗後，填寫組合版本、建立人員與原因，"
             "建立候選組合；再到「組合驗收」使用同一批驗收照片比較，"
             "通過後才可上線。"
         )
+        self.next_step_label.setToolTip(internal_id_tooltip)
         self.next_step_label.setVisible(True)
         self.result_table.setRowCount(len(color_reports))
         for row, report in enumerate(color_reports):
@@ -398,5 +482,6 @@ def _state_label(value: str) -> str:
     return {
         "REBUILT": "已重建",
         "PRESERVED_INSUFFICIENT": "證據不足，沿用舊值",
+        "PRESERVED_SAFETY_REJECTED": "未更新，沿用舊基準",
         "REVIEW_REQUIRED": "需人工檢查",
     }.get(value, value)

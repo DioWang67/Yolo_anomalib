@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
 import pytest
 
+import core.services.color_baseline_recalibration as recalibration
 from core.services.color_baseline_recalibration import (
     DEFAULT_COLORS,
     ColorBaselineCandidateStore,
@@ -90,6 +92,153 @@ def test_rebuilds_all_five_colors_with_holdout(tmp_path: Path) -> None:
     assert all(item.training_crops + item.holdout_crops == 35 for item in build.color_reports)
     assert all(item.holdout_crops >= 5 for item in build.color_reports)
     assert build.report_payload["limitations"]
+
+
+def test_isolated_color_outlier_photo_is_excluded_from_all_colors(
+    tmp_path: Path,
+) -> None:
+    evidence = list(_evidence())
+    for color in DEFAULT_COLORS:
+        evidence.append(
+            ColorCropEvidence(
+                sample_id="ACC-OUTLIER",
+                color=color,
+                image_bgr=(
+                    _crop("Green") if color == "Yellow" else _crop(color)
+                ),
+                source_sha256="f" * 64,
+            )
+        )
+
+    build = StatsColorBaselineRebuilder().build(
+        base_model_path=_base_model(tmp_path),
+        evidence=tuple(evidence),
+    )
+
+    assert build.outlier_filter.status == "AUTO_EXCLUDED"
+    assert build.outlier_filter.excluded_sample_ids == ("ACC-OUTLIER",)
+    assert all(report.total_crops == 35 for report in build.color_reports)
+    persisted = build.report_payload["statistical_outlier_filter"]
+    assert persisted["excluded_sample_ids"] == ["ACC-OUTLIER"]
+    assert build.model_payload["recalibration"][
+        "statistical_outlier_filter"
+    ] == persisted
+
+
+def test_batch_wide_shift_is_not_mass_excluded(tmp_path: Path) -> None:
+    evidence = list(_evidence())
+    for index in range(4):
+        evidence.append(
+            ColorCropEvidence(
+                sample_id=f"ACC-SHIFT-{index}",
+                color="Yellow",
+                image_bgr=_crop("Green"),
+                source_sha256=f"{1000 + index:064x}",
+            )
+        )
+
+    build = StatsColorBaselineRebuilder().build(
+        base_model_path=_base_model(tmp_path),
+        evidence=tuple(evidence),
+    )
+
+    assert build.outlier_filter.status == "SYSTEMATIC_SHIFT_NOT_FILTERED"
+    assert build.outlier_filter.excluded_sample_ids == ()
+    yellow_finding = next(
+        finding
+        for finding in build.outlier_filter.findings
+        if finding.color == "Yellow"
+    )
+    assert yellow_finding.status == "SYSTEMATIC_SHIFT_NOT_FILTERED"
+    assert len(yellow_finding.candidate_sample_ids) == 4
+    yellow_report = next(
+        report for report in build.color_reports if report.color == "Yellow"
+    )
+    assert yellow_report.total_crops == 39
+
+
+def test_unsafe_color_update_is_rejected_and_old_baseline_is_preserved(
+    tmp_path: Path,
+) -> None:
+    base = _base_model(tmp_path)
+    original = json.loads(base.read_text(encoding="utf-8"))
+    shifted_evidence = tuple(
+        ColorCropEvidence(
+            sample_id=item.sample_id,
+            color=item.color,
+            image_bgr=(
+                _crop("Green") if item.color == "Yellow" else item.image_bgr
+            ),
+            source_sha256=item.source_sha256,
+        )
+        for item in _evidence()
+    )
+
+    build = StatsColorBaselineRebuilder().build(
+        base_model_path=base,
+        evidence=shifted_evidence,
+    )
+
+    yellow = next(item for item in build.color_reports if item.color == "Yellow")
+    assert build.status == "READY"
+    assert yellow.state == "PRESERVED_SAFETY_REJECTED"
+    assert build.model_payload["summary"]["Yellow"] == original["summary"]["Yellow"]
+    assert yellow.hue_drift == pytest.approx(0.0)
+    assert yellow.lab_drift == pytest.approx(0.0)
+    assert "Hue" not in yellow.note
+    assert "Lab" not in yellow.note
+    assert yellow.rejection_reasons
+    persisted = next(
+        item
+        for item in build.report_payload["color_reports"]
+        if item["color"] == "Yellow"
+    )
+    assert persisted["rejected_proposal"]["reasons"]
+    assert "Yellow" in build.report_payload["preserved_by_safety"]
+
+
+def test_holdout_regression_falls_back_until_final_checker_is_safe(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    base = _base_model(tmp_path)
+    original = json.loads(base.read_text(encoding="utf-8"))
+    old_checker = recalibration.StatsColorChecker.from_json(base)
+
+    class _GreenRegressionChecker:
+        def check(self, image):
+            result = old_checker.check(image)
+            if result.best_color.casefold() == "green":
+                return SimpleNamespace(best_color="Black")
+            return result
+
+    def checker_from_payload(payload):
+        if payload["summary"] == original["summary"]:
+            return old_checker
+        return _GreenRegressionChecker()
+
+    monkeypatch.setattr(
+        recalibration,
+        "_checker_from_payload",
+        checker_from_payload,
+    )
+    build = StatsColorBaselineRebuilder(
+        maximum_hue_drift=180.0,
+        maximum_lab_drift=1000.0,
+    ).build(
+        base_model_path=base,
+        evidence=_evidence(),
+    )
+
+    assert build.status == "READY"
+    assert build.model_payload["summary"] == original["summary"]
+    assert set(build.report_payload["preserved_by_safety"]) == set(DEFAULT_COLORS)
+    assert all(
+        report.candidate_holdout_correct == report.previous_holdout_correct
+        for report in build.color_reports
+    )
+    green = next(report for report in build.color_reports if report.color == "Green")
+    assert green.rejection_reasons == ("HOLDOUT_ACCURACY_REGRESSION",)
 
 
 def test_preserves_colors_that_do_not_reach_minimum(tmp_path: Path) -> None:

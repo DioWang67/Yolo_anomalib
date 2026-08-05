@@ -59,6 +59,30 @@ def test_camera_clear_image_buffer_failure_is_non_fatal(mock_config):
     assert controller.clear_image_buffer() is False
 
 
+def test_camera_capture_delegates_preview_timeout(mock_config):
+    controller = CameraController(mock_config)
+    controller.camera = MagicMock()
+    controller.camera.get_frame.return_value = np.full((8, 8, 3), 37, dtype=np.uint8)
+    controller.is_initialized = True
+
+    frame = controller.capture_frame(timeout_ms=500)
+
+    assert frame is not None
+    controller.camera.get_frame.assert_called_once_with(timeout_ms=500)
+    assert controller.is_healthy is True
+
+
+def test_camera_mark_unhealthy_requires_recovery(mock_config):
+    controller = CameraController(mock_config)
+    controller.is_initialized = True
+    controller.is_healthy = True
+
+    controller.mark_unhealthy()
+
+    assert controller.is_initialized is True
+    assert controller.is_healthy is False
+
+
 def test_camera_shutdown_is_idempotent(mock_config):
     controller = CameraController(mock_config)
     camera = MagicMock()

@@ -27,6 +27,7 @@ from core.stats_color_checker import StatsColorChecker
 
 COLOR_BASELINE_SCHEMA_VERSION = 1
 ALGORITHM_VERSION = "stats-robust-v2"
+OUTLIER_FILTER_ALGORITHM = "per-color-sample-lab-mad-v1"
 DEFAULT_COLORS = ("Black", "Green", "Orange", "Red", "Yellow")
 
 
@@ -75,6 +76,10 @@ class ColorBaselineColorReport:
     hue_drift: float | None
     lab_drift: float | None
     note: str
+    rejected_proposal_holdout_correct: int | None = None
+    rejected_proposal_hue_drift: float | None = None
+    rejected_proposal_lab_drift: float | None = None
+    rejection_reasons: tuple[str, ...] = ()
 
     @property
     def previous_accuracy(self) -> float | None:
@@ -85,7 +90,7 @@ class ColorBaselineColorReport:
         return _ratio(self.candidate_holdout_correct, self.holdout_crops)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "color": self.color,
             "state": self.state,
             "total_crops": self.total_crops,
@@ -99,6 +104,78 @@ class ColorBaselineColorReport:
             "lab_drift": self.lab_drift,
             "note": self.note,
         }
+        if self.rejection_reasons:
+            payload["rejected_proposal"] = {
+                "holdout_correct": self.rejected_proposal_holdout_correct,
+                "hue_drift": self.rejected_proposal_hue_drift,
+                "lab_drift": self.rejected_proposal_lab_drift,
+                "reasons": list(self.rejection_reasons),
+            }
+        return payload
+
+
+@dataclass(frozen=True)
+class ColorBaselineOutlierColorFinding:
+    """Robust outlier result for one expected color."""
+
+    color: str
+    sample_count: int
+    status: str
+    candidate_sample_ids: tuple[str, ...]
+    excluded_sample_ids: tuple[str, ...]
+    scores: tuple[tuple[str, float], ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "color": self.color,
+            "sample_count": self.sample_count,
+            "status": self.status,
+            "candidate_sample_ids": list(self.candidate_sample_ids),
+            "excluded_sample_ids": list(self.excluded_sample_ids),
+            "scores": [
+                {"sample_id": sample_id, "robust_distance": score}
+                for sample_id, score in self.scores
+            ],
+        }
+
+
+@dataclass(frozen=True)
+class ColorBaselineOutlierFilterReport:
+    """Immutable audit record for photos omitted as isolated batch outliers."""
+
+    status: str
+    total_sample_count: int
+    z_score_threshold: float
+    maximum_auto_exclusion_fraction: float
+    candidate_sample_ids: tuple[str, ...]
+    excluded_sample_ids: tuple[str, ...]
+    findings: tuple[ColorBaselineOutlierColorFinding, ...]
+
+    @property
+    def excluded_count(self) -> int:
+        return len(self.excluded_sample_ids)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "algorithm": OUTLIER_FILTER_ALGORITHM,
+            "status": self.status,
+            "total_sample_count": self.total_sample_count,
+            "z_score_threshold": self.z_score_threshold,
+            "maximum_auto_exclusion_fraction": (
+                self.maximum_auto_exclusion_fraction
+            ),
+            "candidate_sample_ids": list(self.candidate_sample_ids),
+            "excluded_sample_ids": list(self.excluded_sample_ids),
+            "findings": [finding.to_dict() for finding in self.findings],
+        }
+
+
+@dataclass(frozen=True)
+class _RejectedColorProposal:
+    holdout_correct: int
+    hue_drift: float | None
+    lab_drift: float | None
+    reasons: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -110,6 +187,7 @@ class ColorBaselineBuild:
     report_payload: dict[str, Any]
     evidence_sha256: str
     color_reports: tuple[ColorBaselineColorReport, ...]
+    outlier_filter: ColorBaselineOutlierFilterReport
 
 
 @dataclass(frozen=True)
@@ -145,6 +223,9 @@ class StatsColorBaselineRebuilder:
         maximum_hue_drift: float = 18.0,
         maximum_lab_drift: float = 35.0,
         maximum_accuracy_regression: float = 0.02,
+        outlier_z_score_threshold: float = 6.0,
+        maximum_outlier_fraction: float = 0.1,
+        minimum_outlier_sample_count: int = 20,
         sample_size: int = 64,
     ) -> None:
         if minimum_crops_per_color < 2:
@@ -155,12 +236,21 @@ class StatsColorBaselineRebuilder:
             raise ColorBaselineError("holdout_fraction 必須介於 0.05 與 0.5。")
         if sample_size < 16:
             raise ColorBaselineError("sample_size 必須至少為 16。")
+        if not np.isfinite(outlier_z_score_threshold) or outlier_z_score_threshold < 3.0:
+            raise ColorBaselineError("outlier_z_score_threshold 必須至少為 3。")
+        if not 0.0 <= maximum_outlier_fraction <= 0.25:
+            raise ColorBaselineError("maximum_outlier_fraction 必須介於 0 與 0.25。")
+        if minimum_outlier_sample_count < 5:
+            raise ColorBaselineError("minimum_outlier_sample_count 必須至少為 5。")
         self.minimum_crops_per_color = minimum_crops_per_color
         self.minimum_holdout_crops = minimum_holdout_crops
         self.holdout_fraction = holdout_fraction
         self.maximum_hue_drift = maximum_hue_drift
         self.maximum_lab_drift = maximum_lab_drift
         self.maximum_accuracy_regression = maximum_accuracy_regression
+        self.outlier_z_score_threshold = outlier_z_score_threshold
+        self.maximum_outlier_fraction = maximum_outlier_fraction
+        self.minimum_outlier_sample_count = minimum_outlier_sample_count
         self.sample_size = sample_size
 
     def build(
@@ -181,7 +271,24 @@ class StatsColorBaselineRebuilder:
         )
         grouped = _validate_and_group_evidence(evidence, canonical_colors)
         normalized_metadata = _normalized_evidence_metadata(evidence_metadata)
-        evidence_sha256 = _evidence_digest(evidence, normalized_metadata)
+        outlier_filter = _build_outlier_filter_report(
+            grouped,
+            z_score_threshold=self.outlier_z_score_threshold,
+            maximum_auto_exclusion_fraction=self.maximum_outlier_fraction,
+            minimum_sample_count=self.minimum_outlier_sample_count,
+            sample_size=min(self.sample_size, 32),
+            cancel_callback=cancel_callback,
+        )
+        excluded_sample_ids = set(outlier_filter.excluded_sample_ids)
+        filtered_evidence = tuple(
+            item for item in evidence if item.sample_id not in excluded_sample_ids
+        )
+        grouped = _validate_and_group_evidence(filtered_evidence, canonical_colors)
+        digest_metadata = {
+            **normalized_metadata,
+            "statistical_outlier_filter": outlier_filter.to_dict(),
+        }
+        evidence_sha256 = _evidence_digest(filtered_evidence, digest_metadata)
         candidate_summary = json.loads(json.dumps(base_summary))
         split_by_color: dict[str, tuple[tuple[ColorCropEvidence, ...], tuple[ColorCropEvidence, ...]]] = {}
         preliminary_states: dict[str, tuple[str, str]] = {}
@@ -214,6 +321,7 @@ class StatsColorBaselineRebuilder:
             "minimum_crops_per_color": self.minimum_crops_per_color,
             "minimum_holdout_crops": self.minimum_holdout_crops,
             "holdout_fraction": self.holdout_fraction,
+            "statistical_outlier_filter": outlier_filter.to_dict(),
         }
         if normalized_metadata:
             model_payload["recalibration"]["evidence_lineage_sha256"] = (
@@ -223,41 +331,136 @@ class StatsColorBaselineRebuilder:
                 normalized_metadata.get("counts") or {}
             )
 
-        candidate_checker = _checker_from_payload(model_payload)
         previous_checker = StatsColorChecker.from_json(base_path)
-        color_reports: list[ColorBaselineColorReport] = []
-        unsafe = False
-        incomplete = False
+        proposal_checker = _checker_from_payload(model_payload)
+        previous_correct_by_color: dict[str, int] = {}
+        proposal_drift_by_color: dict[
+            str, tuple[float | None, float | None]
+        ] = {}
+        rejected_proposals: dict[str, _RejectedColorProposal] = {}
+
         for color in canonical_colors:
             _raise_if_cancelled(cancel_callback)
-            training, holdout = split_by_color[color]
-            state, note = preliminary_states[color]
-            previous_correct = _correct_predictions(previous_checker, holdout, color)
-            candidate_correct = _correct_predictions(candidate_checker, holdout, color)
+            _training, holdout = split_by_color[color]
+            previous_correct = _correct_predictions(
+                previous_checker,
+                holdout,
+                color,
+            )
+            proposal_correct = _correct_predictions(
+                proposal_checker,
+                holdout,
+                color,
+            )
             hue_drift, lab_drift = _center_drift(
                 base_summary[color],
                 candidate_summary[color],
             )
+            previous_correct_by_color[color] = previous_correct
+            proposal_drift_by_color[color] = (hue_drift, lab_drift)
+            if preliminary_states[color][0] != "REBUILT":
+                continue
+            rejection_reasons: list[str] = []
+            if hue_drift is not None and hue_drift > self.maximum_hue_drift:
+                rejection_reasons.append("HUE_DRIFT_LIMIT_EXCEEDED")
+            if lab_drift is not None and lab_drift > self.maximum_lab_drift:
+                rejection_reasons.append("LAB_DRIFT_LIMIT_EXCEEDED")
+            if rejection_reasons:
+                rejected_proposals[color] = _RejectedColorProposal(
+                    holdout_correct=proposal_correct,
+                    hue_drift=hue_drift,
+                    lab_drift=lab_drift,
+                    reasons=tuple(rejection_reasons),
+                )
+                candidate_summary[color] = json.loads(
+                    json.dumps(base_summary[color])
+                )
+
+        while True:
+            _raise_if_cancelled(cancel_callback)
+            current_checker = _checker_from_payload(model_payload)
+            current_correct_by_color = {
+                color: _correct_predictions(
+                    current_checker,
+                    split_by_color[color][1],
+                    color,
+                )
+                for color in canonical_colors
+            }
+            regressed_rebuilt_colors: list[str] = []
+            preserved_color_regressed = False
+            for color in canonical_colors:
+                holdout_count = len(split_by_color[color][1])
+                previous_accuracy = _ratio(
+                    previous_correct_by_color[color],
+                    holdout_count,
+                )
+                current_accuracy = _ratio(
+                    current_correct_by_color[color],
+                    holdout_count,
+                )
+                has_regression = (
+                    previous_accuracy is not None
+                    and current_accuracy is not None
+                    and current_accuracy + self.maximum_accuracy_regression
+                    < previous_accuracy
+                )
+                if not has_regression:
+                    continue
+                is_active_proposal = (
+                    preliminary_states[color][0] == "REBUILT"
+                    and color not in rejected_proposals
+                )
+                if is_active_proposal:
+                    regressed_rebuilt_colors.append(color)
+                else:
+                    preserved_color_regressed = True
+
+            if preserved_color_regressed:
+                newly_rejected = [
+                    color
+                    for color in canonical_colors
+                    if preliminary_states[color][0] == "REBUILT"
+                    and color not in rejected_proposals
+                ]
+                rejection_reason = "CROSS_COLOR_HOLDOUT_REGRESSION"
+            else:
+                newly_rejected = regressed_rebuilt_colors
+                rejection_reason = "HOLDOUT_ACCURACY_REGRESSION"
+            if not newly_rejected:
+                if preserved_color_regressed:
+                    raise ColorBaselineError(
+                        "最終顏色基準仍造成保留驗證退步，已停止建立候選。"
+                    )
+                final_correct_by_color = current_correct_by_color
+                break
+            for color in newly_rejected:
+                hue_drift, lab_drift = proposal_drift_by_color[color]
+                rejected_proposals[color] = _RejectedColorProposal(
+                    holdout_correct=current_correct_by_color[color],
+                    hue_drift=hue_drift,
+                    lab_drift=lab_drift,
+                    reasons=(rejection_reason,),
+                )
+                candidate_summary[color] = json.loads(
+                    json.dumps(base_summary[color])
+                )
+
+        color_reports: list[ColorBaselineColorReport] = []
+        incomplete = False
+        for color in canonical_colors:
+            training, holdout = split_by_color[color]
+            state, note = preliminary_states[color]
+            rejected = rejected_proposals.get(color)
             if state == "PRESERVED_INSUFFICIENT":
                 incomplete = True
-            else:
-                previous_accuracy = _ratio(previous_correct, len(holdout))
-                candidate_accuracy = _ratio(candidate_correct, len(holdout))
-                drift_reasons: list[str] = []
-                if hue_drift is not None and hue_drift > self.maximum_hue_drift:
-                    drift_reasons.append(f"Hue 中心位移 {hue_drift:.1f} 超過 {self.maximum_hue_drift:.1f}")
-                if lab_drift is not None and lab_drift > self.maximum_lab_drift:
-                    drift_reasons.append(f"Lab 中心位移 {lab_drift:.1f} 超過 {self.maximum_lab_drift:.1f}")
-                if (
-                    previous_accuracy is not None
-                    and candidate_accuracy is not None
-                    and candidate_accuracy + self.maximum_accuracy_regression < previous_accuracy
-                ):
-                    drift_reasons.append("holdout 辨色率低於舊基準，超過允許退步幅度")
-                if drift_reasons:
-                    state = "REVIEW_REQUIRED"
-                    note = "；".join(drift_reasons) + "。"
-                    unsafe = True
+            elif rejected is not None:
+                state = "PRESERVED_SAFETY_REJECTED"
+                note = "自動安全檢查未通過，已沿用舊基準。"
+            final_hue_drift, final_lab_drift = _center_drift(
+                base_summary[color],
+                candidate_summary[color],
+            )
             color_reports.append(
                 ColorBaselineColorReport(
                     color=color,
@@ -265,15 +468,30 @@ class StatsColorBaselineRebuilder:
                     total_crops=len(training) + len(holdout),
                     training_crops=len(training),
                     holdout_crops=len(holdout),
-                    previous_holdout_correct=previous_correct,
-                    candidate_holdout_correct=candidate_correct,
-                    hue_drift=hue_drift,
-                    lab_drift=lab_drift,
+                    previous_holdout_correct=previous_correct_by_color[color],
+                    candidate_holdout_correct=final_correct_by_color[color],
+                    hue_drift=final_hue_drift,
+                    lab_drift=final_lab_drift,
                     note=note,
+                    rejected_proposal_holdout_correct=(
+                        rejected.holdout_correct if rejected is not None else None
+                    ),
+                    rejected_proposal_hue_drift=(
+                        rejected.hue_drift if rejected is not None else None
+                    ),
+                    rejected_proposal_lab_drift=(
+                        rejected.lab_drift if rejected is not None else None
+                    ),
+                    rejection_reasons=(
+                        rejected.reasons if rejected is not None else ()
+                    ),
                 )
             )
 
-        status = "REVIEW_REQUIRED" if unsafe else ("INCOMPLETE" if incomplete else "READY")
+        model_payload["recalibration"]["preserved_by_safety"] = sorted(
+            rejected_proposals
+        )
+        status = "INCOMPLETE" if incomplete else "READY"
         report_payload = {
             "schema_version": COLOR_BASELINE_SCHEMA_VERSION,
             "algorithm": ALGORITHM_VERSION,
@@ -281,6 +499,13 @@ class StatsColorBaselineRebuilder:
             "evidence_sha256": evidence_sha256,
             "base_model_path": str(base_path),
             "base_model_sha256": sha256_file(base_path),
+            "statistical_outlier_filter": outlier_filter.to_dict(),
+            "safety_limits": {
+                "maximum_hue_drift": self.maximum_hue_drift,
+                "maximum_lab_drift": self.maximum_lab_drift,
+                "maximum_accuracy_regression": self.maximum_accuracy_regression,
+            },
+            "preserved_by_safety": sorted(rejected_proposals),
             "color_reports": [item.to_dict() for item in color_reports],
             "limitations": [
                 "資料只取人工確認為 OK 的元件裁切；不代表已有真實顏色缺陷 NG。",
@@ -295,6 +520,7 @@ class StatsColorBaselineRebuilder:
             report_payload=report_payload,
             evidence_sha256=evidence_sha256,
             color_reports=tuple(color_reports),
+            outlier_filter=outlier_filter,
         )
 
     def _split(
@@ -600,6 +826,159 @@ def collect_color_baseline_evidence(
     if not evidence:
         raise ColorBaselineError("選取模型未產生可用的五色元件裁切。")
     return tuple(evidence)
+
+
+def _build_outlier_filter_report(
+    grouped: Mapping[str, Sequence[ColorCropEvidence]],
+    *,
+    z_score_threshold: float,
+    maximum_auto_exclusion_fraction: float,
+    minimum_sample_count: int,
+    sample_size: int,
+    cancel_callback: Callable[[], bool] | None,
+) -> ColorBaselineOutlierFilterReport:
+    total_sample_ids = {
+        item.sample_id
+        for color_evidence in grouped.values()
+        for item in color_evidence
+    }
+    raw_findings: list[
+        tuple[str, int, str, tuple[str, ...], tuple[tuple[str, float], ...]]
+    ] = []
+    locally_eligible_ids: set[str] = set()
+    all_candidate_ids: set[str] = set()
+
+    for color_key in sorted(grouped):
+        _raise_if_cancelled(cancel_callback)
+        color_evidence = tuple(grouped[color_key])
+        color = color_evidence[0].color if color_evidence else color_key.title()
+        features_by_sample = _lab_features_by_sample(
+            color_evidence,
+            sample_size=sample_size,
+        )
+        sample_count = len(features_by_sample)
+        if sample_count < minimum_sample_count:
+            raw_findings.append(
+                (color, sample_count, "INSUFFICIENT_SAMPLE_COUNT", (), ())
+            )
+            continue
+
+        sample_ids = tuple(sorted(features_by_sample))
+        features = np.vstack([features_by_sample[sample_id] for sample_id in sample_ids])
+        center = np.median(features, axis=0)
+        median_absolute_deviation = np.median(
+            np.abs(features - center),
+            axis=0,
+        )
+        robust_scale = np.maximum(
+            median_absolute_deviation * 1.4826,
+            np.full(3, 3.0, dtype=np.float32),
+        )
+        distances = np.linalg.norm((features - center) / robust_scale, axis=1)
+        scored_candidates = tuple(
+            sorted(
+                (
+                    (sample_id, float(distance))
+                    for sample_id, distance in zip(
+                        sample_ids,
+                        distances,
+                        strict=True,
+                    )
+                    if distance > z_score_threshold
+                ),
+                key=lambda item: (-item[1], item[0]),
+            )
+        )
+        candidate_ids = tuple(sorted(sample_id for sample_id, _ in scored_candidates))
+        all_candidate_ids.update(candidate_ids)
+        maximum_local_exclusions = int(
+            np.floor(sample_count * maximum_auto_exclusion_fraction)
+        )
+        if not candidate_ids:
+            status = "NO_OUTLIERS"
+        elif len(candidate_ids) <= maximum_local_exclusions:
+            status = "ELIGIBLE_FOR_AUTO_EXCLUSION"
+            locally_eligible_ids.update(candidate_ids)
+        else:
+            status = "SYSTEMATIC_SHIFT_NOT_FILTERED"
+        raw_findings.append(
+            (color, sample_count, status, candidate_ids, scored_candidates)
+        )
+
+    maximum_global_exclusions = int(
+        np.floor(len(total_sample_ids) * maximum_auto_exclusion_fraction)
+    )
+    global_limit_exceeded = (
+        bool(locally_eligible_ids)
+        and len(locally_eligible_ids) > maximum_global_exclusions
+    )
+    excluded_ids = (
+        ()
+        if global_limit_exceeded
+        else tuple(sorted(locally_eligible_ids))
+    )
+    excluded_id_set = set(excluded_ids)
+    findings: list[ColorBaselineOutlierColorFinding] = []
+    for color, sample_count, status, candidate_ids, scores in raw_findings:
+        if status == "ELIGIBLE_FOR_AUTO_EXCLUSION":
+            if global_limit_exceeded:
+                final_status = "GLOBAL_LIMIT_NOT_FILTERED"
+                color_excluded_ids: tuple[str, ...] = ()
+            else:
+                final_status = "AUTO_EXCLUDED"
+                color_excluded_ids = tuple(
+                    sample_id
+                    for sample_id in candidate_ids
+                    if sample_id in excluded_id_set
+                )
+        else:
+            final_status = status
+            color_excluded_ids = ()
+        findings.append(
+            ColorBaselineOutlierColorFinding(
+                color=color,
+                sample_count=sample_count,
+                status=final_status,
+                candidate_sample_ids=candidate_ids,
+                excluded_sample_ids=color_excluded_ids,
+                scores=scores,
+            )
+        )
+
+    if excluded_ids:
+        report_status = "AUTO_EXCLUDED"
+    elif all_candidate_ids:
+        report_status = "SYSTEMATIC_SHIFT_NOT_FILTERED"
+    else:
+        report_status = "NO_OUTLIERS"
+    return ColorBaselineOutlierFilterReport(
+        status=report_status,
+        total_sample_count=len(total_sample_ids),
+        z_score_threshold=z_score_threshold,
+        maximum_auto_exclusion_fraction=maximum_auto_exclusion_fraction,
+        candidate_sample_ids=tuple(sorted(all_candidate_ids)),
+        excluded_sample_ids=excluded_ids,
+        findings=tuple(findings),
+    )
+
+
+def _lab_features_by_sample(
+    evidence: Sequence[ColorCropEvidence],
+    *,
+    sample_size: int,
+) -> dict[str, np.ndarray]:
+    features: dict[str, list[np.ndarray]] = defaultdict(list)
+    for item in evidence:
+        _hsv, lab, _coverage = _sample_color_pixels(
+            item.image_bgr,
+            item.color,
+            sample_size=sample_size,
+        )
+        features[item.sample_id].append(_trimmed_mean(lab))
+    return {
+        sample_id: np.mean(np.vstack(sample_features), axis=0)
+        for sample_id, sample_features in features.items()
+    }
 
 
 def _sample_color_pixels(

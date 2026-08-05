@@ -15,7 +15,7 @@ from core.services.color_baseline_recalibration import (
     ColorBaselineImageSample,
 )
 
-EVIDENCE_LINEAGE_SCHEMA_VERSION = 1
+EVIDENCE_LINEAGE_SCHEMA_VERSION = 2
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -27,6 +27,30 @@ class AcceptanceEvidenceRepository(Protocol):
     def records(self) -> Sequence[Any]: ...
 
     def image_file(self, record: Any) -> Path: ...
+
+
+@dataclass(frozen=True)
+class ColorBaselineEvidenceExclusion:
+    """One rejected evidence claim with enough context for operator review."""
+
+    sample_id: str
+    source_kind: str
+    source_manifest: str
+    image_path: str
+    image_sha256: str
+    reason_code: str
+    reason: str
+
+    def to_report_dict(self) -> dict[str, str]:
+        return {
+            "sample_id": self.sample_id,
+            "source_kind": self.source_kind,
+            "source_manifest": self.source_manifest,
+            "image_path": self.image_path,
+            "image_sha256": self.image_sha256,
+            "reason_code": self.reason_code,
+            "reason": self.reason,
+        }
 
 
 @dataclass(frozen=True)
@@ -42,6 +66,7 @@ class ColorBaselineEvidenceSnapshot:
     invalid_count: int
     acceptance_manifest: str
     feedback_manifest: str
+    excluded_samples: tuple[ColorBaselineEvidenceExclusion, ...] = ()
 
     @property
     def selected_count(self) -> int:
@@ -72,6 +97,10 @@ class ColorBaselineEvidenceSnapshot:
                     "source_manifest": sample.source_manifest,
                 }
                 for sample in self.samples
+            ],
+            "excluded_samples": [
+                exclusion.to_report_dict()
+                for exclusion in self.excluded_samples
             ],
         }
 
@@ -111,6 +140,7 @@ class ColorBaselineEvidenceProvider:
 
         invalid_count = 0
         duplicate_count = 0
+        exclusions: list[ColorBaselineEvidenceExclusion] = []
         claims_by_hash: dict[str, set[str]] = {}
         invalid_truth_hashes: set[str] = set()
         acceptance_ok_by_hash: dict[str, Any] = {}
@@ -127,6 +157,14 @@ class ColorBaselineEvidenceProvider:
             digest = _normalized_sha256(getattr(record, "image_sha256", ""))
             if digest is None:
                 invalid_count += 1
+                exclusions.append(
+                    _acceptance_exclusion(
+                        record,
+                        acceptance_manifest=acceptance_manifest,
+                        reason_code="INVALID_IMAGE_SHA256",
+                        reason="驗收資料的影像 SHA-256 缺失或格式錯誤。",
+                    )
+                )
                 continue
             claims_by_hash.setdefault(digest, set()).add(verdict)
             if verdict == "NG":
@@ -145,12 +183,57 @@ class ColorBaselineEvidenceProvider:
                     continue
                 digest = _normalized_sha256(row.get("image_sha256"))
                 truth = str(row.get("actual_is_ok") or "").strip()
-                if digest is None or truth not in {"0", "1"}:
+                if digest is None:
                     invalid_count += 1
+                    exclusions.append(
+                        _feedback_exclusion(
+                            row,
+                            feedback_path=feedback_path,
+                            reason_code="INVALID_IMAGE_SHA256",
+                            reason="顏色覆核資料的影像 SHA-256 缺失或格式錯誤。",
+                        )
+                    )
                     continue
-                if truth == "1" and not _positive_feedback_is_consistent(row):
+                if truth not in {"0", "1"}:
+                    invalid_count += 1
+                    exclusions.append(
+                        _feedback_exclusion(
+                            row,
+                            feedback_path=feedback_path,
+                            reason_code="INVALID_HUMAN_VERDICT",
+                            reason="顏色覆核資料缺少有效的人工 OK／NG 真值。",
+                            image_sha256=digest,
+                        )
+                    )
+                    continue
+                positive_validation_issue = (
+                    _positive_feedback_validation_issue(row)
+                    if truth == "1"
+                    else None
+                )
+                if positive_validation_issue is not None:
                     invalid_count += 1
                     invalid_truth_hashes.add(digest)
+                    sample_id = str(row.get("sample_id") or "").strip()
+                    resolved_feedback_image = _feedback_image_path(
+                        feedback_path,
+                        (row,),
+                        (sample_id,) if sample_id else (),
+                    )
+                    exclusions.append(
+                        _feedback_exclusion(
+                            row,
+                            feedback_path=feedback_path,
+                            reason_code=positive_validation_issue[0],
+                            reason=positive_validation_issue[1],
+                            image_path=(
+                                str(resolved_feedback_image)
+                                if resolved_feedback_image is not None
+                                else ""
+                            ),
+                            image_sha256=digest,
+                        )
+                    )
                     continue
                 verdict = "OK" if truth == "1" else "NG"
                 claims_by_hash.setdefault(digest, set()).add(verdict)
@@ -161,6 +244,26 @@ class ColorBaselineEvidenceProvider:
         conflicted_hashes = {
             digest for digest, claims in claims_by_hash.items() if len(claims) > 1
         }
+        for digest in sorted(conflicted_hashes):
+            sample_ids = {
+                str(getattr(acceptance_ok_by_hash.get(digest), "sample_id", "")).strip()
+            }
+            sample_ids.update(
+                str(row.get("sample_id") or "").strip()
+                for row in feedback_by_hash.get(digest, ())
+            )
+            sample_ids.discard("")
+            exclusions.append(
+                ColorBaselineEvidenceExclusion(
+                    sample_id="、".join(sorted(sample_ids)) or digest[:12],
+                    source_kind="merged",
+                    source_manifest=f"{acceptance_manifest} | {feedback_path or ''}",
+                    image_path="",
+                    image_sha256=digest,
+                    reason_code="TRUTH_CONFLICT",
+                    reason="同一張影像同時存在人工 OK 與 NG 真值。",
+                )
+            )
         blocked_hashes = conflicted_hashes | invalid_truth_hashes
         selected_by_hash: dict[str, ColorBaselineImageSample] = {}
 
@@ -170,11 +273,38 @@ class ColorBaselineEvidenceProvider:
         ):
             if digest in blocked_hashes:
                 continue
-            acceptance_image = Path(
-                acceptance_repository.image_file(record)
-            ).resolve()
-            if not _verified_image(acceptance_image, digest):
+            try:
+                acceptance_image = Path(
+                    acceptance_repository.image_file(record)
+                ).resolve()
+            except (OSError, ValueError) as exc:
                 invalid_count += 1
+                exclusions.append(
+                    _acceptance_exclusion(
+                        record,
+                        acceptance_manifest=acceptance_manifest,
+                        reason_code="INVALID_IMAGE_PATH",
+                        reason=f"驗收影像路徑無法安全解析：{exc}",
+                        image_sha256=digest,
+                    )
+                )
+                continue
+            validation_issue = _image_validation_issue(
+                acceptance_image,
+                digest,
+            )
+            if validation_issue is not None:
+                invalid_count += 1
+                exclusions.append(
+                    _acceptance_exclusion(
+                        record,
+                        acceptance_manifest=acceptance_manifest,
+                        reason_code=validation_issue[0],
+                        reason=validation_issue[1],
+                        image_path=str(acceptance_image),
+                        image_sha256=digest,
+                    )
+                )
                 continue
             selected_by_hash[digest] = ColorBaselineImageSample(
                 sample_id=str(getattr(record, "sample_id", "")),
@@ -199,6 +329,15 @@ class ColorBaselineEvidenceProvider:
             )
             if not sample_ids:
                 invalid_count += 1
+                exclusions.append(
+                    _feedback_exclusion(
+                        scoped_rows[0],
+                        feedback_path=feedback_path,
+                        reason_code="MISSING_SAMPLE_ID",
+                        reason="顏色覆核資料缺少 sample ID。",
+                        image_sha256=digest,
+                    )
+                )
                 continue
             duplicate_count += max(0, len(sample_ids) - 1)
             if digest in selected_by_hash:
@@ -209,8 +348,31 @@ class ColorBaselineEvidenceProvider:
                 scoped_rows,
                 sample_ids,
             )
-            if feedback_image is None or not _verified_image(feedback_image, digest):
+            if feedback_image is None:
                 invalid_count += 1
+                exclusions.append(
+                    _feedback_exclusion(
+                        scoped_rows[0],
+                        feedback_path=feedback_path,
+                        reason_code="IMAGE_NOT_FOUND",
+                        reason="找不到唯一且位於顏色覆核資料夾內的影像檔。",
+                        image_sha256=digest,
+                    )
+                )
+                continue
+            validation_issue = _image_validation_issue(feedback_image, digest)
+            if validation_issue is not None:
+                invalid_count += 1
+                exclusions.append(
+                    _feedback_exclusion(
+                        scoped_rows[0],
+                        feedback_path=feedback_path,
+                        reason_code=validation_issue[0],
+                        reason=validation_issue[1],
+                        image_path=str(feedback_image),
+                        image_sha256=digest,
+                    )
+                )
                 continue
             selected_by_hash[digest] = ColorBaselineImageSample(
                 sample_id=f"color-review-{sample_ids[0]}",
@@ -246,6 +408,16 @@ class ColorBaselineEvidenceProvider:
             invalid_count=invalid_count,
             acceptance_manifest=acceptance_manifest,
             feedback_manifest=str(feedback_path) if feedback_path is not None else "",
+            excluded_samples=tuple(
+                sorted(
+                    exclusions,
+                    key=lambda item: (
+                        item.reason_code,
+                        item.source_kind,
+                        item.sample_id,
+                    ),
+                )
+            ),
         )
 
     def _matches_target(self, record: Any) -> bool:
@@ -290,12 +462,76 @@ def _read_feedback_rows(path: Path) -> tuple[dict[str, str], ...]:
         raise ColorBaselineError(f"Unable to read color-review feedback: {path}") from exc
 
 
-def _positive_feedback_is_consistent(row: Mapping[str, str]) -> bool:
+def _positive_feedback_validation_issue(
+    row: Mapping[str, str],
+) -> tuple[str, str] | None:
     product_verdict = str(row.get("product_verdict") or "").strip().casefold()
     detection_verdict = str(row.get("detection_verdict") or "").strip().casefold()
+    if detection_verdict not in {"", "correct"}:
+        return (
+            "INCONSISTENT_POSITIVE_REVIEW",
+            "人工標為 OK，但偵測覆核不是正確，不能當成正常顏色基準。",
+        )
+    if product_verdict in {"", "ok"}:
+        return None
+    review_label = str(row.get("review_label") or "").strip().casefold()
+    color_verdict = str(row.get("color_verdict") or "").strip().casefold()
+    is_mixed_product_failure = (
+        product_verdict == "ng"
+        and review_label == "color_false_reject"
+        and color_verdict in {"actually_ok", "ok"}
+    )
+    if is_mixed_product_failure:
+        return (
+            "MIXED_PRODUCT_NG_COLOR_OK",
+            "該顏色項目人工確認為 OK，但整體產品真值為 NG；完整基準重建會擷取整張照片的全部元件，為避免異常元件污染基準而排除。",
+        )
     return (
-        product_verdict in {"", "ok"}
-        and detection_verdict in {"", "correct"}
+        "INCONSISTENT_POSITIVE_REVIEW",
+        "人工標為 OK，但整體產品或覆核欄位無法證明這是有效正常樣本。",
+    )
+
+
+def _acceptance_exclusion(
+    record: Any,
+    *,
+    acceptance_manifest: str,
+    reason_code: str,
+    reason: str,
+    image_path: str = "",
+    image_sha256: str = "",
+) -> ColorBaselineEvidenceExclusion:
+    declared_path = str(getattr(record, "image_path", "") or "").strip()
+    return ColorBaselineEvidenceExclusion(
+        sample_id=str(getattr(record, "sample_id", "") or "").strip(),
+        source_kind="acceptance",
+        source_manifest=acceptance_manifest,
+        image_path=image_path or declared_path,
+        image_sha256=image_sha256
+        or str(getattr(record, "image_sha256", "") or "").strip(),
+        reason_code=reason_code,
+        reason=reason,
+    )
+
+
+def _feedback_exclusion(
+    row: Mapping[str, str],
+    *,
+    feedback_path: Path | None,
+    reason_code: str,
+    reason: str,
+    image_path: str = "",
+    image_sha256: str = "",
+) -> ColorBaselineEvidenceExclusion:
+    return ColorBaselineEvidenceExclusion(
+        sample_id=str(row.get("sample_id") or "").strip(),
+        source_kind="color_review",
+        source_manifest=str(feedback_path) if feedback_path is not None else "",
+        image_path=image_path or str(row.get("output_image") or "").strip(),
+        image_sha256=image_sha256
+        or str(row.get("image_sha256") or "").strip(),
+        reason_code=reason_code,
+        reason=reason,
     )
 
 
@@ -340,10 +576,20 @@ def _feedback_image_path(
     return relocated[0] if len(relocated) == 1 else None
 
 
-def _verified_image(path: Path, expected_sha256: str) -> bool:
-    if path.is_symlink() or not path.is_file():
-        return False
-    return _sha256_file(path) == expected_sha256
+def _image_validation_issue(
+    path: Path,
+    expected_sha256: str,
+) -> tuple[str, str] | None:
+    if path.is_symlink():
+        return "UNSAFE_SYMBOLIC_LINK", "影像檔是符號連結，基於安全政策不予使用。"
+    if not path.is_file():
+        return "IMAGE_NOT_FOUND", "影像檔不存在。"
+    actual_sha256 = _sha256_file(path)
+    if not actual_sha256:
+        return "IMAGE_READ_FAILED", "影像檔無法讀取。"
+    if actual_sha256 != expected_sha256:
+        return "IMAGE_SHA256_MISMATCH", "影像內容與 manifest 的 SHA-256 不一致。"
+    return None
 
 
 def _sha256_file(path: Path) -> str:

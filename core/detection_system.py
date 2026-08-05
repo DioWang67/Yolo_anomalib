@@ -459,7 +459,11 @@ class DetectionSystem:
 
     def is_camera_connected(self) -> bool:
         """Return True if a camera controller is initialized and ready."""
-        return bool(self.camera and getattr(self.camera, "is_initialized", False))
+        return bool(
+            self.camera
+            and getattr(self.camera, "is_initialized", False)
+            and getattr(self.camera, "is_healthy", True)
+        )
 
     def load_model_configs(self, product: str, area: str, inference_type: str) -> None:
         """Resolve one release snapshot and switch all model components."""

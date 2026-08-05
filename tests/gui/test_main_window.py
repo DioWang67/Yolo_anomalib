@@ -131,6 +131,62 @@ def test_camera_controls_show_unavailable_and_disable_only_camera_auto_mode(
     assert gui.pick_image_btn.isEnabledTo(gui.control_panel.camera_group)
 
 
+def test_manual_camera_inspection_reenables_auto_mode_after_pipeline_stops(
+    gui,
+    qtbot,
+):
+    class CompletingManualCameraSystem:
+        def __init__(self) -> None:
+            self.pipeline_running = True
+
+        @staticmethod
+        def is_camera_connected() -> bool:
+            return True
+
+        @staticmethod
+        def shutdown() -> None:
+            return None
+
+    system = CompletingManualCameraSystem()
+    gui.controller._system = system
+    gui._camera_check_ts = 0
+    for combo, value in (
+        (gui.product_combo, "Cable1"),
+        (gui.area_combo, "A"),
+        (gui.inference_combo, "yolo"),
+    ):
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(value)
+        combo.blockSignals(False)
+    gui._single_shot_running = True
+    gui.start_btn.setEnabled(False)
+    gui.stop_btn.setEnabled(True)
+    gui.update_camera_controls()
+
+    task = DetectionTask(
+        task_id="manual-camera-1",
+        timestamp=time.time(),
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        frame=np.zeros((8, 8, 3), dtype=np.uint8),
+        result={"status": "PASS", "detections": []},
+    )
+    gui.on_pipeline_result(task)
+
+    assert gui._single_shot_running is True
+    assert gui.start_btn.isEnabled() is False
+    assert gui.auto_mode_chk.isEnabled() is False
+
+    system.pipeline_running = False
+    qtbot.waitUntil(gui.auto_mode_chk.isEnabled, timeout=1000)
+
+    assert gui._single_shot_running is False
+    assert gui.start_btn.isEnabled() is True
+    assert gui.stop_btn.isEnabled() is False
+
+
 def test_failed_manual_disconnect_does_not_claim_camera_was_disconnected(
     gui,
     monkeypatch,
@@ -172,6 +228,8 @@ def test_auto_preview_camera_error_is_visible_without_terminal(
     gui.auto_mode_chk.blockSignals(True)
     gui.auto_mode_chk.setChecked(True)
     gui.auto_mode_chk.blockSignals(False)
+    gui._camera_connected_cache = True
+    gui._camera_check_ts = time.monotonic()
     gui._set_camera_status("ready")
     monkeypatch.setattr(
         gui,
@@ -183,6 +241,8 @@ def test_auto_preview_camera_error_is_visible_without_terminal(
 
     assert gui.camera_status_indicator.state == "lost"
     assert not gui.auto_mode_chk.isChecked()
+    assert gui._camera_connected_cache is False
+    assert gui._camera_check_ts == 0
     assert stop_calls == [True]
 
 

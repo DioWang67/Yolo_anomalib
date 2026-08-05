@@ -100,6 +100,8 @@ from core.auto_trigger import AutoTriggerConfig
 from core.services.model_catalog import ModelCatalog
 from core.services.model_config_editor import ModelConfigEditError, update_model_config
 
+_MANUAL_PIPELINE_RELEASE_POLL_MS = 50
+
 
 class DetectionSystemGUI(
     QMainWindow, CameraHandlerMixin, LightHandlerMixin, CalibrationHandlerMixin
@@ -147,6 +149,15 @@ class DetectionSystemGUI(
         self._single_shot_running = False
         self._single_shot_thread: threading.Thread | None = None
         self._single_shot_cancel_event = threading.Event()
+        self._manual_pipeline_release_generation: int | None = None
+        self._manual_pipeline_release_timer = QTimer(self)
+        self._manual_pipeline_release_timer.setSingleShot(True)
+        self._manual_pipeline_release_timer.setInterval(
+            _MANUAL_PIPELINE_RELEASE_POLL_MS
+        )
+        self._manual_pipeline_release_timer.timeout.connect(
+            self._restore_manual_pipeline_controls_when_idle
+        )
         self._shutdown_in_progress = False
         self._closing = False
         self._close_after_auto_stop = False
@@ -1080,6 +1091,45 @@ class DetectionSystemGUI(
         if run_generation == self._run_generation:
             self._single_shot_running = False
 
+    def _schedule_manual_pipeline_release(self, run_generation: int) -> None:
+        """Restore controls only after the camera pipeline has fully stopped."""
+        self._manual_pipeline_release_generation = run_generation
+        self._manual_pipeline_release_timer.start()
+
+    def _cancel_manual_pipeline_release_wait(self) -> None:
+        """Invalidate a pending idle check from an older inspection run."""
+        self._manual_pipeline_release_timer.stop()
+        self._manual_pipeline_release_generation = None
+
+    def _restore_manual_pipeline_controls_when_idle(self) -> None:
+        """Poll pipeline ownership without blocking the Qt main thread."""
+        run_generation = self._manual_pipeline_release_generation
+        if run_generation is None:
+            return
+        if run_generation != self._run_generation:
+            self._cancel_manual_pipeline_release_wait()
+            return
+
+        if self.controller.has_system():
+            try:
+                if self.controller.detection_system.pipeline_running:
+                    self._manual_pipeline_release_timer.start()
+                    return
+            except (AttributeError, RuntimeError) as exc:
+                self._logger.error(
+                    "Manual pipeline state is unreadable; keeping controls locked: %s",
+                    exc,
+                )
+                self._manual_pipeline_release_timer.start()
+                return
+
+        self._cancel_manual_pipeline_release_wait()
+        self._single_shot_running = False
+        self.stats_timer.stop()
+        self.stop_btn.setEnabled(False)
+        self.update_camera_controls()
+        self.update_start_enabled()
+
     def stop_detection(self):
         """優雅停止管線 (非阻塞)"""
         if self._auto_controller is not None and self._auto_controller.is_running():
@@ -1163,6 +1213,7 @@ class DetectionSystemGUI(
         self.log_message("檢測管線已關閉 (IO 已落盤)")
 
     def _reset_ui_state(self):
+        self._cancel_manual_pipeline_release_wait()
         self.controller.bridge.end_run()
         self._single_shot_cancel_event.set()
         self._single_shot_running = False
@@ -1272,6 +1323,8 @@ class DetectionSystemGUI(
             },
         )
         self.on_detection_complete(result)
+        if self._single_shot_running:
+            self._schedule_manual_pipeline_release(self._run_generation)
 
     @pyqtSlot(object)
     def on_pipeline_storage_completed(self, task) -> None:
@@ -1619,6 +1672,7 @@ class DetectionSystemGUI(
             self._t("start_log", product=product, area=area, model=inference_type)
         )
 
+        self._cancel_manual_pipeline_release_wait()
         self._run_generation += 1
         run_generation = self._run_generation
         self._shutdown_in_progress = False
@@ -1689,7 +1743,23 @@ class DetectionSystemGUI(
             self.controller.has_system()
             and self.controller.detection_system.pipeline_running
         )
-        if self._single_shot_running or not is_pipeline_running:
+        is_auto_running = (
+            self._auto_controller is not None
+            and self._auto_controller.is_running()
+        )
+        is_manual_pipeline_finalizing = (
+            self._single_shot_running
+            and is_pipeline_running
+            and not is_auto_running
+        )
+        if is_manual_pipeline_finalizing:
+            self.stats_timer.stop()
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(False)
+            self.update_camera_controls()
+        elif not is_auto_running and (
+            self._single_shot_running or not is_pipeline_running
+        ):
             self._single_shot_running = False
             self.stats_timer.stop()
             self.start_btn.setEnabled(True)
@@ -2240,6 +2310,7 @@ class DetectionSystemGUI(
             self.big_status_label.set_status("READY")
         self.log_message("自動模式已停止")
         self.update_start_enabled()
+        self.update_camera_controls()
 
     def _restart_auto_mode_if_valid(
         self,
@@ -2303,6 +2374,8 @@ class DetectionSystemGUI(
 
     def _on_auto_error(self, msg: str) -> None:
         """Handle fatal auto-inspection error (e.g. camera lost)."""
+        self._camera_connected_cache = False
+        self._camera_check_ts = 0
         self._set_camera_status("lost")
         self.log_message(f"自動模式錯誤: {msg}")
         # Turn off auto mode checkbox to avoid a locked-down UI

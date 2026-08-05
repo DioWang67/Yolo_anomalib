@@ -30,6 +30,7 @@ from app.gui.color_baseline_rebuild_dialog import (
     ColorBaselineRebuildDialog,
 )
 from app.gui.inspection_release_presentation import (
+    format_color_baseline_summary,
     format_component_summary,
     format_local_timestamp,
 )
@@ -60,7 +61,7 @@ _RELEASE_ROLE = Qt.UserRole + 1
 _CATEGORY_LABELS = {
     "AI_MODEL": "AI 模型",
     "COLOR_BASE": "顏色基準",
-    "COLOR_PROFILE": "顏色方案",
+    "COLOR_PROFILE": "顏色設定",
     "COLOR_REVISION": "校正修訂",
 }
 _STATUS_LABELS = {
@@ -166,7 +167,7 @@ class InspectionVersionWorkspace(QWidget):
         self.component_category_filter.addItem("全部", "")
         self.component_category_filter.addItem("AI 模型", "AI_MODEL")
         self.component_category_filter.addItem("顏色基準", "COLOR_BASE")
-        self.component_category_filter.addItem("顏色方案", "COLOR_PROFILE")
+        self.component_category_filter.addItem("顏色設定", "COLOR_PROFILE")
         self.component_category_filter.addItem("校正修訂", "COLOR_REVISION")
         self.component_category_filter.currentIndexChanged.connect(self._render_components)
         filters.addWidget(self.component_category_filter)
@@ -209,24 +210,60 @@ class InspectionVersionWorkspace(QWidget):
         form = QFormLayout()
         self.candidate_model_combo = QComboBox()
         self.candidate_color_combo = QComboBox()
+        self.candidate_color_combo.currentIndexChanged.connect(
+            self._update_color_configuration_summary
+        )
+        self.candidate_color_summary = QLabel("不套用顏色檢查")
+        self.candidate_color_summary.setObjectName("CandidateColorConfigurationSummary")
+        self.candidate_color_summary.setWordWrap(True)
+        self.candidate_color_summary.setStyleSheet(
+            "QLabel { background: #eef5ff; border: 1px solid #b8cce8; "
+            "border-radius: 4px; padding: 8px; }"
+        )
         self.candidate_version_edit = QLineEdit()
         self.candidate_operator_edit = QLineEdit()
         self.candidate_reason_edit = QTextEdit()
         self.candidate_reason_edit.setMaximumHeight(70)
         form.addRow("AI 模型版本", self.candidate_model_combo)
-        form.addRow("顏色方案", self.candidate_color_combo)
+        form.addRow("顏色設定", self.candidate_color_summary)
         form.addRow("組合版本", self.candidate_version_edit)
         form.addRow("建立人員", self.candidate_operator_edit)
         form.addRow("建立原因", self.candidate_reason_edit)
         layout.addLayout(form)
-        layout.addWidget(QLabel("逐色校正覆寫"))
+
+        self.candidate_color_details_button = QPushButton("顯示進階組成設定")
+        self.candidate_color_details_button.setObjectName(
+            "CandidateColorConfigurationDetailsButton"
+        )
+        self.candidate_color_details_button.setCheckable(True)
+        self.candidate_color_details_button.toggled.connect(
+            self._toggle_color_configuration_details
+        )
+        layout.addWidget(self.candidate_color_details_button)
+
+        self.candidate_color_advanced_panel = QWidget()
+        self.candidate_color_advanced_panel.setObjectName(
+            "CandidateColorConfigurationAdvancedPanel"
+        )
+        advanced_layout = QVBoxLayout(self.candidate_color_advanced_panel)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_form = QFormLayout()
+        advanced_form.addRow("完整顏色基準", self.candidate_color_combo)
+        advanced_layout.addLayout(advanced_form)
+        advanced_layout.addWidget(QLabel("單色校正（選填；僅覆寫指定顏色）"))
         self.candidate_color_overrides_table = self._table(("色別", "校正版本"))
         self.candidate_color_overrides_table.setMaximumHeight(180)
-        layout.addWidget(self.candidate_color_overrides_table)
-        create_row = QHBoxLayout()
+        advanced_layout.addWidget(self.candidate_color_overrides_table)
+        rebuild_row = QHBoxLayout()
         rebuild_button = QPushButton("重建完整顏色基準")
         rebuild_button.clicked.connect(self._open_color_baseline_rebuild)
-        create_row.addWidget(rebuild_button)
+        rebuild_row.addWidget(rebuild_button)
+        rebuild_row.addStretch(1)
+        advanced_layout.addLayout(rebuild_row)
+        self.candidate_color_advanced_panel.setVisible(False)
+        layout.addWidget(self.candidate_color_advanced_panel)
+
+        create_row = QHBoxLayout()
         create_row.addStretch(1)
         create_button = QPushButton("建立候選組合")
         create_button.clicked.connect(self._create_candidate)
@@ -238,6 +275,12 @@ class InspectionVersionWorkspace(QWidget):
         )
         layout.addWidget(self.candidate_table, 1)
         return page
+
+    def _toggle_color_configuration_details(self, checked: bool) -> None:
+        self.candidate_color_advanced_panel.setVisible(checked)
+        self.candidate_color_details_button.setText(
+            "隱藏進階組成設定" if checked else "顯示進階組成設定"
+        )
 
     def _build_validation_page(self) -> QWidget:
         page = QWidget()
@@ -474,14 +517,17 @@ class InspectionVersionWorkspace(QWidget):
                     if index >= 0:
                         combo.setCurrentIndex(index)
             self._select_first_color_base()
+            self.candidate_color_details_button.setChecked(True)
         elif record.category == "COLOR_PROFILE":
             self._select_profile_overrides(record)
+            self.candidate_color_details_button.setChecked(True)
         elif record.category == "COLOR_BASE":
             index = self.candidate_color_combo.findData(record.component_id)
             if index >= 0:
                 self.candidate_color_combo.setCurrentIndex(index)
             for combo in self._override_combos.values():
                 combo.setCurrentIndex(0)
+            self.candidate_color_details_button.setChecked(True)
         self._show_stage(1)
 
     def _refresh_candidate_selectors(self) -> None:
@@ -493,10 +539,15 @@ class InspectionVersionWorkspace(QWidget):
         self.candidate_color_combo.addItem("不套用顏色檢查", "")
         color_bases = [record for record in self._components if record.category == "COLOR_BASE" and record.can_compose]
         for record in color_bases:
+            label, tooltip = self._color_base_presentation(record)
             self.candidate_color_combo.addItem(
-                f"完整顏色基準｜{record.version}｜"
-                f"{_STATUS_LABELS.get(record.status, record.status)}",
+                label,
                 record.component_id,
+            )
+            self.candidate_color_combo.setItemData(
+                self.candidate_color_combo.count() - 1,
+                tooltip,
+                Qt.ToolTipRole,
             )
         models = [record for record in self._components if record.category == "AI_MODEL" and record.can_compose]
         for record in models:
@@ -597,7 +648,105 @@ class InspectionVersionWorkspace(QWidget):
                 1,
                 combo,
             )
+            combo.currentIndexChanged.connect(
+                self._update_color_configuration_summary
+            )
             self._override_combos[normalized_key] = combo
+        self._update_color_configuration_summary()
+
+    def _update_color_configuration_summary(
+        self,
+        _index: int | None = None,
+    ) -> None:
+        base = self._component_by_id(
+            str(self.candidate_color_combo.currentData() or "")
+        )
+        if base is None or base.category != "COLOR_BASE":
+            self.candidate_color_summary.setText("不套用顏色檢查")
+            self.candidate_color_summary.setToolTip(
+                "此候選組合不會執行 Stats Color 顏色檢查。"
+            )
+            for combo in self._override_combos.values():
+                combo.setEnabled(False)
+                combo.setItemText(0, "請先選擇完整顏色基準")
+            return
+
+        baseline_label, baseline_tooltip = self._color_base_presentation(base)
+
+        override_labels: list[str] = []
+        for normalized_key, combo in sorted(self._override_combos.items()):
+            combo.setEnabled(True)
+            combo.setItemText(0, "沿用上方完整基準")
+            component_id = str(combo.currentData() or "")
+            revision = self._color_revisions.get(component_id)
+            if revision is not None:
+                override_labels.append(
+                    f"{revision.scope.threshold_key.title()}：{revision.display_version}"
+                )
+                continue
+            record = self._component_by_id(component_id)
+            if record is not None:
+                override_labels.append(
+                    f"{normalized_key.title()}：{record.version}"
+                )
+
+        summary_parts = ["顏色設定", baseline_label]
+        summary_parts.append(
+            "單色校正 " + "、".join(override_labels)
+            if override_labels
+            else "未套用單色校正"
+        )
+        self.candidate_color_summary.setText("｜".join(summary_parts))
+
+        tooltip_parts = [baseline_tooltip]
+        if override_labels:
+            tooltip_parts.append("單色校正：" + "、".join(override_labels))
+        self.candidate_color_summary.setToolTip("\n".join(tooltip_parts))
+        for combo in self._override_combos.values():
+            combo.setToolTip(f"目前沿用完整基準：{base.version}")
+
+    @staticmethod
+    def _color_base_presentation(
+        record: InspectionComponentRecord,
+    ) -> tuple[str, str]:
+        try:
+            details = json.loads(record.detail)
+        except (TypeError, json.JSONDecodeError):
+            details = {}
+        if not isinstance(details, dict):
+            details = {}
+        colors = details.get("colors")
+        colors = colors if isinstance(colors, list) else []
+        configured_count = details.get("color_count")
+        color_count = (
+            configured_count
+            if isinstance(configured_count, int)
+            and not isinstance(configured_count, bool)
+            and configured_count >= 0
+            else len(colors)
+        )
+        if record.status == "DEPLOYED":
+            lifecycle_status = "DEPLOYED"
+        elif details.get("role") == "BASELINE_CANDIDATE":
+            lifecycle_status = "CANDIDATE"
+        else:
+            lifecycle_status = record.status
+
+        quality_status = str(details.get("candidate_status") or "").strip()
+        summary = format_color_baseline_summary(
+            color_count=color_count,
+            created_at=record.created_at,
+            lifecycle_status=lifecycle_status,
+            quality_status=quality_status,
+        )
+
+        tooltip_parts = [
+            f"完整基準內部 ID：{record.version}",
+            f"來源：{record.source_path}",
+        ]
+        if quality_status:
+            tooltip_parts.append(f"品質狀態：{quality_status}")
+        return summary, "\n".join(tooltip_parts)
 
     def _select_first_color_base(self) -> None:
         if self.candidate_color_combo.count() > 1:
@@ -669,6 +818,7 @@ class InspectionVersionWorkspace(QWidget):
         index = self.candidate_color_combo.findData(component_id)
         if index >= 0:
             self.candidate_color_combo.setCurrentIndex(index)
+        self.candidate_color_details_button.setChecked(True)
         self._show_stage(1)
 
     def _select_profile_overrides(
@@ -678,7 +828,7 @@ class InspectionVersionWorkspace(QWidget):
         try:
             profile = self.color_profile_store.load(record.source_path)
         except (OSError, RuntimeError, ValueError) as exc:
-            QMessageBox.warning(self, "顏色方案", str(exc))
+            QMessageBox.warning(self, "顏色設定", str(exc))
             return
         matching_base = next(
             (

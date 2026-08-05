@@ -48,7 +48,7 @@ def test_check_solid_color(dummy_stats_json):
 
     result = checker.check(green_bgr, allowed_colors=["target_green"])
     assert result.best_color == "target_green"
-    assert result.is_ok == True
+    assert bool(result.is_ok)
 
 def test_check_unsupported_color(dummy_stats_json):
     """測試請求不支援的顏色（應回退到所有可用顏色）處理"""
@@ -59,7 +59,7 @@ def test_check_unsupported_color(dummy_stats_json):
 
     # Fallback to all. All zeros image will match 'black'.
     assert result.best_color == "black"
-    assert result.is_ok == True
+    assert bool(result.is_ok)
 
 def test_circular_hue_distance():
     """測試色調（Hue）環形距離計算法"""
@@ -67,6 +67,33 @@ def test_circular_hue_distance():
     assert _circular_hue_distance(10, 20) == 10
     assert _circular_hue_distance(170, 10) == 20 # 170 to 180(0) to 10
     assert _circular_hue_distance(0, 180) == 0 # OpenCV Hue is 0-179
+
+
+def test_orange_red_tiebreak_cannot_inflate_orange_above_black():
+    from core.stats_color_checker import _separate_orange_red
+
+    # Reproduces the score ordering from the Black -> Orange failure. Hue and
+    # Lab both vote Orange, but Black was already the strongest color.
+    hsv_vals = np.array([[10.0, 66.0, 89.0]] * 100, dtype=np.float32)
+    lab_vals = np.array([[87.0, 120.0, 136.0]] * 100, dtype=np.float32)
+    scores = {
+        "black": 0.385626,
+        "yellow": 0.362031,
+        "orange": 0.311123,
+        "red": 0.219895,
+    }
+
+    winner, pair_score, _debug = _separate_orange_red(
+        hsv_vals,
+        lab_vals,
+        scores["orange"],
+        scores["red"],
+    )
+    scores[winner] = pair_score
+
+    assert winner == "orange"
+    assert pair_score == pytest.approx(0.311123)
+    assert max(scores, key=scores.get) == "black"
 
 def test_decision_tuning_defaults_match_module_constants():
     """未提供 tuning 時，行為必須與歷史常數完全一致（零行為變更保證）"""

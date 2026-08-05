@@ -15,6 +15,31 @@ from core.stats_color_checker import ColorDecisionTuning, StatsColorChecker
 logger = logging.getLogger(__name__)
 
 
+def _is_expected_color_match(
+    expected_color: object,
+    observed_color: object,
+    allowed_colors: Iterable[str] | None,
+) -> bool:
+    """Return whether an observed color satisfies a color-labelled detection.
+
+    Some detectors use generic class names (for example, ``LED``). Those class
+    names are not color expectations and must continue to rely on the color
+    checker's threshold result alone.
+    """
+    expected = str(expected_color or "").strip().casefold()
+    if not expected:
+        return True
+
+    allowed = {
+        str(color or "").strip().casefold()
+        for color in (allowed_colors or ())
+        if str(color or "").strip()
+    }
+    if expected not in allowed:
+        return True
+    return expected == str(observed_color or "").strip().casefold()
+
+
 class ColorCheckerService:
     """Wrapper around ColorQCEnhanced that manages model lifecycle.
 
@@ -165,6 +190,11 @@ class ColorCheckerService:
                 if not allowed and det.get("class"):
                     allowed = [det.get("class")]
                 c_res = self._checker.check(roi, allowed_colors=allowed)
+                item_is_ok = bool(c_res.is_ok) and _is_expected_color_match(
+                    det.get("class"),
+                    c_res.best_color,
+                    allowed,
+                )
                 items.append(
                     ColorCheckItemResult(
                         index=idx,
@@ -173,10 +203,10 @@ class ColorCheckerService:
                         best_color=c_res.best_color,
                         diff=float(c_res.diff),
                         threshold=float(c_res.threshold),
-                        is_ok=bool(c_res.is_ok),
+                        is_ok=item_is_ok,
                     )
                 )
-                if not c_res.is_ok:
+                if not item_is_ok:
                     all_ok = False
         else:
             # No detections: estimate on full frame

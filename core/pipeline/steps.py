@@ -66,10 +66,13 @@ class ColorCheckStep(Step):
             candidates=list(candidates) if candidates else None,
         )
 
-        # Attach verified class to detections for downstream steps (e.g. sequence check)
+        # Only an accepted color result may replace the detector class. A rejected
+        # best match is diagnostic evidence, not a trustworthy downstream label.
         for idx, it in enumerate(c_res.items):
             if 0 <= idx < len(detections):
-                detections[idx]["verified_class"] = it.best_color
+                detections[idx]["verified_class"] = (
+                    it.best_color if it.is_ok else detections[idx].get("class")
+                )
 
         ctx.color_result = c_res.to_dict()
 

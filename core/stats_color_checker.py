@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Stats-based color checker derived from the improved color_verifier script."""
+
+from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
@@ -257,11 +257,17 @@ def _separate_orange_red(
     orange_score: float,
     red_score: float,
 ) -> tuple[str, float, dict]:
-    """Ported tie-break logic from color_verifier.py."""
+    """Resolve Orange versus Red without inflating their absolute score.
+
+    The tie-breaker may transfer the pair's existing best score to its chosen
+    winner, but it must never create confidence that can overtake an unrelated
+    color such as Black or Yellow.
+    """
+    pair_score = max(orange_score, red_score)
     if len(hsv_vals) == 0:
         return (
             "red" if red_score >= orange_score else "orange",
-            max(red_score, orange_score),
+            pair_score,
             {},
         )
 
@@ -311,18 +317,14 @@ def _separate_orange_red(
 
     if hue_vote == lab_vote and hue_vote != "unclear":
         predicted = hue_vote
-        confidence = max(orange_score, red_score) * 1.3
     elif hue_vote != "unclear":
         predicted = hue_vote
-        confidence = (orange_score if hue_vote == "orange" else red_score) * 1.1
     elif lab_vote != "unclear":
         predicted = lab_vote
-        confidence = (orange_score if lab_vote == "orange" else red_score) * 1.1
     else:
         predicted = "orange" if orange_score > red_score else "red"
-        confidence = max(orange_score, red_score) * 0.9
 
-    return predicted, float(confidence), debug
+    return predicted, float(pair_score), debug
 
 
 def _is_black_image(

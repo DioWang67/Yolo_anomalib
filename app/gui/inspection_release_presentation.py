@@ -6,6 +6,18 @@ from datetime import datetime, tzinfo
 
 from core.services.inspection_release_models import InspectionRelease
 
+_COLOR_BASELINE_LIFECYCLE_LABELS = {
+    "CANDIDATE": "候選基準",
+    "DEPLOYED": "正式使用",
+    "DEFAULT": "子系統預設",
+    "HISTORY": "歷史版本",
+}
+_COLOR_BASELINE_QUALITY_LABELS = {
+    "READY": "品質檢查通過",
+    "REVIEW_REQUIRED": "需要人工複核",
+    "INCOMPLETE": "基準資料不足",
+}
+
 
 def format_local_timestamp(
     value: str,
@@ -38,6 +50,48 @@ def format_local_timestamp(
         if target_timezone is not None:
             parsed = parsed.astimezone(target_timezone)
     return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_color_baseline_summary(
+    *,
+    color_count: int,
+    created_at: str,
+    lifecycle_status: str,
+    quality_status: str,
+) -> str:
+    """Return a human-facing baseline label without exposing its content ID."""
+    normalized_count = (
+        color_count
+        if isinstance(color_count, int)
+        and not isinstance(color_count, bool)
+        and color_count >= 0
+        else 0
+    )
+    values = [
+        f"完整 {normalized_count} 色基準"
+        if normalized_count
+        else "完整顏色基準"
+    ]
+    local_created_at = format_local_timestamp(created_at)
+    if local_created_at != "—":
+        values.append(f"基準版本 {local_created_at[:16]}")
+    normalized_lifecycle = str(lifecycle_status or "").strip().upper()
+    if normalized_lifecycle:
+        values.append(
+            _COLOR_BASELINE_LIFECYCLE_LABELS.get(
+                normalized_lifecycle,
+                normalized_lifecycle,
+            )
+        )
+    normalized_quality = str(quality_status or "").strip().upper()
+    if normalized_quality:
+        values.append(
+            _COLOR_BASELINE_QUALITY_LABELS.get(
+                normalized_quality,
+                normalized_quality,
+            )
+        )
+    return "｜".join(values)
 
 
 def format_component_summary(release: InspectionRelease) -> str:

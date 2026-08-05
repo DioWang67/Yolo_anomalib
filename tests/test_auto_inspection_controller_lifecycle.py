@@ -12,7 +12,12 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtTest import QSignalSpy
 
 from app.gui import auto_inspection_controller as controller_module
-from app.gui.auto_inspection_controller import AutoInspectionController
+from app.gui.auto_inspection_controller import (
+    DEFAULT_AUTO_TRIGGER_CONFIG,
+    AutoInspectionController,
+    CameraPreviewWorker,
+)
+from core.auto_trigger import AutoTriggerConfig
 
 
 class _Bridge(QObject):
@@ -80,6 +85,46 @@ class _ControllablePreviewWorker(QObject):
             return
         self.running = False
         self.finished.emit()
+
+
+class _EmptyFrameCamera:
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(
+            MV_CC_GetImageBuffer_nMsec=10_000,
+            camera_lost_threshold=2,
+        )
+        self.capture_timeouts: list[int | None] = []
+        self.unhealthy = False
+
+    def capture_frame(self, *, timeout_ms: int | None = None):
+        self.capture_timeouts.append(timeout_ms)
+        return None
+
+    def mark_unhealthy(self) -> None:
+        self.unhealthy = True
+
+
+def test_preview_uses_bounded_timeout_and_marks_repeated_failure_unhealthy() -> None:
+    camera = _EmptyFrameCamera()
+    config = AutoTriggerConfig.from_dict(DEFAULT_AUTO_TRIGGER_CONFIG)
+    worker = CameraPreviewWorker(camera, config, show_debug_overlay=False)
+    errors: list[str] = []
+    worker.error_occurred.connect(errors.append)
+
+    worker.run()
+
+    assert camera.capture_timeouts == [500, 500]
+    assert camera.unhealthy is True
+    assert errors == ["Camera returned None for 2 consecutive frames"]
+
+
+def test_auto_start_rejects_unhealthy_camera_session() -> None:
+    system = _BlockingDetectionSystem()
+    system.camera.is_healthy = False
+    controller = AutoInspectionController(system, _Bridge())
+
+    assert controller.start("Cable1", "A", "yolo") is False
+    assert controller.active_generation is None
 
 
 def _start_blocked_inspection(monkeypatch, qtbot):

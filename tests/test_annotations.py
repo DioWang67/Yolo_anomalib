@@ -289,3 +289,47 @@ def test_annotate_yolo_frame_uses_source_indices_after_duplicate_suppression(
         & (frame[:, :, 1] < 80)
         & (frame[:, :, 2] > 100)
     )
+
+
+def test_annotate_yolo_frame_shows_color_failure_for_black_classified_as_orange(
+    monkeypatch,
+):
+    frame = np.zeros((220, 220, 3), dtype=np.uint8)
+    detections = [
+        {
+            "bbox": [100, 100, 130, 150],
+            "class": "Black",
+            "verified_class": "Black",
+            "source_index": 5,
+        }
+    ]
+    color_result = {
+        "is_ok": False,
+        "items": [
+            {
+                "index": 5,
+                "class_name": "Black",
+                "best_color": "Orange",
+                "diff": 0.60,
+                "threshold": 0.75,
+                "is_ok": False,
+            }
+        ],
+    }
+    captured_lines = []
+    monkeypatch.setattr(
+        "core.services.results.annotations._draw_info_panel",
+        lambda _frame, lines, origin: captured_lines.extend(lines),
+    )
+
+    annotate_yolo_frame(
+        FakeImageUtils(),
+        frame,
+        detections,
+        color_result,
+        "DETECTION_FAIL",
+    )
+
+    text = "\n".join(line for line, _ in captured_lines)
+    assert "Color: FAIL" in text
+    assert "#5 Black -> Orange (d=0.60/0.75) NG" in text

@@ -308,6 +308,53 @@ class TestColorCheckStep:
         assert base_context.status == "PASS"
         assert base_context.color_result["is_ok"] is False
 
+    def test_rejected_color_mismatch_does_not_replace_detector_class(
+        self, mock_env, base_context, mock_color_service
+    ):
+        mock_color_service.is_ready.return_value = True
+        base_context.config.expected_items = {
+            "TestProduct": {"TestArea": ["Black"]}
+        }
+        base_context.result["detections"] = [
+            {"class": "Black", "bbox": [0, 0, 10, 10]}
+        ]
+        mock_it = MagicMock(
+            index=0,
+            class_name="Black",
+            best_color="Orange",
+            diff=0.60,
+            threshold=0.75,
+            is_ok=False,
+        )
+        mock_res = MagicMock()
+        mock_res.items = [mock_it]
+        mock_res.to_dict.return_value = {
+            "is_ok": False,
+            "items": [
+                {
+                    "index": 0,
+                    "class_name": "Black",
+                    "best_color": "Orange",
+                    "is_ok": False,
+                }
+            ],
+        }
+        mock_color_service.check_items.side_effect = None
+        mock_color_service.check_items.return_value = mock_res
+
+        ColorCheckStep(mock_color_service, mock_env.logger).run(base_context)
+        CountCheckStep(
+            mock_env.logger,
+            base_context.product,
+            base_context.area,
+            options={"strict": True},
+        ).run(base_context)
+
+        assert base_context.result["detections"][0]["verified_class"] == "Black"
+        assert base_context.result["missing_items"] == []
+        assert base_context.result["over_items"] == []
+        assert base_context.status == "DETECTION_FAIL"
+
 class TestCountCheckStep:
     def test_run_pass(self, mock_env, base_context):
         base_context.config.expected_items = {"TestProduct": {"TestArea": ["LED", "J1"]}}

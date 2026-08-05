@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 # Default config — can be overridden via set_config() or YAML auto_trigger section
 _PREVIEW_MAX_WIDTH = 960  # pixels; preview frames are resized to this before emitting
 _PREVIEW_STOP_WAIT_MS = 100
+_PREVIEW_CAPTURE_TIMEOUT_CAP_MS = 500
 
 DEFAULT_AUTO_TRIGGER_CONFIG: dict = {
     "enabled": True,
@@ -103,6 +104,27 @@ class CameraPreviewWorker(QThread):
         self._config = config
         self._show_debug_overlay = show_debug_overlay
         self._stop_event = threading.Event()
+        camera_config = getattr(camera, "config", None)
+        configured_timeout_ms = getattr(
+            camera_config,
+            "MV_CC_GetImageBuffer_nMsec",
+            _PREVIEW_CAPTURE_TIMEOUT_CAP_MS,
+        )
+        try:
+            configured_timeout_ms = int(configured_timeout_ms)
+        except (TypeError, ValueError):
+            configured_timeout_ms = _PREVIEW_CAPTURE_TIMEOUT_CAP_MS
+        self._capture_timeout_ms = max(
+            1,
+            min(configured_timeout_ms, _PREVIEW_CAPTURE_TIMEOUT_CAP_MS),
+        )
+        try:
+            self._max_consecutive_failures = max(
+                1,
+                int(getattr(camera_config, "camera_lost_threshold", 5)),
+            )
+        except (TypeError, ValueError):
+            self._max_consecutive_failures = 5
         # Build a scaled config so threshold values match the downsampled frame.
         # - contour area scales by scale^2 (area is proportional to pixel count)
         # - sharpness (Laplacian variance) scales by scale^1 empirically: downsampling
@@ -158,17 +180,22 @@ class CameraPreviewWorker(QThread):
 
     def run(self) -> None:
         consecutive_failures = 0
-        max_failures = 10
         _preview_interval = 1.0 / 15  # cap UI at 15fps
         _last_preview_ts = 0.0
 
         while not self._stop_event.is_set():
-            frame = self._camera.capture_frame()
+            frame = self._camera.capture_frame(
+                timeout_ms=self._capture_timeout_ms
+            )
             if frame is None:
                 consecutive_failures += 1
-                if consecutive_failures >= max_failures:
+                if consecutive_failures >= self._max_consecutive_failures:
+                    mark_unhealthy = getattr(self._camera, "mark_unhealthy", None)
+                    if callable(mark_unhealthy):
+                        mark_unhealthy()
                     self.error_occurred.emit(
-                        f"Camera returned None for {max_failures} consecutive frames"
+                        "Camera returned None for "
+                        f"{self._max_consecutive_failures} consecutive frames"
                     )
                     break
                 continue
@@ -341,7 +368,11 @@ class AutoInspectionController(QObject):
             return False
 
         camera = self._system.camera
-        if camera is None or not camera.is_initialized:
+        if (
+            camera is None
+            or not camera.is_initialized
+            or not getattr(camera, "is_healthy", True)
+        ):
             logger.error("Cannot start auto mode: camera not initialized")
             return False
 
@@ -713,6 +744,10 @@ class AutoInspectionController(QObject):
             self._inspection_thread = None
             self._inspection_generation = None
         self._finalize_stop(generation, notify=True)
+        logger.info(
+            "AutoInspectionController generation %d fully stopped asynchronously",
+            generation,
+        )
         return True
 
     def _finalize_stop(self, generation: int, *, notify: bool) -> None:

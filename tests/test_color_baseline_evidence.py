@@ -75,6 +75,8 @@ def _write_feedback(path: Path, rows: list[dict[str, str]]) -> Path:
         "output_image",
         "product_verdict",
         "detection_verdict",
+        "color_verdict",
+        "review_label",
     )
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -101,6 +103,8 @@ def _feedback_row(
         "output_image": str(image_path.resolve()),
         "product_verdict": "ok" if actual_is_ok else "ng",
         "detection_verdict": "correct",
+        "color_verdict": "actually_ok" if actual_is_ok else "actually_ng",
+        "review_label": "confirmed_ok" if actual_is_ok else "confirmed_ng",
     }
 
 
@@ -166,8 +170,10 @@ def test_provider_merges_feedback_deduplicates_and_excludes_truth_conflicts(
         "color_review",
     }
     lineage = snapshot.to_report_dict()
+    assert lineage["schema_version"] == 2
     assert lineage["counts"]["selected_total"] == 2
     assert len(lineage["samples"]) == 2
+    assert lineage["excluded_samples"][0]["reason_code"] == "TRUTH_CONFLICT"
 
 
 def test_provider_rejects_unbounded_feedback_path_without_losing_valid_acceptance(
@@ -206,6 +212,58 @@ def test_provider_rejects_unbounded_feedback_path_without_losing_valid_acceptanc
     assert snapshot.selected_count == 1
     assert snapshot.selected_feedback_count == 0
     assert snapshot.invalid_count == 1
+    assert len(snapshot.excluded_samples) == 1
+    exclusion = snapshot.excluded_samples[0]
+    assert exclusion.sample_id == "outside"
+    assert exclusion.reason_code == "IMAGE_NOT_FOUND"
+    assert snapshot.to_report_dict()["excluded_samples"][0]["reason"]
+
+
+def test_provider_excludes_mixed_product_ng_color_false_reject(
+    tmp_path: Path,
+) -> None:
+    acceptance_image = tmp_path / "acceptance" / "images" / "acc.png"
+    feedback_image = tmp_path / "training" / "color_review" / "images" / "false-reject.png"
+    acceptance_digest = _write_image(acceptance_image, b"acceptance")
+    digest = _write_image(feedback_image, b"false-reject")
+    row = _feedback_row(
+        sample_id="false-reject",
+        digest=digest,
+        image_path=feedback_image,
+        actual_is_ok=True,
+    )
+    row.update(
+        product_verdict="ng",
+        detection_verdict="correct",
+        color_verdict="actually_ok",
+        review_label="color_false_reject",
+    )
+    feedback = _write_feedback(
+        tmp_path / "training" / "color_review" / "feedback.csv",
+        [row],
+    )
+
+    snapshot = ColorBaselineEvidenceProvider(
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+    ).collect(
+        acceptance_repository=_AcceptanceRepository(
+            tmp_path / "acceptance",
+            (_AcceptanceRecord("ACC-1", acceptance_digest),),
+            {"ACC-1": acceptance_image},
+        ),
+        feedback_manifest=feedback,
+    )
+
+    assert snapshot.selected_acceptance_count == 1
+    assert snapshot.selected_feedback_count == 0
+    assert snapshot.invalid_count == 1
+    assert len(snapshot.excluded_samples) == 1
+    exclusion = snapshot.excluded_samples[0]
+    assert exclusion.sample_id == "false-reject"
+    assert exclusion.reason_code == "MIXED_PRODUCT_NG_COLOR_OK"
+    assert "整張照片的全部元件" in exclusion.reason
 
 
 def test_provider_supports_relocated_feedback_images(tmp_path: Path) -> None:

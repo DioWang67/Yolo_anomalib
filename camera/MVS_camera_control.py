@@ -153,7 +153,7 @@ class MVSCamera:
         )
         return True
 
-    def get_frame(self):
+    def get_frame(self, timeout_ms: int | None = None):
         try:
             self.frame_count += 1
             current_time = time.time()
@@ -164,7 +164,11 @@ class MVSCamera:
                 self.frame_count = 0
                 self.start_time = current_time
 
-            frame = self._get_frame_internal()
+            frame = (
+                self._get_frame_internal()
+                if timeout_ms is None
+                else self._get_frame_internal(timeout_ms=timeout_ms)
+            )
             if frame is not None:
                 # NOTE: the frame is consumed by inference and color checks.
                 # Never draw overlays (FPS text, status, etc.) on it here —
@@ -195,12 +199,20 @@ class MVSCamera:
             _camera_logger.error("獲取影像時發生錯誤: %s", e, exc_info=True)
             return None
 
-    def _get_frame_internal(self):
+    def _get_frame_internal(self, timeout_ms: int | None = None):
         try:
             stOutFrame = MV_FRAME_OUT()
+            capture_timeout_ms = max(
+                0,
+                int(
+                    self.config.MV_CC_GetImageBuffer_nMsec
+                    if timeout_ms is None
+                    else timeout_ms
+                ),
+            )
 
             ret = self.cam.MV_CC_GetImageBuffer(
-                stOutFrame, self.config.MV_CC_GetImageBuffer_nMsec
+                stOutFrame, capture_timeout_ms
             )
             if ret == 0:
                 try:
@@ -242,7 +254,7 @@ class MVSCamera:
                         "No image data received from camera buffer "
                         "(ret[0x%x], timeout=%dms).",
                         ret,
-                        self.config.MV_CC_GetImageBuffer_nMsec,
+                        capture_timeout_ms,
                     )
                     return None
                 _camera_logger.error("獲取影像緩衝區失敗! ret[0x%x]", ret)

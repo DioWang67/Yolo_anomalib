@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
@@ -8,17 +9,28 @@ from uuid import uuid4
 
 import pytest
 from PyQt5.QtTest import QSignalSpy
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QLabel, QPushButton
 
+from app.gui.color_baseline_exclusions_dialog import (
+    ColorBaselineExclusionsDialog,
+)
+from app.gui.color_baseline_rebuild_dialog import ColorBaselineRebuildDialog
 from app.gui.inspection_components_dialog import InspectionComponentsDialog
 from app.gui.inspection_release_composer_dialog import (
     InspectionReleaseComposerDialog,
 )
-from app.gui.inspection_release_presentation import format_local_timestamp
+from app.gui.inspection_release_presentation import (
+    format_color_baseline_summary,
+    format_local_timestamp,
+)
 from app.gui.inspection_releases_dialog import InspectionReleasesDialog
 from app.gui.inspection_version_workspace import InspectionVersionWorkspace
 from app.gui.model_versions_dialog import ModelVersionsDialog
 from app.gui.panels.control_panel import ControlPanel
+from core.services.color_baseline_evidence import (
+    ColorBaselineEvidenceExclusion,
+)
+from core.services.color_baseline_recalibration import ColorBaselineColorReport
 from core.services.inspection_component_catalog import (
     InspectionComponentRecord,
 )
@@ -68,10 +80,209 @@ def test_release_timestamp_preserves_legacy_naive_wall_clock() -> None:
     assert format_local_timestamp("") == "—"
 
 
+def test_color_baseline_summary_uses_human_status_labels() -> None:
+    summary = format_color_baseline_summary(
+        color_count=5,
+        created_at="2026-08-03T05:12:13+00:00",
+        lifecycle_status="CANDIDATE",
+        quality_status="REVIEW_REQUIRED",
+    )
+
+    assert "完整 5 色基準" in summary
+    assert "基準版本" in summary
+    assert "候選基準" in summary
+    assert "需要人工複核" in summary
+
+
+def test_color_baseline_completion_hides_internal_id_from_primary_text():
+    dialog = Mock()
+    dialog.progress.maximum.return_value = 215
+    candidate = Mock(
+        colors=("Black", "Green", "Orange", "Red", "Yellow"),
+        created_at="2026-08-04T05:12:13+00:00",
+        display_version="color-base-e213e58d",
+        status="REVIEW_REQUIRED",
+    )
+
+    ColorBaselineRebuildDialog._completed(dialog, candidate, ())
+
+    phase_text = dialog.phase_label.setText.call_args.args[0]
+    next_step_text = dialog.next_step_label.setText.call_args.args[0]
+    assert "完整 5 色基準" in phase_text
+    assert "需要人工複核" in phase_text
+    assert "color-base-e213e58d" not in phase_text
+    assert "color-base-e213e58d" not in next_step_text
+    assert "color-base-e213e58d" in dialog.phase_label.setToolTip.call_args.args[0]
+
+
+def test_color_baseline_completion_shows_automatic_preservation_without_metrics():
+    dialog = Mock()
+    dialog.progress.maximum.return_value = 215
+    candidate = Mock(
+        colors=("Black", "Green", "Orange", "Red", "Yellow"),
+        created_at="2026-08-04T05:12:13+00:00",
+        display_version="color-base-safe",
+        status="READY",
+    )
+    report = ColorBaselineColorReport(
+        color="Yellow",
+        state="PRESERVED_SAFETY_REJECTED",
+        total_crops=215,
+        training_crops=172,
+        holdout_crops=43,
+        previous_holdout_correct=43,
+        candidate_holdout_correct=43,
+        hue_drift=0.0,
+        lab_drift=0.0,
+        note="自動安全檢查未通過，已沿用舊基準。",
+        rejected_proposal_holdout_correct=42,
+        rejected_proposal_hue_drift=17.4,
+        rejected_proposal_lab_drift=75.8,
+        rejection_reasons=("LAB_DRIFT_LIMIT_EXCEEDED",),
+    )
+
+    ColorBaselineRebuildDialog._completed(dialog, candidate, (report,))
+
+    table_items = {
+        (call.args[0], call.args[1]): call.args[2].text()
+        for call in dialog.result_table.setItem.call_args_list
+    }
+    assert table_items[(0, 1)] == "未更新，沿用舊基準"
+    assert table_items[(0, 7)] == "自動安全檢查未通過，已沿用舊基準。"
+    assert "Hue" not in table_items[(0, 7)]
+    assert "Lab" not in table_items[(0, 7)]
+
+
+def test_color_baseline_exclusion_summary_marks_action_required():
+    exclusion = ColorBaselineEvidenceExclusion(
+        sample_id="case-1",
+        source_kind="color_review",
+        source_manifest="feedback.csv",
+        image_path="case-1.jpg",
+        image_sha256="a" * 64,
+        reason_code="IMAGE_NOT_FOUND",
+        reason="影像檔不存在。",
+    )
+    snapshot = Mock(
+        excluded_samples=(exclusion,),
+        samples=(),
+        conflict_count=0,
+        invalid_count=1,
+        selected_count=10,
+        selected_acceptance_count=8,
+        selected_feedback_count=2,
+        duplicate_count=0,
+        confirmed_ng_count=3,
+    )
+    dialog = Mock()
+
+    ColorBaselineRebuildDialog._show_evidence_summary(dialog, snapshot)
+
+    assert dialog._excluded_evidence == (exclusion,)
+    dialog.excluded_evidence_button.setText.assert_called_once_with(
+        "查看排除照片（1）"
+    )
+    dialog.excluded_evidence_button.setVisible.assert_called_once_with(True)
+    assert "已排除 1 張" in dialog.evidence_label.setText.call_args.args[0]
+
+
+def test_mixed_product_ng_color_ok_is_listed_as_excluded(qapp):
+    exclusion = ColorBaselineEvidenceExclusion(
+        sample_id="case-1",
+        source_kind="color_review",
+        source_manifest="feedback.csv",
+        image_path="case-1.jpg",
+        image_sha256="a" * 64,
+        reason_code="MIXED_PRODUCT_NG_COLOR_OK",
+        reason="顏色 OK，但整體產品 NG。",
+    )
+
+    snapshot = Mock(
+        excluded_samples=(exclusion,),
+        samples=(),
+        selected_count=215,
+        selected_acceptance_count=173,
+        selected_feedback_count=42,
+        duplicate_count=0,
+        confirmed_ng_count=78,
+    )
+    rebuild_dialog = Mock()
+    ColorBaselineRebuildDialog._show_evidence_summary(
+        rebuild_dialog,
+        snapshot,
+    )
+    summary = rebuild_dialog.evidence_label.setText.call_args.args[0]
+    assert "已排除 1 張" in summary
+
+    details_dialog = ColorBaselineExclusionsDialog((exclusion,))
+    try:
+        assert "人工真值均未修改" in details_dialog.description_label.text()
+        assert details_dialog.table.item(0, 1).text() == "case-1"
+        assert details_dialog.table.item(0, 2).text() == exclusion.reason
+    finally:
+        details_dialog.close()
+
+
+def test_statistical_outlier_is_added_to_excluded_photo_list(tmp_path, qapp):
+    image_path = tmp_path / "outlier.jpg"
+    image_path.write_bytes(b"image")
+    sample = Mock(
+        sample_id="ACC-OUTLIER",
+        source_kind="acceptance",
+        source_manifest="ground_truth.csv",
+        image_path=image_path,
+        image_sha256="a" * 64,
+    )
+    dialog = Mock()
+    dialog._excluded_evidence = ()
+    dialog._evidence_samples_by_id = {sample.sample_id: sample}
+    dialog.excluded_evidence_button = QPushButton()
+    dialog.evidence_label = QLabel("本次選用 215 張")
+    report = Mock(
+        excluded_sample_ids=(sample.sample_id,),
+        excluded_count=1,
+        status="AUTO_EXCLUDED",
+    )
+
+    ColorBaselineRebuildDialog._show_outlier_summary(dialog, report)
+
+    assert len(dialog._excluded_evidence) == 1
+    exclusion = dialog._excluded_evidence[0]
+    assert exclusion.sample_id == "ACC-OUTLIER"
+    assert exclusion.reason_code == "STATISTICAL_COLOR_OUTLIER"
+    assert "重建前排除離群照片 1 張" in dialog.evidence_label.text()
+    assert dialog.excluded_evidence_button.text() == "查看排除照片（1）"
+
+
 @pytest.fixture(scope="module")
 def qapp():
     application = QApplication.instance() or QApplication([])
     yield application
+
+
+def test_color_baseline_exclusions_dialog_lists_and_opens_existing_images(
+    tmp_path, qapp
+):
+    image_path = tmp_path / "case-1.jpg"
+    image_path.write_bytes(b"image")
+    exclusion = ColorBaselineEvidenceExclusion(
+        sample_id="case-1",
+        source_kind="color_review",
+        source_manifest="feedback.csv",
+        image_path=str(image_path),
+        image_sha256="a" * 64,
+        reason_code="IMAGE_SHA256_MISMATCH",
+        reason="影像內容與 manifest 不一致。",
+    )
+    dialog = ColorBaselineExclusionsDialog((exclusion,))
+    try:
+        assert dialog.table.rowCount() == 1
+        assert dialog.table.item(0, 1).text() == "case-1"
+        assert dialog.table.item(0, 2).text() == "影像內容與 manifest 不一致。"
+        assert "IMAGE_SHA256_MISMATCH" in dialog.table.item(0, 2).toolTip()
+        assert dialog.open_image_button.isEnabled()
+    finally:
+        dialog.close()
 
 
 def _write(path, content: bytes):
@@ -414,5 +625,101 @@ def test_embedded_workspace_adds_any_component_to_candidate(
             workspace.candidate_model_combo.currentData()
             == records[0].component_id
         )
+    finally:
+        workspace.close()
+
+
+def test_candidate_color_configuration_hides_internal_ids_until_details(
+    tmp_path, qapp
+):
+    model = InspectionComponentRecord(
+        component_id="model:Cable1:A:yolo:1.0.6",
+        category="AI_MODEL",
+        component_type="yolo",
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        version="1.0.6",
+        status="DEPLOYED",
+        created_at="2026-07-30T12:00:00+08:00",
+        integrity="VERIFIED",
+        source_path=tmp_path / "model.onnx",
+        detail="model",
+    )
+    baseline = InspectionComponentRecord(
+        component_id="color-base-candidate:860aed5f3a3535eda1b2ee94",
+        category="COLOR_BASE",
+        component_type="stats_color",
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        version="color-base-860aed5f",
+        status="HISTORY",
+        created_at="2026-08-03T05:12:13+00:00",
+        integrity="WARNING",
+        source_path=tmp_path / "color_stats.json",
+        detail=json.dumps(
+            {
+                "colors": ["Black", "Green", "Orange", "Red", "Yellow"],
+                "color_count": 5,
+                "candidate_status": "REVIEW_REQUIRED",
+                "role": "BASELINE_CANDIDATE",
+            }
+        ),
+    )
+    black_revision = InspectionComponentRecord(
+        component_id="color:black-revision",
+        category="COLOR_REVISION",
+        component_type="stats_color",
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        version="color-v1.0.2",
+        status="DEPLOYED",
+        created_at="2026-07-31T02:00:00+00:00",
+        integrity="VERIFIED",
+        source_path=tmp_path / "black.json",
+        detail="revision",
+    )
+    revision = Mock()
+    revision.scope.threshold_key = "Black"
+    revision.display_version = "color-v1.0.2"
+
+    workspace = InspectionVersionWorkspace(project_root=tmp_path)
+    workspace.catalog = Mock()
+    workspace.catalog.list_components.return_value = (
+        model,
+        baseline,
+        black_revision,
+    )
+
+    def index_revision() -> None:
+        workspace._color_revisions = {black_revision.component_id: revision}
+
+    workspace._index_color_revisions = index_revision
+    try:
+        workspace.set_scope("Cable1", "A", "yolo")
+
+        summary = workspace.candidate_color_summary.text()
+        assert "顏色設定" in summary
+        assert "完整 5 色基準" in summary
+        assert "候選基準" in summary
+        assert "需要人工複核" in summary
+        assert "Black：color-v1.0.2" in summary
+        assert "860aed5f" not in summary
+        assert "860aed5f" not in workspace.candidate_color_combo.currentText()
+        assert "color-base-860aed5f" in workspace.candidate_color_summary.toolTip()
+        assert workspace.candidate_color_advanced_panel.isHidden()
+
+        workspace.candidate_color_details_button.click()
+
+        assert not workspace.candidate_color_advanced_panel.isHidden()
+        black_combo = workspace._override_combos["black"]
+        assert black_combo.itemText(0) == "沿用上方完整基準"
+
+        workspace.candidate_color_combo.setCurrentIndex(0)
+
+        assert workspace.candidate_color_summary.text() == "不套用顏色檢查"
+        assert not black_combo.isEnabled()
     finally:
         workspace.close()
