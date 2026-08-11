@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | 產線操作者／班組長 | [AI 檢測系統操作手冊](manuals/OPERATOR_MANUAL.md) | [誤判與漏檢 SOP](operations/MISJUDGE_TRIAGE_SOP.md) |
 | 設備／製程工程 | [工程維運手冊](manuals/ENGINEERING_MANUAL.md) | [相機診斷](operations/CAMERA_RUNTIME_DIAGNOSTICS.md) |
-| AI／軟體工程 | [工程維運手冊](manuals/ENGINEERING_MANUAL.md) | [模組架構](architecture/MODULE_ARCHITECTURE.md) |
+| AI／軟體工程 | [工程維運手冊](manuals/ENGINEERING_MANUAL.md) | [模組架構（繁中）](architecture/MODULE_ARCHITECTURE_ZH_TW.md)／[英文原文](architecture/MODULE_ARCHITECTURE.md) |
 | IT／公司 API | [公司同步](data/COMPANY_SERVER_SYNC.md) | [安全設計](architecture/SECURITY.md) |
 | 發版人員 | [發布與回滾 SOP](operations/RELEASE_ROLLBACK_SOP.md) | [正式上線檢查表](operations/PRODUCTION_GO_LIVE_CHECKLIST.md) |
 
@@ -28,7 +28,7 @@
 | 公司伺服器同步 | [公司同步](data/COMPANY_SERVER_SYNC.md) | `tools/inspection_sync_admin.py` |
 | PCBA 受控試產 | [PCBA 試產指南](pilot/PCBA_PILOT_GUIDE.md) | [試產驗收紀錄](pilot/PCBA_PILOT_ACCEPTANCE_TEMPLATE.md) |
 | 跨類別重複框 Pilot | [Cable1/A 1.0.6 改善企畫](pilot/CROSS_CLASS_DUPLICATE_DETECTION_PROPOSAL.md) | 現場 Gate 尚須完成 |
-| 程式模組與執行緒責任 | [模組架構](architecture/MODULE_ARCHITECTURE.md) | [技術指南](architecture/TECH_GUIDE.md) |
+| 程式模組與執行緒責任 | [模組架構（繁中）](architecture/MODULE_ARCHITECTURE_ZH_TW.md) | [英文原文](architecture/MODULE_ARCHITECTURE.md)／[技術指南](architecture/TECH_GUIDE.md) |
 | 路徑、YAML 與憑證安全 | [安全設計](architecture/SECURITY.md) | `tests/test_security.py` |
 | 受限裝置 runtime 評估 | [Firmware Runtime Plan](architecture/FIRMWARE_RUNTIME_PLAN.md) | 需以 benchmark gate 決定 |
 | 門檻／模型／保存政策歷程 | [Calibration Change Log](records/CALIBRATION_CHANGE_LOG.md) | 只追加，不覆寫歷史 |

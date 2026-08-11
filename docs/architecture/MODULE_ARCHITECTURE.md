@@ -1,5 +1,7 @@
 # Module Architecture
 
+Traditional Chinese version: [MODULE_ARCHITECTURE_ZH_TW.md](MODULE_ARCHITECTURE_ZH_TW.md)
+
 This document describes the current `yolo11_inference` runtime architecture. It
 is meant to help engineers find the right module before changing behavior.
 
