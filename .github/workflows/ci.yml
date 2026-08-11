@@ -154,15 +154,26 @@ jobs:
           python -m pip install --requirement requirements.txt
           python -m pip install --requirement requirements-dev.txt
           python -m pip check
-      - name: Run tests with project-wide coverage
+      - name: Measure non-GUI project coverage
         run: |
           python -c "from pathlib import Path; Path('reports').mkdir(exist_ok=True)"
           python -m pytest -m "not gui" --timeout=60 \
-            --cov=core --cov=app \
-            --cov-report=xml:reports/coverage.xml \
-            --cov-report=term-missing \
-            --cov-fail-under=60 \
-            --junitxml=reports/coverage-junit.xml
+            --cov=core --cov=app --cov=camera \
+            --cov-report= \
+            --cov-fail-under=0 \
+            --junitxml=reports/coverage-non-gui-junit.xml
+      - name: Append GUI project coverage
+        run: |
+          python -m pytest -m gui --timeout=60 \
+            --cov=core --cov=app --cov=camera \
+            --cov-append \
+            --cov-report= \
+            --cov-fail-under=0 \
+            --junitxml=reports/coverage-gui-junit.xml
+      - name: Enforce 80 percent project-wide coverage
+        run: |
+          python -m coverage xml -o reports/coverage.xml
+          python -m coverage report --show-missing --fail-under=80
       - name: Enforce 80 percent on critical workflows
         run: |
           python -m pytest \
