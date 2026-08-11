@@ -4,7 +4,13 @@ import numpy as np
 import pytest
 
 from camera.camera_controller import CameraController
-from core.exceptions import BackendNotAvailableError, CameraConnectionError, ConfigurationError, HardwareError
+from core.exceptions import (
+    BackendNotAvailableError,
+    CameraConnectionError,
+    ConfigurationError,
+    HardwareError,
+    ModelInferenceError,
+)
 from core.inference_engine import InferenceEngine
 
 
@@ -163,7 +169,7 @@ def test_inference_with_empty_image(mock_yolo, mock_autocast, mock_config):
     model.detector.process_detections.return_value = (None, [], [])
 
     # Test with empty array (invalid shape for letterbox)
-    with pytest.raises(Exception): # letterbox might raise ValueError
+    with pytest.raises(ModelInferenceError):
         model.infer(np.array([]), "prod", "area")
 
 

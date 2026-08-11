@@ -12,11 +12,17 @@ import csv
 import json
 import logging
 import os
+import sys
 import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.station_data import resolve_result_root, resolve_review_manifest
 
 REVIEW_LABELS = (
     "",
@@ -809,9 +815,9 @@ def _inspection_base_path(snapshot_path: Path) -> Path | None:
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build the CLI parser."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--result-root", default="Result", help="Root result directory")
-    parser.add_argument("--output-csv", default="review_manifest.csv", help="Output CSV path")
-    parser.add_argument("--output-json", default="review_manifest.json", help="Output JSON path")
+    parser.add_argument("--result-root", default=None, help="Root result directory")
+    parser.add_argument("--output-csv", default=None, help="Output CSV path")
+    parser.add_argument("--output-json", default=None, help="Output JSON path")
     parser.add_argument(
         "--include-pass",
         action="store_true",
@@ -825,16 +831,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     args = build_arg_parser().parse_args(argv)
+    result_root = resolve_result_root(args.result_root)
+    output_csv = resolve_review_manifest(args.output_csv)
+    output_json = resolve_review_manifest(
+        args.output_json,
+        default_name="review_manifest.json",
+    )
     cases = collect_review_cases(
-        args.result_root,
+        result_root,
         include_pass=args.include_pass,
         start_time=args.start_time,
         end_time=args.end_time,
     )
-    write_manifest(cases, args.output_csv, args.output_json)
-    print(f"Wrote {len(cases)} review cases to {args.output_csv}")
-    if args.output_json:
-        print(f"Wrote JSON manifest to {args.output_json}")
+    write_manifest(cases, output_csv, output_json)
+    print(f"Wrote {len(cases)} review cases to {output_csv}")
+    print(f"Wrote JSON manifest to {output_json}")
     return 0
 
 

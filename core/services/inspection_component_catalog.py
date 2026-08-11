@@ -229,11 +229,14 @@ class InspectionComponentCatalog:
             return []
         store = ColorConfigurationRevisionStore(root=self.color_revisions_root)
         records: list[InspectionComponentRecord] = []
-        for scope_root in sorted(store.root.iterdir()):
-            if not scope_root.is_dir() or scope_root.name == "active" or scope_root.name.startswith("."):
-                continue
+        try:
+            scopes = store.iter_scopes()
+        except (OSError, ColorCalibrationError, ValueError) as exc:
+            raise InspectionComponentCatalogError(
+                f"無法載入顏色版本目錄 {store.root}：{exc}"
+            ) from exc
+        for scope in scopes:
             try:
-                scope = store.scope_for_hash(scope_root.name)
                 active = store.read_active_pointer(scope)
                 active_id = str(active.get("revision_id") or "") if active else ""
                 for revision in store.list_revisions(scope):
@@ -276,7 +279,9 @@ class InspectionComponentCatalog:
                         )
                     )
             except (OSError, ColorCalibrationError, ValueError) as exc:
-                raise InspectionComponentCatalogError(f"無法載入顏色版本 {scope_root.name}：{exc}") from exc
+                raise InspectionComponentCatalogError(
+                    f"無法載入顏色版本 {scope.scope_hash}：{exc}"
+                ) from exc
         return records
 
     def _base_color_components(

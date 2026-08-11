@@ -132,11 +132,16 @@ class ColorBaselineEvidenceProvider:
         acceptance_manifest = str(
             Path(getattr(acceptance_repository, "manifest_path", "")).resolve()
         )
-        feedback_path = (
-            Path(feedback_manifest).expanduser().resolve()
-            if feedback_manifest is not None
-            else None
-        )
+        try:
+            feedback_path = (
+                Path(feedback_manifest).expanduser().resolve()
+                if feedback_manifest is not None
+                else None
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ColorBaselineError(
+                f"Color review manifest path is invalid: {feedback_manifest!r}."
+            ) from exc
 
         invalid_count = 0
         duplicate_count = 0
@@ -176,7 +181,7 @@ class ColorBaselineEvidenceProvider:
             acceptance_ok_by_hash[digest] = record
 
         feedback_by_hash: dict[str, list[dict[str, str]]] = {}
-        if feedback_path is not None and feedback_path.is_file():
+        if feedback_path is not None and _is_regular_file(feedback_path):
             feedback_rows = _read_feedback_rows(feedback_path)
             for row in feedback_rows:
                 if not self._matches_feedback_scope(row):
@@ -277,7 +282,7 @@ class ColorBaselineEvidenceProvider:
                 acceptance_image = Path(
                     acceptance_repository.image_file(record)
                 ).resolve()
-            except (OSError, ValueError) as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 invalid_count += 1
                 exclusions.append(
                     _acceptance_exclusion(
@@ -542,17 +547,27 @@ def _feedback_image_path(
 ) -> Path | None:
     if manifest_path is None:
         return None
-    feedback_root = manifest_path.parent.resolve()
+    feedback_root = _safe_resolve_path(manifest_path.parent)
+    if feedback_root is None:
+        return None
+
     declared: set[Path] = set()
     for row in rows:
         raw_path = str(row.get("output_image") or "").strip()
         if not raw_path:
             continue
-        candidate = Path(raw_path).expanduser().resolve()
-        if _is_within(candidate, feedback_root):
+        try:
+            unresolved_candidate = Path(raw_path).expanduser()
+            if unresolved_candidate.is_symlink():
+                continue
+        except (OSError, RuntimeError, ValueError):
+            continue
+        candidate = _safe_resolve_path(unresolved_candidate)
+        if candidate is not None and _is_within(candidate, feedback_root):
             declared.add(candidate)
+
     existing = sorted(
-        (path for path in declared if path.is_file() and not path.is_symlink()),
+        (path for path in declared if _is_regular_file(path)),
         key=str,
     )
     if len(existing) == 1:
@@ -561,18 +576,28 @@ def _feedback_image_path(
         return None
 
     images_root = feedback_root / "images"
-    if not images_root.is_dir():
+    try:
+        if images_root.is_symlink() or not images_root.is_dir():
+            return None
+        image_entries = tuple(images_root.iterdir())
+    except (OSError, RuntimeError, ValueError):
         return None
-    relocated = sorted(
-        (
-            path.resolve()
-            for path in images_root.iterdir()
-            if path.is_file()
-            and not path.is_symlink()
-            and path.stem in sample_ids
-        ),
-        key=str,
-    )
+
+    relocated: list[Path] = []
+    for path in image_entries:
+        try:
+            if path.is_symlink() or path.stem not in sample_ids:
+                continue
+        except (OSError, RuntimeError, ValueError):
+            continue
+        resolved = _safe_resolve_path(path)
+        if (
+            resolved is not None
+            and _is_within(resolved, feedback_root)
+            and _is_regular_file(resolved)
+        ):
+            relocated.append(resolved)
+    relocated.sort(key=str)
     return relocated[0] if len(relocated) == 1 else None
 
 
@@ -580,10 +605,13 @@ def _image_validation_issue(
     path: Path,
     expected_sha256: str,
 ) -> tuple[str, str] | None:
-    if path.is_symlink():
-        return "UNSAFE_SYMBOLIC_LINK", "影像檔是符號連結，基於安全政策不予使用。"
-    if not path.is_file():
-        return "IMAGE_NOT_FOUND", "影像檔不存在。"
+    try:
+        if path.is_symlink():
+            return "UNSAFE_SYMBOLIC_LINK", "影像檔是符號連結，基於安全政策不予使用。"
+        if not path.is_file():
+            return "IMAGE_NOT_FOUND", "影像檔不存在。"
+    except (OSError, RuntimeError, ValueError):
+        return "INVALID_IMAGE_PATH", "影像檔路徑無法安全解析。"
     actual_sha256 = _sha256_file(path)
     if not actual_sha256:
         return "IMAGE_READ_FAILED", "影像檔無法讀取。"
@@ -598,7 +626,7 @@ def _sha256_file(path: Path) -> str:
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
-    except OSError:
+    except (OSError, RuntimeError, ValueError):
         return ""
     return digest.hexdigest()
 
@@ -620,9 +648,23 @@ def _required_text(value: str, field: str) -> str:
     return normalized
 
 
+def _safe_resolve_path(value: str | Path) -> Path | None:
+    try:
+        return Path(value).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _is_regular_file(path: Path) -> bool:
+    try:
+        return not path.is_symlink() and path.is_file()
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def _is_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
-    except ValueError:
+    except (OSError, RuntimeError, ValueError):
         return False
     return True

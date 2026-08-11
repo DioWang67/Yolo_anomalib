@@ -4,8 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PIL import Image
 import pytest
+from PIL import Image
 
 from app.gui.training_batch_dialog import TrainingBatchDialog
 from core.station_data import load_station_data_paths

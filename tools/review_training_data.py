@@ -10,14 +10,15 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.gui.review_cases_dialog import run_review_dialog
+from core.station_data import resolve_result_root, resolve_review_manifest
 from core.workspace import load_workspace_paths
 
 
 def main(argv: list[str] | None = None) -> int:
     """Parse paths and launch the review UI."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--result-root", default="Result")
-    parser.add_argument("--manifest", default="review_manifest.csv")
+    parser.add_argument("--result-root", default=None)
+    parser.add_argument("--manifest", default=None)
     parser.add_argument("--training-data")
     parser.add_argument("--product")
     parser.add_argument("--area")
@@ -28,8 +29,8 @@ def main(argv: list[str] | None = None) -> int:
         else load_workspace_paths(Path(__file__).resolve().parents[1]).training_data
     )
     run_review_dialog(
-        result_root=args.result_root,
-        manifest_path=args.manifest,
+        result_root=resolve_result_root(args.result_root),
+        manifest_path=resolve_review_manifest(args.manifest),
         training_data_dir=training_data_dir,
         product=args.product,
         area=args.area,

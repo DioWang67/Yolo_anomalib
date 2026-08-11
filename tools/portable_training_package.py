@@ -15,6 +15,7 @@ from typing import Any
 
 PORTABLE_TRAINING_PACKAGE_SCHEMA = 1
 PACKAGE_METADATA_NAME = "package.json"
+SUPPORTED_OPERATOR_HANDOFF_SCHEMAS = frozenset({3, 4, 5, 6})
 
 
 class PortableTrainingPackageError(ValueError):
@@ -41,9 +42,9 @@ def export_portable_training_package(
     """Package dataset, annotation queue, configuration, and baseline artifacts."""
     handoff = Path(handoff_path).expanduser().resolve()
     payload = _read_json_mapping(handoff, "operator handoff")
-    if int(payload.get("schema_version", 0)) not in {3, 4}:
+    if int(payload.get("schema_version", 0)) not in SUPPORTED_OPERATOR_HANDOFF_SCHEMAS:
         raise PortableTrainingPackageError(
-            "Portable export requires a schema-v3 or schema-v4 operator handoff."
+            "Portable export requires a schema-v3 through schema-v6 operator handoff."
         )
     targets = payload.get("targets")
     if not isinstance(targets, list) or len(targets) != 1 or not isinstance(targets[0], dict):

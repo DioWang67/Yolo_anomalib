@@ -109,7 +109,7 @@ class CameraController:
         try:
             self.logger.logger.debug(f"正在拍攝 {count} 幀圖像...")
             frames = []
-            for i in range(count):
+            for _i in range(count):
                 frame = self.capture_frame()
                 if frame is not None:
                     frames.append(frame)

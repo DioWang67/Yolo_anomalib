@@ -187,6 +187,11 @@ class CameraPreviewWorker(QThread):
             frame = self._camera.capture_frame(
                 timeout_ms=self._capture_timeout_ms
             )
+            # capture_frame() is a blocking SDK boundary. A normal Stop can be
+            # requested while it is waiting, so discard that final return value
+            # before interpreting ``None`` as a camera-health failure.
+            if self._stop_event.is_set():
+                break
             if frame is None:
                 consecutive_failures += 1
                 if consecutive_failures >= self._max_consecutive_failures:

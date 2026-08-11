@@ -201,7 +201,7 @@ def test_save_results_yolo_success_and_flush(tmp_result_dir):
     assert out["model_info"] == {"weights": "ckpt.pt", "model_version": "1.0.0"}
     assert out["inference_time"] == 0.123
     assert os.path.exists(out["config_snapshot_path"])
-    with open(out["config_snapshot_path"], "r", encoding="utf-8") as handle:
+    with open(out["config_snapshot_path"], encoding="utf-8") as handle:
         snapshot = json.load(handle)
     assert snapshot["product"] == "P"
     assert snapshot["area"] == "A"
@@ -286,7 +286,7 @@ def test_save_results_fail_snapshot_contains_traceability_record(tmp_result_dir)
         ],
     )
 
-    with open(out["config_snapshot_path"], "r", encoding="utf-8") as handle:
+    with open(out["config_snapshot_path"], encoding="utf-8") as handle:
         snapshot = json.load(handle)
 
     assert snapshot["schema_version"] == 2
@@ -662,7 +662,7 @@ def test_buffer_and_manual_flush(tmp_result_dir):
     )
     frame = _mk_img()
     processed = _mk_img()[:, :, ::-1]
-    for i in range(2):
+    for _i in range(2):
         h.save_results(frame, [], "PASS", "yolo", [],
                        processed, product="P", area="A")
     # 撠 flush ??Excel ?府?蝛?

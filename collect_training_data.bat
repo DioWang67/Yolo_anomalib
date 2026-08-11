@@ -30,7 +30,7 @@ if not defined PYTHON_EXE (
 if not defined PYTHON_EXE goto :python_missing
 
 echo Opening button-based review window...
-"%PYTHON_EXE%" %PYTHON_ARGS% tools\review_training_data.py --result-root Result --manifest review_manifest.csv
+"%PYTHON_EXE%" %PYTHON_ARGS% tools\review_training_data.py %*
 if errorlevel 1 goto :failed
 
 echo.

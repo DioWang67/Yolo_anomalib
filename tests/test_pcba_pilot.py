@@ -51,12 +51,26 @@ def test_readiness_command_uses_short_area_argument(tmp_path, monkeypatch):
 
 def test_collect_command_writes_manifest(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    result_root = tmp_path / "Result"
+    result_root.mkdir()
+    output_csv = tmp_path / "review_manifest.csv"
+    output_json = tmp_path / "review_manifest.json"
 
-    exit_code = main(["collect"])
+    exit_code = main(
+        [
+            "collect",
+            "--result-root",
+            str(result_root),
+            "--output-csv",
+            str(output_csv),
+            "--output-json",
+            str(output_json),
+        ]
+    )
 
     assert exit_code == 0
-    assert (tmp_path / "review_manifest.csv").exists()
-    assert (tmp_path / "review_manifest.json").exists()
+    assert output_csv.exists()
+    assert output_json.exists()
 
 
 def test_summary_command_uses_default_area_paths(tmp_path, monkeypatch):
@@ -76,7 +90,14 @@ def test_summary_command_uses_default_area_paths(tmp_path, monkeypatch):
             }
         )
 
-    exit_code = main(["summary", "A"])
+    exit_code = main(
+        [
+            "summary",
+            "A",
+            "--review-manifest-csv",
+            str(tmp_path / "review_manifest.csv"),
+        ]
+    )
 
     assert exit_code == 0
     summary = json.loads((tmp_path / "pilot_acceptance_summary_A.json").read_text(encoding="utf-8"))

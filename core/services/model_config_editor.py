@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import yaml
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ModelConfigEditError(ValueError):
@@ -50,6 +55,40 @@ SCALAR_FIELDS: tuple[str, ...] = (
     "save_fail_only",
 )
 
+DEPLOY_LOCK_NAME = ".deploy.lock"
+
+
+def _acquire_deploy_lock(config_path: Path) -> Path:
+    """Atomically acquire the station lock shared with training deployment."""
+    lock_path = config_path.parent / DEPLOY_LOCK_NAME
+    try:
+        lock_path.mkdir()
+    except FileExistsError:
+        raise ModelConfigEditError(
+            f"Model deployment is in progress; config edit is blocked: {lock_path}"
+        ) from None
+    except OSError as exc:
+        raise ModelConfigEditError(
+            f"Unable to acquire the model deployment lock: {lock_path}: {exc}"
+        ) from exc
+    return lock_path
+
+
+def _release_deploy_lock(lock_path: Path) -> None:
+    """Release a station lock acquired by this config edit."""
+    try:
+        lock_path.rmdir()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        _LOGGER.warning(
+            "Model config deployment-lock cleanup was deferred; "
+            "remove the retained lock after verifying no deployment is active: "
+            "lock_path=%s error=%s",
+            lock_path,
+            exc,
+        )
+
 
 def load_model_config(config_path: Path) -> dict[str, Any]:
     """Load a model config YAML file.
@@ -79,6 +118,51 @@ def load_model_config(config_path: Path) -> dict[str, Any]:
     return dict(raw)
 
 
+def _save_model_config_locked(
+    config_path: Path,
+    values: dict[str, Any],
+) -> ModelConfigEditResult:
+    """Publish a config while the caller owns the station deployment lock."""
+    backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+    temporary_path = config_path.with_name(
+        f".{config_path.name}.{uuid4().hex}.tmp"
+    )
+    try:
+        backup_path.write_text(config_path.read_text(encoding="utf-8"), encoding="utf-8")
+        temporary_path.write_text(
+            yaml.safe_dump(
+                values,
+                allow_unicode=True,
+                sort_keys=False,
+                default_flow_style=False,
+            ),
+            encoding="utf-8",
+        )
+        temporary_path.replace(config_path)
+    except OSError as exc:
+        raise ModelConfigEditError(f"寫入模型設定失敗: {exc}") from exc
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
+    return ModelConfigEditResult(config_path=config_path, backup_path=backup_path, values=values)
+
+
+def _mutate_model_config(
+    config_path: Path,
+    mutator: Callable[[dict[str, Any]], None],
+) -> ModelConfigEditResult:
+    """Serialize one complete config read-modify-write transaction."""
+    lock_path = _acquire_deploy_lock(config_path)
+    try:
+        values = load_model_config(config_path)
+        mutator(values)
+        return _save_model_config_locked(config_path, values)
+    finally:
+        _release_deploy_lock(lock_path)
+
+
 def save_model_config(
     config_path: Path,
     values: dict[str, Any],
@@ -100,21 +184,11 @@ def save_model_config(
     if not config_path.exists():
         raise ModelConfigEditError(f"找不到模型設定檔: {config_path}")
 
-    backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+    lock_path = _acquire_deploy_lock(config_path)
     try:
-        backup_path.write_text(config_path.read_text(encoding="utf-8"), encoding="utf-8")
-        config_path.write_text(
-            yaml.safe_dump(
-                values,
-                allow_unicode=True,
-                sort_keys=False,
-                default_flow_style=False,
-            ),
-            encoding="utf-8",
-        )
-    except OSError as exc:
-        raise ModelConfigEditError(f"寫入模型設定失敗: {exc}") from exc
-    return ModelConfigEditResult(config_path=config_path, backup_path=backup_path, values=values)
+        return _save_model_config_locked(config_path, values)
+    finally:
+        _release_deploy_lock(lock_path)
 
 
 def update_model_config(
@@ -140,48 +214,48 @@ def update_model_config(
     Raises:
         ModelConfigEditError: If values have invalid types/ranges.
     """
-    data = load_model_config(config_path)
     sanitized = _sanitize_changes(changes)
 
-    expected_items = sanitized.pop("expected_items", None)
-    position_changes = {
-        key: sanitized.pop(key)
-        for key in list(sanitized.keys())
-        if key.startswith("position_") or key in {"missing_slot_check_enabled"}
-    }
-    count_check_strict = sanitized.pop("count_check_strict", None)
-    duplicate_filter_changes = {
-        key: sanitized.pop(key)
-        for key in list(sanitized.keys())
-        if key.startswith("duplicate_filter_")
-    }
-    for key, value in sanitized.items():
-        if value is None:
-            data.pop(key, None)
-        else:
-            data[key] = value
+    def apply_changes(data: dict[str, Any]) -> None:
+        expected_items = sanitized.pop("expected_items", None)
+        position_changes = {
+            key: sanitized.pop(key)
+            for key in list(sanitized.keys())
+            if key.startswith("position_") or key in {"missing_slot_check_enabled"}
+        }
+        count_check_strict = sanitized.pop("count_check_strict", None)
+        duplicate_filter_changes = {
+            key: sanitized.pop(key)
+            for key in list(sanitized.keys())
+            if key.startswith("duplicate_filter_")
+        }
+        for key, value in sanitized.items():
+            if value is None:
+                data.pop(key, None)
+            else:
+                data[key] = value
 
-    if expected_items is not None:
-        nested = data.get("expected_items")
-        if not isinstance(nested, dict):
-            nested = {}
-        product_map = nested.get(product)
-        if not isinstance(product_map, dict):
-            product_map = {}
-        product_map[area] = expected_items
-        nested[product] = product_map
-        data["expected_items"] = nested
+        if expected_items is not None:
+            nested = data.get("expected_items")
+            if not isinstance(nested, dict):
+                nested = {}
+            product_map = nested.get(product)
+            if not isinstance(product_map, dict):
+                product_map = {}
+            product_map[area] = expected_items
+            nested[product] = product_map
+            data["expected_items"] = nested
 
-    if position_changes:
-        _apply_position_changes(data, product, area, position_changes)
+        if position_changes:
+            _apply_position_changes(data, product, area, position_changes)
 
-    if count_check_strict is not None:
-        _apply_count_check_strict(data, count_check_strict)
+        if count_check_strict is not None:
+            _apply_count_check_strict(data, count_check_strict)
 
-    if duplicate_filter_changes:
-        _apply_duplicate_filter_changes(data, duplicate_filter_changes)
+        if duplicate_filter_changes:
+            _apply_duplicate_filter_changes(data, duplicate_filter_changes)
 
-    return save_model_config(config_path, data)
+    return _mutate_model_config(config_path, apply_changes)
 
 
 def save_calibration_settings(
@@ -217,45 +291,44 @@ def save_calibration_settings(
     Raises:
         ModelConfigEditError: If a value is out of its valid range.
     """
-    data = load_model_config(config_path)
+    def apply_calibration(data: dict[str, Any]) -> None:
+        if exposure_time is not None:
+            value = float(exposure_time)
+            if value <= 0:
+                raise ModelConfigEditError("exposure_time 必須大於 0")
+            data["exposure_time"] = f"{value:.4f}"
+        if gain is not None:
+            value = float(gain)
+            if value < 0:
+                raise ModelConfigEditError("gain 不可小於 0")
+            data["gain"] = f"{value:.1f}"
+        if light_brightness is not None:
+            percent = int(light_brightness)
+            if not 0 <= percent <= 100:
+                raise ModelConfigEditError("light_brightness 必須介於 0 到 100")
+            data["light_brightness"] = percent
 
-    if exposure_time is not None:
-        value = float(exposure_time)
-        if value <= 0:
-            raise ModelConfigEditError("exposure_time 必須大於 0")
-        data["exposure_time"] = f"{value:.4f}"
-    if gain is not None:
-        value = float(gain)
-        if value < 0:
-            raise ModelConfigEditError("gain 不可小於 0")
-        data["gain"] = f"{value:.1f}"
-    if light_brightness is not None:
-        percent = int(light_brightness)
-        if not 0 <= percent <= 100:
-            raise ModelConfigEditError("light_brightness 必須介於 0 到 100")
-        data["light_brightness"] = percent
+        calibration = data.get("calibration")
+        if not isinstance(calibration, dict):
+            calibration = {}
+        if target_luma is not None:
+            luma = float(target_luma)
+            if not 0.0 <= luma <= 255.0:
+                raise ModelConfigEditError("target_luma 必須介於 0 到 255")
+            calibration["target_luma"] = luma
+        if tolerance is not None:
+            tol = float(tolerance)
+            if tol <= 0:
+                raise ModelConfigEditError("tolerance 必須大於 0")
+            calibration["tolerance"] = tol
+        if roi is not None:
+            if len(roi) != 4:
+                raise ModelConfigEditError("roi 必須是 (x1, y1, x2, y2)")
+            calibration["roi"] = [int(v) for v in roi]
+        if calibration:
+            data["calibration"] = calibration
 
-    calibration = data.get("calibration")
-    if not isinstance(calibration, dict):
-        calibration = {}
-    if target_luma is not None:
-        luma = float(target_luma)
-        if not 0.0 <= luma <= 255.0:
-            raise ModelConfigEditError("target_luma 必須介於 0 到 255")
-        calibration["target_luma"] = luma
-    if tolerance is not None:
-        tol = float(tolerance)
-        if tol <= 0:
-            raise ModelConfigEditError("tolerance 必須大於 0")
-        calibration["tolerance"] = tol
-    if roi is not None:
-        if len(roi) != 4:
-            raise ModelConfigEditError("roi 必須是 (x1, y1, x2, y2)")
-        calibration["roi"] = [int(v) for v in roi]
-    if calibration:
-        data["calibration"] = calibration
-
-    return save_model_config(config_path, data)
+    return _mutate_model_config(config_path, apply_calibration)
 
 
 def _sanitize_changes(changes: dict[str, Any]) -> dict[str, Any]:

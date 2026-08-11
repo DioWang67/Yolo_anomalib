@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 
 from core.services.alignment import (
-    ExpectedLayoutAlignment,
     base_class_name,
     extract_layout_alignment,
     resolve_missing_expected_keys,
@@ -63,7 +62,6 @@ class MissingSlotChecker:
             if det.get("position_expected_key")
         }
 
-        remaining = list(missing_items)
         decisions: list[MissingSlotDecision] = []
         missing_keys = resolve_missing_expected_keys(
             missing_items,

@@ -8,6 +8,7 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+from PyQt5.QtGui import QImage
 from PyQt5.QtTest import QSignalSpy
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton
 
@@ -263,12 +264,19 @@ def qapp():
 def test_color_baseline_exclusions_dialog_lists_and_opens_existing_images(
     tmp_path, qapp
 ):
-    image_path = tmp_path / "case-1.jpg"
-    image_path.write_bytes(b"image")
+    source_root = tmp_path / "color_review"
+    source_root.mkdir()
+    source_manifest = source_root / "feedback.csv"
+    source_manifest.write_text("sample_id\n", encoding="utf-8")
+    image_path = source_root / "images" / "case-1.png"
+    image_path.parent.mkdir()
+    image = QImage(4, 4, QImage.Format_RGB32)
+    image.fill(0xFF336699)
+    assert image.save(str(image_path), "PNG")
     exclusion = ColorBaselineEvidenceExclusion(
         sample_id="case-1",
         source_kind="color_review",
-        source_manifest="feedback.csv",
+        source_manifest=str(source_manifest),
         image_path=str(image_path),
         image_sha256="a" * 64,
         reason_code="IMAGE_SHA256_MISMATCH",

@@ -353,13 +353,16 @@ def discover_color_variants(
     if not store.root.is_dir():
         return tuple(variants)
     has_matching_active = False
-    for scope_root in sorted(
-        path
-        for path in store.root.iterdir()
-        if path.is_dir() and path.name != "active" and not path.name.startswith(".")
-    ):
+    try:
+        scopes = store.iter_scopes()
+    except ColorCalibrationError:
+        raise
+    except OSError as exc:
+        raise AcceptanceMatrixError(
+            f"無法列舉顏色版本目錄：{store.root}"
+        ) from exc
+    for scope in scopes:
         try:
-            scope = store.scope_for_hash(scope_root.name)
             if (scope.product, scope.area, scope.model_type, scope.checker_type) != (
                 product,
                 area,
@@ -382,7 +385,9 @@ def discover_color_variants(
         except ColorCalibrationError:
             raise
         except OSError as exc:
-            raise AcceptanceMatrixError(f"無法讀取顏色版本目錄：{scope_root}") from exc
+            raise AcceptanceMatrixError(
+                f"無法讀取顏色版本目錄：{store.root / scope.scope_hash}"
+            ) from exc
     if has_matching_active:
         variants.insert(
             1,

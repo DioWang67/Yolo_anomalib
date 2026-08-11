@@ -5,9 +5,14 @@ from __future__ import annotations
 import argparse
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from core.services.inspection_repository import InspectionRepository
+from core.station_data import resolve_result_root
 
 
 def rebuild_inspection_database(
@@ -40,11 +45,11 @@ def rebuild_inspection_database(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--result-root", default="Result")
+    parser.add_argument("--result-root", default=None)
     parser.add_argument("--database")
     args = parser.parse_args(argv)
     indexed_count, errors = rebuild_inspection_database(
-        args.result_root,
+        resolve_result_root(args.result_root),
         database_path=args.database,
     )
     print(f"Indexed {indexed_count} inspection snapshot(s).")

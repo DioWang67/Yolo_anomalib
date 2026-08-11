@@ -16,10 +16,10 @@ QKeySequence = qt_gui.QKeySequence
 QCloseEvent = qt_gui.QCloseEvent
 QShortcut = qt_widgets.QShortcut
 
-from app.gui.i18n import tr
-from app.gui.main_window import DetectionSystemGUI
-from core._version import __version__ as SYSTEM_VERSION
-from core.types import DetectionResult, DetectionTask
+from app.gui.i18n import tr  # noqa: E402
+from app.gui.main_window import DetectionSystemGUI  # noqa: E402
+from core._version import __version__ as SYSTEM_VERSION  # noqa: E402
+from core.types import DetectionResult, DetectionTask  # noqa: E402
 from tools.retraining_workspaces import create_retraining_workspace  # noqa: E402
 
 
@@ -185,6 +185,110 @@ def test_manual_camera_inspection_reenables_auto_mode_after_pipeline_stops(
     assert gui._single_shot_running is False
     assert gui.start_btn.isEnabled() is True
     assert gui.stop_btn.isEnabled() is False
+
+
+def test_manual_pipeline_finalization_timeout_restores_safe_stop_action(
+    gui,
+    monkeypatch,
+):
+    class StuckManualCameraSystem:
+        pipeline_running = True
+
+        @staticmethod
+        def is_camera_connected() -> bool:
+            return True
+
+        @staticmethod
+        def shutdown() -> None:
+            return None
+
+    monkeypatch.setattr(gui.controller, "_system", StuckManualCameraSystem())
+    try:
+        gui._single_shot_running = True
+        gui.start_btn.setEnabled(False)
+        gui.stop_btn.setEnabled(False)
+        gui._schedule_manual_pipeline_release(gui._run_generation)
+        gui._manual_pipeline_release_deadline = time.monotonic() - 1.0
+
+        gui._restore_manual_pipeline_controls_when_idle()
+
+        assert gui._manual_pipeline_release_generation is None
+        assert gui._manual_pipeline_release_deadline is None
+        assert gui._manual_pipeline_release_timer.isActive() is False
+        assert gui._single_shot_running is False
+        assert gui.start_btn.isEnabled() is False
+        assert gui.stop_btn.isEnabled() is True
+
+        gui._shutdown_in_progress = True
+        gui._pipeline_shutdown_deadline = time.monotonic() - 1.0
+        gui.stop_btn.setEnabled(False)
+        gui._on_pipeline_stopped()
+
+        assert gui._pipeline_shutdown_deadline is None
+        assert gui._shutdown_in_progress is False
+        assert gui.start_btn.isEnabled() is False
+        assert gui.stop_btn.isEnabled() is True
+    finally:
+        # pytest-qt closes widgets before fixture finalizers restore monkeypatches.
+        # Remove the deliberately stuck system so closeEvent cannot open a modal.
+        gui.controller._system = None
+
+
+def test_manual_pipeline_state_error_does_not_lock_both_controls(
+    gui,
+    monkeypatch,
+):
+    class UnreadableManualCameraSystem:
+        @property
+        def pipeline_running(self):
+            raise RuntimeError("state unavailable")
+
+        @staticmethod
+        def is_camera_connected() -> bool:
+            return True
+
+        @staticmethod
+        def shutdown() -> None:
+            return None
+
+    messages: list[str] = []
+    shutdown_attempts: list[bool] = []
+    monkeypatch.setattr(gui, "log_message", messages.append)
+    monkeypatch.setattr(
+        gui,
+        "_begin_pipeline_shutdown",
+        lambda: shutdown_attempts.append(True),
+    )
+    monkeypatch.setattr(gui.controller, "_system", UnreadableManualCameraSystem())
+    try:
+        gui._single_shot_running = True
+        gui.start_btn.setEnabled(False)
+        gui.stop_btn.setEnabled(False)
+        gui._schedule_manual_pipeline_release(gui._run_generation)
+        gui._manual_pipeline_release_deadline = time.monotonic() - 1.0
+
+        gui._restore_manual_pipeline_controls_when_idle()
+
+        assert gui._manual_pipeline_release_generation is None
+        assert gui._manual_pipeline_release_deadline is None
+        assert gui._single_shot_running is False
+        assert gui.start_btn.isEnabled() is False
+        assert gui.stop_btn.isEnabled() is True
+        assert any("state unavailable" in message for message in messages)
+
+        gui.stop_btn.click()
+
+        assert shutdown_attempts == [True]
+        assert gui._shutdown_in_progress is True
+        assert gui.stop_btn.isEnabled() is False
+
+        gui._on_pipeline_stopped()
+
+        assert gui._shutdown_in_progress is False
+        assert gui.start_btn.isEnabled() is False
+        assert gui.stop_btn.isEnabled() is True
+    finally:
+        gui.controller._system = None
 
 
 def test_failed_manual_disconnect_does_not_claim_camera_was_disconnected(
@@ -995,7 +1099,7 @@ def test_model_loading_async(gui, qtbot):
     # Trigger refresh manually
     # We call it once to ensure the attribute is created since we skip auto-load in __init__
     gui.load_available_models()
-    with qtbot.waitSignal(gui.model_loader.models_ready, timeout=5000, raising=False) as blocker:
+    with qtbot.waitSignal(gui.model_loader.models_ready, timeout=5000, raising=False):
         # Thread already started by the call above
         pass
 

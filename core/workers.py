@@ -35,7 +35,8 @@ import queue
 import threading
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Protocol
 
 from core.exceptions import (
     BackendInitializationError,
@@ -267,8 +268,8 @@ class AcquisitionWorker(threading.Thread):
         inference_type: str = "yolo",
         capture_interval: float = 0.0,
         name: str = "AcquisitionWorker",
-        on_task_captured: Optional[Callable[[DetectionTask], None]] = None,
-        on_camera_lost: Optional[Callable[[], None]] = None,
+        on_task_captured: Callable[[DetectionTask], None] | None = None,
+        on_camera_lost: Callable[[], None] | None = None,
         stop_event: threading.Event | None = None,
         mode: PipelineMode = "continuous",
         lost_threshold: int | None = None,
@@ -483,7 +484,7 @@ class InferenceWorker(BaseWorker):
         detection_system: DetectionPipelineHost,
         *,
         name: str = "InferenceWorker",
-        on_task_inferred: Optional[Callable[[DetectionTask], None]] = None,
+        on_task_inferred: Callable[[DetectionTask], None] | None = None,
         stop_event: threading.Event | None = None,
     ) -> None:
         super().__init__(in_queue, out_queue, name=name, stop_event=stop_event)
@@ -709,7 +710,7 @@ class StorageWorker(BaseWorker):
         detection_system: DetectionPipelineHost,
         *,
         name: str = "StorageWorker",
-        on_task_processed: Optional[Callable[[DetectionTask], None]] = None,
+        on_task_processed: Callable[[DetectionTask], None] | None = None,
         stop_event: threading.Event | None = None,
         mode: PipelineMode = "continuous",
         drop_queue: OverwriteQueue[DetectionTask] | None = None,

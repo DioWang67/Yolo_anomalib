@@ -1,3 +1,8 @@
+# Import order in this module is a validated native-loader contract across the
+# supported Windows Conda environment; do not let an auto-sort move project
+# modules across the Anomalib/Torch boundary.
+# ruff: noqa: I001
+
 import os
 import warnings
 from typing import Any, cast
@@ -109,7 +114,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 ModelKey = tuple[str, str]
 
-import torch
+import torch  # noqa: E402
+
 # Limit PyTorch CPU threads to prevent UI starvation (e.g. combo box stutters) when running locally
 torch.set_num_threads(int(max(1, (os.cpu_count() or 2) // 2)))
 

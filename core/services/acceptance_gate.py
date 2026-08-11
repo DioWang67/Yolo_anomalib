@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -63,6 +63,10 @@ def run_candidate_acceptance(
     inference_type: str,
     model_identity: ModelIdentity,
     policy: AcceptanceGatePolicy,
+    color_revision_overrides: Mapping[str, str] | None = None,
+    include_active_color_revisions: bool = True,
+    color_revision_contract: Mapping[str, Any] | None = None,
+    color_revision_contract_validator: Callable[[], Sequence[str]] | None = None,
     service_factory: InferenceServiceFactory = AcceptanceInferenceService,
     progress_callback: ProgressCallback | None = None,
 ) -> AcceptanceGateResult:
@@ -89,6 +93,8 @@ def run_candidate_acceptance(
             global_config_path=global_config_path,
             model_identity=model_identity,
             color_revisions_root=color_revisions_root,
+            color_revision_overrides=dict(color_revision_overrides or {}),
+            include_active_color_revisions=include_active_color_revisions,
         )
         try:
             total = len(records)
@@ -114,6 +120,15 @@ def run_candidate_acceptance(
             service.close()
     if _sha256_file(resolved_snapshot) != snapshot_sha256:
         failures.append("acceptance snapshot changed while inference was running")
+    if color_revision_contract_validator is not None:
+        try:
+            failures.extend(
+                str(failure)
+                for failure in color_revision_contract_validator()
+                if str(failure)
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            failures.append(f"active color revision contract changed: {exc}")
 
     baseline_metrics = calculate_acceptance_metrics(records)
     candidate_metrics = calculate_acceptance_metrics(candidate_records)
@@ -144,6 +159,7 @@ def run_candidate_acceptance(
             "record_count": len(records),
         },
         "policy": asdict(policy),
+        "color_revisions": dict(color_revision_contract or {}),
         "baseline_metrics": _metrics_payload(baseline_metrics),
         "metrics": _metrics_payload(candidate_metrics),
         "comparison": comparison,

@@ -29,7 +29,12 @@ def run_cli(system) -> None:
 
     print(f"可用機種: {', '.join(available_products)}")
     while True:
-        product = input("請輸入要檢測的機種 (輸入 'quit' 離開): ").strip()
+        try:
+            product = input("請輸入要檢測的機種 (輸入 'quit' 離開): ").strip()
+        except KeyboardInterrupt:
+            print("\n中止，正在關閉...")
+            system.shutdown()
+            return
         if product.lower() == "quit":
             logger.logger.info("離開檢測系統")
             system.shutdown()
@@ -48,7 +53,12 @@ def run_cli(system) -> None:
 
     while True:
         print(f"可用區域: {', '.join(available_areas)}")
-        cmd = input("請輸入檢測指令 (格式: area,inference_type 或 quit): ").strip()
+        try:
+            cmd = input("請輸入檢測指令 (格式: area,inference_type 或 quit): ").strip()
+        except KeyboardInterrupt:
+            print("\n中止，正在關閉...")
+            system.shutdown()
+            break
         if cmd.lower() == "quit":
             logger.logger.info("離開檢測系統")
             system.shutdown()

@@ -150,3 +150,31 @@ def test_catalog_distinguishes_production_combination_from_default_pointers(
     assert by_version[deployed_color.display_version].status == "DEPLOYED"
     assert by_version[default_color.display_version].status == "DEFAULT"
     assert all(record.can_compose for record in records)
+
+
+def test_catalog_ignores_color_revision_infrastructure_directories(
+    tmp_path: Path,
+) -> None:
+    models_root = tmp_path / "models"
+    models_root.mkdir()
+    revisions_root = tmp_path / ".color_revisions"
+    for directory_name in (
+        "active",
+        "activation_events",
+        "future-infrastructure",
+        "locks",
+        "revocations",
+    ):
+        infrastructure_root = revisions_root / directory_name
+        infrastructure_root.mkdir(parents=True)
+        (infrastructure_root / "revision.json").write_text(
+            "{}",
+            encoding="utf-8",
+        )
+
+    catalog = InspectionComponentCatalog(
+        models_root=models_root,
+        color_revisions_root=revisions_root,
+    )
+
+    assert catalog.list_components() == ()

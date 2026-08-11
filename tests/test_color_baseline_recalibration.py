@@ -209,7 +209,7 @@ def test_holdout_regression_falls_back_until_final_checker_is_safe(
         def check(self, image):
             result = old_checker.check(image)
             if result.best_color.casefold() == "green":
-                return SimpleNamespace(best_color="Black")
+                return SimpleNamespace(best_color="Black", is_ok=True)
             return result
 
     def checker_from_payload(payload):
@@ -357,3 +357,30 @@ def test_collects_only_known_component_crops_from_confirmed_ok() -> None:
     assert evidence[0].sample_id == "ACC-1"
     assert evidence[0].image_bgr.shape == (40, 40, 3)
     assert np.mean(evidence[0].image_bgr[:, :, 2]) > 100
+
+
+def test_correct_predictions_requires_threshold_acceptance_and_color_match() -> None:
+    evidence = tuple(
+        ColorCropEvidence(
+            sample_id=f"sample-{index}",
+            color="Black",
+            image_bgr=np.zeros((4, 4, 3), dtype=np.uint8),
+            source_sha256=f"{index:064x}",
+        )
+        for index in range(3)
+    )
+
+    class _Checker:
+        def __init__(self) -> None:
+            self._results = iter(
+                (
+                    SimpleNamespace(best_color="Black", is_ok=False),
+                    SimpleNamespace(best_color="Black", is_ok=True),
+                    SimpleNamespace(best_color="Orange", is_ok=True),
+                )
+            )
+
+        def check(self, _image):
+            return next(self._results)
+
+    assert recalibration._correct_predictions(_Checker(), evidence, "Black") == 1

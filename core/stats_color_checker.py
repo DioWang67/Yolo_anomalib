@@ -407,6 +407,11 @@ class StatsColorChecker:
                 base_thresholds[name.lower()] = float(val)
         self._color_thresholds = base_thresholds
 
+    @property
+    def supported_colors(self) -> tuple[str, ...]:
+        """Return the immutable color vocabulary exposed by this checker."""
+        return tuple(color_range.name for color_range in self._ranges.values())
+
     @classmethod
     def from_json(
         cls,

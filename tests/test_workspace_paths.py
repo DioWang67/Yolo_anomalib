@@ -4,6 +4,11 @@ from pathlib import Path
 
 import pytest
 
+from core.station_data import (
+    load_station_data_paths,
+    resolve_result_root,
+    resolve_review_manifest,
+)
 from core.workspace import WorkspaceConfigurationError, load_workspace_paths
 
 MANIFEST = """\
@@ -133,3 +138,51 @@ def test_optional_station_paths_default_to_inference_project(tmp_path: Path) -> 
         tmp_path / "yolo11_inference" / "Result"
     ).resolve()
     assert paths.inference_artifacts == (tmp_path / "yolo11_inference").resolve()
+
+
+def test_station_cli_defaults_use_workspace_results_and_review_manifest(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "workspace.yaml").write_text(MANIFEST, encoding="utf-8")
+
+    assert resolve_result_root(None, start=tmp_path) == (tmp_path / "Result").resolve()
+    assert resolve_review_manifest(None, start=tmp_path) == (
+        tmp_path / "station_data" / "yolo11_inference" / "review_manifest.csv"
+    ).resolve()
+    assert resolve_review_manifest(
+        None,
+        start=tmp_path,
+        default_name="review_manifest.json",
+    ) == (
+        tmp_path / "station_data" / "yolo11_inference" / "review_manifest.json"
+    ).resolve()
+
+
+def test_explicit_station_cli_paths_do_not_discover_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalid_workspace = tmp_path / "invalid-workspace"
+    invalid_workspace.mkdir()
+    monkeypatch.setenv("YOLO11_WORKSPACE_ROOT", str(invalid_workspace))
+    explicit_result = tmp_path / "custom-results"
+    explicit_manifest = tmp_path / "custom-review.csv"
+
+    assert resolve_result_root(explicit_result) == explicit_result.resolve()
+    assert resolve_review_manifest(explicit_manifest) == explicit_manifest.resolve()
+
+
+def test_station_defaults_do_not_depend_on_process_working_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    expected = load_station_data_paths(project_root)
+    unrelated_cwd = tmp_path / "unrelated-cwd"
+    unrelated_cwd.mkdir()
+    monkeypatch.delenv("YOLO11_WORKSPACE_ROOT", raising=False)
+    monkeypatch.chdir(unrelated_cwd)
+
+    assert load_station_data_paths() == expected
+    assert resolve_result_root(None) == expected.results
+    assert resolve_review_manifest(None) == expected.default_review_manifest

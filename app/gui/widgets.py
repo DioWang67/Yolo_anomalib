@@ -491,7 +491,6 @@ class OperatorGuidanceCard(QFrame):
             return
 
         missing = result.missing_items or []
-        over = result.over_items or []
         unexpected = result.unexpected_items or []
         if result.status == "PASS":
             self.show_message("PASS", "Continue production.", "success", [])

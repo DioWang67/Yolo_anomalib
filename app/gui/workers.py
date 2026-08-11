@@ -29,10 +29,9 @@ import threading
 import traceback
 from typing import TYPE_CHECKING
 
-import numpy as np
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
-from core.types import DetectionItem, DetectionResult, DetectionTask
+from core.types import DetectionTask
 
 if TYPE_CHECKING:
     from app.gui.controller import DetectionController

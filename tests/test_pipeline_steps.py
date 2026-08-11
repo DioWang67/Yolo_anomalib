@@ -9,6 +9,11 @@ from core.config import DetectionConfig
 from core.pipeline.context import DetectionContext
 from core.pipeline.registry import PipelineEnv
 from core.pipeline.steps import ColorCheckStep, CountCheckStep, PositionCheckStep, SaveResultsStep, SequenceCheckStep
+from core.position_validator import (
+    PositionValidator,
+    _base_class_name,
+    build_missing_item_locations,
+)
 from core.services.color_checker import ColorCheckerService
 
 
@@ -451,16 +456,6 @@ class TestSequenceCheckErrorHandling:
         step.run(base_context)
         assert base_context.status == "DETECTION_FAIL"
         assert base_context.result["sequence_check"]["reason"] == "order_mismatch"
-
-# ---------------------------------------------------------------------------
-# Position validation unit tests (PositionValidator directly)
-# ---------------------------------------------------------------------------
-from core.position_validator import (
-    PositionValidator,
-    _base_class_name,
-    build_missing_item_locations,
-)
-
 
 def _make_pos_config(
     expected_boxes: dict,

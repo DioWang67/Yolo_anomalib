@@ -476,6 +476,34 @@ def test_color_discovery_lists_embedded_active_and_exact_revision(
     assert profile_variant.revision_overrides == profile.revision_overrides
 
 
+def test_color_discovery_ignores_revision_store_infrastructure_directories(
+    tmp_path: Path,
+) -> None:
+    revisions_root = tmp_path / ".color_revisions"
+    for directory_name in (
+        "active",
+        "activation_events",
+        "future-infrastructure",
+        "locks",
+        "revocations",
+    ):
+        infrastructure_root = revisions_root / directory_name
+        infrastructure_root.mkdir(parents=True)
+        (infrastructure_root / "revision.json").write_text(
+            "{}",
+            encoding="utf-8",
+        )
+
+    variants = discover_color_variants(
+        revisions_root,
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+    )
+
+    assert [variant.variant_id for variant in variants] == ["color-embedded"]
+
+
 def test_color_discovery_includes_immutable_baseline_candidate(
     tmp_path: Path,
 ) -> None:

@@ -96,6 +96,15 @@ class StationDataPaths:
         return path
 
 
+@dataclass(frozen=True)
+class InferencePathContract:
+    """Canonical inference paths passed across GUI and training boundaries."""
+
+    models_dir: Path
+    station_data_dir: Path
+    project_root: Path
+
+
 def station_data_paths_from_workspace(workspace: WorkspacePaths) -> StationDataPaths:
     root = workspace.station_data.resolve()
     return StationDataPaths(
@@ -119,4 +128,59 @@ def station_data_paths_from_workspace(workspace: WorkspacePaths) -> StationDataP
 
 def load_station_data_paths(start: str | Path | None = None) -> StationDataPaths:
     """Discover station-local paths with legacy in-project fallback."""
-    return station_data_paths_from_workspace(load_workspace_paths(start))
+    discovery_start = (
+        Path(start) if start is not None else Path(__file__).resolve().parents[1]
+    )
+    return station_data_paths_from_workspace(load_workspace_paths(discovery_start))
+
+
+def resolve_inference_path_contract(
+    *,
+    models_dir: str | Path | None = None,
+    station_data_dir: str | Path | None = None,
+    project_root: str | Path | None = None,
+    start: str | Path | None = None,
+) -> InferencePathContract:
+    """Resolve missing paths without discovery when every path is injected."""
+    fallback_paths = None
+    if any(value is None for value in (models_dir, station_data_dir, project_root)):
+        fallback_paths = load_station_data_paths(start)
+    if models_dir is None:
+        assert fallback_paths is not None
+        models_dir = fallback_paths.models
+    if station_data_dir is None:
+        assert fallback_paths is not None
+        station_data_dir = fallback_paths.root
+    if project_root is None:
+        assert fallback_paths is not None
+        project_root = fallback_paths.source_root
+    return InferencePathContract(
+        models_dir=Path(models_dir).expanduser().resolve(),
+        station_data_dir=Path(station_data_dir).expanduser().resolve(),
+        project_root=Path(project_root).expanduser().resolve(),
+    )
+
+
+def resolve_result_root(
+    value: str | Path | None,
+    *,
+    start: str | Path | None = None,
+) -> Path:
+    """Resolve an explicit result root or the workspace-canonical default."""
+    if value is not None:
+        return Path(value).expanduser().resolve()
+    return load_station_data_paths(start).results
+
+
+def resolve_review_manifest(
+    value: str | Path | None,
+    *,
+    start: str | Path | None = None,
+    default_name: str = "review_manifest.csv",
+) -> Path:
+    """Resolve an explicit review manifest or its station-local default."""
+    if value is not None:
+        return Path(value).expanduser().resolve()
+    if Path(default_name).name != default_name:
+        raise ValueError("Default review manifest name must be a file name.")
+    return load_station_data_paths(start).review_root / default_name

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Dialog for illumination calibration: record current values and auto-calibrate.
 
 The heavy lifting lives in :class:`core.services.calibration_session.CalibrationSession`
@@ -8,8 +6,10 @@ operator set a target, and drives record / auto-calibrate, persisting results to
 the per-model ``config.yaml`` via an injected save function.
 """
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import cv2
 import numpy as np

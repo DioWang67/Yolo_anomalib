@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -24,9 +25,23 @@ from tools.color_calibration_service import (
     canonical_sha256,
     sha256_file,
 )
+from tools.color_revision_publication_lock import (
+    ColorRevisionPublicationLockTimeoutError,
+    color_revision_publication_lock,
+)
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_SCOPE_HASH = re.compile(r"^[0-9a-f]{24}$")
 _DISPLAY_VERSION = re.compile(r"^color-v(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
+_ACTIVATION_EVENT_TYPES = frozenset(
+    {
+        "COLOR_REVISION_ACTIVATED",
+        "COLOR_REVISION_ROLLED_BACK",
+        "COLOR_BASELINE_CAPTURED",
+        "COLOR_OK_ONLY_CANDIDATE_ACTIVATED",
+    }
+)
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -80,11 +95,13 @@ class ColorConfigurationRevisionStore:
         clock: Callable[[], datetime] | None = None,
         id_generator: Callable[[], str] | None = None,
         replace_file: Callable[[str | Path, str | Path], Any] | None = None,
+        publication_lock_timeout: float = 30.0,
     ) -> None:
         self.root = Path(root).resolve()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.id_generator = id_generator or (lambda: str(uuid4()))
         self.replace_file = replace_file or os.replace
+        self.publication_lock_timeout = max(float(publication_lock_timeout), 0.0)
 
     def commit(
         self,
@@ -249,35 +266,131 @@ class ColorConfigurationRevisionStore:
     ) -> Path:
         if not operator.strip() or not reason.strip():
             raise ColorCalibrationError("COLOR_ACTIVATION_REASON_REQUIRED", "Activation operator and reason are required.")
-        if self.is_revoked(revision):
-            raise ColorCalibrationError("COLOR_REVISION_REVOKED", "A revoked color revision cannot be activated.")
-        self.load(revision.scope, revision.revision_id)
+        if event_type not in _ACTIVATION_EVENT_TYPES:
+            raise ColorCalibrationError(
+                "COLOR_ACTIVATION_EVENT_TYPE_INVALID",
+                "Color activation event type is unsupported.",
+            )
         lock = self._lock_for(revision.scope.scope_hash)
-        with lock:
-            active = self.read_active_pointer(revision.scope)
-            current_sha = str(active.get("config_sha256") or "") if active else revision.parent_config_sha256
-            if current_sha != expected_current_sha256:
-                raise ColorCalibrationError("CURRENT_CONFIG_STALE", "Active color configuration changed after approval.", retryable=True)
-            if active and str(active.get("revision_id")) == revision.revision_id:
-                return self.active_pointer_path(revision.scope)
-            pointer = {
-                "schema_version": 2,
-                "scope": {**asdict(revision.scope), "scope_hash": revision.scope.scope_hash},
-                "revision_id": revision.revision_id,
-                "display_version": revision.display_version,
-                "config_sha256": revision.new_config_sha256,
-                "activated_at": self.clock().isoformat(),
-                "operator": operator.strip(),
-                "previous_revision_id": str(active.get("revision_id") or "") if active else None,
-                "activation_reason": reason.strip(),
-            }
-            pointer_path = self.active_pointer_path(revision.scope)
-            self._atomic_pointer_write(pointer_path, pointer)
-            event_id = _safe_id(self.id_generator(), "activation event")
-            _write_json_atomic(revision.root / "activation_events" / f"{event_id}.json", {
-                **pointer, "event_id": event_id, "event_type": event_type,
-            })
-            return pointer_path
+        try:
+            with color_revision_publication_lock(
+                self.root,
+                timeout=self.publication_lock_timeout,
+            ):
+                with lock:
+                    revision = self.load(
+                        revision.scope,
+                        revision.revision_id,
+                    )
+                    if self.is_revoked(revision):
+                        raise ColorCalibrationError(
+                            "COLOR_REVISION_REVOKED",
+                            "A revoked color revision cannot be activated.",
+                        )
+                    active = self.read_active_pointer(revision.scope)
+                    current_sha = (
+                        str(active.get("config_sha256") or "")
+                        if active
+                        else revision.parent_config_sha256
+                    )
+                    if current_sha != expected_current_sha256:
+                        raise ColorCalibrationError(
+                            "CURRENT_CONFIG_STALE",
+                            "Active color configuration changed after approval.",
+                            retryable=True,
+                        )
+                    if (
+                        active
+                        and str(active.get("revision_id"))
+                        == revision.revision_id
+                    ):
+                        return self.active_pointer_path(revision.scope)
+                    event_id = _safe_id(
+                        self.id_generator(),
+                        "activation event",
+                    )
+                    pointer = {
+                        "schema_version": 2,
+                        "scope": {
+                            **asdict(revision.scope),
+                            "scope_hash": revision.scope.scope_hash,
+                        },
+                        "revision_id": revision.revision_id,
+                        "display_version": revision.display_version,
+                        "config_sha256": revision.new_config_sha256,
+                        "activated_at": self.clock().isoformat(),
+                        "operator": operator.strip(),
+                        "previous_revision_id": (
+                            str(active.get("revision_id") or "")
+                            if active
+                            else None
+                        ),
+                        "activation_reason": reason.strip(),
+                        "event_id": event_id,
+                        "event_type": event_type,
+                    }
+                    pointer_path = self.active_pointer_path(revision.scope)
+                    event_path = (
+                        revision.root
+                        / "activation_events"
+                        / f"{event_id}.json"
+                    )
+                    if (
+                        revision.root.is_symlink()
+                        or event_path.parent.is_symlink()
+                        or not event_path.parent.is_dir()
+                        or not event_path.parent.resolve().is_relative_to(
+                            self.root
+                        )
+                    ):
+                        raise ColorCalibrationError(
+                            "COLOR_REVISION_PATH_ESCAPE",
+                            "Color activation event directory is unsafe.",
+                        )
+                    if event_path.exists() or event_path.is_symlink():
+                        raise ColorCalibrationError(
+                            "COLOR_ACTIVATION_EVENT_COLLISION",
+                            "Color activation event identity already exists.",
+                            retryable=True,
+                        )
+                    try:
+                        _write_json_atomic(
+                            event_path,
+                            pointer,
+                        )
+                    except (OSError, TypeError, ValueError) as event_error:
+                        if _activation_event_matches(event_path, pointer):
+                            _LOGGER.warning(
+                                "Color activation event was committed but its "
+                                "durability sync reported an error: path=%s "
+                                "error=%s",
+                                event_path,
+                                event_error,
+                            )
+                        else:
+                            raise ColorCalibrationError(
+                                "COLOR_ACTIVATION_EVENT_FAILED",
+                                "Color activation event could not be recorded; "
+                                "the active pointer was not published.",
+                                retryable=True,
+                            ) from event_error
+                    try:
+                        self._atomic_pointer_write(pointer_path, pointer)
+                    except ColorCalibrationError as pointer_error:
+                        evidence_note = (
+                            "Completed activation event retained without an active "
+                            f"pointer commit: {event_path}"
+                        )
+                        pointer_error.add_note(evidence_note)
+                        _LOGGER.error("%s", evidence_note)
+                        raise
+                    return pointer_path
+        except ColorRevisionPublicationLockTimeoutError as exc:
+            raise ColorCalibrationError(
+                "COLOR_REVISION_PUBLICATION_BUSY",
+                "A model deployment is publishing the active color contract.",
+                retryable=True,
+            ) from exc
 
     def rollback(
         self,
@@ -302,18 +415,81 @@ class ColorConfigurationRevisionStore:
     def revoke(self, revision: ColorConfigurationRevision, *, operator: str, reason: str) -> Path:
         if not operator.strip() or not reason.strip():
             raise ColorCalibrationError("COLOR_REVOCATION_REASON_REQUIRED", "Revocation operator and reason are required.")
-        active = self.read_active_pointer(revision.scope)
-        if active and str(active.get("revision_id")) == revision.revision_id:
-            raise ColorCalibrationError("COLOR_ACTIVE_REVISION_CANNOT_REVOKE", "Rollback to another revision before revoking the active revision.")
-        revocations = revision.root / "revocations"
-        event_id = _safe_id(self.id_generator(), "revocation")
-        path = revocations / f"{event_id}.json"
-        _write_json_atomic(path, {
-            "schema_version": 1, "event_type": "COLOR_REVISION_REVOKED", "event_id": event_id,
-            "revision_id": revision.revision_id, "scope_hash": revision.scope.scope_hash,
-            "operator": operator.strip(), "reason": reason.strip(), "created_at": self.clock().isoformat(),
-        })
-        return path
+        lock = self._lock_for(revision.scope.scope_hash)
+        try:
+            with color_revision_publication_lock(
+                self.root,
+                timeout=self.publication_lock_timeout,
+            ):
+                with lock:
+                    revision = self.load(
+                        revision.scope,
+                        revision.revision_id,
+                    )
+                    active = self.read_active_pointer(revision.scope)
+                    if (
+                        active
+                        and str(active.get("revision_id"))
+                        == revision.revision_id
+                    ):
+                        raise ColorCalibrationError(
+                            "COLOR_ACTIVE_REVISION_CANNOT_REVOKE",
+                            "Rollback to another revision before revoking the "
+                            "active revision.",
+                        )
+                    revocations = revision.root / "revocations"
+                    event_id = _safe_id(self.id_generator(), "revocation")
+                    path = revocations / f"{event_id}.json"
+                    if (
+                        revision.root.is_symlink()
+                        or revocations.is_symlink()
+                        or not revocations.is_dir()
+                        or not revocations.resolve().is_relative_to(self.root)
+                    ):
+                        raise ColorCalibrationError(
+                            "COLOR_REVISION_PATH_ESCAPE",
+                            "Color revocation event directory is unsafe.",
+                        )
+                    if path.exists() or path.is_symlink():
+                        raise ColorCalibrationError(
+                            "COLOR_REVOCATION_EVENT_COLLISION",
+                            "Color revocation event identity already exists.",
+                            retryable=True,
+                        )
+                    payload = {
+                        "schema_version": 1,
+                        "event_type": "COLOR_REVISION_REVOKED",
+                        "event_id": event_id,
+                        "revision_id": revision.revision_id,
+                        "scope_hash": revision.scope.scope_hash,
+                        "operator": operator.strip(),
+                        "reason": reason.strip(),
+                        "created_at": self.clock().isoformat(),
+                    }
+                    try:
+                        _write_json_atomic(path, payload)
+                    except (OSError, TypeError, ValueError) as event_error:
+                        if _activation_event_matches(path, payload):
+                            _LOGGER.warning(
+                                "Color revocation event was committed but its "
+                                "durability sync reported an error: path=%s "
+                                "error=%s",
+                                path,
+                                event_error,
+                            )
+                        else:
+                            raise ColorCalibrationError(
+                                "COLOR_REVOCATION_EVENT_FAILED",
+                                "Color revocation event could not be recorded.",
+                                retryable=True,
+                            ) from event_error
+                    return path
+        except ColorRevisionPublicationLockTimeoutError as exc:
+            raise ColorCalibrationError(
+                "COLOR_REVISION_PUBLICATION_BUSY",
+                "A model deployment is publishing the active color contract.",
+                retryable=True,
+            ) from exc
 
     def load(self, scope: ColorCalibrationScope, revision_id: str) -> ColorConfigurationRevision:
         revision_root = self.root / scope.scope_hash / _safe_id(revision_id, "revision")
@@ -350,13 +526,52 @@ class ColorConfigurationRevisionStore:
 
     def read_active_pointer(self, scope: ColorCalibrationScope) -> Mapping[str, Any] | None:
         path = self.active_pointer_path(scope)
+        if path.parent.is_symlink() or path.is_symlink():
+            raise ColorCalibrationError(
+                "COLOR_ACTIVE_POINTER_INVALID",
+                f"Active color pointer cannot be a symbolic link: {path}",
+            )
+        if path.parent.exists() and not path.parent.resolve().is_relative_to(
+            self.root
+        ):
+            raise ColorCalibrationError(
+                "COLOR_ACTIVE_POINTER_INVALID",
+                f"Active color pointer escapes its store: {path}",
+            )
         if not path.is_file():
             return None
         try:
             payload = _read_json(path)
-            if str(payload.get("scope", {}).get("scope_hash") or "") != scope.scope_hash:
+            if not isinstance(payload, Mapping):
+                raise ColorCalibrationError(
+                    "COLOR_ACTIVE_POINTER_INVALID",
+                    "Active color pointer must contain an object.",
+                )
+            raw_scope = payload.get("scope")
+            if not isinstance(raw_scope, Mapping) or (
+                str(raw_scope.get("scope_hash") or "") != scope.scope_hash
+            ):
                 raise ColorCalibrationError("COLOR_ACTIVE_POINTER_INVALID", "Active pointer scope mismatch.")
+            schema_version = payload.get("schema_version")
+            if type(schema_version) is not int or schema_version not in {1, 2}:
+                raise ColorCalibrationError(
+                    "COLOR_ACTIVE_POINTER_INVALID",
+                    "Active color pointer schema version is unsupported.",
+                )
+            if schema_version == 2:
+                if not _has_valid_activation_evidence(
+                    self.root,
+                    scope,
+                    payload,
+                ):
+                    raise ColorCalibrationError(
+                        "COLOR_ACTIVATION_EVIDENCE_MISSING",
+                        "Schema 2 active color pointer has no exact activation "
+                        "event.",
+                    )
             return payload
+        except ColorCalibrationError:
+            raise
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
             raise ColorCalibrationError("COLOR_ACTIVE_POINTER_INVALID", f"Active pointer is unreadable: {path}") from exc
 
@@ -399,6 +614,21 @@ class ColorConfigurationRevisionStore:
                 "COLOR_REVISION_INVALID",
                 f"Color scope metadata is unreadable: {scope_root}",
             ) from exc
+
+    def iter_scopes(self) -> tuple[ColorCalibrationScope, ...]:
+        """Return verified revision scopes, excluding store infrastructure."""
+        if not self.root.is_dir():
+            return ()
+        scope_hashes = sorted(
+            path.name
+            for path in self.root.iterdir()
+            if (
+                not path.is_symlink()
+                and path.is_dir()
+                and _SCOPE_HASH.fullmatch(path.name)
+            )
+        )
+        return tuple(self.scope_for_hash(scope_hash) for scope_hash in scope_hashes)
 
     def list_revisions(
         self, scope: ColorCalibrationScope
@@ -507,7 +737,20 @@ class ColorConfigurationRevisionStore:
         return None
 
     def _atomic_pointer_write(self, path: Path, payload: Mapping[str, Any]) -> None:
+        if path.parent.is_symlink() or path.is_symlink():
+            raise ColorCalibrationError(
+                "COLOR_REVISION_PATH_ESCAPE",
+                "Color activation pointer destination is unsafe.",
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
+        if (
+            path.parent.is_symlink()
+            or not path.parent.resolve().is_relative_to(self.root)
+        ):
+            raise ColorCalibrationError(
+                "COLOR_REVISION_PATH_ESCAPE",
+                "Color activation pointer destination is unsafe.",
+            )
         temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         try:
             with temporary.open("w", encoding="utf-8", newline="\n") as handle:
@@ -516,10 +759,22 @@ class ColorConfigurationRevisionStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             self.replace_file(temporary, path)
+            _fsync_directory(path.parent)
         except OSError as exc:
+            if _activation_event_matches(path, payload):
+                _LOGGER.warning(
+                    "Color activation pointer was committed but its durability "
+                    "sync reported an error: path=%s error=%s",
+                    path,
+                    exc,
+                )
+                return
             raise ColorCalibrationError("COLOR_ACTIVATION_FAILED", f"Could not activate color revision: {exc}", retryable=True) from exc
         finally:
-            temporary.unlink(missing_ok=True)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     @classmethod
     def _lock_for(cls, scope_hash: str) -> threading.Lock:
@@ -572,3 +827,101 @@ def _display_value(value: Any) -> str:
 
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _activation_event_matches(
+    path: Path,
+    pointer: Mapping[str, Any],
+) -> bool:
+    try:
+        return _read_json(path) == dict(pointer)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _has_valid_activation_evidence(
+    root: Path,
+    scope: ColorCalibrationScope,
+    pointer: Mapping[str, Any],
+) -> bool:
+    """Validate new exact references or one uniquely matching legacy event."""
+    try:
+        revision_id = _safe_id(
+            str(pointer.get("revision_id") or ""),
+            "revision",
+        )
+        events_root = root / scope.scope_hash / revision_id / "activation_events"
+        event_id_value = pointer.get("event_id")
+        event_type_value = pointer.get("event_type")
+        if event_id_value is not None or event_type_value is not None:
+            event_id = _safe_id(str(event_id_value or ""), "activation event")
+            event_type = str(event_type_value or "")
+            if event_type not in _ACTIVATION_EVENT_TYPES:
+                return False
+            event_path = events_root / f"{event_id}.json"
+            return _safe_event_payload(event_path, root=root) == dict(pointer)
+        return _legacy_activation_event_count(
+            events_root,
+            root=root,
+            pointer=pointer,
+        ) == 1
+    except (OSError, TypeError, ValueError, ColorCalibrationError):
+        return False
+
+
+def _legacy_activation_event_count(
+    events_root: Path,
+    *,
+    root: Path,
+    pointer: Mapping[str, Any],
+) -> int:
+    if events_root.is_symlink() or not events_root.is_dir():
+        return 0
+    matches = 0
+    for event_path in sorted(events_root.glob("*.json")):
+        event = _safe_event_payload(event_path, root=root)
+        if event is None:
+            return 0
+        event_id = str(event.get("event_id") or "")
+        event_type = str(event.get("event_type") or "")
+        if (
+            _safe_id(event_id, "activation event") != event_path.stem
+            or event_path.name != f"{event_id}.json"
+            or event_type not in _ACTIVATION_EVENT_TYPES
+            or set(event) != set(pointer) | {"event_id", "event_type"}
+        ):
+            return 0
+        legacy_pointer = dict(event)
+        legacy_pointer.pop("event_id")
+        legacy_pointer.pop("event_type")
+        if legacy_pointer == dict(pointer):
+            matches += 1
+    return matches
+
+
+def _safe_event_payload(
+    path: Path,
+    *,
+    root: Path,
+) -> Mapping[str, Any] | None:
+    if (
+        path.parent.is_symlink()
+        or path.parent.parent.is_symlink()
+        or path.parent.parent.parent.is_symlink()
+        or path.is_symlink()
+        or not path.is_file()
+        or not path.resolve().is_relative_to(root)
+    ):
+        return None
+    payload = _read_json(path)
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

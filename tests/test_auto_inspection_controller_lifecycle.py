@@ -104,6 +104,20 @@ class _EmptyFrameCamera:
         self.unhealthy = True
 
 
+class _BlockingEmptyFrameCamera(_EmptyFrameCamera):
+    def __init__(self) -> None:
+        super().__init__()
+        self.config.camera_lost_threshold = 1
+        self.capture_started = threading.Event()
+        self.release_capture = threading.Event()
+
+    def capture_frame(self, *, timeout_ms: int | None = None):
+        self.capture_timeouts.append(timeout_ms)
+        self.capture_started.set()
+        self.release_capture.wait(timeout=1.0)
+        return None
+
+
 def test_preview_uses_bounded_timeout_and_marks_repeated_failure_unhealthy() -> None:
     camera = _EmptyFrameCamera()
     config = AutoTriggerConfig.from_dict(DEFAULT_AUTO_TRIGGER_CONFIG)
@@ -116,6 +130,26 @@ def test_preview_uses_bounded_timeout_and_marks_repeated_failure_unhealthy() -> 
     assert camera.capture_timeouts == [500, 500]
     assert camera.unhealthy is True
     assert errors == ["Camera returned None for 2 consecutive frames"]
+
+
+def test_preview_stop_during_blocking_capture_is_not_a_camera_failure() -> None:
+    camera = _BlockingEmptyFrameCamera()
+    config = AutoTriggerConfig.from_dict(DEFAULT_AUTO_TRIGGER_CONFIG)
+    worker = CameraPreviewWorker(camera, config, show_debug_overlay=False)
+    errors: list[str] = []
+    worker.error_occurred.connect(errors.append)
+    runner = threading.Thread(target=worker.run, daemon=True)
+
+    runner.start()
+    assert camera.capture_started.wait(timeout=1.0)
+    worker.stop()
+    camera.release_capture.set()
+    runner.join(timeout=1.0)
+
+    assert runner.is_alive() is False
+    assert camera.capture_timeouts == [500]
+    assert camera.unhealthy is False
+    assert errors == []
 
 
 def test_auto_start_rejects_unhealthy_camera_session() -> None:

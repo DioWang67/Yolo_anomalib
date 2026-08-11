@@ -27,6 +27,38 @@ from tools.review_repair import (
 )
 
 
+def test_operator_handoff_explicit_workspace_paths_skip_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = tmp_path / "review.csv"
+    manifest.write_text("review_label\n", encoding="utf-8")
+    models_dir = tmp_path / "models"
+    station_data_dir = tmp_path / "station_data"
+    inference_project_root = tmp_path / "inference"
+    for path in (models_dir, station_data_dir, inference_project_root):
+        path.mkdir()
+    invalid_workspace = tmp_path / "invalid-workspace"
+    invalid_workspace.mkdir()
+    monkeypatch.setenv("YOLO11_WORKSPACE_ROOT", str(invalid_workspace))
+
+    report = export_operator_handoff(
+        manifest,
+        tmp_path / "training_data",
+        inference_models_dir=models_dir,
+        inference_station_data_dir=station_data_dir,
+        inference_project_root=inference_project_root,
+    )
+    payload = json.loads(report.handoff_path.read_text(encoding="utf-8"))
+
+    assert payload["schema_version"] == 6
+    assert payload["inference_models_dir"] == str(models_dir.resolve())
+    assert payload["inference_station_data_dir"] == str(station_data_dir.resolve())
+    assert payload["inference_project_root"] == str(
+        inference_project_root.resolve()
+    )
+
+
 def _save_test_image(
     path: Path,
     *,
@@ -733,7 +765,10 @@ def test_operator_handoff_exports_verified_boxes_and_routes_missed_cases(tmp_pat
         str(original_wrong_box),
     }
     handoff = json.loads(report.handoff_path.read_text(encoding="utf-8"))
-    assert handoff["schema_version"] == 5
+    assert handoff["schema_version"] == 6
+    assert Path(handoff["inference_models_dir"]).is_absolute()
+    assert Path(handoff["inference_station_data_dir"]).is_absolute()
+    assert Path(handoff["inference_project_root"]).is_absolute()
     assert handoff["training_options"] == {
         "epochs": 20,
         "augmentations_per_image": 20,

@@ -70,6 +70,9 @@ def test_training_review_opens_project_scoped_dialog(tmp_path, monkeypatch) -> N
         result_root=gui._project_root / "Result",
         manifest_path=gui._project_root / "review_manifest.csv",
         training_data_dir=tmp_path / "Yolo11_auto_train" / "data",
+        inference_models_dir=gui._project_root / "models",
+        inference_station_data_dir=gui._project_root,
+        inference_project_root=gui._project_root,
         language="zh_TW",
         product="Cable1",
         area="A",
@@ -120,6 +123,9 @@ projects:
 paths:
   training_data: trainer/shared-data
   inference_models: inference-app/models
+  station_data: station/inference
+  inference_results: results/inference
+  inference_artifacts: artifacts/inference
 """,
         encoding="utf-8",
     )
@@ -134,7 +140,17 @@ paths:
 
     _open_training_review(gui)
 
-    assert run_dialog.call_args.kwargs["training_data_dir"] == training_data.resolve()
+    kwargs = run_dialog.call_args.kwargs
+    assert kwargs["result_root"] == (workspace_root / "results" / "inference").resolve()
+    assert kwargs["manifest_path"] == (
+        workspace_root / "station" / "inference" / "review_manifest.csv"
+    ).resolve()
+    assert kwargs["training_data_dir"] == training_data.resolve()
+    assert kwargs["inference_models_dir"] == (inference_root / "models").resolve()
+    assert kwargs["inference_station_data_dir"] == (
+        workspace_root / "station" / "inference"
+    ).resolve()
+    assert kwargs["inference_project_root"] == inference_root.resolve()
 
 
 def test_training_review_refuses_while_detection_is_running(monkeypatch) -> None:

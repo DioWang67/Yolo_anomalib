@@ -47,14 +47,14 @@ def test_measure_luma_rejects_bad_shape():
 
 # ------------------------------------------------------------------- propose
 def _state(**kw) -> HardwareState:
-    base = dict(
-        exposure=10000.0,
-        exposure_min=100.0,
-        exposure_max=100000.0,
-        led_brightness=128,
-        led_max=255,
-        led_available=True,
-    )
+    base = {
+        "exposure": 10000.0,
+        "exposure_min": 100.0,
+        "exposure_max": 100000.0,
+        "led_brightness": 128,
+        "led_max": 255,
+        "led_available": True,
+    }
     base.update(kw)
     return HardwareState(**base)
 

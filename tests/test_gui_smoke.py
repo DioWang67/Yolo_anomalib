@@ -1,6 +1,6 @@
 
-import pytest
 import numpy as np
+import pytest
 
 # Ensure app is importable
 # sys.path.append(os.getcwd())
@@ -323,6 +323,7 @@ def test_detection_worker_cancel_prevents_late_pipeline_start(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 
     import threading
+
     from PyQt5.QtWidgets import QApplication
 
     from app.gui.workers import DetectionWorker

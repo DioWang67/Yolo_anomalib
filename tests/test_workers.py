@@ -15,12 +15,11 @@ import time
 import numpy as np
 import pytest
 
-from core.queues import OverwriteQueue
-from core.exceptions import ModelInferenceError
-from core.types import DetectionTask
 from core.async_pipeline import AsyncPipelineManager
+from core.exceptions import ModelInferenceError
+from core.queues import OverwriteQueue
+from core.types import DetectionTask
 from core.workers import AcquisitionWorker, BaseWorker, InferenceWorker, StorageWorker
-
 
 # =====================================================================
 # Helpers & Fixtures

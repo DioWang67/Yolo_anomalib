@@ -72,7 +72,10 @@ from app.gui.training_batch_dialog import (
 )
 from core.retraining_options import RetrainingOptions
 from core.services.inspection_repository import InspectionRepository
-from core.station_data import load_station_data_paths
+from core.station_data import (
+    load_station_data_paths,
+    resolve_inference_path_contract,
+)
 from core.training_batch_version import (
     TrainingBatchVersionError,
     validate_training_batch_version,
@@ -906,6 +909,9 @@ class ReviewCasesDialog(QDialog):
         result_root: str | Path,
         manifest_path: str | Path,
         training_data_dir: str | Path,
+        inference_models_dir: str | Path | None = None,
+        inference_station_data_dir: str | Path | None = None,
+        inference_project_root: str | Path | None = None,
         language: str = "zh_TW",
         product: str | None = None,
         area: str | None = None,
@@ -921,9 +927,17 @@ class ReviewCasesDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        inference_paths = resolve_inference_path_contract(
+            models_dir=inference_models_dir,
+            station_data_dir=inference_station_data_dir,
+            project_root=inference_project_root,
+        )
         self.result_root = Path(result_root)
         self.manifest_path = _target_manifest_path(Path(manifest_path), product=product, area=area)
         self.training_data_dir = Path(training_data_dir)
+        self.inference_models_dir = inference_paths.models_dir
+        self.inference_station_data_dir = inference_paths.station_data_dir
+        self.inference_project_root = inference_paths.project_root
         self.language = language
         self.product = product
         self.area = area
@@ -3275,15 +3289,10 @@ class ReviewCasesDialog(QDialog):
             source_manifest_sha=manifest_sha,
         )
         if processing_execution_framework_enabled():
-            configured_result_root = getattr(self, "result_root", None)
-            project_root = (
-                Path(configured_result_root).resolve().parent
-                if isinstance(configured_result_root, (str, Path))
-                else self.manifest_path.parent
+            production_models_root = self.inference_models_dir
+            production_color_revisions_root = (
+                self.inference_station_data_dir / ".color_revisions"
             )
-            data_paths = load_station_data_paths(project_root)
-            production_models_root = data_paths.models
-            production_color_revisions_root = data_paths.color_revisions
             run_store = ProcessingRunStore(
                 self.manifest_path.parent / ".processing_runs"
             )
@@ -3560,7 +3569,9 @@ class ReviewCasesDialog(QDialog):
             handoff_report = export_operator_handoff(
                 selected_manifest,
                 self.training_data_dir,
-                inference_models_dir=self.result_root.parent / "models",
+                inference_models_dir=self.inference_models_dir,
+                inference_station_data_dir=self.inference_station_data_dir,
+                inference_project_root=self.inference_project_root,
                 training_options=training_options.to_dict(),
                 batch_version=batch_version,
                 batch_workspace_dir=(
@@ -3715,7 +3726,9 @@ class ReviewCasesDialog(QDialog):
             report = export_operator_handoff(
                 selected_manifest,
                 output_dir,
-                inference_models_dir=self.result_root.parent / "models",
+                inference_models_dir=self.inference_models_dir,
+                inference_station_data_dir=self.inference_station_data_dir,
+                inference_project_root=self.inference_project_root,
                 training_options=(
                     training_options.to_dict() if training_options is not None else None
                 ),
@@ -4103,10 +4116,9 @@ class ReviewCasesDialog(QDialog):
         self.workflow_stack.setCurrentWidget(page)
 
     def _experimental_color_service(self) -> ExperimentalColorCandidateService:
-        data_paths = load_station_data_paths(self.result_root)
         return ExperimentalColorCandidateService(
-            models_root=data_paths.models,
-            revisions_root=data_paths.color_revisions,
+            models_root=self.inference_models_dir,
+            revisions_root=self.inference_station_data_dir / ".color_revisions",
         )
 
     def _eligible_experimental_color_scopes(self, report: Any):
@@ -4599,9 +4611,12 @@ def _is_failure_review_candidate(row: dict[str, Any]) -> bool:
 
 def run_review_dialog(
     *,
-    result_root: str | Path = "Result",
-    manifest_path: str | Path = "review_manifest.csv",
+    result_root: str | Path | None = None,
+    manifest_path: str | Path | None = None,
     training_data_dir: str | Path | None = None,
+    inference_models_dir: str | Path | None = None,
+    inference_station_data_dir: str | Path | None = None,
+    inference_project_root: str | Path | None = None,
     language: str = "zh_TW",
     product: str | None = None,
     area: str | None = None,
@@ -4610,8 +4625,36 @@ def run_review_dialog(
     parent: QWidget | None = None,
 ) -> int:
     """Open the review dialog, creating a QApplication when run standalone."""
+    station_paths = (
+        load_station_data_paths()
+        if any(
+            value is None
+            for value in (
+                result_root,
+                manifest_path,
+                inference_models_dir,
+                inference_station_data_dir,
+            )
+        )
+        else None
+    )
+    workspace_paths = (
+        load_workspace_paths(Path(__file__).resolve().parents[2])
+        if training_data_dir is None or inference_project_root is None
+        else None
+    )
+    if result_root is None:
+        result_root = station_paths.results  # type: ignore[union-attr]
+    if manifest_path is None:
+        manifest_path = station_paths.default_review_manifest  # type: ignore[union-attr]
     if training_data_dir is None:
-        training_data_dir = load_workspace_paths().training_data
+        training_data_dir = workspace_paths.training_data  # type: ignore[union-attr]
+    if inference_models_dir is None:
+        inference_models_dir = station_paths.models  # type: ignore[union-attr]
+    if inference_station_data_dir is None:
+        inference_station_data_dir = station_paths.root  # type: ignore[union-attr]
+    if inference_project_root is None:
+        inference_project_root = workspace_paths.inference_project  # type: ignore[union-attr]
     if use_legacy_selected_page is None:
         use_legacy_selected_page = _environment_flag_enabled(
             LEGACY_SELECTED_PAGE_ENV
@@ -4633,6 +4676,9 @@ def run_review_dialog(
         result_root=result_root,
         manifest_path=manifest_path,
         training_data_dir=training_data_dir,
+        inference_models_dir=inference_models_dir,
+        inference_station_data_dir=inference_station_data_dir,
+        inference_project_root=inference_project_root,
         language=language,
         product=product,
         area=area,

@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
 )
 
 from app.gui.hover_help import HoverHelpBadge
+from core.station_data import resolve_inference_path_contract
 from tools.retraining_workspaces import (
     RetrainingWorkspace,
     RetrainingWorkspaceError,
@@ -122,6 +123,9 @@ class RetrainingWorkspaceHost(QWidget):
         result_root: str | Path,
         manifest_path: str | Path,
         training_data_dir: str | Path,
+        inference_models_dir: str | Path | None = None,
+        inference_station_data_dir: str | Path | None = None,
+        inference_project_root: str | Path | None = None,
         language: str,
         product: str | None,
         area: str | None,
@@ -147,6 +151,14 @@ class RetrainingWorkspaceHost(QWidget):
         self.result_root = Path(result_root)
         self.manifest_path = Path(manifest_path)
         self.training_data_dir = Path(training_data_dir)
+        inference_paths = resolve_inference_path_contract(
+            models_dir=inference_models_dir,
+            station_data_dir=inference_station_data_dir,
+            project_root=inference_project_root,
+        )
+        self.inference_models_dir = inference_paths.models_dir
+        self.inference_station_data_dir = inference_paths.station_data_dir
+        self.inference_project_root = inference_paths.project_root
         self.language = language
         self._available_targets = self._normalize_targets(
             available_targets,
@@ -598,6 +610,9 @@ class RetrainingWorkspaceHost(QWidget):
                 result_root=self.result_root,
                 manifest_path=active_workspace.manifest_path,
                 training_data_dir=self.training_data_dir,
+                inference_models_dir=self.inference_models_dir,
+                inference_station_data_dir=self.inference_station_data_dir,
+                inference_project_root=self.inference_project_root,
                 language=self.language,
                 product=self.product,
                 area=self.area,

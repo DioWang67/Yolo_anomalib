@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Hardware-facing glue for brightness auto-calibration.
 
 ``AutoCalibrator`` is pure; this module binds it to a real camera and LED
@@ -14,8 +12,11 @@ LED brightness has two representations: the controller speaks raw 0..max_value
 the single boundary that converts between them.
 """
 
+from __future__ import annotations
+
 import time
-from typing import Callable, Protocol
+from collections.abc import Callable
+from typing import Protocol
 
 import numpy as np
 

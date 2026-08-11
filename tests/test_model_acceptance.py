@@ -528,6 +528,14 @@ def test_headless_gate_blocks_a_sample_regression(tmp_path: Path) -> None:
         def close(self) -> None:
             pass
 
+    def reject_changed_color_revisions() -> tuple[str, ...]:
+        raise RuntimeError("active pointer changed during inference")
+
+    color_revision_contract = {
+        "schema_version": 1,
+        "identity_sha256": "contract-sha",
+    }
+
     result = run_candidate_acceptance(
         project_root=tmp_path,
         models_root=tmp_path / "models",
@@ -546,9 +554,17 @@ def test_headless_gate_blocks_a_sample_regression(tmp_path: Path) -> None:
             max_false_negatives=0,
             max_regressions=0,
         ),
+        color_revision_contract=color_revision_contract,
+        color_revision_contract_validator=reject_changed_color_revisions,
         service_factory=RegressingService,
     )
 
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
     assert result.passed is False
     assert any("false positives" in failure for failure in result.failures)
     assert any("regressed samples" in failure for failure in result.failures)
+    assert any(
+        "active pointer changed during inference" in failure
+        for failure in result.failures
+    )
+    assert report["color_revisions"] == color_revision_contract

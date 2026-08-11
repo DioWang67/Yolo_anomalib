@@ -8,7 +8,6 @@ cannot be loaded (e.g. broken DLL on Windows CI).
 """
 
 import threading
-import time
 from collections import OrderedDict
 from unittest.mock import MagicMock
 

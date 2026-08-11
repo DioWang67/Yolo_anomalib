@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Single-entry PCBA pilot helper for operators.
 
 This wrapper keeps the production tools available behind short commands:
@@ -11,6 +9,8 @@ This wrapper keeps the production tools available behind short commands:
     python tools/pcba_pilot.py metrics
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
@@ -19,20 +19,25 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.collect_review_cases import collect_review_cases, write_manifest
-from tools.inspection_metrics import (
+from core.station_data import resolve_result_root, resolve_review_manifest  # noqa: E402
+from tools.collect_review_cases import collect_review_cases, write_manifest  # noqa: E402
+from tools.inspection_metrics import (  # noqa: E402
     compute_report,
     load_manifest_rows,
     render_console,
+)
+from tools.inspection_metrics import (  # noqa: E402
     write_report as write_metrics_report,
 )
-from tools.pilot_acceptance_report import build_acceptance_summary, write_summary
-from tools.production_readiness_check import (
+from tools.pilot_acceptance_report import (  # noqa: E402
+    build_acceptance_summary,
+    write_summary,
+)
+from tools.production_readiness_check import (  # noqa: E402
     has_blocking_failures,
     run_readiness_checks,
     write_report,
 )
-
 
 DEFAULT_PRODUCT = "PCBA1"
 
@@ -74,11 +79,16 @@ def run_readiness_command(args: argparse.Namespace) -> int:
 
 def run_collect_command(args: argparse.Namespace) -> int:
     """Collect review cases with operator-friendly defaults."""
-    cases = collect_review_cases(args.result_root, include_pass=args.include_pass)
-    write_manifest(cases, args.output_csv, args.output_json)
-    print(f"Wrote {len(cases)} review cases to {args.output_csv}")
-    if args.output_json:
-        print(f"Wrote JSON manifest to {args.output_json}")
+    result_root = resolve_result_root(args.result_root)
+    output_csv = resolve_review_manifest(args.output_csv)
+    output_json = resolve_review_manifest(
+        args.output_json,
+        default_name="review_manifest.json",
+    )
+    cases = collect_review_cases(result_root, include_pass=args.include_pass)
+    write_manifest(cases, output_csv, output_json)
+    print(f"Wrote {len(cases)} review cases to {output_csv}")
+    print(f"Wrote JSON manifest to {output_json}")
     if not cases:
         print("No review cases found. Run inference first, or use --include-pass for golden board review.")
     return 0
@@ -96,7 +106,7 @@ def run_summary_command(args: argparse.Namespace) -> int:
         product=product,
         area=area,
         readiness_json=readiness_json,
-        review_manifest_csv=args.review_manifest_csv,
+        review_manifest_csv=resolve_review_manifest(args.review_manifest_csv),
     )
     write_summary(summary, output_json=output_json, output_md=output_md)
     print(f"Recommendation: {summary.recommendation}")
@@ -109,7 +119,7 @@ def run_pilot_command(args: argparse.Namespace) -> int:
     """Run readiness, collect review cases, then build the summary."""
     area = _resolve_area(args)
     readiness_json = args.readiness_json or str(default_readiness_report_path(area))
-    review_manifest_csv = args.output_csv
+    review_manifest_csv = resolve_review_manifest(args.output_csv)
 
     readiness_args = argparse.Namespace(
         product=args.product,
@@ -119,9 +129,12 @@ def run_pilot_command(args: argparse.Namespace) -> int:
         output_json=readiness_json,
     )
     collect_args = argparse.Namespace(
-        result_root=args.result_root,
+        result_root=resolve_result_root(args.result_root),
         output_csv=review_manifest_csv,
-        output_json=args.review_manifest_json,
+        output_json=resolve_review_manifest(
+            args.review_manifest_json,
+            default_name="review_manifest.json",
+        ),
         include_pass=args.include_pass,
     )
     summary_args = argparse.Namespace(
@@ -145,7 +158,7 @@ def run_pilot_command(args: argparse.Namespace) -> int:
 
 def run_metrics_command(args: argparse.Namespace) -> int:
     """Compute trust metrics (confusion matrix, escape/overkill) from labels."""
-    rows = load_manifest_rows(args.review_manifest_csv)
+    rows = load_manifest_rows(resolve_review_manifest(args.review_manifest_csv))
     report = compute_report(rows)
     print(render_console(report))
     output_json = None if args.no_json else args.output_json
@@ -166,17 +179,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     readiness.add_argument("--output-json", default=None, help="Readiness report path")
     readiness.set_defaults(func=run_readiness_command)
 
-    collect = subparsers.add_parser("collect", help="Collect review manifest from Result/")
-    collect.add_argument("--result-root", default="Result", help="Root result directory")
-    collect.add_argument("--output-csv", default="review_manifest.csv", help="Review manifest CSV path")
-    collect.add_argument("--output-json", default="review_manifest.json", help="Review manifest JSON path")
+    collect = subparsers.add_parser("collect", help="Collect the station review manifest")
+    collect.add_argument("--result-root", default=None, help="Root result directory")
+    collect.add_argument("--output-csv", default=None, help="Review manifest CSV path")
+    collect.add_argument("--output-json", default=None, help="Review manifest JSON path")
     collect.add_argument("--include-pass", action="store_true", help="Include PASS cases for golden board review")
     collect.set_defaults(func=run_collect_command)
 
     summary = subparsers.add_parser("summary", help="Build pilot acceptance summary")
     _add_product_area_args(summary)
     summary.add_argument("--readiness-json", default=None, help="Readiness report JSON path")
-    summary.add_argument("--review-manifest-csv", default="review_manifest.csv", help="Review manifest CSV path")
+    summary.add_argument("--review-manifest-csv", default=None, help="Review manifest CSV path")
     summary.add_argument("--output-json", default=None, help="Pilot summary JSON path")
     summary.add_argument("--output-md", default=None, help="Pilot summary Markdown path")
     summary.set_defaults(func=run_summary_command)
@@ -185,9 +198,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     _add_product_area_args(pilot)
     pilot.add_argument("--config", default=None, help="Override config path")
     pilot.add_argument("--readiness-json", default=None, help="Readiness report path")
-    pilot.add_argument("--result-root", default="Result", help="Root result directory")
-    pilot.add_argument("--output-csv", default="review_manifest.csv", help="Review manifest CSV path")
-    pilot.add_argument("--review-manifest-json", default="review_manifest.json", help="Review manifest JSON path")
+    pilot.add_argument("--result-root", default=None, help="Root result directory")
+    pilot.add_argument("--output-csv", default=None, help="Review manifest CSV path")
+    pilot.add_argument("--review-manifest-json", default=None, help="Review manifest JSON path")
     pilot.add_argument("--summary-json", default=None, help="Pilot summary JSON path")
     pilot.add_argument("--summary-md", default=None, help="Pilot summary Markdown path")
     pilot.add_argument("--include-pass", action="store_true", help="Include PASS cases for golden board review")
@@ -197,7 +210,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "metrics", help="Confusion matrix + escape/overkill from labeled manifest"
     )
     metrics.add_argument(
-        "--review-manifest-csv", default="review_manifest.csv", help="Labeled review manifest CSV path"
+        "--review-manifest-csv", default=None, help="Labeled review manifest CSV path"
     )
     metrics.add_argument(
         "--output-json", default="inspection_metrics.json", help="Metrics report JSON path"

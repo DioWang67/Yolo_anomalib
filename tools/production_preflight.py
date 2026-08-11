@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import shutil
+import sys
 import tempfile
 import uuid
 from dataclasses import asdict, dataclass
@@ -16,10 +17,14 @@ from urllib.parse import urlparse
 
 import yaml
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from core.services.inspection_database import (
     InspectionDatabaseError,
     InspectionDatabaseManager,
 )
+from core.station_data import resolve_result_root
 
 
 @dataclass(frozen=True)
@@ -311,7 +316,7 @@ def _aware_utc(value: datetime | None) -> datetime:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--result-root", default="Result")
+    parser.add_argument("--result-root", default=None)
     parser.add_argument("--config")
     parser.add_argument("--backup-restore-drill", action="store_true")
     parser.add_argument(
@@ -327,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         settings = load_settings(
-            args.result_root,
+            resolve_result_root(args.result_root),
             config_path=args.config,
         )
         checks = run_preflight(

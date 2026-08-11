@@ -36,6 +36,7 @@ def test_load_stats_from_json(dummy_stats_json):
     assert "black" in checker._ranges
     assert "target_green" in checker._ranges
     assert checker._ranges["target_green"].name == "target_green"
+    assert checker.supported_colors == ("black", "target_green")
 
 def test_check_solid_color(dummy_stats_json):
     """測試對純色圖像進行顏色檢查"""

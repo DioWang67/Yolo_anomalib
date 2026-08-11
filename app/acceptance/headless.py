@@ -11,7 +11,13 @@ from core.services.acceptance_gate import (
     AcceptanceGatePolicy,
     run_candidate_acceptance,
 )
+from core.services.color_revision_contract import (
+    capture_candidate_color_revision_contract,
+    color_revision_overrides,
+    verify_active_color_revision_contract,
+)
 from core.services.model_acceptance import ModelIdentity
+from core.station_data import load_station_data_paths
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,6 +64,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.color_model
         else None
     )
+    color_revisions_root = (
+        Path(args.color_revisions_root).expanduser().resolve()
+        if args.color_revisions_root
+        else load_station_data_paths(args.project_root).color_revisions
+    )
+    color_revision_contract = capture_candidate_color_revision_contract(
+        revisions_root=color_revisions_root,
+        candidate_config_path=config_path,
+        global_config_path=args.global_config,
+        color_model_present=color_path is not None,
+        product=args.product,
+        area=args.area,
+        inference_type=args.inference_type,
+    )
+    revision_overrides = color_revision_overrides(color_revision_contract)
     identity = ModelIdentity(
         version=str(args.candidate_version),
         sha256=_sha256_file(weight_path),
@@ -82,11 +103,18 @@ def main(argv: list[str] | None = None) -> int:
                 flush=True,
             )
 
+    def verify_color_revisions() -> tuple[str, ...]:
+        verify_active_color_revision_contract(
+            color_revision_contract,
+            revisions_root=color_revisions_root,
+        )
+        return ()
+
     result = run_candidate_acceptance(
         project_root=args.project_root,
         models_root=args.models_root,
         global_config_path=args.global_config,
-        color_revisions_root=args.color_revisions_root,
+        color_revisions_root=color_revisions_root,
         dataset_root=args.dataset_root,
         snapshot_manifest_path=args.snapshot_manifest,
         report_path=args.report,
@@ -95,6 +123,10 @@ def main(argv: list[str] | None = None) -> int:
         inference_type=args.inference_type,
         model_identity=identity,
         policy=policy,
+        color_revision_overrides=revision_overrides,
+        include_active_color_revisions=False,
+        color_revision_contract=color_revision_contract,
+        color_revision_contract_validator=verify_color_revisions,
         progress_callback=report_progress,
     )
     if result.passed:

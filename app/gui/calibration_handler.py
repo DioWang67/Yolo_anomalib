@@ -1,8 +1,8 @@
-from __future__ import annotations
-
 """Mixin wiring the 'Illumination Calibration' menu action to its dialog."""
 
-from PyQt5.QtWidgets import QDialog, QMessageBox
+from __future__ import annotations
+
+from PyQt5.QtWidgets import QMessageBox
 
 from app.gui.calibration_dialog import CalibrationDialog
 from app.gui.i18n import tr

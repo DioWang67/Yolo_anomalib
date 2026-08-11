@@ -1032,7 +1032,13 @@ def _correct_predictions(
     evidence: Sequence[ColorCropEvidence],
     expected_color: str,
 ) -> int:
-    return sum(checker.check(item.image_bgr).best_color.casefold() == expected_color.casefold() for item in evidence)
+    expected = expected_color.casefold()
+    correct = 0
+    for item in evidence:
+        result = checker.check(item.image_bgr)
+        if bool(result.is_ok) and result.best_color.casefold() == expected:
+            correct += 1
+    return correct
 
 
 def _center_drift(

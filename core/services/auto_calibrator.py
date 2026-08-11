@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Illumination auto-calibration: drive image brightness to a recorded target.
 
 Scope and strategy
@@ -26,9 +24,11 @@ Concurrency: single-threaded by contract. The caller (GUI worker thread) must
 guarantee no inspection runs concurrently; this module holds no shared state.
 """
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable
 
 import numpy as np
 

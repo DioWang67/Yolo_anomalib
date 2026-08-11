@@ -107,7 +107,7 @@ class FakeMessageBox:
 
 
 class FakeDialog:
-    instances: list["FakeDialog"] = []
+    instances: list[FakeDialog] = []
 
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs

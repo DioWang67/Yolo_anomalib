@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QUrl
-from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtCore import QUrl
+from PyQt5.QtGui import QDesktopServices, QImageReader
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -24,12 +24,52 @@ from core.services.color_baseline_evidence import (
     ColorBaselineEvidenceExclusion,
 )
 
-_PATH_ROLE = Qt.UserRole
 _SOURCE_LABELS = {
     "acceptance": "驗收資料",
     "color_review": "顏色覆核",
     "merged": "跨來源真值",
 }
+_IMAGE_SUFFIXES = frozenset(
+    {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
+)
+_IMAGE_SOURCE_KINDS = frozenset({"acceptance", "color_review"})
+
+
+def _trusted_image_path(
+    exclusion: ColorBaselineEvidenceExclusion,
+) -> Path | None:
+    """Resolve one decodable image without escaping its evidence source root."""
+    if exclusion.source_kind not in _IMAGE_SOURCE_KINDS:
+        return None
+    if not exclusion.source_manifest or not exclusion.image_path:
+        return None
+
+    try:
+        unresolved_manifest = Path(exclusion.source_manifest).expanduser()
+        if unresolved_manifest.is_symlink():
+            return None
+        manifest_path = unresolved_manifest.resolve(strict=True)
+        if not manifest_path.is_file():
+            return None
+
+        source_root = manifest_path.parent
+        unresolved_image = Path(exclusion.image_path).expanduser()
+        if not unresolved_image.is_absolute():
+            unresolved_image = source_root / unresolved_image
+        if unresolved_image.is_symlink():
+            return None
+        image_path = unresolved_image.resolve(strict=True)
+        image_path.relative_to(source_root)
+        if image_path.suffix.casefold() not in _IMAGE_SUFFIXES:
+            return None
+        if not image_path.is_file():
+            return None
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+    reader = QImageReader(str(image_path))
+    reader.setDecideFormatFromContent(True)
+    return image_path if not reader.read().isNull() else None
 
 
 class ColorBaselineExclusionsDialog(QDialog):
@@ -82,7 +122,6 @@ class ColorBaselineExclusionsDialog(QDialog):
                 elif column == 2:
                     tooltip = f"{value}\n內部原因代碼：{exclusion.reason_code}"
                 item.setToolTip(tooltip)
-                item.setData(_PATH_ROLE, exclusion.image_path)
                 self.table.setItem(row, column, item)
 
         actions = QHBoxLayout()
@@ -103,25 +142,31 @@ class ColorBaselineExclusionsDialog(QDialog):
         if self._exclusions:
             self.table.selectRow(0)
 
-    def _selected_path(self) -> Path | None:
+    def _selected_exclusion(self) -> ColorBaselineEvidenceExclusion | None:
         row = self.table.currentRow()
-        item = self.table.item(row, 0) if row >= 0 else None
-        raw_path = str(item.data(_PATH_ROLE) or "") if item else ""
-        return Path(raw_path).expanduser() if raw_path else None
+        if row < 0 or row >= len(self._exclusions):
+            return None
+        return self._exclusions[row]
+
+    def _selected_path(self) -> Path | None:
+        exclusion = self._selected_exclusion()
+        return _trusted_image_path(exclusion) if exclusion is not None else None
 
     def _update_actions(self) -> None:
-        path = self._selected_path()
-        self.open_image_button.setEnabled(
-            bool(path and path.is_file() and not path.is_symlink())
-        )
+        self.open_image_button.setEnabled(self._selected_path() is not None)
 
     def _open_selected_image(self) -> None:
         path = self._selected_path()
-        if path is None or path.is_symlink() or not path.is_file():
+        if path is None:
             QMessageBox.warning(
                 self,
                 "無法開啟照片",
-                "選取項目沒有可讀取的本機影像檔。",
+                "選取項目沒有位於來源資料夾內且可驗證的影像檔。",
             )
             return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve())))
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            QMessageBox.warning(
+                self,
+                "無法開啟照片",
+                "系統沒有可用的影像檢視器。",
+            )

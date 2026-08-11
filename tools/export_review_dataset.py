@@ -28,6 +28,7 @@ from typing import Any
 from PIL import Image
 
 from core.retraining_options import RetrainingOptions
+from core.station_data import resolve_inference_path_contract
 from core.training_batch_version import validate_training_batch_version
 from tools.color_feedback import export_color_feedback
 from tools.process_liveness import is_process_active
@@ -286,6 +287,8 @@ def export_operator_handoff(
     output_dir: str | Path,
     *,
     inference_models_dir: str | Path | None = None,
+    inference_station_data_dir: str | Path | None = None,
+    inference_project_root: str | Path | None = None,
     training_options: dict[str, Any] | None = None,
     batch_version: str = "",
     batch_workspace_dir: str | Path | None = None,
@@ -300,6 +303,15 @@ def export_operator_handoff(
     manifest_path = Path(manifest_csv)
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
+    inference_paths = resolve_inference_path_contract(
+        models_dir=inference_models_dir,
+        station_data_dir=inference_station_data_dir,
+        project_root=inference_project_root,
+        start=Path(__file__).resolve().parents[1],
+    )
+    resolved_inference_models_dir = inference_paths.models_dir
+    resolved_inference_station_data_dir = inference_paths.station_data_dir
+    resolved_inference_project_root = inference_paths.project_root
     selected_training_options = RetrainingOptions.from_mapping(training_options)
     requested_batch_version = str(batch_version or "").strip()
     requested_workspace_dir = (
@@ -540,8 +552,15 @@ def export_operator_handoff(
             final_updates,
             selected_training_options,
             normalized_batch_version,
+            inference_models_dir=resolved_inference_models_dir,
+            inference_station_data_dir=resolved_inference_station_data_dir,
+            inference_project_root=resolved_inference_project_root,
         )
-        existing_handoff = _find_active_operator_job(output_root, submission_hash)
+        existing_handoff = _find_active_operator_job(
+            output_root,
+            submission_hash,
+            minimum_schema_version=6,
+        )
         if existing_handoff is not None:
             existing_payload = _read_json_mapping(existing_handoff)
             existing_status_path = Path(
@@ -583,7 +602,7 @@ def export_operator_handoff(
         handoff_path = job_dir / "handoff.json"
         status_path = job_dir / "status.json"
         handoff_payload = {
-            "schema_version": 5,
+            "schema_version": 6,
             "job_id": job_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "submission_hash": submission_hash,
@@ -592,11 +611,11 @@ def export_operator_handoff(
             "source_manifest": str(manifest_path.resolve()),
             "data_root": str(output_root.resolve()),
             "status_path": str(status_path.resolve()),
-            "inference_models_dir": (
-                str(Path(inference_models_dir).resolve())
-                if inference_models_dir is not None
-                else ""
+            "inference_models_dir": str(resolved_inference_models_dir),
+            "inference_station_data_dir": str(
+                resolved_inference_station_data_dir
             ),
+            "inference_project_root": str(resolved_inference_project_root),
             "ready_count": len(ready_items),
             "total_ready_count": total_ready_count,
             "pending_count": len(pending_rows),
@@ -2733,6 +2752,10 @@ def _operator_submission_hash(
     updates: list[tuple[str, ExportedReviewItem | dict[str, str]]],
     training_options: RetrainingOptions | None = None,
     batch_version: str = "",
+    *,
+    inference_models_dir: Path | None = None,
+    inference_station_data_dir: Path | None = None,
+    inference_project_root: Path | None = None,
 ) -> str:
     fingerprint: list[dict[str, str]] = []
     for state, payload in updates:
@@ -2762,6 +2785,14 @@ def _operator_submission_hash(
         ),
         "training_options": (training_options or RetrainingOptions()).to_dict(),
     }
+    if inference_models_dir is not None:
+        submission_payload["inference_models_dir"] = str(inference_models_dir)
+    if inference_station_data_dir is not None:
+        submission_payload["inference_station_data_dir"] = str(
+            inference_station_data_dir
+        )
+    if inference_project_root is not None:
+        submission_payload["inference_project_root"] = str(inference_project_root)
     if batch_version:
         submission_payload["batch_version"] = batch_version
     serialized = json.dumps(
@@ -2774,7 +2805,10 @@ def _operator_submission_hash(
 
 
 def _find_active_operator_job(
-    output_root: Path, submission_hash: str
+    output_root: Path,
+    submission_hash: str,
+    *,
+    minimum_schema_version: int = 1,
 ) -> Path | None:
     jobs_root = output_root / ".operator_handoff" / "jobs"
     if not jobs_root.is_dir():
@@ -2785,6 +2819,12 @@ def _find_active_operator_job(
         handoff_path = job_dir / "handoff.json"
         handoff = _read_json_mapping(handoff_path)
         if str(handoff.get("submission_hash") or "") != submission_hash:
+            continue
+        try:
+            schema_version = int(handoff.get("schema_version", 0))
+        except (TypeError, ValueError):
+            continue
+        if schema_version < minimum_schema_version:
             continue
         status = _read_json_mapping(job_dir / "status.json")
         state = str(status.get("state") or "").strip()

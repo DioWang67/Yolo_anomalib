@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Build a concise pilot acceptance summary from readiness and review outputs."""
+
+from __future__ import annotations
 
 import argparse
 import csv

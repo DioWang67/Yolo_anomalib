@@ -208,7 +208,7 @@ def _l1(a: list[float], b: list[float]) -> float:
         a = [x / sa for x in a]
     if sb > 0:
         b = [x / sb for x in b]
-    return sum(abs(x - y) for x, y in zip(a, b))
+    return sum(abs(x - y) for x, y in zip(a, b, strict=False))
 
 
 class ColorQCEnhanced:
@@ -218,6 +218,11 @@ class ColorQCEnhanced:
         self.model = model
         # runtime per-color rules overrides: name(lower) -> rules dict
         self._color_rules_overrides: dict[str, dict[str, float | None]] = {}
+
+    @property
+    def supported_colors(self) -> tuple[str, ...]:
+        """Return the immutable color vocabulary exposed by this checker."""
+        return tuple(color.name for color in self.model.colors)
 
     @classmethod
     def from_json(cls, path: Any) -> ColorQCEnhanced:
@@ -233,7 +238,7 @@ class ColorQCEnhanced:
     ) -> ColorQCAdvancedResult:
         hist, metrics = _compute_hsv3d_hist(image_bgr, self.model.hist_bins)
 
-        allowed = set(c.lower() for c in allowed_colors) if allowed_colors else None
+        allowed = {c.lower() for c in allowed_colors} if allowed_colors else None
 
         best_name = ""
         best_diff = float("inf")

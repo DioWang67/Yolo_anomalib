@@ -396,7 +396,7 @@ class PositionValidator:
                 inlier_count=0,
             )
             return ExpectedLayoutAlignment()
-        paired_shifts = list(zip(shifts_x, shifts_y))
+        paired_shifts = list(zip(shifts_x, shifts_y, strict=True))
         shifts_x.sort()
         shifts_y.sort()
         mid = source_count // 2

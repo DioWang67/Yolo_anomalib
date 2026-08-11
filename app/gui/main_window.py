@@ -43,18 +43,20 @@ def _get_detection_class():
     return _CoreDetectionSystem
 
 
-import numpy as np
-from PyQt5.QtCore import (
+# Keep Qt/numpy and application imports after the lazy detection bootstrap;
+# Windows runtime DLL resolution depends on this initialization order.
+import numpy as np  # noqa: E402
+from PyQt5.QtCore import (  # noqa: E402
     QIODevice,
     QSaveFile,
     QSettings,
-    QTemporaryDir,
     Qt,
+    QTemporaryDir,
     QTimer,
     pyqtSlot,
 )
-from PyQt5.QtGui import QKeySequence
-from PyQt5.QtWidgets import (
+from PyQt5.QtGui import QKeySequence  # noqa: E402
+from PyQt5.QtWidgets import (  # noqa: E402
     QApplication,
     QDialog,
     QFileDialog,
@@ -68,39 +70,48 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from app.gui.auto_inspection_controller import (
-    AutoInspectionController,
+from app.gui.auto_inspection_controller import (  # noqa: E402
     DEFAULT_AUTO_TRIGGER_CONFIG,
+    AutoInspectionController,
 )
-from app.gui.calibration_handler import CalibrationHandlerMixin
-from app.gui.camera_handler import CameraHandlerMixin
-from app.gui.controller import DetectionController
-from app.gui.engineering_settings_page import EngineeringSettingsPage
-from app.gui.inspection_history_page import InspectionHistoryPage
-from app.gui.inspection_release_presentation import format_component_summary
-from app.gui.inspection_version_workspace import InspectionVersionWorkspace
-from app.gui.light_handler import LightHandlerMixin
-from app.gui.i18n import normalize_language, tr
-from app.gui.model_config_dialog import ModelConfigDialog
-from app.gui.panels.control_panel import ControlPanel
-from app.gui.panels.image_panel import ImagePanel
-from app.gui.panels.info_panel import InfoPanel
-from app.gui.preferences import PreferencesManager
-from app.gui.utils import load_image_with_retry
-from app.gui.view_builder import (
+from app.gui.calibration_handler import CalibrationHandlerMixin  # noqa: E402
+from app.gui.camera_handler import CameraHandlerMixin  # noqa: E402
+from app.gui.controller import DetectionController  # noqa: E402
+from app.gui.engineering_settings_page import EngineeringSettingsPage  # noqa: E402
+from app.gui.i18n import normalize_language, tr  # noqa: E402
+from app.gui.inspection_history_page import InspectionHistoryPage  # noqa: E402
+from app.gui.inspection_release_presentation import (  # noqa: E402
+    format_component_summary,
+)
+from app.gui.inspection_version_workspace import (  # noqa: E402
+    InspectionVersionWorkspace,
+)
+from app.gui.light_handler import LightHandlerMixin  # noqa: E402
+from app.gui.model_config_dialog import ModelConfigDialog  # noqa: E402
+from app.gui.panels.control_panel import ControlPanel  # noqa: E402
+from app.gui.panels.image_panel import ImagePanel  # noqa: E402
+from app.gui.panels.info_panel import InfoPanel  # noqa: E402
+from app.gui.preferences import PreferencesManager  # noqa: E402
+from app.gui.utils import load_image_with_retry  # noqa: E402
+from app.gui.view_builder import (  # noqa: E402
     _open_inspection_releases,
     _open_model_update_status,
     _open_model_versions,
     _open_training_review,
     build_menu_bar,
 )
-from app.gui.widgets import CameraStatusIndicator
-from core._version import __version__ as SYSTEM_VERSION
-from core.auto_trigger import AutoTriggerConfig
-from core.services.model_catalog import ModelCatalog
-from core.services.model_config_editor import ModelConfigEditError, update_model_config
+from app.gui.widgets import CameraStatusIndicator  # noqa: E402
+from core._version import __version__ as SYSTEM_VERSION  # noqa: E402
+from core.auto_trigger import AutoTriggerConfig  # noqa: E402
+from core.services.model_catalog import ModelCatalog  # noqa: E402
+from core.services.model_config_editor import (  # noqa: E402
+    ModelConfigEditError,
+    update_model_config,
+)
 
 _MANUAL_PIPELINE_RELEASE_POLL_MS = 50
+_MANUAL_PIPELINE_RELEASE_TIMEOUT_SECONDS = 10.0
+_PIPELINE_SHUTDOWN_SETTLE_TIMEOUT_SECONDS = 10.0
 
 
 class DetectionSystemGUI(
@@ -150,6 +161,8 @@ class DetectionSystemGUI(
         self._single_shot_thread: threading.Thread | None = None
         self._single_shot_cancel_event = threading.Event()
         self._manual_pipeline_release_generation: int | None = None
+        self._manual_pipeline_release_deadline: float | None = None
+        self._pipeline_shutdown_deadline: float | None = None
         self._manual_pipeline_release_timer = QTimer(self)
         self._manual_pipeline_release_timer.setSingleShot(True)
         self._manual_pipeline_release_timer.setInterval(
@@ -523,7 +536,7 @@ class DetectionSystemGUI(
             "padding: 2px 8px; color: #6c757d; font-size: 11px; border-left: 1px solid #dee2e6;"
         )
         self.statusBar().addPermanentWidget(self.model_version_label)
-        
+
         # --- New: Pipeline Bridge & Stats ---
         self.controller.bridge.image_ready.connect(self.on_image_ready)
         self.controller.bridge.result_ready.connect(self.on_pipeline_result)
@@ -535,11 +548,11 @@ class DetectionSystemGUI(
         self.controller.bridge.single_shot_finished.connect(
             self._on_single_shot_thread_finished
         )
-        
+
         self.stats_timer = QTimer(self)
         self.stats_timer.setInterval(1000)
         self.stats_timer.timeout.connect(self.update_pipeline_stats)
-        
+
         self.apply_language(self.current_language)
         self.statusBar().showMessage(tr(self.current_language, "ready"))
         self.update_start_enabled()
@@ -758,6 +771,9 @@ class DetectionSystemGUI(
         result_root: str | Path,
         manifest_path: str | Path,
         training_data_dir: str | Path,
+        inference_models_dir: str | Path | None = None,
+        inference_station_data_dir: str | Path | None = None,
+        inference_project_root: str | Path | None = None,
         language: str,
         product: str | None,
         area: str | None,
@@ -766,10 +782,28 @@ class DetectionSystemGUI(
         """Show one persistent, in-window retraining workspace for a target."""
         from app.gui.retraining_workspace_host import RetrainingWorkspaceHost
 
+        inference_models_dir = (
+            self._station_paths.models
+            if inference_models_dir is None
+            else Path(inference_models_dir)
+        )
+        inference_station_data_dir = (
+            self._station_paths.root
+            if inference_station_data_dir is None
+            else Path(inference_station_data_dir)
+        )
+        inference_project_root = (
+            self._station_paths.source_root
+            if inference_project_root is None
+            else Path(inference_project_root)
+        )
         workspace_key = (
             str(Path(result_root).resolve()),
             str(Path(manifest_path).resolve()),
             str(Path(training_data_dir).resolve()),
+            str(Path(inference_models_dir).resolve()),
+            str(Path(inference_station_data_dir).resolve()),
+            str(Path(inference_project_root).resolve()),
             language,
             product or "",
             area or "",
@@ -790,6 +824,9 @@ class DetectionSystemGUI(
                 result_root=result_root,
                 manifest_path=manifest_path,
                 training_data_dir=training_data_dir,
+                inference_models_dir=inference_models_dir,
+                inference_station_data_dir=inference_station_data_dir,
+                inference_project_root=inference_project_root,
                 language=language,
                 product=product,
                 area=area,
@@ -882,11 +919,11 @@ class DetectionSystemGUI(
     def _update_model_combos(self):
         """Populates and sets the product, area, and inference type combo boxes."""
         self.available_products = self._catalog.products()
-        
+
         self.product_combo.blockSignals(True)
         self.area_combo.blockSignals(True)
         self.inference_combo.blockSignals(True)
-        
+
         self.product_combo.clear()
         self.area_combo.clear()
         self.inference_combo.clear()
@@ -920,7 +957,7 @@ class DetectionSystemGUI(
         available_types = [self.inference_combo.itemText(i) for i in range(self.inference_combo.count())]
         if last_infer and last_infer in available_types:
             self.inference_combo.setCurrentText(last_infer)
-            
+
         self.inference_combo.blockSignals(False)
 
 
@@ -1094,12 +1131,34 @@ class DetectionSystemGUI(
     def _schedule_manual_pipeline_release(self, run_generation: int) -> None:
         """Restore controls only after the camera pipeline has fully stopped."""
         self._manual_pipeline_release_generation = run_generation
+        self._manual_pipeline_release_deadline = (
+            time.monotonic() + _MANUAL_PIPELINE_RELEASE_TIMEOUT_SECONDS
+        )
         self._manual_pipeline_release_timer.start()
 
     def _cancel_manual_pipeline_release_wait(self) -> None:
         """Invalidate a pending idle check from an older inspection run."""
         self._manual_pipeline_release_timer.stop()
         self._manual_pipeline_release_generation = None
+        self._manual_pipeline_release_deadline = None
+
+    def _restore_retryable_pipeline_stop_controls(self) -> None:
+        """Keep Start guarded while allowing another bounded Stop attempt."""
+        self._pipeline_shutdown_deadline = None
+        self._shutdown_in_progress = False
+        self.stats_timer.stop()
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setText(tr(self.current_language, "stop"))
+        self.stop_btn.setEnabled(self.controller.has_system())
+        self.update_camera_controls()
+
+    def _recover_manual_pipeline_release(self, reason: str) -> None:
+        """End a failed finalization wait while retaining a safe Stop action."""
+        self._logger.error("Manual pipeline finalization failed: %s", reason)
+        self.log_message(f"Manual pipeline finalization failed: {reason}")
+        self._cancel_manual_pipeline_release_wait()
+        self._single_shot_running = False
+        self._restore_retryable_pipeline_stop_controls()
 
     def _restore_manual_pipeline_controls_when_idle(self) -> None:
         """Poll pipeline ownership without blocking the Qt main thread."""
@@ -1110,18 +1169,28 @@ class DetectionSystemGUI(
             self._cancel_manual_pipeline_release_wait()
             return
 
+        pipeline_running = False
+        state_error: Exception | None = None
         if self.controller.has_system():
             try:
-                if self.controller.detection_system.pipeline_running:
-                    self._manual_pipeline_release_timer.start()
-                    return
-            except (AttributeError, RuntimeError) as exc:
-                self._logger.error(
-                    "Manual pipeline state is unreadable; keeping controls locked: %s",
-                    exc,
+                pipeline_running = bool(
+                    self.controller.detection_system.pipeline_running
                 )
+            except (AttributeError, RuntimeError) as exc:
+                state_error = exc
+
+        if pipeline_running or state_error is not None:
+            deadline = self._manual_pipeline_release_deadline
+            if deadline is not None and time.monotonic() < deadline:
                 self._manual_pipeline_release_timer.start()
                 return
+            reason = (
+                f"pipeline state remained unreadable ({state_error})"
+                if state_error is not None
+                else "pipeline did not become idle before the deadline"
+            )
+            self._recover_manual_pipeline_release(reason)
+            return
 
         self._cancel_manual_pipeline_release_wait()
         self._single_shot_running = False
@@ -1149,22 +1218,34 @@ class DetectionSystemGUI(
         if startup_worker_running and hasattr(self.worker, "cancel"):
             self.worker.cancel()
         self.stop_btn.setText(tr(self.current_language, "stopping"))
-        
+
+        try:
+            pipeline_running = bool(
+                self.controller.detection_system.pipeline_running
+            )
+        except (AttributeError, RuntimeError) as exc:
+            self._logger.error(
+                "Pipeline state is unreadable during Stop; attempting bounded "
+                "shutdown: %s",
+                exc,
+            )
+            self.log_message(
+                "Pipeline state is unreadable; attempting bounded shutdown."
+            )
+            self._begin_pipeline_shutdown()
+            return
+
         if (
-            not self.controller.detection_system.pipeline_running
-            and self._single_shot_running
+            not pipeline_running and self._single_shot_running
         ):
             self.log_message("正在等待目前的模型推論安全結束...")
             return
 
-        if (
-            not self.controller.detection_system.pipeline_running
-            and startup_worker_running
-        ):
+        if not pipeline_running and startup_worker_running:
             self.log_message("正在取消啟動中的檢測...")
             return
 
-        if not self.controller.detection_system.pipeline_running:
+        if not pipeline_running:
             self._shutdown_in_progress = False
             self._on_pipeline_stopped()
             return
@@ -1173,12 +1254,20 @@ class DetectionSystemGUI(
 
     def _begin_pipeline_shutdown(self):
         """Start a bounded background shutdown if one is not already active."""
-        shutdown_worker = getattr(self, "_shutdown_worker", None)
-        if shutdown_worker is not None and shutdown_worker.isRunning():
-            return
-        self._shutdown_worker = self.controller.build_shutdown_worker()
-        self._shutdown_worker.shutdown_complete.connect(self._on_pipeline_stopped)
-        self._shutdown_worker.start()
+        try:
+            shutdown_worker = getattr(self, "_shutdown_worker", None)
+            if shutdown_worker is not None and shutdown_worker.isRunning():
+                return
+            self._shutdown_worker = self.controller.build_shutdown_worker()
+            self._shutdown_worker.shutdown_complete.connect(self._on_pipeline_stopped)
+            self._pipeline_shutdown_deadline = (
+                time.monotonic() + _PIPELINE_SHUTDOWN_SETTLE_TIMEOUT_SECONDS
+            )
+            self._shutdown_worker.start()
+        except (AttributeError, RuntimeError) as exc:
+            self._logger.error("Failed to start bounded pipeline shutdown: %s", exc)
+            self.log_message(f"Failed to start pipeline shutdown: {exc}")
+            self._restore_retryable_pipeline_stop_controls()
 
     def _on_start_worker_finished(self, run_generation):
         """Finish a stop request that happened while start_pipeline() was loading."""
@@ -1194,16 +1283,44 @@ class DetectionSystemGUI(
 
     def _on_pipeline_stopped(self):
         """Pipeline stopped callback."""
-        if (
-            self.controller.has_system()
-            and self.controller.detection_system.pipeline_running
-        ):
+        pipeline_running = False
+        if self.controller.has_system():
+            try:
+                pipeline_running = bool(
+                    self.controller.detection_system.pipeline_running
+                )
+            except (AttributeError, RuntimeError) as exc:
+                self._logger.error(
+                    "Pipeline state remained unreadable after shutdown: %s",
+                    exc,
+                )
+                self.log_message(
+                    "Pipeline shutdown state is unreadable; Stop can be retried."
+                )
+                self._restore_retryable_pipeline_stop_controls()
+                return
+        if pipeline_running:
+            now = time.monotonic()
+            deadline = self._pipeline_shutdown_deadline
+            if deadline is None:
+                deadline = now + _PIPELINE_SHUTDOWN_SETTLE_TIMEOUT_SECONDS
+                self._pipeline_shutdown_deadline = deadline
+            elif now >= deadline:
+                self._logger.error(
+                    "Pipeline remained active after the bounded shutdown deadline"
+                )
+                self.log_message(
+                    "Pipeline did not stop before the deadline; Stop can be retried."
+                )
+                self._restore_retryable_pipeline_stop_controls()
+                return
             self._shutdown_in_progress = True
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(False)
             self.stop_btn.setText(tr(self.current_language, "stopping"))
             QTimer.singleShot(250, self._on_pipeline_stopped)
             return
+        self._pipeline_shutdown_deadline = None
         self.controller.bridge.end_run()
         self._shutdown_in_progress = False
         self._stopping_generation = None
@@ -1214,6 +1331,7 @@ class DetectionSystemGUI(
 
     def _reset_ui_state(self):
         self._cancel_manual_pipeline_release_wait()
+        self._pipeline_shutdown_deadline = None
         self.controller.bridge.end_run()
         self._single_shot_cancel_event.set()
         self._single_shot_running = False
@@ -1253,7 +1371,7 @@ class DetectionSystemGUI(
         ``DetectionTask`` (pipeline mode). Converts to ``DetectionResult``
         and delegates to ``on_detection_complete``.
         """
-        from core.types import DetectionResult, DetectionTask, DetectionItem
+        from core.types import DetectionItem, DetectionResult, DetectionTask
 
         if isinstance(result_or_task, DetectionResult):
             # Single-shot mode emits DetectionResult directly
@@ -1552,7 +1670,7 @@ class DetectionSystemGUI(
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.append(f"[{timestamp}] {message}")
 
-    
+
 
     # ------------------------------------------------------------------
     # Localized operator-facing overrides

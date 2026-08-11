@@ -195,7 +195,7 @@ def draw_debug_overlay(
     frame: np.ndarray,
     info: DebugInfo,
     roi: list[int],
-    config: "AutoTriggerConfig | None" = None,
+    config: AutoTriggerConfig | None = None,
 ) -> np.ndarray:
     """Draw state-machine debug info onto a copy of frame.
 

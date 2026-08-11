@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Final inspection verdict, computed after color correction and all checks.
 
 Why this exists
@@ -20,6 +18,8 @@ alignment / position) are all clean. Products that do not populate a given
 signal simply skip that gate, so single-stage pipelines (e.g. PCBA's
 ``count_check`` only) keep their previous behavior.
 """
+
+from __future__ import annotations
 
 from typing import Any
 

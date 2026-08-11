@@ -64,6 +64,7 @@ class ColorCheckStep(Step):
             processed_image=ctx.processed_image,
             detections=detections,
             candidates=list(candidates) if candidates else None,
+            generic_classes=self.options.get("generic_classes"),
         )
 
         # Only an accepted color result may replace the detector class. A rejected

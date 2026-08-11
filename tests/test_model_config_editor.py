@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-import yaml
-import pytest
+import logging
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from threading import Event
 
+import pytest
+import yaml
+
+import core.services.model_config_editor as model_config_editor
 from core.services.model_config_editor import (
     ModelConfigEditError,
     load_model_config,
@@ -47,6 +53,176 @@ def test_update_model_config_writes_common_fields_and_expected_items(tmp_path):
     assert saved["expected_items"]["PCBA1"]["A"] == ["J5-1", "J5-2"]
     assert saved["custom"] == {"keep": True}
     assert result.backup_path.exists()
+
+
+def test_update_model_config_fails_closed_when_deploy_lock_exists(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    original = "weights: old.pt\n"
+    config_path.write_text(original, encoding="utf-8")
+    (tmp_path / ".deploy.lock").mkdir()
+
+    with pytest.raises(ModelConfigEditError, match="deployment is in progress"):
+        update_model_config(
+            config_path,
+            {"weights": "new.pt"},
+            product="PCBA1",
+            area="A",
+        )
+
+    assert config_path.read_text(encoding="utf-8") == original
+    assert not config_path.with_suffix(".yaml.bak").exists()
+    assert (tmp_path / ".deploy.lock").is_dir()
+
+
+def test_update_model_config_holds_deploy_lock_through_atomic_publish(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "config.yaml"
+    backup_path = config_path.with_suffix(".yaml.bak")
+    original = "weights: old.pt\n"
+    config_path.write_text(original, encoding="utf-8")
+    original_replace = Path.replace
+    publish_started = Event()
+    allow_publish = Event()
+
+    def replace_while_locked(path, target):
+        assert path.parent == config_path.parent
+        assert target == config_path
+        publish_started.set()
+        if not allow_publish.wait(timeout=5):
+            raise TimeoutError("test did not release the atomic config publish")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", replace_while_locked)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        edit = executor.submit(
+            update_model_config,
+            config_path,
+            {"weights": "new.pt"},
+            product="PCBA1",
+            area="A",
+        )
+        try:
+            assert publish_started.wait(timeout=5)
+            lock_path = tmp_path / ".deploy.lock"
+            assert lock_path.is_dir()
+            with pytest.raises(FileExistsError):
+                lock_path.mkdir()
+        finally:
+            allow_publish.set()
+        edit.result(timeout=5)
+
+    assert load_model_config(config_path)["weights"] == "new.pt"
+    assert backup_path.read_text(encoding="utf-8") == original
+    assert not (tmp_path / ".deploy.lock").exists()
+    assert not list(tmp_path.glob(".config.yaml.*.tmp"))
+
+
+def test_update_model_config_holds_deploy_lock_before_read(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("weights: old.pt\n", encoding="utf-8")
+    original_load = model_config_editor.load_model_config
+    read_started = Event()
+    allow_read = Event()
+
+    def load_while_locked(path):
+        assert (tmp_path / ".deploy.lock").is_dir()
+        read_started.set()
+        if not allow_read.wait(timeout=5):
+            raise TimeoutError("test did not release the locked config read")
+        return original_load(path)
+
+    monkeypatch.setattr(model_config_editor, "load_model_config", load_while_locked)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first_edit = executor.submit(
+            update_model_config,
+            config_path,
+            {"weights": "first.pt"},
+            product="PCBA1",
+            area="A",
+        )
+        try:
+            assert read_started.wait(timeout=5)
+            with pytest.raises(ModelConfigEditError, match="deployment is in progress"):
+                update_model_config(
+                    config_path,
+                    {"weights": "stale-second.pt"},
+                    product="PCBA1",
+                    area="A",
+                )
+        finally:
+            allow_read.set()
+        first_edit.result(timeout=5)
+
+    assert load_model_config(config_path)["weights"] == "first.pt"
+
+
+def test_update_model_config_lock_cleanup_failure_keeps_successful_publication(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("weights: old.pt\n", encoding="utf-8")
+    real_rmdir = Path.rmdir
+
+    def deny_lock_cleanup(path):
+        if path.name == ".deploy.lock":
+            raise PermissionError("simulated lock cleanup denial")
+        return real_rmdir(path)
+
+    monkeypatch.setattr(Path, "rmdir", deny_lock_cleanup)
+    caplog.set_level(logging.WARNING, logger=model_config_editor.__name__)
+
+    update_model_config(
+        config_path,
+        {"weights": "new.pt"},
+        product="PCBA1",
+        area="A",
+    )
+
+    assert load_model_config(config_path)["weights"] == "new.pt"
+    assert (tmp_path / ".deploy.lock").is_dir()
+    assert "deployment-lock cleanup was deferred" in caplog.text
+    assert "simulated lock cleanup denial" in caplog.text
+
+
+def test_update_model_config_lock_cleanup_failure_does_not_mask_primary_error(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    config_path = tmp_path / "config.yaml"
+    original = "weights: old.pt\nenable_color_check: false\n"
+    config_path.write_text(original, encoding="utf-8")
+    real_rmdir = Path.rmdir
+
+    def deny_lock_cleanup(path):
+        if path.name == ".deploy.lock":
+            raise PermissionError("simulated lock cleanup denial")
+        return real_rmdir(path)
+
+    monkeypatch.setattr(Path, "rmdir", deny_lock_cleanup)
+    caplog.set_level(logging.WARNING, logger=model_config_editor.__name__)
+
+    with pytest.raises(ModelConfigEditError, match="顏色檢查"):
+        update_model_config(
+            config_path,
+            {"duplicate_filter_enabled": True},
+            product="PCBA1",
+            area="A",
+        )
+
+    assert config_path.read_text(encoding="utf-8") == original
+    assert (tmp_path / ".deploy.lock").is_dir()
+    assert "deployment-lock cleanup was deferred" in caplog.text
+    assert "simulated lock cleanup denial" in caplog.text
 
 
 def test_update_model_config_rejects_invalid_threshold(tmp_path):

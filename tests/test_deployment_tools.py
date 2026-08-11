@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from tools.runtime_benchmark import (
     collect_image_paths,
-    parse_imgsz as parse_benchmark_imgsz,
     summarize_latencies,
+)
+from tools.runtime_benchmark import (
+    parse_imgsz as parse_benchmark_imgsz,
 )
 
 

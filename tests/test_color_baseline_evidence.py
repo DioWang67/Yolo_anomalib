@@ -266,6 +266,86 @@ def test_provider_excludes_mixed_product_ng_color_false_reject(
     assert "整張照片的全部元件" in exclusion.reason
 
 
+def test_provider_skips_invalid_row_with_unresolvable_output_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    acceptance_image = tmp_path / "acceptance" / "images" / "acc.png"
+    acceptance_digest = _write_image(acceptance_image, b"acceptance")
+    row = _feedback_row(
+        sample_id="invalid-path",
+        digest=hashlib.sha256(b"invalid-path").hexdigest(),
+        image_path=tmp_path / "unused.png",
+        actual_is_ok=True,
+    )
+    row.update(
+        output_image="C:\\" + ("x" * 40_000),
+        product_verdict="ng",
+        detection_verdict="correct",
+        color_verdict="actually_ok",
+        review_label="color_false_reject",
+    )
+    feedback = _write_feedback(
+        tmp_path / "training" / "color_review" / "feedback.csv",
+        [row],
+    )
+    original_resolve = Path.resolve
+
+    def _raise_for_untrusted_path(path, *args, **kwargs):
+        if len(str(path)) > 1_024:
+            raise OSError("path too long")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", _raise_for_untrusted_path)
+
+    snapshot = ColorBaselineEvidenceProvider(
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+    ).collect(
+        acceptance_repository=_AcceptanceRepository(
+            tmp_path / "acceptance",
+            (_AcceptanceRecord("ACC-1", acceptance_digest),),
+            {"ACC-1": acceptance_image},
+        ),
+        feedback_manifest=feedback,
+    )
+
+    assert snapshot.selected_acceptance_count == 1
+    assert snapshot.selected_feedback_count == 0
+    assert snapshot.invalid_count == 1
+    assert snapshot.excluded_samples[0].sample_id == "invalid-path"
+    assert snapshot.excluded_samples[0].reason_code == "MIXED_PRODUCT_NG_COLOR_OK"
+
+
+def test_provider_fails_closed_for_unresolvable_feedback_manifest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    original_resolve = Path.resolve
+
+    def _raise_for_untrusted_path(path, *args, **kwargs):
+        if len(str(path)) > 1_024:
+            raise OSError("path too long")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", _raise_for_untrusted_path)
+
+    with pytest.raises(ColorBaselineError, match="manifest path is invalid"):
+        ColorBaselineEvidenceProvider(
+            product="Cable1",
+            area="A",
+            model_type="yolo",
+        ).collect(
+            acceptance_repository=_AcceptanceRepository(
+                tmp_path / "acceptance",
+                (),
+                {},
+            ),
+            feedback_manifest="C:\\" + ("x" * 40_000),
+        )
+
+
 def test_provider_supports_relocated_feedback_images(tmp_path: Path) -> None:
     image_path = tmp_path / "training" / "color_review" / "images" / "case-1.png"
     digest = _write_image(image_path, b"relocated")

@@ -3,10 +3,12 @@ import json
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from tools.portable_training_package import export_portable_training_package
 
 
-def _write_portable_fixture(tmp_path: Path) -> Path:
+def _write_portable_fixture(tmp_path: Path, schema_version: int) -> Path:
     data_root = tmp_path / "training" / "data"
     dataset = data_root / "Cable1" / "A"
     images = dataset / "raw" / "images"
@@ -41,7 +43,7 @@ def _write_portable_fixture(tmp_path: Path) -> Path:
     handoff.write_text(
         json.dumps(
             {
-                "schema_version": 4,
+                "schema_version": schema_version,
                 "job_id": job_id,
                 "submission_hash": hashlib.sha256(b"submission").hexdigest(),
                 "source_manifest": "",
@@ -72,8 +74,12 @@ def _write_portable_fixture(tmp_path: Path) -> Path:
     return handoff
 
 
-def test_portable_package_contains_dataset_model_contract_and_checksums(tmp_path):
-    handoff = _write_portable_fixture(tmp_path)
+@pytest.mark.parametrize("schema_version", (4, 5, 6))
+def test_portable_package_contains_dataset_model_contract_and_checksums(
+    tmp_path,
+    schema_version,
+):
+    handoff = _write_portable_fixture(tmp_path, schema_version)
 
     report = export_portable_training_package(handoff, tmp_path / "transfer.zip")
 

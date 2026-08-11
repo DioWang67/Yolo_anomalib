@@ -14,30 +14,96 @@ from core.stats_color_checker import ColorDecisionTuning, StatsColorChecker
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_GENERIC_DETECTOR_CLASSES = ("LED",)
+
 
 def _is_expected_color_match(
     expected_color: object,
     observed_color: object,
-    allowed_colors: Iterable[str] | None,
+    supported_colors: Iterable[str],
+    generic_detector_classes: Iterable[str],
 ) -> bool:
     """Return whether an observed color satisfies a color-labelled detection.
 
     Some detectors use generic class names (for example, ``LED``). Those class
     names are not color expectations and must continue to rely on the color
-    checker's threshold result alone.
+    checker's threshold result alone. Every other detector class is treated as
+    a color expectation and therefore fails closed if the checker cannot
+    evaluate it.
     """
     expected = str(expected_color or "").strip().casefold()
     if not expected:
         return True
 
-    allowed = {
+    supported = {
         str(color or "").strip().casefold()
-        for color in (allowed_colors or ())
+        for color in supported_colors
         if str(color or "").strip()
     }
-    if expected not in allowed:
+    generic = {
+        str(class_name or "").strip().casefold()
+        for class_name in generic_detector_classes
+        if str(class_name or "").strip()
+    }
+    if expected in generic:
         return True
-    return expected == str(observed_color or "").strip().casefold()
+    return (
+        expected in supported
+        and expected == str(observed_color or "").strip().casefold()
+    )
+
+
+def _configured_colors_are_supported(
+    configured_colors: Iterable[str],
+    supported_colors: Iterable[str],
+) -> bool:
+    """Fail closed when explicit color candidates cannot be evaluated."""
+    configured = {
+        str(color or "").strip().casefold()
+        for color in configured_colors
+        if str(color or "").strip()
+    }
+    if not configured:
+        return True
+    supported = {
+        str(color or "").strip().casefold()
+        for color in supported_colors
+        if str(color or "").strip()
+    }
+    return bool(configured & supported)
+
+
+def _supported_color_names(checker: object) -> frozenset[str]:
+    """Return the normalized color vocabulary exposed by a loaded checker."""
+    return frozenset(
+        normalized.casefold()
+        for color in getattr(checker, "supported_colors", ())
+        if (normalized := str(color or "").strip())
+    )
+
+
+def _normalize_candidates(candidates: Iterable[str] | None) -> tuple[str, ...]:
+    if candidates is None:
+        return ()
+    if isinstance(candidates, str):
+        return (candidates,)
+    try:
+        return tuple(candidates)
+    except TypeError:
+        return ()
+
+
+def _supported_candidates(
+    candidates: Iterable[object],
+    supported_colors: frozenset[str],
+) -> list[str] | None:
+    filtered = [
+        normalized
+        for candidate in candidates
+        if (normalized := str(candidate or "").strip())
+        and normalized.casefold() in supported_colors
+    ]
+    return filtered or None
 
 
 class ColorCheckerService:
@@ -168,6 +234,7 @@ class ColorCheckerService:
         processed_image: np.ndarray,
         detections: list[dict[str, Any]],
         candidates: Iterable[str] | None = None,
+        generic_classes: Iterable[str] | None = None,
     ) -> ColorCheckResult:
         """Run color check on detections.
 
@@ -178,6 +245,27 @@ class ColorCheckerService:
 
         items: list[ColorCheckItemResult] = []
         all_ok = True
+        requested_candidates = _normalize_candidates(candidates)
+        supported_colors = _supported_color_names(self._checker)
+        generic_detector_classes = {
+            normalized.casefold()
+            for value in (
+                _DEFAULT_GENERIC_DETECTOR_CLASSES
+                if generic_classes is None
+                else _normalize_candidates(generic_classes)
+            )
+            if (normalized := str(value or "").strip())
+        }
+        configured_colors = {
+            normalized.casefold()
+            for value in requested_candidates
+            if (normalized := str(value or "").strip())
+            and normalized.casefold() not in generic_detector_classes
+        }
+        configured_colors_are_supported = _configured_colors_are_supported(
+            configured_colors,
+            supported_colors,
+        )
         if detections:
             proc = processed_image if processed_image is not None else frame
             for idx, det in enumerate(detections):
@@ -186,14 +274,20 @@ class ColorCheckerService:
                 x2, y2 = min(proc.shape[1], x2), min(proc.shape[0], y2)
                 roi = proc[y1:y2, x1:x2]
                 # Priority: explicit candidates > YOLO class
-                allowed = list(candidates) if candidates else None
-                if not allowed and det.get("class"):
-                    allowed = [det.get("class")]
+                candidate_pool: Iterable[object] = requested_candidates
+                if not requested_candidates and det.get("class"):
+                    candidate_pool = (det.get("class"),)
+                allowed = _supported_candidates(candidate_pool, supported_colors)
                 c_res = self._checker.check(roi, allowed_colors=allowed)
-                item_is_ok = bool(c_res.is_ok) and _is_expected_color_match(
-                    det.get("class"),
-                    c_res.best_color,
-                    allowed,
+                item_is_ok = (
+                    bool(c_res.is_ok)
+                    and configured_colors_are_supported
+                    and _is_expected_color_match(
+                        det.get("class"),
+                        c_res.best_color,
+                        supported_colors,
+                        generic_detector_classes,
+                    )
                 )
                 items.append(
                     ColorCheckItemResult(

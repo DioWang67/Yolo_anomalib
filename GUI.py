@@ -112,9 +112,9 @@ def _check_camera_grab() -> int:
         return runtime_ret
 
     from MvImport.CameraParams_const import (
-        MV_ACCESS_Exclusive,
         MV_GIGE_DEVICE,
         MV_USB_DEVICE,
+        MV_ACCESS_Exclusive,
     )
     from MvImport.CameraParams_header import (
         MV_CC_DEVICE_INFO,
