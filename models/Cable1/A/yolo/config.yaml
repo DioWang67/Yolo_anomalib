@@ -126,7 +126,7 @@ calibration:
   target_luma: 58.0
   tolerance: 2.0
 gain: '23.0'
-exposure_time: '79553.0000'
+exposure_time: '74765.0000'
 save_annotated: true
 save_processed: true
 save_crops: true
