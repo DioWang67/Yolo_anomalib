@@ -17,16 +17,42 @@ every YOLO-side dimension (missing / unexpected / slot mismatch / board
 alignment / position) are all clean. Products that do not populate a given
 signal simply skip that gate, so single-stage pipelines (e.g. PCBA's
 ``count_check`` only) keep their previous behavior.
+
+One signal cannot be recomputed: a check that never ran. ``count_check`` failing
+to read its expected-items config leaves no missing/unexpected items behind, and
+``position_check`` failing to read its enable flag never annotates
+``position_status``, so those FAILs are carried through explicitly rather than
+re-derived. Checks that *did* run and merely failed to publish their verdict are
+re-derived normally from the signals they already wrote.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from core.pipeline.steps import (
+    EXPECTED_ITEMS_LOOKUP_FAILED_STATUS,
+    POSITION_CONFIG_LOOKUP_FAILED_STATUS,
+)
 from core.services.decision_engine import InspectionDecisionEngine, InspectionStatus
 
 # Statuses that represent a hard failure/abort and must not be reinterpreted.
 _TERMINAL = {"INFERENCE_ERROR", "ERROR", "CANCELED"}
+
+# ``<check>.status`` values meaning the check could not run at all. Such a check
+# leaves no per-detection signal behind, so the engine cannot re-derive its FAIL.
+_UNEVALUATED = frozenset(
+    {
+        EXPECTED_ITEMS_LOOKUP_FAILED_STATUS,
+        POSITION_CONFIG_LOOKUP_FAILED_STATUS,
+    }
+)
+
+
+def _is_unevaluated(result: dict[str, Any], key: str) -> bool:
+    """Return whether ``result[key]`` records a check that could not run."""
+    payload = result.get(key)
+    return isinstance(payload, dict) and payload.get("status") in _UNEVALUATED
 
 
 def finalize_status(ctx: Any, *, fail_on_unexpected: bool = True) -> None:
@@ -51,6 +77,14 @@ def finalize_status(ctx: Any, *, fail_on_unexpected: bool = True) -> None:
     sequence = result.get("sequence_check")
     sequence_failed = isinstance(sequence, dict) and not sequence.get("is_ok", True)
 
+    # A normal count/position FAIL reaches the engine as missing, unexpected, or
+    # position_status signals, so it survives this recomputation on its own. A
+    # check that could not run at all produces no such signal, so its FAIL must
+    # be carried explicitly or recomputing here would silently restore PASS.
+    unevaluated = _is_unevaluated(result, "count_check") or _is_unevaluated(
+        result, "position_check"
+    )
+
     decision = InspectionDecisionEngine(fail_on_unexpected=fail_on_unexpected).evaluate(
         detections=result.get("detections", []) or [],
         missing_items=result.get("missing_items", []) or [],
@@ -60,5 +94,10 @@ def finalize_status(ctx: Any, *, fail_on_unexpected: bool = True) -> None:
     )
     result["decision"] = decision.to_dict()
 
-    failed = color_failed or sequence_failed or decision.status != InspectionStatus.PASS
+    failed = (
+        color_failed
+        or sequence_failed
+        or unevaluated
+        or decision.status != InspectionStatus.PASS
+    )
     ctx.status = "DETECTION_FAIL" if failed else "PASS"

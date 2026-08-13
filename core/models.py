@@ -45,6 +45,10 @@ class ColorCheckItemResult:
 class ColorCheckResult:
     is_ok: bool
     items: list[ColorCheckItemResult]
+    # Why the verdict looks the way it does. ``evaluated`` means every item was
+    # actually measured; other values record that no measurement was possible,
+    # which downstream consumers must not read as a passing result.
+    status: str = "evaluated"
 
     def diff_string(self) -> str:
         return ";".join([f"{it.diff:.2f}" for it in self.items])
@@ -54,6 +58,7 @@ class ColorCheckResult:
             "is_ok": self.is_ok,
             "items": [it.to_dict() for it in self.items],
             "diff": self.diff_string(),
+            "status": self.status,
         }
 
 

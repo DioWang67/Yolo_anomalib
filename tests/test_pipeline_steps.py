@@ -1,4 +1,5 @@
 import logging
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, Mock
 
@@ -7,6 +8,7 @@ import pytest
 
 from core.config import DetectionConfig
 from core.pipeline.context import DetectionContext
+from core.pipeline.finalize import finalize_status
 from core.pipeline.registry import PipelineEnv
 from core.pipeline.steps import ColorCheckStep, CountCheckStep, PositionCheckStep, SaveResultsStep, SequenceCheckStep
 from core.position_validator import (
@@ -41,6 +43,41 @@ def base_context():
         status="PASS",
         config=DetectionConfig(weights="dummy.pt"),
     )
+
+
+_POSITION_CONFIG = {
+    "TestProduct": {
+        "TestArea": {
+            "enabled": True,
+            "expected_boxes": {"LED1": {"x1": 40, "y1": 40, "x2": 60, "y2": 60}},
+            "tolerance": 10,
+            "tolerance_unit": "pixel",
+        }
+    }
+}
+
+
+class _BrokenEnabledFlagConfig(DetectionConfig):
+    """Config whose position enable flag cannot be read at all."""
+
+    def is_position_check_enabled(self, product, area):
+        raise KeyError("simulated config defect")
+
+
+class _BrokenEvaluateConfig(DetectionConfig):
+    """Enable flag reads fine; the lookup inside evaluate_status then fails.
+
+    Mirrors a config that degrades after the step already committed to running,
+    which is the only way to reach the evaluation except block now that the
+    enable-flag lookup fails closed.
+    """
+
+    def is_position_check_enabled(self, product, area):
+        calls = getattr(self, "_enabled_calls", 0) + 1
+        self._enabled_calls = calls
+        if calls == 1:
+            return True
+        raise KeyError("simulated evaluate defect")
 
 
 class TestPositionCheckStep:
@@ -102,6 +139,158 @@ class TestPositionCheckStep:
         step = PositionCheckStep(mock_env.logger, base_context.product, base_context.area)
         step.run(base_context)
         assert base_context.status == "FAIL"
+
+    # --- config lookup failure must not read as "disabled" --------------------
+
+    def test_config_lookup_failure_is_not_treated_as_disabled(
+        self, mock_env, base_context
+    ):
+        """A failed enable-flag lookup must fail closed, not skip the check."""
+        base_context.config = _BrokenEnabledFlagConfig(weights="dummy.pt")
+        base_context.config.position_config = _POSITION_CONFIG
+        base_context.result["detections"] = [{"class": "LED1", "cx": 99, "cy": 99}]
+
+        PositionCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+
+        assert base_context.status == "DETECTION_FAIL"
+        assert base_context.result["position_check"]["is_ok"] is False
+        assert (
+            base_context.result["position_check"]["status"]
+            == "position_config_lookup_failed"
+        )
+        assert "Position config lookup failed" in (
+            base_context.result["position_check"]["error"]
+        )
+
+    def test_config_lookup_failure_survives_finalize_status(
+        self, mock_env, base_context
+    ):
+        """The step-level FAIL must not be recomputed away by finalize_status."""
+        base_context.config = _BrokenEnabledFlagConfig(weights="dummy.pt")
+        base_context.config.position_config = _POSITION_CONFIG
+        base_context.result["detections"] = [{"class": "LED1", "cx": 99, "cy": 99}]
+        base_context.color_result = None
+
+        PositionCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+        assert base_context.status == "DETECTION_FAIL"
+
+        finalize_status(base_context)
+
+        assert base_context.status == "DETECTION_FAIL"
+
+    def test_config_lookup_failure_is_logged_with_context(
+        self, mock_env, base_context, caplog
+    ):
+        base_context.config = _BrokenEnabledFlagConfig(weights="dummy.pt")
+        base_context.config.position_config = _POSITION_CONFIG
+        base_context.result["detections"] = [{"class": "LED1", "cx": 99, "cy": 99}]
+
+        with caplog.at_level(logging.ERROR):
+            PositionCheckStep(
+                mock_env.logger, base_context.product, base_context.area
+            ).run(base_context)
+
+        assert "Position check config lookup failed" in caplog.text
+        assert "TestProduct" in caplog.text
+        assert "TestArea" in caplog.text
+        assert "simulated config defect" in caplog.text
+
+    def test_explicitly_disabled_still_skips(self, mock_env, base_context):
+        """A successful lookup returning False keeps the long-standing skip."""
+        base_context.config.position_config = {
+            "TestProduct": {"TestArea": {"enabled": False}}
+        }
+        base_context.result["detections"] = [{"class": "LED1", "cx": 99, "cy": 99}]
+
+        PositionCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+
+        assert base_context.status == "PASS"
+        assert "position_check" not in base_context.result
+        assert "position_status" not in base_context.result["detections"][0]
+
+    def test_enabled_and_position_ok_still_passes(self, mock_env, base_context):
+        base_context.config.position_config = _POSITION_CONFIG
+        base_context.result["detections"] = [{"class": "LED1", "cx": 50, "cy": 50}]
+        base_context.color_result = None
+
+        PositionCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+        assert base_context.status == "PASS"
+
+        finalize_status(base_context)
+        assert base_context.status == "PASS"
+
+    def test_enabled_and_position_wrong_still_fails(self, mock_env, base_context):
+        base_context.config.position_config = _POSITION_CONFIG
+        base_context.result["detections"] = [{"class": "LED1", "cx": 99, "cy": 99}]
+        base_context.color_result = None
+
+        PositionCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+        assert base_context.status == "DETECTION_FAIL"
+        assert base_context.result["detections"][0]["position_status"] == "WRONG"
+
+        finalize_status(base_context)
+        assert base_context.status == "DETECTION_FAIL"
+
+    def test_position_evaluation_error_is_recovered_by_finalize(
+        self, mock_env, base_context
+    ):
+        """Locks in the safety net the L612 soft-fail deliberately relies on.
+
+        ``evaluate_status`` failing loses the step-level verdict, but ``validate``
+        already annotated ``position_status``, so finalize_status re-derives the
+        same FAIL. If this ever breaks, that except block must become fail-closed.
+        """
+        base_context.config = _BrokenEvaluateConfig(weights="dummy.pt")
+        base_context.config.position_config = _POSITION_CONFIG
+        base_context.result["detections"] = [{"class": "LED1", "cx": 99, "cy": 99}]
+        base_context.color_result = None
+
+        PositionCheckStep(
+            mock_env.logger,
+            base_context.product,
+            base_context.area,
+            options={"force": True},
+        ).run(base_context)
+
+        # The step itself could not publish a verdict...
+        assert base_context.status == "PASS"
+        # ...but validate() left the evidence behind.
+        assert base_context.result["detections"][0]["position_status"] == "WRONG"
+
+        finalize_status(base_context)
+
+        # ...so the FAIL is recovered rather than lost.
+        assert base_context.status == "DETECTION_FAIL"
+        assert base_context.result["decision"]["reasons"] == ["POSITION_SHIFT"]
+
+    def test_position_evaluation_error_is_logged_with_context(
+        self, mock_env, base_context, caplog
+    ):
+        base_context.config = _BrokenEvaluateConfig(weights="dummy.pt")
+        base_context.config.position_config = _POSITION_CONFIG
+        base_context.result["detections"] = [{"class": "LED1", "cx": 99, "cy": 99}]
+
+        with caplog.at_level(logging.WARNING):
+            PositionCheckStep(
+                mock_env.logger,
+                base_context.product,
+                base_context.area,
+                options={"force": True},
+            ).run(base_context)
+
+        assert "Position check evaluation failed" in caplog.text
+        assert "TestProduct" in caplog.text
+        assert "TestArea" in caplog.text
 
 
 class TestSaveResultsStep:
@@ -360,6 +549,138 @@ class TestColorCheckStep:
         assert base_context.result["over_items"] == []
         assert base_context.status == "DETECTION_FAIL"
 
+    def test_color_fail_always_sets_detection_fail_status(
+        self, mock_env, base_context, mock_color_service
+    ):
+        """The fail-closed enforcement point must not be guarded by a bare except."""
+        mock_color_service.is_ready.return_value = True
+        mock_res = MagicMock()
+        mock_res.items = []
+        mock_res.to_dict.return_value = {
+            "is_ok": False,
+            "items": [],
+            "status": "evaluated",
+        }
+        mock_color_service.check_items.side_effect = None
+        mock_color_service.check_items.return_value = mock_res
+
+        ColorCheckStep(mock_color_service, mock_env.logger).run(base_context)
+
+        assert base_context.status == "DETECTION_FAIL"
+
+    def test_color_pass_leaves_status_untouched(
+        self, mock_env, base_context, mock_color_service
+    ):
+        mock_color_service.is_ready.return_value = True
+        mock_res = MagicMock()
+        mock_res.items = []
+        mock_res.to_dict.return_value = {
+            "is_ok": True,
+            "items": [],
+            "status": "evaluated",
+        }
+        mock_color_service.check_items.side_effect = None
+        mock_color_service.check_items.return_value = mock_res
+
+        ColorCheckStep(mock_color_service, mock_env.logger).run(base_context)
+
+        assert base_context.status == "PASS"
+
+    def test_zero_detections_fails_closed_with_real_service(
+        self, mock_env, base_context
+    ):
+        """No detections must FAIL rather than let the background decide."""
+
+        class AlwaysOkChecker:
+            supported_colors = ("Black",)
+
+            def __init__(self):
+                self.calls = 0
+
+            def check(self, _image, allowed_colors=None):
+                self.calls += 1
+                return SimpleNamespace(
+                    best_color="Black", diff=0.0, threshold=1.0, is_ok=True
+                )
+
+        checker = AlwaysOkChecker()
+        service = ColorCheckerService()
+        service._checker = checker
+        base_context.config.expected_items = {"TestProduct": {"TestArea": ["Black"]}}
+        base_context.result["detections"] = []
+
+        ColorCheckStep(service, mock_env.logger).run(base_context)
+
+        assert checker.calls == 0, "the full frame must never be color-checked"
+        assert base_context.color_result["is_ok"] is False
+        assert base_context.color_result["status"] == "no_detections"
+        assert base_context.status == "DETECTION_FAIL"
+
+    def test_detections_still_evaluated_normally_with_real_service(
+        self, mock_env, base_context
+    ):
+        """The ROI path is untouched by the zero-detection guard."""
+
+        class MatchingChecker:
+            supported_colors = ("Black",)
+
+            def __init__(self):
+                self.calls = 0
+
+            def check(self, _image, allowed_colors=None):
+                self.calls += 1
+                return SimpleNamespace(
+                    best_color="Black", diff=0.0, threshold=1.0, is_ok=True
+                )
+
+        checker = MatchingChecker()
+        service = ColorCheckerService()
+        service._checker = checker
+        base_context.config.expected_items = {"TestProduct": {"TestArea": ["Black"]}}
+        base_context.result["detections"] = [
+            {"class": "Black", "bbox": [0, 0, 10, 10]}
+        ]
+
+        ColorCheckStep(service, mock_env.logger).run(base_context)
+
+        assert checker.calls == 1
+        assert base_context.color_result["is_ok"] is True
+        assert base_context.color_result["status"] == "evaluated"
+        assert base_context.result["detections"][0]["verified_class"] == "Black"
+        assert base_context.status == "PASS"
+
+    def test_candidate_lookup_failure_fails_closed(
+        self, mock_env, base_context, mock_color_service
+    ):
+        """A broken expected-items config must not widen the color vocabulary."""
+        mock_color_service.is_ready.return_value = True
+        base_context.config.expected_items = None  # get_items_by_area -> AttributeError
+        base_context.config.color_fail_closed = True
+
+        ColorCheckStep(mock_color_service, mock_env.logger).run(base_context)
+
+        mock_color_service.check_items.assert_not_called()
+        assert base_context.status == "DETECTION_FAIL"
+        assert base_context.color_result["is_ok"] is False
+        assert base_context.color_result["status"] == "candidate_lookup_failed"
+
+    def test_candidate_lookup_failure_is_logged_when_fail_closed_disabled(
+        self, mock_env, base_context, mock_color_service, caplog
+    ):
+        """Degrading to an unrestricted vocabulary must never be silent."""
+        mock_color_service.is_ready.return_value = True
+        base_context.config.expected_items = None
+        base_context.config.color_fail_closed = False
+
+        with caplog.at_level(logging.WARNING):
+            ColorCheckStep(mock_color_service, mock_env.logger).run(base_context)
+
+        assert "Color candidate lookup failed" in caplog.text
+        assert "unrestricted color vocabulary" in caplog.text
+        mock_color_service.check_items.assert_called_once()
+        assert mock_color_service.check_items.call_args.kwargs["candidates"] is None
+
+
 class TestCountCheckStep:
     def test_run_pass(self, mock_env, base_context):
         base_context.config.expected_items = {"TestProduct": {"TestArea": ["LED", "J1"]}}
@@ -406,6 +727,159 @@ class TestCountCheckStep:
         assert base_context.result["over_items"] == ["Black"]
         assert base_context.result["unexpected_items"] == ["Black"]
         assert base_context.result["decision"]["reasons"] == ["UNEXPECTED_COMPONENT"]
+
+    def test_expected_items_lookup_failure_fails_closed(self, mock_env, base_context):
+        """An unreadable expectation must not be treated as 'nothing expected'."""
+        base_context.config.expected_items = None  # -> AttributeError
+        base_context.result["detections"] = [{"class": "LED"}]
+
+        CountCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+
+        assert base_context.status == "DETECTION_FAIL"
+        assert base_context.result["count_check"]["is_ok"] is False
+        assert (
+            base_context.result["count_check"]["status"]
+            == "expected_items_lookup_failed"
+        )
+        assert "Expected items lookup failed" in (
+            base_context.result["count_check"]["error"]
+        )
+
+    @pytest.mark.parametrize(
+        "expected_items",
+        (
+            None,
+            "not-a-mapping",
+            [1, 2, 3],
+        ),
+    )
+    def test_expected_items_lookup_failure_variants_fail_closed(
+        self, mock_env, base_context, expected_items
+    ):
+        base_context.config.expected_items = expected_items
+
+        CountCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+
+        assert base_context.status == "DETECTION_FAIL"
+        assert (
+            base_context.result["count_check"]["status"]
+            == "expected_items_lookup_failed"
+        )
+
+    def test_non_iterable_expected_items_fails_closed(self, mock_env, base_context):
+        """A malformed value that breaks normalization is a lookup failure too."""
+        base_context.config.expected_items = {"TestProduct": {"TestArea": 5}}
+
+        CountCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+
+        assert base_context.status == "DETECTION_FAIL"
+        assert (
+            base_context.result["count_check"]["status"]
+            == "expected_items_lookup_failed"
+        )
+
+    def test_expected_items_lookup_failure_is_logged(
+        self, mock_env, base_context, caplog
+    ):
+        base_context.config.expected_items = None
+
+        with caplog.at_level(logging.ERROR):
+            CountCheckStep(
+                mock_env.logger, base_context.product, base_context.area
+            ).run(base_context)
+
+        assert "Count check expected-items lookup failed" in caplog.text
+        assert "TestProduct" in caplog.text
+        assert "TestArea" in caplog.text
+
+    def test_lookup_failure_is_not_confused_with_absent_expectation(
+        self, mock_env, base_context
+    ):
+        """The two cases must produce visibly different outcomes."""
+        failed_ctx = base_context
+        failed_ctx.config.expected_items = None
+        CountCheckStep(
+            mock_env.logger, failed_ctx.product, failed_ctx.area
+        ).run(failed_ctx)
+
+        absent_ctx = DetectionContext(
+            product="TestProduct",
+            area="TestArea",
+            inference_type="yolo",
+            frame=np.zeros((100, 100, 3), dtype=np.uint8),
+            processed_image=np.zeros((100, 100, 3), dtype=np.uint8),
+            result={"detections": [], "missing_items": []},
+            status="PASS",
+            config=DetectionConfig(weights="dummy.pt"),
+        )
+        absent_ctx.config.expected_items = {"TestProduct": {"TestArea": []}}
+        CountCheckStep(
+            mock_env.logger, absent_ctx.product, absent_ctx.area
+        ).run(absent_ctx)
+
+        assert failed_ctx.status == "DETECTION_FAIL"
+        assert "count_check" in failed_ctx.result
+        # Unchanged legacy behavior: a genuinely empty expectation skips quietly.
+        assert absent_ctx.status == "PASS"
+        assert "count_check" not in absent_ctx.result
+
+    def test_absent_expected_items_still_skips_quietly(self, mock_env, base_context):
+        base_context.config.expected_items = {"TestProduct": {}}
+        base_context.result["detections"] = [{"class": "LED"}]
+
+        CountCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+
+        assert base_context.status == "PASS"
+        assert "count_check" not in base_context.result
+
+    def test_lookup_failure_survives_finalize_status(self, mock_env, base_context):
+        """finalize_status recomputes the verdict; the FAIL must not be lost."""
+        base_context.config.expected_items = None
+        base_context.color_result = None
+
+        CountCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+        assert base_context.status == "DETECTION_FAIL"
+
+        finalize_status(base_context)
+
+        assert base_context.status == "DETECTION_FAIL"
+
+    def test_normal_count_pass_survives_finalize_status(self, mock_env, base_context):
+        base_context.config.expected_items = {"TestProduct": {"TestArea": ["LED"]}}
+        base_context.result["detections"] = [{"class": "LED"}]
+        base_context.color_result = None
+
+        CountCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+        finalize_status(base_context)
+
+        assert base_context.status == "PASS"
+        assert base_context.result["count_check"]["is_ok"] is True
+        assert "status" not in base_context.result["count_check"]
+
+    def test_normal_count_fail_survives_finalize_status(self, mock_env, base_context):
+        base_context.config.expected_items = {"TestProduct": {"TestArea": ["LED", "J1"]}}
+        base_context.result["detections"] = [{"class": "LED"}]
+        base_context.color_result = None
+
+        CountCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+        finalize_status(base_context)
+
+        assert base_context.status == "DETECTION_FAIL"
+        assert base_context.result["missing_items"] == ["J1"]
 
     def test_run_skips_inference_error(self, mock_env, base_context):
         base_context.status = "INFERENCE_ERROR"

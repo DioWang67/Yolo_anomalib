@@ -7,7 +7,10 @@ from typing import Any
 from core.exceptions import ResultPersistenceError
 from core.pipeline.context import DetectionContext
 from core.position_validator import PositionValidator
-from core.services.color_checker import ColorCheckerService
+from core.services.color_checker import (
+    COLOR_CHECK_NO_DETECTIONS_STATUS,
+    ColorCheckerService,
+)
 from core.services.cross_class_duplicate_filter import (
     DuplicateFilterMode,
     DuplicateFilterPolicy,
@@ -18,6 +21,16 @@ from core.services.result_sink import ExcelImageResultSink
 
 INFERENCE_ERROR_STATUS = "INFERENCE_ERROR"
 DETECTION_FAIL_STATUS = "DETECTION_FAIL"
+
+#: ``count_check.status`` marking a count check that could not be evaluated
+#: because its expected-items configuration could not be read. Distinct from a
+#: normal count FAIL, which carries missing/over items instead.
+EXPECTED_ITEMS_LOOKUP_FAILED_STATUS = "expected_items_lookup_failed"
+
+#: ``position_check.status`` marking a position check that could not be
+#: evaluated because its enable flag could not be read. Distinct from a normal
+#: position FAIL, which annotates detections with ``position_status``.
+POSITION_CONFIG_LOOKUP_FAILED_STATUS = "position_config_lookup_failed"
 
 
 class Step:
@@ -39,10 +52,10 @@ class ColorCheckStep(Step):
         """Run color check on detections and attach ctx.color_result."""
         if str(ctx.status).upper() == INFERENCE_ERROR_STATUS:
             return
+        fail_closed = bool(getattr(ctx.config, "color_fail_closed", True))
         if not self.color_service.is_ready():
             self.logger.warning("ColorChecker not ready (possibly missing JSON file); skipping color check")
             ctx.color_result = {"is_ok": False, "items": [], "error": "Not loaded"}
-            fail_closed = bool(getattr(ctx.config, "color_fail_closed", True))
             if fail_closed:
                 ctx.status = DETECTION_FAIL_STATUS
                 self.logger.info("Color checker unavailable -> overall FAIL")
@@ -50,14 +63,36 @@ class ColorCheckStep(Step):
 
         detections: list[dict[str, Any]] = ctx.result.get("detections", [])
 
-        # Extract candidates from config to restrict search space
-        candidates = set()
+        # Extract candidates from config to restrict search space. A lookup
+        # failure must never degrade silently into an unrestricted vocabulary:
+        # that widens the search space and makes a wrong color easier to accept.
+        candidates: set[str] = set()
         try:
             expected = ctx.config.get_items_by_area(ctx.product, ctx.area)
-            if expected:
-                candidates = {str(c).strip() for c in expected if c}
-        except Exception:
-            pass
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            self.logger.error(
+                "Color candidate lookup failed for product=%s area=%s: %s",
+                ctx.product,
+                ctx.area,
+                exc,
+            )
+            if fail_closed:
+                ctx.color_result = {
+                    "is_ok": False,
+                    "items": [],
+                    "status": "candidate_lookup_failed",
+                    "error": f"Color candidate lookup failed: {exc}",
+                }
+                ctx.status = DETECTION_FAIL_STATUS
+                self.logger.info("Color candidates unavailable -> overall FAIL")
+                return
+            self.logger.warning(
+                "Proceeding with the unrestricted color vocabulary because "
+                "color_fail_closed is disabled"
+            )
+            expected = None
+        if expected:
+            candidates = {str(c).strip() for c in expected if c}
 
         c_res = self.color_service.check_items(
             frame=ctx.frame,
@@ -95,15 +130,21 @@ class ColorCheckStep(Step):
             self.logger.info(
                 f"Color check logs truncated: {total-max_log} more items..."
             )
+        status = str(ctx.color_result.get("status") or "")
         self.logger.info(
-            f"Color check summary: total={total}, fail={fail_cnt}")
-        # Enforce FAIL when color check is enabled and any item fails
-        try:
-            if not bool(ctx.color_result.get("is_ok", True)):
-                ctx.status = DETECTION_FAIL_STATUS
-                self.logger.info("Color check mismatch -> overall FAIL")
-        except Exception:
-            pass
+            f"Color check summary: total={total}, fail={fail_cnt}, status={status or 'unknown'}"
+        )
+        # Enforce FAIL when color check is enabled and any item fails. This must
+        # stay unguarded: swallowing an error here would turn the only
+        # fail-closed enforcement point into a silent pass.
+        if not bool(ctx.color_result.get("is_ok", True)):
+            ctx.status = DETECTION_FAIL_STATUS
+            reason = (
+                "no detection ROI to evaluate"
+                if status == COLOR_CHECK_NO_DETECTIONS_STATUS
+                else "mismatch"
+            )
+            self.logger.info("Color check %s -> overall FAIL", reason)
 
 
 class CrossClassDuplicateFilterStep(Step):
@@ -248,16 +289,27 @@ class CountCheckStep(Step):
             return
         if not self.options.get("enabled", True):
             return
-        expected_items = None
+
         try:
             expected_items = ctx.config.get_items_by_area(self.product, self.area)
-        except Exception:
-            expected_items = None
-        if not expected_items:
+            expected_list = (
+                [str(x).strip() for x in expected_items if str(x).strip()]
+                if expected_items
+                else []
+            )
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            self._fail_closed_on_unreadable_expectation(ctx, exc)
             return
 
-        expected_list = [str(x).strip() for x in expected_items if str(x).strip()]
+        # An empty result from a *successful* lookup means this area genuinely
+        # has no count expectation, which keeps its long-standing skip. That is
+        # a different fact from a lookup that failed, handled above.
         if not expected_list:
+            self.logger.debug(
+                "Count check skipped: no expected items configured for product=%s area=%s",
+                self.product,
+                self.area,
+            )
             return
 
         strict = bool(self.options.get("strict", False))
@@ -302,6 +354,36 @@ class CountCheckStep(Step):
         else:
             self.logger.info("Count check PASS")
         self._sync_count_decision(ctx, missing_items, over_items, strict)
+
+    def _fail_closed_on_unreadable_expectation(
+        self, ctx: DetectionContext, exc: Exception
+    ) -> None:
+        """Record an unevaluable count check and fail the inspection.
+
+        An unreadable expectation means the required item set is *unknown*, not
+        empty. Skipping the comparison would accept any detection set at all, so
+        the inspection fails instead. There is deliberately no opt-out: an
+        expected-items config that cannot be read is a defect to fix, not an
+        operating mode.
+        """
+        self.logger.error(
+            "Count check expected-items lookup failed for product=%s area=%s: %s",
+            self.product,
+            self.area,
+            exc,
+        )
+        ctx.result["count_check"] = {
+            "expected": {},
+            "detected": {},
+            "missing": [],
+            "over": [],
+            "strict": bool(self.options.get("strict", False)),
+            "is_ok": False,
+            "status": EXPECTED_ITEMS_LOOKUP_FAILED_STATUS,
+            "error": f"Expected items lookup failed: {exc}",
+        }
+        ctx.status = DETECTION_FAIL_STATUS
+        self.logger.info("Count expectations unavailable -> overall FAIL")
 
     @staticmethod
     def _sync_count_decision(
@@ -510,15 +592,18 @@ class PositionCheckStep(Step):
             ctx.config or self.options.get("config"), self.product, self.area
         )
 
-        # If not enabled in config, allow forcing via options
-        enabled = False
+        # If not enabled in config, allow forcing via options. A failed lookup
+        # must not be read as "disabled": that skips validate() entirely, so no
+        # detection is ever annotated with position_status and finalize_status
+        # has nothing left to recompute a FAIL from — a shifted part would PASS.
         try:
             enabled = bool(
                 validator.config.is_position_check_enabled(
                     self.product, self.area)
             )
-        except Exception:
-            pass
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            self._fail_closed_on_unreadable_config(ctx, exc)
+            return
         if not enabled and not self.options.get("force", False):
             return
 
@@ -532,5 +617,40 @@ class PositionCheckStep(Step):
                 new_status = DETECTION_FAIL_STATUS
             ctx.status = new_status
             self.logger.info(f"Position check evaluated status: {new_status}")
-        except Exception as e:
-            self.logger.warning(f"Position check failed: {e}")
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            # Deliberately not fail-closed. validate() above already annotated
+            # every detection with position_status, and missing_items is already
+            # on ctx.result, so finalize_status recomputes this same FAIL from
+            # POSITION_SHIFT / MISSING. Losing the verdict here is recoverable;
+            # see test_position_evaluation_error_is_recovered_by_finalize.
+            # If that safety net is ever removed, this must become fail-closed.
+            self.logger.warning(
+                "Position check evaluation failed for product=%s area=%s: %s "
+                "(verdict deferred to finalize_status)",
+                self.product,
+                self.area,
+                exc,
+                exc_info=True,
+            )
+
+    def _fail_closed_on_unreadable_config(
+        self, ctx: DetectionContext, exc: Exception
+    ) -> None:
+        """Record an unevaluable position check and fail the inspection.
+
+        An unreadable enable flag means it is *unknown* whether positions must
+        be checked, which is not the same as the check being switched off.
+        """
+        self.logger.error(
+            "Position check config lookup failed for product=%s area=%s: %s",
+            self.product,
+            self.area,
+            exc,
+        )
+        ctx.result["position_check"] = {
+            "is_ok": False,
+            "status": POSITION_CONFIG_LOOKUP_FAILED_STATUS,
+            "error": f"Position config lookup failed: {exc}",
+        }
+        ctx.status = DETECTION_FAIL_STATUS
+        self.logger.info("Position check configuration unavailable -> overall FAIL")

@@ -11,6 +11,11 @@ from core.services.alignment import (
     extract_layout_alignment,
     resolve_missing_expected_keys,
 )
+from core.services.results.customer_message import (
+    COLOR_FAILURE_LOW_CONFIDENCE,
+    COLOR_FAILURE_MISMATCH,
+    classify_color_check_failure,
+)
 from core.services.results.position_summary import (
     POSITION_OK_STATES,
     format_fixture_shift_hint,
@@ -413,6 +418,27 @@ def _draw_info_panel(
         pass
 
 
+def _color_item_overlay_text(item: dict[str, Any], is_ok: bool) -> str:
+    """Return an ASCII-safe description of one color-check item for overlay text.
+
+    Shares its classification with the main verdict message
+    (:func:`core.services.results.customer_message.classify_color_check_failure`)
+    so this image overlay never shows a bare class name for a failure the
+    operator guidance card separately reports as a color mismatch or a
+    confidence shortfall.
+    """
+    if is_ok:
+        cls_name = item.get("class_name") or "-"
+        best = item.get("best_color") or "-"
+        return f"{cls_name} -> {best}"
+    description = classify_color_check_failure(item)
+    if description.kind == COLOR_FAILURE_MISMATCH:
+        return f"{description.class_name} -> {description.predicted_color} (mismatch)"
+    if description.kind == COLOR_FAILURE_LOW_CONFIDENCE:
+        return f"{description.class_name} (low confidence)"
+    return item.get("class_name") or "-"
+
+
 def _format_color_lines(
     color_result: dict[str, Any],
     max_items: int | None = None,
@@ -436,8 +462,6 @@ def _format_color_lines(
         limit = max_items if max_items is not None else COLOR_PANEL_MAX_ITEMS
         for _, _, item in ranked[:limit]:
             idx = item.get("index", "-")
-            cls_name = item.get("class_name") or "-"
-            best = item.get("best_color") or "-"
             diff = item.get("diff")
             threshold = item.get("threshold")
             diff_str = "-"
@@ -445,7 +469,14 @@ def _format_color_lines(
                 diff_str = f"{float(diff):.2f}/{float(threshold):.2f}"
             status_ok = bool(item.get("is_ok", True))
             status_text = "OK" if status_ok else "NG"
-            line = f"#{idx} {cls_name} -> {best} (d={diff_str}) {status_text}"
+            # ASCII-only: this line is drawn with cv2.putText / FONT_HERSHEY_SIMPLEX,
+            # which cannot render non-Latin glyphs, so it cannot reuse the
+            # Chinese wording customer_message.py uses for the same
+            # mismatch-vs-low-confidence classification. The distinction (not
+            # just diff/threshold, which are debugging context kept either way)
+            # still needs to survive in this ASCII form.
+            description = _color_item_overlay_text(item, status_ok)
+            line = f"#{idx} {description} (d={diff_str}) {status_text}"
             lines.append((line, status_ok))
         hidden = max(0, len(ranked) - limit)
         if hidden > 0:

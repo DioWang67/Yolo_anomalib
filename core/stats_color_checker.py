@@ -6,6 +6,7 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -399,13 +400,25 @@ class StatsColorChecker:
         if not color_ranges:
             raise ValueError("color_ranges must not be empty")
         self._ranges = color_ranges
-        self._default_threshold = default_threshold or DEFAULT_RATIO_THRESHOLD
         self._tuning = tuning or _DEFAULT_TUNING
-        base_thresholds = {**COLOR_CONF_THRESHOLDS}
-        if color_thresholds:
-            for name, val in color_thresholds.items():
-                base_thresholds[name.lower()] = float(val)
-        self._color_thresholds = base_thresholds
+
+        # Immutable baseline: the effective configuration this checker returns to
+        # whenever a caller applies a runtime configuration that omits a key. It
+        # is a private copy, so instance-level tuning can never write back into
+        # the module constant shared by every other checker.
+        self._baseline_default_threshold = DEFAULT_RATIO_THRESHOLD
+        self._baseline_color_thresholds: dict[str, float] = dict(COLOR_CONF_THRESHOLDS)
+
+        self._default_threshold = self._baseline_default_threshold
+        self._color_thresholds = dict(self._baseline_color_thresholds)
+        # Constructor arguments are runtime configuration, not baseline, so they
+        # go through the same validate-then-commit path as any later update.
+        self.apply_runtime_configuration(
+            # ``or None`` preserves the historical constructor contract where a
+            # falsy threshold means "unset" and falls back to the baseline.
+            default_threshold=default_threshold or None,
+            color_thresholds=color_thresholds,
+        )
 
     @property
     def supported_colors(self) -> tuple[str, ...]:
@@ -529,22 +542,109 @@ class StatsColorChecker:
             metrics=metrics,
         )
 
+    def apply_runtime_configuration(
+        self,
+        *,
+        default_threshold: float | None = None,
+        # Values arrive straight from product config and are validated here, so
+        # they are deliberately untyped rather than assumed to be floats.
+        color_thresholds: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Replace all runtime-tunable state with this invocation's configuration.
+
+        Any key not supplied returns to the immutable baseline, so configuration
+        belonging to a previously inspected product cannot survive into the next
+        one when the same checker instance is reused.
+
+        Every value is validated before any state changes, so a successful call
+        commits the whole configuration and a rejected one commits none of it.
+        A rejected call additionally resets to baseline, so the checker is never
+        left holding a half-applied or previous-product configuration.
+
+        Args:
+            default_threshold: Fallback threshold for colors without an explicit
+                one; ``None`` restores the baseline.
+            color_thresholds: Per-color thresholds, matched case-insensitively;
+                colors omitted here return to the baseline.
+
+        Raises:
+            TypeError: If ``color_thresholds`` is not a mapping.
+            ValueError: If any value cannot be coerced to float.
+        """
+        try:
+            resolved_default = self._baseline_default_threshold
+            if default_threshold is not None:
+                try:
+                    resolved_default = float(default_threshold)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Invalid default color threshold: {default_threshold!r}"
+                    ) from exc
+
+            resolved = dict(self._baseline_color_thresholds)
+            if color_thresholds:
+                if not isinstance(color_thresholds, Mapping):
+                    raise TypeError(
+                        "color threshold overrides must be a mapping, got "
+                        f"{type(color_thresholds).__name__}"
+                    )
+                for name, value in color_thresholds.items():
+                    try:
+                        resolved[str(name).lower()] = float(value)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            f"Invalid color threshold overrides: {name!r} -> {value!r}"
+                        ) from exc
+        except (TypeError, ValueError):
+            self.reset_runtime_configuration()
+            raise
+
+        self._default_threshold = resolved_default
+        self._color_thresholds = resolved
+
+    def reset_runtime_configuration(self) -> None:
+        """Discard every runtime override and return to the immutable baseline."""
+        self._default_threshold = self._baseline_default_threshold
+        self._color_thresholds = dict(self._baseline_color_thresholds)
+
     def apply_threshold_overrides(self, overrides: dict[str, float] | None) -> None:
+        """Merge per-color threshold overrides onto the *current* configuration.
+
+        Prefer :meth:`apply_runtime_configuration` when switching products: this
+        method deliberately keeps values already applied, so on its own it cannot
+        clear a previous product's configuration.
+
+        Raises:
+            ValueError: If any value cannot be coerced to float. Nothing is
+                applied in that case, so a rejected batch cannot leave the
+                checker half-configured.
+        """
         if not overrides:
             return
+        coerced: dict[str, float] = {}
         for name, value in overrides.items():
             try:
-                self._color_thresholds[str(name).lower()] = float(value)
-            except Exception:
-                continue
+                coerced[str(name).lower()] = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Invalid color threshold overrides: {name!r} -> {value!r}"
+                ) from exc
+        self._color_thresholds.update(coerced)
 
     def set_default_threshold(self, threshold: float | None) -> None:
+        """Set the fallback threshold used by colors without an explicit one.
+
+        Raises:
+            ValueError: If the threshold cannot be coerced to float.
+        """
         if threshold is None:
             return
         try:
             self._default_threshold = float(threshold)
-        except Exception:
-            pass
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid default color threshold: {threshold!r}"
+            ) from exc
 
     def _filter_ranges(
         self, allowed_colors: Iterable[str] | None

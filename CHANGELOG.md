@@ -108,6 +108,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Default allowed roots: project root, models directory, Result directory
   - Configurable for different deployment scenarios
 
+## [1.1.0] - 2026-08-13
+
+### Added
+- Explicit `status` field on `ColorCheckResult` / the serialized `color_check`
+  payload (`evaluated`, `no_detections`), and on `count_check` /
+  `position_check` results (`expected_items_lookup_failed`,
+  `position_config_lookup_failed`), so downstream consumers can tell a check
+  that actually ran from one that could not, instead of reading an unrelated
+  FAIL as a pass.
+- Shared color-failure classification (`classify_color_check_failure` in
+  `core/services/results/customer_message.py`) distinguishing a color
+  **mismatch** (wrong color detected) from **low confidence** (right color,
+  score below its own threshold), with matching wording reused across the
+  customer-facing message, the GUI detail panel and the ASCII image overlay,
+  plus new `color_mismatch` / `color_low_confidence` translation strings
+  (EN/ZH).
+- `ColorQCEnhanced.apply_runtime_configuration()` /
+  `reset_runtime_configuration()` and the equivalent `StatsColorChecker`
+  methods, which replace (rather than merge) the active thresholds/rules in a
+  single validated, all-or-nothing call.
+- Expanded pipeline and color-checker test coverage for the new fail-closed
+  paths (`tests/test_pipeline_steps.py`,
+  `tests/test_color_checker_service.py`).
+
+### Changed
+- Color check on a frame with zero detections now fails closed
+  (`status=no_detections`) instead of estimating a verdict from the full-frame
+  background.
+- `ColorCheckerService` reapplies the complete runtime configuration (default
+  threshold, overrides, rules) on every invocation, including calls that
+  supply none, so a checker instance cached across products can no longer
+  carry a previous product's tuning into the next inspection.
+- Color-check failure text throughout the GUI and customer message now states
+  whether the color was mismatched or just under-confident, instead of
+  naming only the detected class.
+
+### Fixed
+- Count check and position check no longer silently pass when their
+  configuration lookup fails (unreadable expected-items or position-enable
+  config); both now fail closed and record why, and `finalize_status` carries
+  that verdict through instead of re-deriving a false PASS from the absence of
+  a signal.
+- Color check candidate lookup failures now respect `color_fail_closed`
+  instead of silently falling back to an unrestricted color vocabulary.
+- `apply_threshold_overrides`, `apply_color_rules_overrides` and
+  `set_default_threshold` now raise on invalid values instead of silently
+  discarding them.
+
 ## [0.1.0] - 2026-01-06
 
 ### 初始版本功能 (Initial Release Features)

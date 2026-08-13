@@ -20,7 +20,12 @@ from PyQt5.QtWidgets import (
 )
 
 from app.gui.i18n import normalize_language, tr
-from core.services.results.customer_message import build_customer_message
+from core.services.results.customer_message import (
+    COLOR_FAILURE_LOW_CONFIDENCE,
+    COLOR_FAILURE_MISMATCH,
+    build_customer_message,
+    classify_color_check_failure,
+)
 from core.services.results.position_summary import (
     format_fixture_shift_hint,
     summarize_position_records,
@@ -372,14 +377,12 @@ class FailReasonLabel(QLabel):
         color_check = result.color_check or {}
         if color_check and not color_check.get("is_ok", True):
             bad = [
-                _color_item_label(c, self._language)
+                _color_check_failure_text(c, self._language)
                 for c in (color_check.get("items") or [])
                 if not c.get("is_ok", True)
             ]
             reasons.append(
-                f"{tr(self._language, 'color_error')}: {', '.join(str(i) for i in bad[:3])}"
-                if bad
-                else tr(self._language, "color_error")
+                "; ".join(str(i) for i in bad[:3]) if bad else tr(self._language, "color_error")
             )
 
         seq = result.sequence_check or {}
@@ -913,15 +916,25 @@ class ResultDisplayWidget(QWidget):
             if source_index in effective_indices:
                 visible_color_items.append(color_item)
         for color_item in visible_color_items:
-            item_status = "OK" if color_item.get("is_ok", True) else "NG"
-            cls_name = _color_item_label(color_item, self._language)
-            pred = color_item.get("best_color") or tr(
-                self._language, "unknown_color"
-            )
+            is_ok = bool(color_item.get("is_ok", True))
+            item_status = "OK" if is_ok else "NG"
+            if is_ok:
+                cls_name = _color_item_label(color_item, self._language)
+                pred = color_item.get("best_color") or tr(
+                    self._language, "unknown_color"
+                )
+                description = f"{cls_name} -> {pred}"
+            else:
+                # This detail panel keeps the raw diff/threshold numbers (they
+                # are debugging context); the description text itself shares
+                # the same mismatch-vs-low-confidence classification as the
+                # main operator guidance card so the two never read as if a
+                # different item or a different color had failed.
+                description = _color_check_failure_text(color_item, self._language)
             diff = color_item.get("diff", 0)
             threshold = color_item.get("threshold", 0)
             lines.append(
-                f"  {item_status} {cls_name} -> {pred} "
+                f"  {item_status} {description} "
                 f"(diff={diff:.2f}, thr={threshold:.2f})"
             )
         if not visible_color_items:
@@ -1097,3 +1110,25 @@ def _color_item_label(item: dict[str, object], language: str) -> str:
         return str(label)
     key = "full_frame" if item.get("index") == -1 else "unknown_item"
     return tr(normalize_language(language), key)
+
+
+def _color_check_failure_text(item: dict[str, object], language: str) -> str:
+    """Return a localized description of one failed color-check item.
+
+    Shares its classification with the main verdict message
+    (:func:`core.services.results.customer_message.classify_color_check_failure`)
+    so a color swap and a confidence shortfall are described the same way here
+    as in the primary operator guidance card, instead of this detail view
+    showing only the detected class the way the guidance card used to.
+    """
+    description = classify_color_check_failure(item)
+    lang = normalize_language(language)
+    if description.kind == COLOR_FAILURE_MISMATCH:
+        return tr(lang, "color_mismatch").format(
+            class_name=description.class_name, predicted=description.predicted_color
+        )
+    if description.kind == COLOR_FAILURE_LOW_CONFIDENCE:
+        return tr(lang, "color_low_confidence").format(
+            class_name=description.class_name
+        )
+    return _color_item_label(item, language)

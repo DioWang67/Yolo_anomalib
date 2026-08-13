@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_GENERIC_DETECTOR_CLASSES = ("LED",)
 
+#: Every detection ROI was measured against the loaded color model.
+COLOR_CHECK_EVALUATED_STATUS = "evaluated"
+#: There was no detection ROI to measure, so no color evidence exists.
+COLOR_CHECK_NO_DETECTIONS_STATUS = "no_detections"
+
 
 def _is_expected_color_match(
     expected_color: object,
@@ -150,19 +155,11 @@ class ColorCheckerService:
                 )
                 tuning = ColorDecisionTuning()
             try:
-                self._checker = StatsColorChecker.from_json(
-                    model_path,
-                    default_threshold=default_threshold or None,
-                    color_thresholds=overrides,
-                    tuning=tuning,
-                )
-                if default_threshold is not None:
-                    try:
-                        self._checker.set_default_threshold(default_threshold)
-                    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
-                        raise RuntimeError(
-                            "Could not apply the configured default color threshold"
-                        ) from exc
+                # Runtime overrides are deliberately not baked in here: they are
+                # applied below through the same reset-then-apply path used when
+                # an already-loaded checker is reused, so both paths produce an
+                # identical effective configuration.
+                self._checker = StatsColorChecker.from_json(model_path, tuning=tuning)
                 self._checker_type = checker_type
                 self._model_path = model_path
                 self._decision_tuning = (
@@ -176,8 +173,6 @@ class ColorCheckerService:
                 raise RuntimeError(
                     f"Failed to load StatsColorChecker from {model_path}: {e}"
                 ) from e
-            overrides = None  # already applied during creation
-            rules_overrides = None
         elif need_reload:
             try:
                 self._checker = ColorQCEnhanced.from_json(model_path)
@@ -191,38 +186,35 @@ class ColorCheckerService:
                     f"Failed to load ColorQCEnhanced from {model_path}: {e}"
                 ) from e
 
+        # Reapply the whole runtime configuration on every invocation, including
+        # when nothing was supplied. A checker instance is cached across products
+        # that share a model file, so anything not restated here must fall back
+        # to the model baseline rather than linger from the previous product.
         if checker_type == "stats":
-            if default_threshold is not None:
-                try:
-                    self._checker.set_default_threshold(default_threshold)
-                except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
-                    raise RuntimeError(
-                        "Could not apply the active default color threshold"
-                    ) from exc
-            if overrides:
-                try:
-                    self._checker.apply_threshold_overrides(overrides)
-                except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
-                    raise RuntimeError(
-                        "Could not apply active color threshold overrides"
-                    ) from exc
+            self._apply_runtime_configuration(
+                default_threshold=default_threshold,
+                color_thresholds=overrides,
+            )
             return
+        self._apply_runtime_configuration(
+            color_thresholds=overrides,
+            color_rules=rules_overrides,
+        )
 
-        # Apply threshold overrides (case-insensitive) if provided
-        if overrides:
-            try:
-                self._checker.apply_threshold_overrides(overrides)
-            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
-                raise RuntimeError(
-                    "Could not apply active color threshold overrides"
-                ) from exc
-        if rules_overrides:
-            try:
-                self._checker.apply_color_rules_overrides(rules_overrides)
-            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
-                raise RuntimeError(
-                    "Could not apply active color rule overrides"
-                ) from exc
+    def _apply_runtime_configuration(self, **configuration: Any) -> None:
+        """Hand this invocation's configuration to the checker, failing loudly.
+
+        Raises:
+            RuntimeError: If the checker rejects the configuration. The checker
+                resets itself to baseline first, so a rejected configuration can
+                never leave the previous product's values in effect.
+        """
+        try:
+            self._checker.apply_runtime_configuration(**configuration)
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Could not apply active color configuration: {exc}"
+            ) from exc
 
     def is_ready(self) -> bool:
         """Return True if a model is loaded and ready."""
@@ -238,10 +230,23 @@ class ColorCheckerService:
     ) -> ColorCheckResult:
         """Run color check on detections.
 
-        If no detections are present, fallback to check on full frame.
+        A frame without detections carries no region to measure. Judging the
+        full frame instead would let an unrelated background color decide the
+        verdict, so the missing evidence is reported and the result fails
+        closed.
         """
         if self._checker is None:
             raise RuntimeError("ColorChecker not loaded")
+
+        if not detections:
+            logger.info(
+                "Color check has no detection ROI to evaluate; failing closed"
+            )
+            return ColorCheckResult(
+                is_ok=False,
+                items=[],
+                status=COLOR_CHECK_NO_DETECTIONS_STATUS,
+            )
 
         items: list[ColorCheckItemResult] = []
         all_ok = True
@@ -266,56 +271,44 @@ class ColorCheckerService:
             configured_colors,
             supported_colors,
         )
-        if detections:
-            proc = processed_image if processed_image is not None else frame
-            for idx, det in enumerate(detections):
-                x1, y1, x2, y2 = det.get("bbox", [0, 0, 0, 0])
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(proc.shape[1], x2), min(proc.shape[0], y2)
-                roi = proc[y1:y2, x1:x2]
-                # Priority: explicit candidates > YOLO class
-                candidate_pool: Iterable[object] = requested_candidates
-                if not requested_candidates and det.get("class"):
-                    candidate_pool = (det.get("class"),)
-                allowed = _supported_candidates(candidate_pool, supported_colors)
-                c_res = self._checker.check(roi, allowed_colors=allowed)
-                item_is_ok = (
-                    bool(c_res.is_ok)
-                    and configured_colors_are_supported
-                    and _is_expected_color_match(
-                        det.get("class"),
-                        c_res.best_color,
-                        supported_colors,
-                        generic_detector_classes,
-                    )
+        proc = processed_image if processed_image is not None else frame
+        for idx, det in enumerate(detections):
+            x1, y1, x2, y2 = det.get("bbox", [0, 0, 0, 0])
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(proc.shape[1], x2), min(proc.shape[0], y2)
+            roi = proc[y1:y2, x1:x2]
+            # Priority: explicit candidates > YOLO class
+            candidate_pool: Iterable[object] = requested_candidates
+            if not requested_candidates and det.get("class"):
+                candidate_pool = (det.get("class"),)
+            allowed = _supported_candidates(candidate_pool, supported_colors)
+            c_res = self._checker.check(roi, allowed_colors=allowed)
+            item_is_ok = (
+                bool(c_res.is_ok)
+                and configured_colors_are_supported
+                and _is_expected_color_match(
+                    det.get("class"),
+                    c_res.best_color,
+                    supported_colors,
+                    generic_detector_classes,
                 )
-                items.append(
-                    ColorCheckItemResult(
-                        index=idx,
-                        class_name=det.get("class"),
-                        bbox=det.get("bbox"),
-                        best_color=c_res.best_color,
-                        diff=float(c_res.diff),
-                        threshold=float(c_res.threshold),
-                        is_ok=item_is_ok,
-                    )
-                )
-                if not item_is_ok:
-                    all_ok = False
-        else:
-            # No detections: estimate on full frame
-            c_res = self._checker.check(frame)
+            )
             items.append(
                 ColorCheckItemResult(
-                    index=-1,
-                    class_name=None,
-                    bbox=None,
+                    index=idx,
+                    class_name=det.get("class"),
+                    bbox=det.get("bbox"),
                     best_color=c_res.best_color,
                     diff=float(c_res.diff),
                     threshold=float(c_res.threshold),
-                    is_ok=bool(c_res.is_ok),
+                    is_ok=item_is_ok,
                 )
             )
-            all_ok = bool(c_res.is_ok)
+            if not item_is_ok:
+                all_ok = False
 
-        return ColorCheckResult(is_ok=all_ok, items=items)
+        return ColorCheckResult(
+            is_ok=all_ok,
+            items=items,
+            status=COLOR_CHECK_EVALUATED_STATUS,
+        )

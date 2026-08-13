@@ -130,15 +130,22 @@ def test_color_override_loader_falls_back_to_global_decision_tuning(tmp_path):
 def test_color_checker_rejects_an_active_override_that_cannot_be_applied():
     service = ColorCheckerService()
     service._checker = MagicMock()
-    service._checker.apply_threshold_overrides.side_effect = ValueError(
+    service._checker.apply_runtime_configuration.side_effect = ValueError(
         "invalid threshold"
     )
     service._model_path = "color-model.json"
     service._checker_type = "stats"
 
-    with pytest.raises(RuntimeError, match="active color threshold overrides"):
+    with pytest.raises(RuntimeError, match="active color configuration"):
         service.ensure_loaded(
             "color-model.json",
             overrides={"red": 0.4},
             checker_type="stats",
         )
+
+    # The rejected configuration is the one this invocation supplied, not a
+    # merge with whatever the previously inspected product left behind.
+    service._checker.apply_runtime_configuration.assert_called_once_with(
+        default_threshold=None,
+        color_thresholds={"red": 0.4},
+    )

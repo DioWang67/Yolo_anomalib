@@ -332,4 +332,7 @@ def test_annotate_yolo_frame_shows_color_failure_for_black_classified_as_orange(
 
     text = "\n".join(line for line, _ in captured_lines)
     assert "Color: FAIL" in text
-    assert "#5 Black -> Orange (d=0.60/0.75) NG" in text
+    # Names both the detected class and the predicted color (a color swap),
+    # not just "Black" alone, so this overlay matches the operator guidance
+    # card's "顏色不符: Black → Orange" classification.
+    assert "#5 Black -> Orange (mismatch) (d=0.60/0.75) NG" in text
