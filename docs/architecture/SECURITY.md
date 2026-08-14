@@ -3,8 +3,9 @@
 本文件記錄 `yolo11_inference` 目前已實作、可由程式與測試驗證的安全機制。
 它不是作業系統權限、網路隔離或公司資安政策的替代品。
 
-最後核對日期：2026-08-05（核對時系統版本 1.0.0）；目前系統正式版本：1.1.0。
-v1.1.0 未變更本文件所述的路徑邊界與 YAML 載入機制。
+最後核對日期：2026-08-14；目前系統正式版本：1.1.0。
+v1.1.0 未變更第 1 節的 `core/security.py` 路徑邊界，也未變更第 2 節的 YAML 載入
+機制。新增的是第 1.1 節：驗收證據檔案在既有路徑邊界之上另有一層更嚴格的判定。
 
 ## 1. 路徑邊界
 
@@ -43,6 +44,39 @@ target = ensure_subpath(result_root / product / "evidence.json", result_root)
 - 讀取既有檔案時使用 `must_exist=True`。
 - 不要把整個使用者家目錄、磁碟根目錄或網路分享根目錄加入白名單。
 - 專案沒有 `DEV_MODE` 放寬路徑限制；不得自行加入全磁碟 bypass。
+
+### 1.1 驗收證據檔案的額外判定
+
+第 1 節的邊界回答「這個路徑是否在允許範圍內」。驗收證據還要回答一個不同的問題：
+**這個檔案是否就是當初記錄雜湊值的那一個**。`Path.resolve()` 會跟隨符號連結，
+因此一個指向 root 內部的連結可以通過 `ensure_subpath()`，但它不是原始檔案——
+指向的目標可以在事後被換掉，而記錄下來的雜湊值不會改變。
+
+因此下列 API 對符號連結採**拒絕**而非跟隨：
+
+| API | 位置 | 判定 |
+| --- | --- | --- |
+| `verified_acceptance_image_path()` | `core/services/model_acceptance.py` | 逐一走過相對路徑的每個組成部分，任一部分是符號連結即拒絕；再檢查仍位於 dataset root 內；預設另比對 `image_sha256` |
+| `artifact_ref()` | `core/services/acceptance_artifacts.py` | 在 `resolve()` **之前**檢查最後一個組成部分是否為符號連結，並拒絕空檔案 |
+| `cross_process_file_lock()` | `tools/cross_process_lock.py` | 在 `resolve()` 之前檢查鎖檔與其父目錄是否為符號連結 |
+
+符號連結檢查必須寫在 `resolve()` **之前**。`resolve()` 之後的 `is_symlink()` 恆為
+`False`，那種寫法看起來像防護但永遠不會生效。
+
+`verify_acceptance_artifact_bundle()` 在每次驗收推論的開始與結束各執行一次，
+比對已釘住的路徑、SHA-256 與檔案大小，並確認 model config 仍解析到同一個權重
+檔案。推論期間被替換的檔案會使該次結果被拒絕，而不是產生一份指向已變更檔案的
+報告。
+
+### 1.2 跨行程互斥
+
+驗收 manifest（`ground_truth.csv`）的每一次寫入都在 `cross_process_file_lock()`
+保護下進行：同一行程內以 `threading.RLock` 序列化，跨行程以位元組範圍鎖
+（Windows `msvcrt.locking`、POSIX `fcntl.flock`）序列化。批次提交另外採用
+checksum compare-and-swap——若 manifest 在推論期間被改動，該批次會被拒絕而不是
+覆蓋他人的結果。
+
+鎖檔位於 station data 的 `locks/` 目錄，不含任何內容，且被排除於備份 ZIP 之外。
 
 ## 2. YAML 與設定輸入
 
@@ -85,6 +119,18 @@ D:\miniconda\envs\yolo_anomalib\python.exe -m pytest tests\test_security.py -q
 測試涵蓋合法子路徑、多 root、`..` traversal、root 外絕對路徑、symlink escape、
 Result alias、drive-relative 路徑與單一路徑片段。Windows 無建立 symlink 權限時，
 該案例可被 pytest 明確標示為 skipped；不得把 skip 寫成已驗證通過。
+
+第 1.1／1.2 節的證據邊界回歸測試：
+
+```powershell
+D:\miniconda\envs\yolo_anomalib\python.exe -m pytest tests\test_acceptance_artifacts.py tests\test_acceptance_runs.py tests\test_model_acceptance.py -q
+```
+
+另有一項測試環境保護：`tests/conftest.py` 會在 `--basetemp` 落在含
+`workspace.yaml` 的目錄之內時**拒絕啟動測試**。workspace 探索是往上層尋找
+`workspace.yaml`，因此 workspace 內的 basetemp 會讓每個測試的 `tmp_path` 解析到
+正式 station data。此事曾發生：一個測試用的殘缺顏色模型被寫入正式 color profile
+store，並在驗收工具中成為可選取的顏色方案。另有一道 per-test 寫入偵測作為後備。
 
 文件與單元測試不能證明主機 ACL、公司 API 或現場網路已完成滲透測試。正式上線
 仍須執行 [上線檢查表](../operations/PRODUCTION_GO_LIVE_CHECKLIST.md)。

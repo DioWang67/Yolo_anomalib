@@ -30,6 +30,7 @@
 | 跨類別重複框 Pilot | [Cable1/A 1.0.6 改善企畫](pilot/CROSS_CLASS_DUPLICATE_DETECTION_PROPOSAL.md) | 現場 Gate 尚須完成 |
 | 程式模組與執行緒責任 | [模組架構（繁中）](architecture/MODULE_ARCHITECTURE_ZH_TW.md) | [英文原文](architecture/MODULE_ARCHITECTURE.md)／[技術指南](architecture/TECH_GUIDE.md) |
 | 路徑、YAML 與憑證安全 | [安全設計](architecture/SECURITY.md) | `tests/test_security.py` |
+| 驗收證據綁定與跨行程互斥 | [安全設計 §1.1／§1.2](architecture/SECURITY.md) | [模組架構：驗收證據層](architecture/MODULE_ARCHITECTURE_ZH_TW.md) |
 | 受限裝置 runtime 評估 | [Firmware Runtime Plan](architecture/FIRMWARE_RUNTIME_PLAN.md) | 需以 benchmark gate 決定 |
 | 門檻／模型／保存政策歷程 | [Calibration Change Log](records/CALIBRATION_CHANGE_LOG.md) | 只追加，不覆寫歷史 |
 

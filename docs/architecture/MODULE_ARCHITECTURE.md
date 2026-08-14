@@ -191,6 +191,59 @@ CLI inference remains simpler for validation and debugging.
 External inputs are treated as untrusted: product, area, type and paths are
 validated or normalized before use.
 
+## Acceptance Evidence Layer
+
+The acceptance workspace is separate from the detection pipeline: it re-infers
+existing photographs to produce comparable evidence, and writes neither official
+detection results nor human ground truth. For operator procedure see
+[Model Combination Acceptance](../model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md).
+
+### `core/services/acceptance_artifacts.py`
+
+Owns the boundary of "which files one inference actually used".
+`AcceptanceArtifactBundle` binds the global config, model config, weight,
+optional color model and per-color revisions into one content-addressed
+combination, and `verify_acceptance_artifact_bundle()` re-checks it before and
+after a run. Every acceptance entry point — the window, the matrix, the gate and
+the headless CLI — must take its paths from a bundle rather than assembling them,
+otherwise the files named by a report may not be the files that were loaded.
+
+`color_scope_model_type()` lives here too: fusion shares the YOLO scope for color
+artifacts. That rule must exist exactly once.
+
+### `core/services/acceptance_runs.py`
+
+`AcceptanceRunRepository` makes an interactive run atomic. Each sample's result
+is staged in the run directory and state transitions are append-only events; the
+manifest is committed only once every sample has completed. A failed or cancelled
+run leaves the previous official results unchanged.
+
+### `core/services/model_acceptance.py`
+
+`AcceptanceRepository` owns the manifest (`ground_truth.csv`). Every mutation
+runs under `_exclusive_mutation()`, and a batch commit uses a checksum
+compare-and-swap. Stale results are cleared by `artifact_bundle_sha256`, not by
+run: what a snapshot needs is that every result came from one identical artifact
+combination, not from one invocation.
+
+`calculate_acceptance_metrics()` is a total function. It runs on the display and
+reporting path, so a corrupt row is counted as `malformed` and excluded from
+every denominator instead of raising. Rejection belongs to the two decision
+points that can act on it: the gate and a formal snapshot.
+
+### `tools/cross_process_lock.py`
+
+A file lock for short metadata mutations: `threading.RLock` within the process
+and a byte-range lock across processes. Never hold it across inference or any
+other long I/O.
+
+### `app/gui/metric_presentation.py`
+
+`format_count_with_rate()` renders each metric as count-and-rate in a single
+cell. Do not split the count and the rate into neighbouring columns: the overall
+and color-only metric families share a denominator but not a numerator, so
+splitting them invites readers to convert one into the other.
+
 ## State And Concurrency Safety
 
 - GUI work that can block is routed through `QThread` workers.
@@ -198,6 +251,14 @@ validated or normalized before use.
 - Config switching uses copied config snapshots.
 - Output paths are constrained under the project root by security helpers.
 - Async queues prevent unbounded frame buildup.
+- Acceptance manifest mutations hold both an in-process lock and a cross-process
+  file lock, and batch commits additionally use a checksum compare-and-swap so
+  one run cannot overwrite another's results.
+- The GUI's annotated-preview cache is bounded: previews are stored at display
+  size and the least recently viewed is evicted. A full-resolution unbounded
+  QPixmap cache exhausted the graphics heap on batches of a few hundred images
+  and killed the process with no Python traceback. Any new image cache must bound
+  both entry size and entry count.
 
 Avoid adding shared mutable state directly to GUI widgets, workers or global
 module variables. If state must be shared, make the owner explicit and document
