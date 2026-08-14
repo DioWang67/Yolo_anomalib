@@ -21,7 +21,7 @@ import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -29,7 +29,6 @@ from camera.camera_controller import CameraController
 from core.async_pipeline import AsyncPipelineManager
 from core.config import DetectionConfig
 from core.fusion_inference import FusionInferenceRunner
-from core.inference_engine import InferenceEngine
 from core.inference_tokens import InferenceTypeToken
 from core.logging_config import DetectionLogger
 from core.logging_utils import context_adapter
@@ -52,6 +51,9 @@ from core.services.model_manager import ModelManager
 from core.services.result_sink import ExcelImageResultSink
 from core.station_data import load_station_data_paths
 from core.types import DetectionItem, DetectionResult
+
+if TYPE_CHECKING:  # pragma: no cover
+    from core.inference_engine import InferenceEngine
 
 PROJECT_ROOT = project_root()
 

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import getpass
 import json
-from collections.abc import Iterable
+from collections import OrderedDict
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 import numpy as np
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtGui import QBrush, QImage, QPixmap, QStandardItemModel
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -38,6 +39,29 @@ from PyQt5.QtWidgets import (
 )
 
 from app.acceptance.matrix_dialog import AcceptanceMatrixDialog
+from core.services.acceptance_artifacts import (
+    AcceptanceArtifactBundle,
+    AcceptanceArtifactError,
+    build_acceptance_artifact_bundle,
+    color_scope_model_type,
+    resolve_effective_color_model,
+    verify_acceptance_artifact_bundle,
+)
+from core.services.acceptance_matrix import (
+    AcceptanceColorVariant,
+    AcceptanceMatrixError,
+    build_model_variant,
+    discover_color_variants,
+)
+from core.services.acceptance_runs import (
+    AcceptanceRun,
+    AcceptanceRunError,
+    AcceptanceRunRepository,
+)
+from core.services.color_revision_contract import (
+    capture_candidate_color_revision_contract,
+    color_revision_overrides,
+)
 from core.services.model_acceptance import (
     ACCEPTANCE_REASON_CODES,
     SUPPORTED_IMAGE_SUFFIXES,
@@ -46,12 +70,34 @@ from core.services.model_acceptance import (
     AcceptanceInferenceService,
     AcceptanceRecord,
     AcceptanceRepository,
+    ModelIdentity,
     calculate_acceptance_metrics,
 )
 from core.services.model_catalog import ModelCatalog
 from core.station_data import load_station_data_paths
 
 SAMPLE_ID_ROLE = Qt.UserRole
+
+#: Annotated frames are display-only and never persisted, so this cache is
+#: deliberately bounded rather than complete. A full batch of station images
+#: (2048x3072) holds roughly 24 MB per QPixmap at source resolution; keeping
+#: every one of a few hundred samples exhausted the graphics heap and killed
+#: the process outright, with no Python traceback to show for it. The preview
+#: is only ever drawn scaled into a panel, so storing it at source resolution
+#: bought nothing.
+ANNOTATED_PREVIEW_MAX_EDGE = 1600
+ANNOTATED_PREVIEW_CACHE_SIZE = 24
+
+#: Every failure mode that can surface while pinning one run's artifacts. They
+#: are all reported to the operator the same way, so they are named once.
+RUN_SETUP_ERRORS = (
+    AcceptanceArtifactError,
+    AcceptanceMatrixError,
+    AcceptanceRunError,
+    OSError,
+    RuntimeError,
+    ValueError,
+)
 REASON_LABELS = {
     "MISSING": "缺件",
     "WRONG_COMPONENT": "元件錯誤",
@@ -79,13 +125,17 @@ class ScaledImageLabel(QLabel):
     def __init__(self, empty_text: str):
         super().__init__(empty_text)
         self._source: QPixmap | None = None
+        self._default_empty_text = empty_text
+        self._empty_text = empty_text
         self.setAlignment(Qt.AlignCenter)
         self.setMinimumSize(360, 300)
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet("background: #161a20; color: #aeb6c2;")
 
-    def set_source(self, pixmap: QPixmap | None) -> None:
+    def set_source(self, pixmap: QPixmap | None, *, empty_text: str = "") -> None:
+        """Show ``pixmap``, or ``empty_text`` explaining why there is none."""
         self._source = pixmap
+        self._empty_text = empty_text or self._default_empty_text
         self._refresh()
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
@@ -95,6 +145,7 @@ class ScaledImageLabel(QLabel):
     def _refresh(self) -> None:
         if self._source is None or self._source.isNull():
             self.setPixmap(QPixmap())
+            self.setText(self._empty_text)
             return
         self.setPixmap(
             self._source.scaled(
@@ -116,37 +167,119 @@ class InferenceBatchWorker(QThread):
         self,
         *,
         project_root: Path,
+        models_root: Path,
         repository: AcceptanceRepository,
         records: tuple[AcceptanceRecord, ...],
         inference_type: str,
+        artifact_bundle: AcceptanceArtifactBundle,
     ):
         super().__init__()
         self._project_root = project_root
+        self._models_root = models_root
         self._repository = repository
         self._records = records
         self._inference_type = inference_type
+        self._artifact_bundle = artifact_bundle
+        self.failed_message = ""
+        self.cancelled = False
 
     def run(self) -> None:
         service: AcceptanceInferenceService | None = None
+        self.failed_message = ""
+        self.cancelled = False
         try:
-            service = AcceptanceInferenceService(project_root=self._project_root)
+            verify_acceptance_artifact_bundle(
+                self._artifact_bundle,
+                models_root=self._models_root,
+            )
+            identity = ModelIdentity(
+                version=self._artifact_bundle.version,
+                sha256=self._artifact_bundle.model_weight.sha256,
+                runtime_config_sha256=self._artifact_bundle.model_config.sha256,
+                color_model_sha256=(
+                    self._artifact_bundle.color_model.sha256
+                    if self._artifact_bundle.color_model is not None
+                    else ""
+                ),
+            )
+            service = AcceptanceInferenceService(
+                project_root=self._project_root,
+                models_root=self._models_root,
+                global_config_path=self._artifact_bundle.global_config.path,
+                color_model_path_override=(
+                    self._artifact_bundle.color_model.path
+                    if self._artifact_bundle.color_model is not None
+                    and self._artifact_bundle.color_model_mode == "override"
+                    else None
+                ),
+                model_config_overrides={
+                    (
+                        self._artifact_bundle.product,
+                        self._artifact_bundle.area,
+                        color_scope_model_type(self._artifact_bundle.inference_type),
+                    ): self._artifact_bundle.model_config.path
+                },
+                model_weight_path_override=self._artifact_bundle.model_weight.path,
+                model_identity=identity,
+                color_revision_overrides=dict(
+                    self._artifact_bundle.color_revision_overrides
+                ),
+                include_active_color_revisions=(
+                    self._artifact_bundle.include_active_color_revisions
+                ),
+            )
             total = len(self._records)
             for index, record in enumerate(self._records, start=1):
                 if self.isInterruptionRequested():
+                    self.cancelled = True
                     break
                 outcome = service.infer(
                     record,
-                    self._repository.image_file(record),
+                    self._repository.verified_image_file(record),
                     inference_type=self._inference_type,
                     cancel_cb=self.isInterruptionRequested,
                 )
+                if self.isInterruptionRequested():
+                    self.cancelled = True
+                    break
+                if (
+                    outcome.model_version,
+                    outcome.model_sha256.lower(),
+                    outcome.runtime_config_sha256.lower(),
+                    outcome.color_model_sha256.lower(),
+                ) != (
+                    identity.version,
+                    identity.sha256.lower(),
+                    identity.runtime_config_sha256.lower(),
+                    identity.color_model_sha256.lower(),
+                ):
+                    raise AcceptanceDataError(
+                        "Inference identity does not match the pinned artifact bundle."
+                    )
                 self.outcome_ready.emit(outcome)
                 self.progress_changed.emit(index, total)
-        except (ImportError, OSError, RuntimeError, ValueError) as exc:
-            self.failed.emit(str(exc))
+            if not self.cancelled:
+                verify_acceptance_artifact_bundle(
+                    self._artifact_bundle,
+                    models_root=self._models_root,
+                )
+        except (
+            AcceptanceArtifactError,
+            ImportError,
+            OSError,
+            RuntimeError,
+            ValueError,
+        ) as exc:
+            self.failed_message = str(exc)
+            self.failed.emit(self.failed_message)
         finally:
             if service is not None:
-                service.close()
+                try:
+                    service.close()
+                except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                    if not self.failed_message and not self.cancelled:
+                        self.failed_message = f"Inference cleanup failed: {exc}"
+                        self.failed.emit(self.failed_message)
 
 
 class BackupWorker(QThread):
@@ -177,9 +310,14 @@ class ModelAcceptanceWindow(QMainWindow):
         self.data_paths = load_station_data_paths(self.project_root)
         self.catalog = ModelCatalog(self.data_paths.models)
         self.repository: AcceptanceRepository | None = None
+        self._run_repository: AcceptanceRunRepository | None = None
+        self._active_run: AcceptanceRun | None = None
+        self._active_bundle: AcceptanceArtifactBundle | None = None
+        self._pending_outcomes: dict[str, AcceptanceInferenceOutcome] = {}
+        self._inference_failure_message = ""
         self._records: tuple[AcceptanceRecord, ...] = ()
         self._visible_records: tuple[AcceptanceRecord, ...] = ()
-        self._annotated_pixmaps: dict[str, QPixmap] = {}
+        self._annotated_pixmaps: OrderedDict[str, QPixmap] = OrderedDict()
         self._worker: InferenceBatchWorker | None = None
         self._backup_worker: BackupWorker | None = None
         self._close_when_finished = False
@@ -197,6 +335,10 @@ class ModelAcceptanceWindow(QMainWindow):
         self.product_combo = QComboBox()
         self.area_combo = QComboBox()
         self.type_combo = QComboBox()
+        self.color_model_combo = QComboBox()
+        self.color_model_combo.setToolTip(
+            "選擇本次推論要使用的顏色模型。預設沿用工位目前正式生效的顏色設定。"
+        )
         self.batch_edit = QLineEdit()
         self.batch_edit.setPlaceholderText("例如 LOT-20260730")
         self.reviewer_edit = QLineEdit(getpass.getuser())
@@ -204,6 +346,7 @@ class ModelAcceptanceWindow(QMainWindow):
             ("產品", self.product_combo),
             ("區域", self.area_combo),
             ("模型", self.type_combo),
+            ("顏色模型", self.color_model_combo),
             ("批次", self.batch_edit),
             ("覆核者", self.reviewer_edit),
         ):
@@ -393,8 +536,10 @@ class ModelAcceptanceWindow(QMainWindow):
     def _scope_changed(self) -> None:
         product = self.product_combo.currentText().strip()
         area = self.area_combo.currentText().strip()
+        self._reload_color_models()
         if not product or not area:
             self.repository = None
+            self._run_repository = None
             self._records = ()
             self._render_records()
             return
@@ -402,9 +547,132 @@ class ModelAcceptanceWindow(QMainWindow):
             self.repository = AcceptanceRepository(
                 self.data_paths.acceptance / product / area
             )
+            self._run_repository = AcceptanceRunRepository(self.repository.root)
             self._reload_records()
         except (OSError, AcceptanceDataError) as exc:
             QMessageBox.critical(self, "驗收資料錯誤", str(exc))
+
+    def _reload_color_models(self) -> None:
+        """List the color models this scope can be inferred with.
+
+        The first entry keeps the previous behavior -- whatever the station has
+        active -- so opening the tool and pressing 推論 does the same thing it
+        always did. Anything else pins one stored color model for this run only;
+        nothing here activates or edits a color version.
+        """
+        self.color_model_combo.blockSignals(True)
+        self.color_model_combo.clear()
+        self.color_model_combo.addItem("目前正式設定（不覆寫）", None)
+        product = self.product_combo.currentText().strip()
+        area = self.area_combo.currentText().strip()
+        inference_type = self.type_combo.currentText().strip()
+        if not product or not area or not inference_type:
+            self.color_model_combo.blockSignals(False)
+            return
+        try:
+            discovery = discover_color_variants(
+                self.data_paths.color_revisions,
+                product=product,
+                area=area,
+                model_type=color_scope_model_type(inference_type),
+                baselines_root=self.data_paths.color_baselines,
+                profiles_root=self.data_paths.color_profiles,
+            )
+        except (AcceptanceMatrixError, OSError, RuntimeError, ValueError) as exc:
+            # A scope whose color store cannot be read must not silently look
+            # like a scope that simply has no color model.
+            self.color_model_combo.addItem(f"（無法讀取顏色模型：{exc}）", None)
+            self._disable_last_color_item()
+            self.color_model_combo.blockSignals(False)
+            return
+        for variant in discovery.stored_color_models:
+            self.color_model_combo.addItem(variant.label, variant)
+        for exclusion in discovery.exclusions:
+            self.color_model_combo.addItem(
+                f"{exclusion.label}（無法使用：{exclusion.reason}）", None
+            )
+            self._disable_last_color_item()
+        self.color_model_combo.blockSignals(False)
+
+    def _disable_last_color_item(self) -> None:
+        """Make the item just added visible but unselectable.
+
+        Only a standard item model exposes per-item enabling. If Qt ever hands
+        back another model the entry stays selectable, which is safe rather than
+        merely tolerable: an excluded entry carries no variant, so selecting it
+        resolves to the same no-override run as the default entry.
+        """
+        model = self.color_model_combo.model()
+        if not isinstance(model, QStandardItemModel):
+            return
+        item = model.item(self.color_model_combo.count() - 1)
+        if item is not None:
+            item.setEnabled(False)
+
+    def _selected_color_variant(self) -> AcceptanceColorVariant | None:
+        variant = self.color_model_combo.currentData()
+        return variant if isinstance(variant, AcceptanceColorVariant) else None
+
+    def _artifact_bundle_for_run(
+        self,
+        inference_type: str,
+    ) -> AcceptanceArtifactBundle:
+        product = self.product_combo.currentText().strip()
+        area = self.area_combo.currentText().strip()
+        model_variant = build_model_variant(
+            self.data_paths.models,
+            product=product,
+            area=area,
+            inference_type=inference_type,
+        )
+        if model_variant.config_path is None or model_variant.weight_path is None:
+            raise AcceptanceMatrixError(
+                "目前模型組合缺少 config 或 weight，無法建立固定驗收組合。"
+            )
+        global_config_path = self.project_root / "config.yaml"
+        selected_color = self._selected_color_variant()
+        selected_color_path = (
+            selected_color.color_model_path
+            if selected_color is not None
+            else None
+        )
+        if selected_color is not None:
+            revision_overrides = selected_color.override_mapping()
+            include_active_revisions = selected_color.include_active_revisions
+            color_contract: Mapping[str, object] = {}
+        else:
+            effective_color = resolve_effective_color_model(
+                model_config_path=model_variant.config_path,
+                global_config_path=global_config_path,
+                models_root=self.data_paths.models,
+            )
+            color_contract = capture_candidate_color_revision_contract(
+                revisions_root=self.data_paths.color_revisions,
+                candidate_config_path=model_variant.config_path,
+                global_config_path=global_config_path,
+                color_model_present=effective_color is not None,
+                product=product,
+                area=area,
+                inference_type=color_scope_model_type(inference_type),
+            )
+            revision_overrides = color_revision_overrides(color_contract)
+            # Resolve Active once, then use only its exact immutable revisions.
+            include_active_revisions = False
+        return build_acceptance_artifact_bundle(
+            product=product,
+            area=area,
+            inference_type=inference_type,
+            version=model_variant.identity.version,
+            global_config_path=global_config_path,
+            model_config_path=model_variant.config_path,
+            models_root=self.data_paths.models,
+            model_weight_path=model_variant.weight_path,
+            color_model_path=selected_color_path,
+            color_model_is_override=selected_color_path is not None,
+            color_revision_overrides=revision_overrides,
+            include_active_color_revisions=include_active_revisions,
+            color_revision_contract=color_contract,
+        )
 
     def _reload_records(self, *, select_id: str = "") -> None:
         if self.repository is None:
@@ -413,9 +681,16 @@ class ModelAcceptanceWindow(QMainWindow):
         self._render_records(select_id=select_id)
         self._update_summary()
 
+    def _active_filter(self) -> str:
+        return (
+            str(self.filter_combo.currentData() or "all")
+            if hasattr(self, "filter_combo")
+            else "all"
+        )
+
     def _render_records(self, *, select_id: str = "") -> None:
         previous_id = select_id or self._selected_sample_id()
-        filter_value = str(self.filter_combo.currentData() or "all") if hasattr(self, "filter_combo") else "all"
+        filter_value = self._active_filter()
         self._visible_records = tuple(
             record for record in self._records if _record_matches_filter(record, filter_value)
         )
@@ -423,20 +698,9 @@ class ModelAcceptanceWindow(QMainWindow):
         self.sample_list.clear()
         selected_row = -1
         for index, record in enumerate(self._visible_records):
-            truth = record.expected_verdict or "待覆核"
-            machine = record.machine_status or "未推論"
-            item = QListWidgetItem(f"{record.sample_id}\n人工 {truth}｜模型 {machine}")
+            item = QListWidgetItem()
             item.setData(SAMPLE_ID_ROLE, record.sample_id)
-            if record.machine_status == "ERROR":
-                item.setForeground(Qt.darkRed)
-            elif (
-                record.review_status == "confirmed"
-                and record.machine_status
-                and record.expected_verdict != record.machine_status
-            ):
-                item.setForeground(Qt.red)
-            elif record.review_status == "confirmed":
-                item.setForeground(Qt.darkGreen)
+            _paint_sample_item(item, record)
             self.sample_list.addItem(item)
             if record.sample_id == previous_id:
                 selected_row = index
@@ -448,6 +712,53 @@ class ModelAcceptanceWindow(QMainWindow):
             self.original_image.set_source(None)
             self.prediction_image.set_source(None)
             self.detail_label.setText("請先加入圖片")
+
+    def _refresh_record_in_place(self, record: AcceptanceRecord) -> bool:
+        """Repaint one row instead of rebuilding the whole list.
+
+        A batch emits one outcome per sample and each one used to clear and
+        refill the entire list widget, so the cost of watching a run grew with
+        the square of its size -- a few hundred station images meant tens of
+        thousands of discarded rows. An outcome can only change its own row and
+        never the order, because the visible order follows the manifest, so a
+        rebuild is needed only when the new verdict moves the record in or out
+        of the active filter.
+
+        Returns:
+            ``False`` when the caller must fall back to a full rebuild.
+        """
+        was_visible = any(
+            visible.sample_id == record.sample_id
+            for visible in self._visible_records
+        )
+        if _record_matches_filter(record, self._active_filter()) != was_visible:
+            return False
+        self._visible_records = tuple(
+            record if visible.sample_id == record.sample_id else visible
+            for visible in self._visible_records
+        )
+        if not was_visible:
+            return True
+        row = next(
+            (
+                index
+                for index, visible in enumerate(self._visible_records)
+                if visible.sample_id == record.sample_id
+            ),
+            -1,
+        )
+        item = self.sample_list.item(row)
+        if item is None:
+            return False
+        _paint_sample_item(item, record)
+        # The full rebuild always re-selected the sample, which is what drives
+        # the preview panel. Re-selecting an already-current row emits nothing,
+        # so that case is refreshed explicitly rather than left stale.
+        if self.sample_list.currentRow() == row:
+            self._sample_changed(item, None)
+        else:
+            self.sample_list.setCurrentRow(row)
+        return True
 
     def _selected_sample_id(self) -> str:
         item = self.sample_list.currentItem()
@@ -468,7 +779,18 @@ class ModelAcceptanceWindow(QMainWindow):
             return
         pixmap = QPixmap(str(self.repository.image_file(record)))
         self.original_image.set_source(pixmap if not pixmap.isNull() else None)
-        self.prediction_image.set_source(self._annotated_pixmaps.get(record.sample_id))
+        preview = self._annotated_preview(record.sample_id)
+        # A record can be inferred yet have no preview, because previews are
+        # bounded and never persisted. Saying "尚未執行推論" there would report a
+        # verdict that does exist as one that was never produced.
+        self.prediction_image.set_source(
+            preview,
+            empty_text=(
+                "標註圖預覽已釋出，重新推論此張即可再次檢視"
+                if preview is None and record.machine_status
+                else ""
+            ),
+        )
         self._render_record_detail(record)
 
     def _render_record_detail(self, record: AcceptanceRecord) -> None:
@@ -560,7 +882,13 @@ class ModelAcceptanceWindow(QMainWindow):
         self._start_inference((record,) if record else ())
 
     def _run_pending(self) -> None:
-        self._start_inference(tuple(record for record in self._records if not record.machine_status))
+        self._start_inference(
+            tuple(
+                record
+                for record in self._records
+                if not record.machine_status or record.machine_status == "ERROR"
+            )
+        )
 
     def _run_all(self) -> None:
         self._start_inference(self._records)
@@ -602,7 +930,10 @@ class ModelAcceptanceWindow(QMainWindow):
         versions = sorted({record.model_version for record in self._records if record.model_version})
         label = f"baseline-v{versions[0]}" if len(versions) == 1 else "baseline-mixed"
         try:
-            snapshot = self.repository.create_snapshot(label=label)
+            snapshot = self.repository.create_snapshot(
+                label=label,
+                require_completed_run=True,
+            )
         except (OSError, AcceptanceDataError) as exc:
             QMessageBox.critical(self, "建立快照失敗", str(exc))
             return
@@ -675,23 +1006,88 @@ class ModelAcceptanceWindow(QMainWindow):
             self._close_when_finished = False
             self.close()
 
+    def _confirm_discarded_results(
+        self,
+        records: tuple[AcceptanceRecord, ...],
+        artifact_bundle: AcceptanceArtifactBundle,
+    ) -> bool:
+        """Ask before a partial run discards results from another combination.
+
+        A snapshot may only mix results produced by one artifact combination,
+        so starting a run under a different bundle necessarily invalidates the
+        earlier ones. That is the operator's decision to make, not something
+        they should have to infer from a table that quietly emptied itself.
+
+        Re-running samples under the *same* bundle discards nothing, so the
+        common case of retrying a few errored images asks nothing at all.
+        """
+        selected = {record.sample_id for record in records}
+        discarded = sum(
+            1
+            for record in self._records
+            if record.sample_id not in selected
+            and record.machine_status
+            and record.artifact_bundle_sha256 != artifact_bundle.bundle_sha256
+        )
+        if not discarded:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "將清除既有推論結果",
+            f"本次只推論 {len(records)} 張，但另有 {discarded} 張的既有結果"
+            "來自不同的模型／顏色組合，提交時會被清除（人工真值不受影響）。"
+            "\n\n要繼續嗎？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
     def _start_inference(self, records: tuple[AcceptanceRecord, ...]) -> None:
-        if not records or self.repository is None or self._worker is not None:
+        if (
+            not records
+            or self.repository is None
+            or self._run_repository is None
+            or self._worker is not None
+        ):
             return
         inference_type = self.type_combo.currentText().strip()
         if not inference_type:
             QMessageBox.warning(self, "缺少模型", "目前產品／區域沒有可用模型。")
             return
+        try:
+            artifact_bundle = self._artifact_bundle_for_run(inference_type)
+        except RUN_SETUP_ERRORS as exc:
+            QMessageBox.critical(self, "無法建立固定驗收組合", str(exc))
+            return
+        # Asked before the run is opened, so declining leaves no run behind.
+        if not self._confirm_discarded_results(records, artifact_bundle):
+            return
+        try:
+            source_manifest_sha256 = self.repository.manifest_sha256()
+            active_run = self._run_repository.begin(
+                artifact_bundle=artifact_bundle,
+                sample_ids=tuple(record.sample_id for record in records),
+                source_manifest_sha256=source_manifest_sha256,
+            )
+        except RUN_SETUP_ERRORS as exc:
+            QMessageBox.critical(self, "無法建立固定驗收組合", str(exc))
+            return
         worker = InferenceBatchWorker(
             project_root=self.project_root,
+            models_root=self.data_paths.models,
             repository=self.repository,
             records=records,
             inference_type=inference_type,
+            artifact_bundle=artifact_bundle,
         )
         worker.outcome_ready.connect(self._inference_ready)
         worker.progress_changed.connect(self._inference_progress)
         worker.failed.connect(self._inference_failed)
         worker.finished.connect(self._inference_finished)
+        self._active_run = active_run
+        self._active_bundle = artifact_bundle
+        self._pending_outcomes = {}
+        self._inference_failure_message = ""
         self._worker = worker
         self.progress.setRange(0, len(records))
         self.progress.setValue(0)
@@ -705,13 +1101,62 @@ class ModelAcceptanceWindow(QMainWindow):
         if self.repository is None:
             return
         try:
-            self.repository.save_inference(raw_outcome)
-        except (OSError, AcceptanceDataError) as exc:
+            if self._active_run is None or self._run_repository is None:
+                raise AcceptanceRunError("No active acceptance run owns this outcome.")
+            self._run_repository.append_outcome(self._active_run, raw_outcome)
+            self._pending_outcomes[raw_outcome.sample_id] = raw_outcome
+        except (OSError, AcceptanceDataError, AcceptanceRunError) as exc:
+            if self._worker is not None:
+                self._worker.requestInterruption()
             self._inference_failed(str(exc))
             return
         if raw_outcome.annotated_frame is not None:
-            self._annotated_pixmaps[raw_outcome.sample_id] = _frame_to_pixmap(raw_outcome.annotated_frame)
-        self._reload_records(select_id=raw_outcome.sample_id)
+            self._cache_annotated_preview(
+                raw_outcome.sample_id, raw_outcome.annotated_frame
+            )
+        updated = next(
+            (
+                _record_with_outcome(record, raw_outcome)
+                for record in self._records
+                if record.sample_id == raw_outcome.sample_id
+            ),
+            None,
+        )
+        if updated is None:
+            return
+        self._records = tuple(
+            updated if record.sample_id == updated.sample_id else record
+            for record in self._records
+        )
+        if not self._refresh_record_in_place(updated):
+            self._render_records(select_id=updated.sample_id)
+
+    def _cache_annotated_preview(self, sample_id: str, frame: np.ndarray) -> None:
+        """Store one display-sized preview, dropping the least recently viewed.
+
+        Both halves matter: downscaling keeps a single entry small, and the cap
+        keeps a long batch from growing without limit. Either alone still ends
+        in the graphics heap being exhausted on a large enough run.
+        """
+        pixmap = _frame_to_pixmap(frame)
+        if max(pixmap.width(), pixmap.height()) > ANNOTATED_PREVIEW_MAX_EDGE:
+            pixmap = pixmap.scaled(
+                ANNOTATED_PREVIEW_MAX_EDGE,
+                ANNOTATED_PREVIEW_MAX_EDGE,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+        self._annotated_pixmaps.pop(sample_id, None)
+        self._annotated_pixmaps[sample_id] = pixmap
+        while len(self._annotated_pixmaps) > ANNOTATED_PREVIEW_CACHE_SIZE:
+            self._annotated_pixmaps.popitem(last=False)
+
+    def _annotated_preview(self, sample_id: str) -> QPixmap | None:
+        """Return a cached preview, counting this read as a use."""
+        pixmap = self._annotated_pixmaps.get(sample_id)
+        if pixmap is not None:
+            self._annotated_pixmaps.move_to_end(sample_id)
+        return pixmap
 
     def _inference_progress(self, current: int, total: int) -> None:
         self.progress.setRange(0, total)
@@ -719,17 +1164,68 @@ class ModelAcceptanceWindow(QMainWindow):
         self.statusBar().showMessage(f"推論進度 {current}/{total}")
 
     def _inference_failed(self, message: str) -> None:
+        self._inference_failure_message = message
         QMessageBox.critical(self, "推論失敗", message)
 
     def _inference_finished(self) -> None:
         worker = self._worker
+        run = self._active_run
+        artifact_bundle = self._active_bundle
+        run_repository = self._run_repository
+        repository = self.repository
+        final_message = "推論失敗。"
+        try:
+            failure_message = self._inference_failure_message or str(
+                getattr(worker, "failed_message", "") or ""
+            )
+            cancelled = bool(getattr(worker, "cancelled", False))
+            if (
+                run is None
+                or artifact_bundle is None
+                or run_repository is None
+                or repository is None
+            ):
+                final_message = "推論工作缺少 run context，結果未提交。"
+            elif failure_message:
+                run_repository.fail(run, reason=failure_message)
+                final_message = "推論失敗，原正式結果未變更。"
+            elif cancelled or len(self._pending_outcomes) != len(run.sample_ids):
+                run_repository.cancel(run)
+                final_message = "推論已取消，原正式結果未變更。"
+            else:
+                _committed, committed_sha256 = repository.save_inference_batch(
+                    tuple(
+                        self._pending_outcomes[sample_id]
+                        for sample_id in run.sample_ids
+                    ),
+                    run_id=run.run_id,
+                    artifact_bundle=artifact_bundle,
+                    expected_manifest_sha256=run.source_manifest_sha256,
+                )
+                run_repository.complete(
+                    run,
+                    committed_manifest_sha256=committed_sha256,
+                )
+                final_message = f"推論完成並原子提交：{run.run_id}"
+        except (OSError, AcceptanceDataError, AcceptanceRunError) as exc:
+            final_message = f"推論結果提交失敗：{exc}"
+            if run is not None and run_repository is not None:
+                try:
+                    run_repository.fail(run, reason=str(exc))
+                except AcceptanceRunError:
+                    pass
+            QMessageBox.critical(self, "推論結果未提交", str(exc))
         self._worker = None
+        self._active_run = None
+        self._active_bundle = None
+        self._pending_outcomes = {}
+        self._inference_failure_message = ""
         if worker is not None:
             worker.deleteLater()
         self.progress.setVisible(False)
         self._set_busy(False)
         self._reload_records()
-        self.statusBar().showMessage("推論完成。", 5000)
+        self.statusBar().showMessage(final_message, 8000)
         if self._close_when_finished:
             self._close_when_finished = False
             self.close()
@@ -739,6 +1235,7 @@ class ModelAcceptanceWindow(QMainWindow):
             self.product_combo,
             self.area_combo,
             self.type_combo,
+            self.color_model_combo,
             self.add_files_button,
             self.add_folder_button,
             self.run_selected_button,
@@ -783,24 +1280,26 @@ class ModelAcceptanceWindow(QMainWindow):
 
     def _update_summary(self) -> None:
         metrics = calculate_acceptance_metrics(self._records)
-        self.summary_label.setText(
-            "｜".join(
-                (
-                    f"總數 {len(self._records)}",
-                    f"已確認 {metrics.confirmed}",
-                    f"待確認 {metrics.pending}",
-                    f"已推論 {metrics.inferred}",
-                    f"TP {metrics.tp}",
-                    f"誤殺 {metrics.fp}",
-                    f"漏檢 {metrics.fn}",
-                    f"TN {metrics.tn}",
-                    f"真實良率 {_format_rate(metrics.true_yield)}",
-                    f"模型判定良率 {_format_rate(metrics.machine_yield)}",
-                    f"漏檢率 {_format_rate(metrics.escape_rate)}",
-                    f"誤殺率 {_format_rate(metrics.overkill_rate)}",
-                )
-            )
-        )
+        parts = [
+            f"總數 {len(self._records)}",
+            f"已確認 {metrics.confirmed}",
+            f"待確認 {metrics.pending}",
+            f"已推論 {metrics.inferred}",
+            f"TP {metrics.tp}",
+            f"誤殺 {metrics.fp}",
+            f"漏檢 {metrics.fn}",
+            f"TN {metrics.tn}",
+            f"真實良率 {_format_rate(metrics.true_yield)}",
+            f"模型判定良率 {_format_rate(metrics.machine_yield)}",
+            f"漏檢率 {_format_rate(metrics.escape_rate)}",
+            f"誤殺率 {_format_rate(metrics.overkill_rate)}",
+        ]
+        if metrics.malformed:
+            # Shown only when present, and never folded into 待確認: these rows
+            # claim to be reviewed but carry no verdict, so they block a formal
+            # snapshot and the operator has to repair them by hand.
+            parts.append(f"真值異常 {metrics.malformed}（無法建立正式快照）")
+        self.summary_label.setText("｜".join(parts))
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self._backup_worker is not None and self._backup_worker.isRunning():
@@ -841,6 +1340,50 @@ def _frame_to_pixmap(frame: np.ndarray) -> QPixmap:
 
 def _format_rate(value: float | None) -> str:
     return "—" if value is None else f"{value:.2%}"
+
+
+def _paint_sample_item(item: QListWidgetItem, record: AcceptanceRecord) -> None:
+    """Write one record's label and status colour onto its row.
+
+    Shared by the full rebuild and the single-row refresh so the two paths
+    cannot drift into showing the same record differently.
+    """
+    truth = record.expected_verdict or "待覆核"
+    machine = record.machine_status or "未推論"
+    item.setText(f"{record.sample_id}\n人工 {truth}｜模型 {machine}")
+    if record.machine_status == "ERROR":
+        item.setForeground(Qt.darkRed)
+    elif (
+        record.review_status == "confirmed"
+        and record.machine_status
+        and record.expected_verdict != record.machine_status
+    ):
+        item.setForeground(Qt.red)
+    elif record.review_status == "confirmed":
+        item.setForeground(Qt.darkGreen)
+    else:
+        # Reset explicitly: a reused row keeps the brush from its previous
+        # verdict, so an ERROR that reruns to OK would stay dark red.
+        item.setForeground(QBrush())
+
+
+def _record_with_outcome(
+    record: AcceptanceRecord,
+    outcome: AcceptanceInferenceOutcome,
+) -> AcceptanceRecord:
+    return record.with_changes(
+        machine_status=outcome.machine_status,
+        machine_reasons="|".join(outcome.machine_reasons),
+        model_version=outcome.model_version,
+        model_sha256=outcome.model_sha256,
+        runtime_config_sha256=outcome.runtime_config_sha256,
+        color_model_sha256=outcome.color_model_sha256,
+        inference_at=outcome.inference_at,
+        latency_ms=f"{outcome.latency_ms:.3f}",
+        error=outcome.error,
+        color_check_status=outcome.color_check_status,
+        color_details_json=outcome.color_details_json,
+    )
 
 
 def _format_number(value: object) -> str:

@@ -11,11 +11,13 @@ import cv2
 import numpy as np
 import pytest
 
+from core.services import acceptance_matrix
 from core.services.acceptance_matrix import (
     AcceptanceColorVariant,
     AcceptanceMatrixError,
     AcceptanceMatrixRequest,
     AcceptanceModelVariant,
+    build_model_variant,
     build_registered_model_variant,
     build_release_acceptance_variants,
     discover_color_variants,
@@ -44,6 +46,21 @@ from tools.color_configuration_revisions import (
 )
 
 NOW = datetime(2026, 7, 30, 12, 0, tzinfo=timezone.utc)
+
+#: A color model the stats checker can actually load. Discovery now withholds
+#: one it cannot, so a fixture carrying only ``count`` would test that a stored
+#: baseline is offered using a file that could never back an inference run.
+_LOADABLE_STATS_PAYLOAD = {
+    "summary": {
+        "Black": {
+            "count": 30,
+            "hsv_min": [0.0, 0.0, 0.0],
+            "hsv_max": [180.0, 40.0, 60.0],
+            "lab_min": [0.0, 118.0, 118.0],
+            "lab_max": [40.0, 138.0, 138.0],
+        }
+    }
+}
 
 
 def _write_image(path: Path, value: int) -> None:
@@ -119,6 +136,8 @@ class FakeInferenceService:
             machine_reasons=reasons,
             model_version=identity.version,
             model_sha256=identity.sha256,
+            runtime_config_sha256=identity.runtime_config_sha256,
+            color_model_sha256=identity.color_model_sha256,
             inference_at=NOW.isoformat(),
             latency_ms=10.0 if identity.version == "v1" else 20.0,
             error="",
@@ -134,15 +153,22 @@ def _request(
     tmp_path: Path,
     repository: AcceptanceRepository,
 ) -> AcceptanceMatrixRequest:
+    (tmp_path / "config.yaml").write_text("device: cpu\n", encoding="utf-8")
     model_paths: list[tuple[Path, Path, Path]] = []
     for version in ("v1", "v2"):
         root = tmp_path / f"models-{version}"
         config_path = root / "Cable1" / "A" / "yolo" / "config.yaml"
         config_path.parent.mkdir(parents=True)
         weight_path = config_path.parent / f"{version}.onnx"
+        color_path = config_path.parent / f"{version}-color.json"
         weight_path.write_bytes(version.encode("utf-8"))
+        color_path.write_text('{"summary": {}}', encoding="utf-8")
         config_path.write_text(
-            f"enable_yolo: true\nweights: {weight_path.as_posix()}\n",
+            f"enable_yolo: true\n"
+            f"weights: {weight_path.as_posix()}\n"
+            "enable_color_check: true\n"
+            "color_checker_type: stats\n"
+            f"color_model_path: {color_path.as_posix()}\n",
             encoding="utf-8",
         )
         model_paths.append((root, config_path, weight_path))
@@ -208,6 +234,10 @@ def test_matrix_runs_cartesian_product_and_preserves_ground_truth(
     assert result.sample_count == 2
     assert len(result.combinations) == 4
     assert len(FakeInferenceService.created) == 4
+    assert all(
+        created["model_weight_path_override"] is not None
+        for created in FakeInferenceService.created
+    )
     assert FakeInferenceService.closed == 4
     assert progress[-1][:2] == (8, 8)
     assert result.run_root.name == "matrix-20260730T120000Z-run-001"
@@ -233,6 +263,9 @@ def test_matrix_runs_cartesian_product_and_preserves_ground_truth(
     assert report["reference_combination_id"] == baseline.combination_id
     assert report["sample_count"] == 2
     assert len(report["samples"]) == 8
+    first_bundle = report["combinations"][0]["artifact_bundle"]
+    assert first_bundle["color_model_mode"] == "embedded"
+    assert len(first_bundle["color_model"]["sha256"]) == 64
     with result.summary_csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         summary_rows = list(csv.DictReader(handle))
     assert len(summary_rows) == 4
@@ -262,6 +295,25 @@ def test_matrix_rejects_changed_image_evidence(tmp_path: Path) -> None:
     with pytest.raises(AcceptanceMatrixError, match="雜湊不符"):
         run_acceptance_matrix(
             _request(tmp_path, repository),
+            service_factory=FakeInferenceService,
+        )
+
+
+def test_matrix_rejects_config_and_selected_weight_mismatch(
+    tmp_path: Path,
+) -> None:
+    repository = _fixture_repository(tmp_path)
+    request = _request(tmp_path, repository)
+    mismatched_weight = tmp_path / "wrong.onnx"
+    mismatched_weight.write_bytes(b"wrong")
+    first = replace(request.model_variants[0], weight_path=mismatched_weight)
+
+    with pytest.raises(AcceptanceMatrixError, match="do not resolve"):
+        run_acceptance_matrix(
+            replace(
+                request,
+                model_variants=(first, *request.model_variants[1:]),
+            ),
             service_factory=FakeInferenceService,
         )
 
@@ -319,6 +371,59 @@ def test_registered_historical_model_is_read_only_and_hashes_at_run_time(
     assert variant.config_path == config_path
     assert variant.identity.sha256 == ""
     assert len(variant.identity.runtime_config_sha256) == 64
+
+
+def test_registered_current_model_uses_effective_station_config(
+    tmp_path: Path,
+) -> None:
+    models_root = tmp_path / "models"
+    station_root = models_root / "Cable1" / "A" / "yolo"
+    station_root.mkdir(parents=True)
+    weight_path = station_root / "Cable1_A_v1.0.6.onnx"
+    weight_path.write_bytes(b"current-weight")
+    snapshot_path = station_root / "versions" / "Cable1_A_v1.0.6.config.yaml"
+    snapshot_path.parent.mkdir()
+    snapshot_path.write_text(
+        f"weights: {weight_path.as_posix()}\ncalibration: old\n",
+        encoding="utf-8",
+    )
+    active_config_path = station_root / "config.yaml"
+    active_config_path.write_text(
+        f"weights: {weight_path.as_posix()}\ncalibration: current\n",
+        encoding="utf-8",
+    )
+    record = ModelVersionRecord(
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        version="1.0.6",
+        weight_path=weight_path,
+        is_current=True,
+        trained_at=NOW,
+        deployed_at=NOW,
+        activated_at=NOW,
+        training_time_inferred=False,
+        config_snapshot_path=snapshot_path,
+        file_size=weight_path.stat().st_size,
+    )
+
+    variant = build_registered_model_variant(record, models_root=models_root)
+    main_window_variant = build_model_variant(
+        models_root,
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+    )
+
+    assert variant.config_path == active_config_path.resolve()
+    assert variant.config_path == main_window_variant.config_path
+    assert variant.identity.runtime_config_sha256 == hashlib.sha256(
+        active_config_path.read_bytes()
+    ).hexdigest()
+    assert (
+        variant.identity.runtime_config_sha256
+        == main_window_variant.identity.runtime_config_sha256
+    )
 
 
 def test_release_quick_validation_pair_uses_exact_draft_artifacts(
@@ -413,7 +518,7 @@ def test_color_discovery_lists_embedded_active_and_exact_revision(
         product="Cable1",
         area="A",
         model_type="yolo",
-    )
+    ).variants
     store.activate(
         revision,
         operator="reviewer",
@@ -425,7 +530,7 @@ def test_color_discovery_lists_embedded_active_and_exact_revision(
         product="Cable1",
         area="A",
         model_type="yolo",
-    )
+    ).variants
 
     assert [item.variant_id for item in before_activation] == [
         "color-embedded",
@@ -441,7 +546,7 @@ def test_color_discovery_lists_embedded_active_and_exact_revision(
     color_model = tmp_path / "models" / "Cable1" / "A" / "yolo" / "color_stats.json"
     color_model.parent.mkdir(parents=True)
     color_model.write_text(
-        json.dumps({"summary": {"Black": {"count": 30}}}),
+        json.dumps(_LOADABLE_STATS_PAYLOAD),
         encoding="utf-8",
     )
     config = color_model.with_name("config.yaml")
@@ -466,7 +571,7 @@ def test_color_discovery_lists_embedded_active_and_exact_revision(
         area="A",
         model_type="yolo",
         profiles_root=tmp_path / ".color_profiles",
-    )
+    ).variants
     profile_variant = next(
         item
         for item in with_profiles
@@ -499,7 +604,7 @@ def test_color_discovery_ignores_revision_store_infrastructure_directories(
         product="Cable1",
         area="A",
         model_type="yolo",
-    )
+    ).variants
 
     assert [variant.variant_id for variant in variants] == ["color-embedded"]
 
@@ -513,7 +618,7 @@ def test_color_discovery_includes_immutable_baseline_candidate(
         model_type="yolo",
         build=ColorBaselineBuild(
             status="INCOMPLETE",
-            model_payload={"summary": {"Black": {"count": 30}}},
+            model_payload=_LOADABLE_STATS_PAYLOAD,
             report_payload={
                 "status": "INCOMPLETE",
                 "color_reports": [],
@@ -538,10 +643,170 @@ def test_color_discovery_includes_immutable_baseline_candidate(
         area="A",
         model_type="yolo",
         baselines_root=tmp_path / ".color_baselines",
-    )
+    ).variants
 
     baseline = variants[1]
     assert baseline.variant_id == f"color-base-{candidate.candidate_id}"
     assert baseline.color_model_path == candidate.color_model_path
     assert baseline.color_model_sha256 == candidate.color_model_sha256
     assert "INCOMPLETE" in baseline.label
+
+
+def _commit_baseline_candidate(root: Path):
+    """Commit one minimal in-scope baseline candidate for Cable1/A/yolo."""
+    return ColorBaselineCandidateStore(root).commit(
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        build=ColorBaselineBuild(
+            status="INCOMPLETE",
+            model_payload=_LOADABLE_STATS_PAYLOAD,
+            report_payload={"status": "INCOMPLETE", "color_reports": []},
+            evidence_sha256="e" * 64,
+            color_reports=(),
+            outlier_filter=ColorBaselineOutlierFilterReport(
+                status="NOT_RUN",
+                total_sample_count=0,
+                z_score_threshold=6.0,
+                maximum_auto_exclusion_fraction=0.1,
+                candidate_sample_ids=(),
+                excluded_sample_ids=(),
+                findings=(),
+            ),
+        ),
+    )
+
+
+def test_incompatible_baseline_is_reported_as_an_exclusion_not_dropped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A superseded-algorithm candidate must be explained, not made invisible.
+
+    It stays unselectable because its crop coordinate space differs, but an
+    unexplained disappearance reads as data loss and invites rebuilding a
+    baseline that is not actually missing.
+    """
+    candidate = _commit_baseline_candidate(tmp_path / ".color_baselines")
+    monkeypatch.setattr(acceptance_matrix, "ALGORITHM_VERSION", "stats-robust-v99")
+
+    discovery = discover_color_variants(
+        tmp_path / ".color_revisions",
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        baselines_root=tmp_path / ".color_baselines",
+    )
+
+    assert [variant.variant_id for variant in discovery.variants] == ["color-embedded"]
+    assert discovery.stored_color_models == ()
+    assert len(discovery.exclusions) == 1
+    exclusion = discovery.exclusions[0]
+    assert candidate.display_version in exclusion.label
+    assert candidate.algorithm in exclusion.reason
+    assert "stats-robust-v99" in exclusion.reason
+
+
+def test_unloadable_baseline_is_excluded_instead_of_offered(tmp_path: Path) -> None:
+    """A stored model the checker cannot load must never reach a matrix run.
+
+    Offering it costs an entire combination: the inference service turns each
+    per-image failure into an ERROR outcome and carries on, so all samples come
+    back ERROR after the whole set has been inferred. Reported as an exclusion
+    the operator sees the reason before spending the run.
+    """
+    candidate = ColorBaselineCandidateStore(tmp_path / ".color_baselines").commit(
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        build=ColorBaselineBuild(
+            status="READY",
+            # Only a count: no hsv/lab ranges, so StatsColorChecker cannot load it.
+            model_payload={"summary": {"Black": {"count": 30}}},
+            report_payload={"status": "READY", "color_reports": []},
+            evidence_sha256="e" * 64,
+            color_reports=(),
+            outlier_filter=ColorBaselineOutlierFilterReport(
+                status="NOT_RUN",
+                total_sample_count=0,
+                z_score_threshold=6.0,
+                maximum_auto_exclusion_fraction=0.1,
+                candidate_sample_ids=(),
+                excluded_sample_ids=(),
+                findings=(),
+            ),
+        ),
+    )
+
+    discovery = discover_color_variants(
+        tmp_path / ".color_revisions",
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        baselines_root=tmp_path / ".color_baselines",
+    )
+
+    assert discovery.stored_color_models == ()
+    assert len(discovery.exclusions) == 1
+    exclusion = discovery.exclusions[0]
+    assert candidate.display_version in exclusion.label
+    assert "hsv_min" in exclusion.reason
+
+
+def test_incomplete_but_loadable_baseline_is_still_offered(tmp_path: Path) -> None:
+    """Status alone must not withhold a baseline.
+
+    An unfinished recalibration can still hold usable statistics for the colors
+    it did finish, and the operator may legitimately want that comparison. Only
+    whether the file loads decides whether it is offered.
+    """
+    _commit_baseline_candidate(tmp_path / ".color_baselines")
+
+    discovery = discover_color_variants(
+        tmp_path / ".color_revisions",
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        baselines_root=tmp_path / ".color_baselines",
+    )
+
+    assert discovery.exclusions == ()
+    assert len(discovery.stored_color_models) == 1
+    assert "INCOMPLETE" in discovery.stored_color_models[0].label
+
+
+def test_compatible_baseline_produces_no_exclusion(tmp_path: Path) -> None:
+    """A usable candidate must not be listed as withheld."""
+    _commit_baseline_candidate(tmp_path / ".color_baselines")
+
+    discovery = discover_color_variants(
+        tmp_path / ".color_revisions",
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        baselines_root=tmp_path / ".color_baselines",
+    )
+
+    assert discovery.exclusions == ()
+    assert len(discovery.stored_color_models) == 1
+
+
+def test_out_of_scope_baseline_is_not_reported_as_an_exclusion(
+    tmp_path: Path,
+) -> None:
+    """Another station's candidate was never a candidate here.
+
+    Reporting it would bury the exclusions that actually need explaining.
+    """
+    _commit_baseline_candidate(tmp_path / ".color_baselines")
+
+    discovery = discover_color_variants(
+        tmp_path / ".color_revisions",
+        product="LED",
+        area="A",
+        model_type="yolo",
+        baselines_root=tmp_path / ".color_baselines",
+    )
+
+    assert discovery.exclusions == ()
+    assert discovery.stored_color_models == ()

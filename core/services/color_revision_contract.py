@@ -49,6 +49,8 @@ def capture_candidate_color_revision_contract(
     candidate_config_path: str | Path,
     global_config_path: str | Path | None = None,
     color_model_present: bool,
+    force_color_enabled: bool = False,
+    color_checker_type_override: str | None = None,
     product: str,
     area: str,
     inference_type: str,
@@ -88,15 +90,16 @@ def capture_candidate_color_revision_contract(
         raise ColorRevisionContractError(
             "Candidate enable_color_check must be a boolean."
         )
-    configured_checker = normalized_config.get(
-        "color_checker_type",
-        base_checker,
+    configured_checker = (
+        color_checker_type_override
+        if color_checker_type_override is not None
+        else normalized_config.get("color_checker_type", base_checker)
     )
     if configured_checker is not None and not isinstance(configured_checker, str):
         raise ColorRevisionContractError(
             "Candidate color_checker_type must be a string."
         )
-    enabled = configured_enabled and color_model_present
+    enabled = (force_color_enabled or configured_enabled) and color_model_present
     checker_type = (
         str(configured_checker or "color_qc").strip().lower()
         if enabled

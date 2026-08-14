@@ -4,6 +4,7 @@ import hashlib
 import json
 import threading
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -13,6 +14,10 @@ import numpy as np
 import pytest
 
 from core.detection_system import DetectionSystem
+from core.services.acceptance_artifacts import (
+    AcceptanceArtifactBundle,
+    build_acceptance_artifact_bundle,
+)
 from core.services.acceptance_gate import (
     AcceptanceGatePolicy,
     run_candidate_acceptance,
@@ -35,6 +40,33 @@ from core.types import DetectionItem, DetectionResult
 def _write_image(path: Path, value: int = 127) -> None:
     image = np.full((24, 32, 3), value, dtype=np.uint8)
     assert cv2.imwrite(str(path), image)
+
+
+def _candidate_bundle(
+    tmp_path: Path,
+    *,
+    models_root: Path,
+    color_revision_contract: dict[str, object] | None = None,
+) -> AcceptanceArtifactBundle:
+    station_root = models_root / "Cable1" / "A" / "yolo"
+    station_root.mkdir(parents=True, exist_ok=True)
+    weight = station_root / "candidate.onnx"
+    config = station_root / "config.yaml"
+    global_config = tmp_path / "config.yaml"
+    weight.write_bytes(b"candidate-weight")
+    config.write_text(f"weights: {weight.as_posix()}\n", encoding="utf-8")
+    global_config.write_text("device: cpu\n", encoding="utf-8")
+    return build_acceptance_artifact_bundle(
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        version="candidate",
+        global_config_path=global_config,
+        model_config_path=config,
+        models_root=models_root,
+        model_weight_path=weight,
+        color_revision_contract=color_revision_contract,
+    )
 
 
 def test_repository_imports_once_and_persists_confirmation(tmp_path: Path) -> None:
@@ -87,6 +119,20 @@ def test_repository_rejects_ng_without_reason_and_ok_clears_reason(
     assert confirmed.defect_class == ""
 
 
+def test_repository_rejects_image_path_traversal(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source)
+    repository = AcceptanceRepository(tmp_path / "acceptance")
+    record = repository.import_images(
+        (source,),
+        product="Cable1",
+        area="A",
+    )[0]
+
+    with pytest.raises(AcceptanceDataError, match="escapes"):
+        repository.image_file(replace(record, image_path="../source.png"))
+
+
 def test_metrics_exclude_pending_and_error_from_confusion_denominators() -> None:
     def record(sample_id: str, truth: str, prediction: str) -> AcceptanceRecord:
         return AcceptanceRecord(
@@ -125,6 +171,68 @@ def test_metrics_exclude_pending_and_error_from_confusion_denominators() -> None
     assert metrics.machine_yield == pytest.approx(0.5)
     assert metrics.escape_rate == pytest.approx(0.5)
     assert metrics.overkill_rate == pytest.approx(0.5)
+
+
+def test_metrics_report_confirmed_record_without_binary_truth_as_malformed() -> None:
+    """A corrupt row must be counted, not raised from and not silently dropped.
+
+    This helper runs on the display and reporting path, so raising here would
+    make one hand-edited row prevent a whole manifest from being read. Dropping
+    it would be worse: the metrics would report a clean sheet for a manifest
+    that is not clean. It is excluded from every denominator and surfaced as its
+    own count, and rejection stays with the two decision points -- the gate and
+    a formal snapshot.
+    """
+    malformed = AcceptanceRecord(
+        sample_id="invalid-truth",
+        image_path="images/invalid.png",
+        image_sha256="a" * 64,
+        product="Cable1",
+        area="A",
+        expected_verdict="",
+        review_status="confirmed",
+        machine_status="OK",
+    )
+    usable = replace(
+        malformed,
+        sample_id="tn",
+        expected_verdict="OK",
+    )
+
+    metrics = calculate_acceptance_metrics((malformed, usable))
+
+    assert metrics.malformed == 1
+    assert metrics.confirmed == 1
+    assert metrics.pending == 0
+    assert (metrics.tp, metrics.fp, metrics.fn, metrics.tn) == (0, 0, 0, 1)
+    assert metrics.true_yield == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    "policy_kwargs",
+    (
+        {
+            "min_confirmed": 0,
+            "max_false_positives": 0,
+            "max_false_negatives": 0,
+        },
+        {
+            "min_confirmed": 1,
+            "max_false_positives": -1,
+            "max_false_negatives": 0,
+        },
+        {
+            "min_confirmed": 1,
+            "max_false_positives": 0,
+            "max_false_negatives": -1,
+        },
+    ),
+)
+def test_gate_policy_rejects_unsafe_numeric_limits(
+    policy_kwargs: dict[str, int],
+) -> None:
+    with pytest.raises(ValueError):
+        AcceptanceGatePolicy(**policy_kwargs)
 
 
 def test_machine_reason_codes_normalize_pipeline_evidence() -> None:
@@ -335,9 +443,14 @@ def test_inference_service_stages_color_baseline_override_without_mutation(
 ) -> None:
     config = tmp_path / "model.config.yaml"
     config.write_text(
-        "enable_color_check: true\ncolor_checker_type: stats\ncolor_model_path: original.json\n",
+        "weights: candidate.onnx\n"
+        "enable_color_check: true\n"
+        "color_checker_type: stats\n"
+        "color_model_path: original.json\n",
         encoding="utf-8",
     )
+    weight = tmp_path / "candidate.onnx"
+    weight.write_bytes(b"candidate-weight")
     baseline = tmp_path / "candidate.json"
     baseline.write_text(
         '{"summary":{"Black":{"count":30}}}',
@@ -349,15 +462,20 @@ def test_inference_service_stages_color_baseline_override_without_mutation(
     service = AcceptanceInferenceService(
         project_root=tmp_path,
         system_factory=system_factory,
-        model_identity=ModelIdentity("1.0.6", "model-sha"),
+        model_identity=ModelIdentity(
+            "1.0.6",
+            hashlib.sha256(weight.read_bytes()).hexdigest(),
+        ),
         model_config_overrides={
             ("Cable1", "A", "yolo"): config,
         },
+        model_weight_path_override=weight,
         color_model_path_override=baseline,
     )
     staged = Path(system_factory.call_args.kwargs["model_config_overrides"][("Cable1", "A", "yolo")])
 
     assert staged != config
+    assert str(weight.resolve()) in staged.read_text(encoding="utf-8")
     assert str(baseline.resolve()) in staged.read_text(encoding="utf-8")
     assert "original.json" in config.read_text(encoding="utf-8")
     assert service._model_identity is not None
@@ -424,9 +542,13 @@ def test_headless_gate_uses_snapshot_without_mutating_human_truth(
         )
     snapshot = repository.create_snapshot(label="frozen")
     truth_before = hashlib.sha256(repository.manifest_path.read_bytes()).hexdigest()
+    models_root = tmp_path / "candidate_models"
+    artifact_bundle = _candidate_bundle(tmp_path, models_root=models_root)
+    service_kwargs: dict[str, object] = {}
 
     class FakeService:
         def __init__(self, **kwargs) -> None:
+            service_kwargs.update(kwargs)
             self.kwargs = kwargs
             self.closed = False
 
@@ -435,10 +557,10 @@ def test_headless_gate_uses_snapshot_without_mutating_human_truth(
                 sample_id=record.sample_id,
                 machine_status=record.expected_verdict,
                 machine_reasons=(() if record.expected_verdict == "OK" else ("MISSING",)),
-                model_version="candidate",
-                model_sha256="candidate-sha",
-                runtime_config_sha256="config-sha",
-                color_model_sha256="color-sha",
+                model_version=artifact_bundle.version,
+                model_sha256=artifact_bundle.model_weight.sha256,
+                runtime_config_sha256=artifact_bundle.model_config.sha256,
+                color_model_sha256="",
                 inference_at="2026-07-31T10:00:00+08:00",
                 latency_ms=2.0,
                 error="",
@@ -450,7 +572,7 @@ def test_headless_gate_uses_snapshot_without_mutating_human_truth(
     report_path = tmp_path / "run" / "model_acceptance_gate.json"
     result = run_candidate_acceptance(
         project_root=tmp_path,
-        models_root=tmp_path / "candidate_models",
+        models_root=models_root,
         global_config_path=tmp_path / "config.yaml",
         color_revisions_root=tmp_path / ".color_revisions",
         dataset_root=dataset_root,
@@ -459,12 +581,7 @@ def test_headless_gate_uses_snapshot_without_mutating_human_truth(
         product="Cable1",
         area="A",
         inference_type="yolo",
-        model_identity=ModelIdentity(
-            version="candidate",
-            sha256="candidate-sha",
-            runtime_config_sha256="config-sha",
-            color_model_sha256="color-sha",
-        ),
+        artifact_bundle=artifact_bundle,
         policy=AcceptanceGatePolicy(
             min_confirmed=2,
             max_false_positives=0,
@@ -478,7 +595,39 @@ def test_headless_gate_uses_snapshot_without_mutating_human_truth(
     assert result.passed is True
     assert report["metrics"]["accuracy"] == 1.0
     assert report["comparison"]["regressed"] == 0
+    assert service_kwargs["model_weight_path_override"] == artifact_bundle.model_weight.path
+    assert service_kwargs["model_config_overrides"] == {
+        ("Cable1", "A", "yolo"): artifact_bundle.model_config.path
+    }
+    assert report["artifact_bundle"]["bundle_sha256"] == artifact_bundle.bundle_sha256
     assert truth_after == truth_before
+
+    class CleanupFailingService(FakeService):
+        def close(self) -> None:
+            raise RuntimeError("shutdown failed")
+
+    cleanup_result = run_candidate_acceptance(
+        project_root=tmp_path,
+        models_root=models_root,
+        global_config_path=tmp_path / "config.yaml",
+        color_revisions_root=tmp_path / ".color_revisions",
+        dataset_root=dataset_root,
+        snapshot_manifest_path=snapshot.manifest_path,
+        report_path=tmp_path / "run" / "cleanup-failure.json",
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        artifact_bundle=artifact_bundle,
+        policy=AcceptanceGatePolicy(
+            min_confirmed=2,
+            max_false_positives=0,
+            max_false_negatives=0,
+        ),
+        service_factory=CleanupFailingService,
+    )
+
+    assert cleanup_result.passed is False
+    assert any("cleanup failed" in failure for failure in cleanup_result.failures)
 
 
 def test_headless_gate_blocks_a_sample_regression(tmp_path: Path) -> None:
@@ -508,6 +657,16 @@ def test_headless_gate_blocks_a_sample_regression(tmp_path: Path) -> None:
         )
     )
     snapshot = repository.create_snapshot(label="frozen")
+    color_revision_contract = {
+        "schema_version": 1,
+        "identity_sha256": "contract-sha",
+    }
+    models_root = tmp_path / "models"
+    artifact_bundle = _candidate_bundle(
+        tmp_path,
+        models_root=models_root,
+        color_revision_contract=color_revision_contract,
+    )
 
     class RegressingService:
         def __init__(self, **kwargs) -> None:
@@ -518,8 +677,9 @@ def test_headless_gate_blocks_a_sample_regression(tmp_path: Path) -> None:
                 sample_id=record.sample_id,
                 machine_status="NG",
                 machine_reasons=("COLOR_MISMATCH",),
-                model_version="candidate",
-                model_sha256="candidate",
+                model_version=artifact_bundle.version,
+                model_sha256=artifact_bundle.model_weight.sha256,
+                runtime_config_sha256=artifact_bundle.model_config.sha256,
                 inference_at="2026-07-31T10:00:00+08:00",
                 latency_ms=1.0,
                 error="",
@@ -531,14 +691,9 @@ def test_headless_gate_blocks_a_sample_regression(tmp_path: Path) -> None:
     def reject_changed_color_revisions() -> tuple[str, ...]:
         raise RuntimeError("active pointer changed during inference")
 
-    color_revision_contract = {
-        "schema_version": 1,
-        "identity_sha256": "contract-sha",
-    }
-
     result = run_candidate_acceptance(
         project_root=tmp_path,
-        models_root=tmp_path / "models",
+        models_root=models_root,
         global_config_path=tmp_path / "config.yaml",
         color_revisions_root=None,
         dataset_root=repository.root,
@@ -547,7 +702,7 @@ def test_headless_gate_blocks_a_sample_regression(tmp_path: Path) -> None:
         product="Cable1",
         area="A",
         inference_type="yolo",
-        model_identity=ModelIdentity(version="candidate", sha256="candidate"),
+        artifact_bundle=artifact_bundle,
         policy=AcceptanceGatePolicy(
             min_confirmed=1,
             max_false_positives=0,

@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QThread, QUrl, pyqtSignal
-from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtGui import QColor, QDesktopServices
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -24,12 +24,16 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.gui.metric_presentation import format_count_with_rate
+from core.services.acceptance_artifacts import color_scope_model_type
 from core.services.acceptance_matrix import (
     AcceptanceColorVariant,
     AcceptanceMatrixCancelled,
     AcceptanceMatrixRequest,
     AcceptanceMatrixResult,
     AcceptanceModelVariant,
+    ColorVariantDiscovery,
+    ColorVariantExclusion,
     build_model_variant,
     build_registered_model_variant,
     build_release_acceptance_variants,
@@ -49,6 +53,50 @@ from core.services.model_version_registry import (
 from core.station_data import load_station_data_paths
 
 VARIANT_ROLE = Qt.UserRole
+
+#: Result columns as ``(header, tooltip)``. The tooltip carries the exact
+#: denominator because a bare count next to a bare percentage reads as one
+#: metric split in two, and the two families here do not share a numerator:
+#: 顏色誤殺 counts only the overkills attributable to color, so it is always a
+#: subset of 誤殺. Every count is therefore rendered together with its own rate
+#: in one cell, never as a count in one column and a rate in the next.
+RESULT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("YOLO", "本列使用的 YOLO 模型 Bundle。"),
+    ("顏色設定", "本列使用的顏色設定；不會啟用，也不會改動 Active 版本。"),
+    ("準確率", "判定正確張數 ÷ 已確認且推論成功張數＝(TP+TN)／(TP+FP+FN+TN)。"),
+    (
+        "誤殺（整體）",
+        "真實 OK 但模型判 NG 的張數；括號為誤殺率＝誤殺 ÷ 真實 OK 張數。\n"
+        "包含所有原因，不只顏色。",
+    ),
+    (
+        "漏檢（整體）",
+        "真實 NG 但模型判 OK 的張數；括號為漏檢率＝漏檢 ÷ 真實 NG 張數。",
+    ),
+    (
+        "顏色誤殺",
+        "上列誤殺中，判定原因含 COLOR_MISMATCH 或顏色檢查 FAIL 的張數；\n"
+        "括號同樣以真實 OK 張數為分母。此值必定 ≤ 整體誤殺。",
+    ),
+    (
+        "顏色逃逸",
+        "人工標記為 COLOR_MISMATCH 的真 NG 中，模型顏色判定為 OK 的張數；\n"
+        "括號以人工標記顏色 NG 的張數為分母。",
+    ),
+    ("平均 ms", "本組每張照片的平均推論耗時。"),
+    ("P95 ms", "本組推論耗時的 95 百分位；反映最慢的情況。"),
+    (
+        "相較首組變動",
+        "與第一組（基準組）相比，機器判定或判定原因不同的張數。\n"
+        "第一列本身即基準組，因此顯示「基準組」而非 0。",
+    ),
+    ("錯誤", "推論失敗的張數；這些張不計入上述任何統計。"),
+    ("狀態", "本組是否完成，或失敗原因。"),
+)
+COLUMN_OVERKILL = 3
+COLUMN_ESCAPE = 4
+COLUMN_ERRORS = 10
+COLUMN_STATUS = 11
 
 
 class AcceptanceMatrixWorker(QThread):
@@ -196,6 +244,10 @@ class AcceptanceMatrixDialog(QDialog):
         self.color_table.setMaximumHeight(210)
         layout.addWidget(self.color_table)
 
+        self.color_hint = QLabel()
+        self.color_hint.setWordWrap(True)
+        layout.addWidget(self.color_hint)
+
         controls = QHBoxLayout()
         self.workload_label = QLabel()
         self.run_button = QPushButton("開始驗收")
@@ -226,31 +278,22 @@ class AcceptanceMatrixDialog(QDialog):
         layout.addWidget(self.progress)
         layout.addWidget(self.progress_detail)
 
-        self.result_table = QTableWidget(0, 12)
-        self.result_table.setHorizontalHeaderLabels(
-            (
-                "YOLO",
-                "顏色設定",
-                "準確率",
-                "誤殺",
-                "漏檢",
-                "顏色誤殺率",
-                "顏色逃逸率",
-                "平均 ms",
-                "P95 ms",
-                "相較首組變動",
-                "錯誤",
-                "狀態",
-            )
-        )
+        self.result_table = QTableWidget(0, len(RESULT_COLUMNS))
+        for column, (title, tooltip) in enumerate(RESULT_COLUMNS):
+            header_item = QTableWidgetItem(title)
+            header_item.setToolTip(tooltip)
+            self.result_table.setHorizontalHeaderItem(column, header_item)
         self.result_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.result_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.result_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.result_table, 1)
 
         warning = QLabel(
-            "注意：如果驗收集中沒有任何人工標為 COLOR_MISMATCH 的真 NG，"
-            "顏色逃逸率會顯示 UNKNOWN；這不是 0%，而是缺少可驗證逃逸的樣本。"
+            "注意：「誤殺／漏檢」是整體判定結果，「顏色誤殺／顏色逃逸」只計入歸因於"
+            "顏色的部分，因此顏色誤殺必定 ≤ 整體誤殺，兩者不可互相對照。"
+            "每格括號內都是該欄自己的比率。"
+            "如果驗收集中沒有任何人工標為 COLOR_MISMATCH 的真 NG，"
+            "顏色逃逸會顯示 UNKNOWN；這不是 0%，而是缺少可驗證逃逸的樣本。"
         )
         warning.setWordWrap(True)
         warning.setStyleSheet("color: #9a5b00;")
@@ -319,16 +362,20 @@ class AcceptanceMatrixDialog(QDialog):
                 )
             if skipped:
                 self.progress_detail.setText("未列入不完整／不可信的歷史模型：" + "、".join(skipped))
-            variants = discover_color_variants(
+            color_model_type = color_scope_model_type(self.inference_type)
+            discovery = discover_color_variants(
                 self.data_paths.color_revisions,
                 product=self.product,
                 area=self.area,
-                model_type=("yolo" if self.inference_type.lower() == "fusion" else self.inference_type),
+                model_type=color_model_type,
                 baselines_root=self.data_paths.color_baselines,
                 profiles_root=self.data_paths.color_profiles,
             )
-            for variant in variants:
+            for variant in discovery.variants:
                 self._append_color_variant(variant)
+            for exclusion in discovery.exclusions:
+                self._append_color_exclusion(exclusion)
+            self._render_color_availability(discovery, model_type=color_model_type)
         except (
             ModelVersionRegistryError,
             OSError,
@@ -372,6 +419,47 @@ class AcceptanceMatrixDialog(QDialog):
         else:
             source = "只用所選 YOLO Bundle 內建 config"
         self.color_table.setItem(row, 2, QTableWidgetItem(source))
+
+    def _append_color_exclusion(self, exclusion: ColorVariantExclusion) -> None:
+        """Show an in-scope color artifact that exists but cannot be selected.
+
+        Shown rather than hidden: an operator who built this baseline would
+        otherwise read its absence as lost data and rebuild it, which costs a
+        recalibration run and can pull unintended evidence into a new baseline.
+        """
+        row = self.color_table.rowCount()
+        self.color_table.insertRow(row)
+        self.color_table.setItem(row, 0, _excluded_item())
+        label_item = QTableWidgetItem(exclusion.label)
+        reason_item = QTableWidgetItem(f"無法使用：{exclusion.reason}")
+        for item in (label_item, reason_item):
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            item.setForeground(QColor("#8a8f98"))
+        self.color_table.setItem(row, 1, label_item)
+        self.color_table.setItem(row, 2, reason_item)
+
+    def _render_color_availability(
+        self, discovery: ColorVariantDiscovery, *, model_type: str
+    ) -> None:
+        """State whether this scope has any stored color model to compare against.
+
+        Without this, a scope that never had a color baseline looks identical to
+        a broken tool: the table still lists the bundle's built-in setting, so
+        there is nothing on screen to distinguish the two. ``model_type`` is the
+        type actually searched, which is not always the selected inference type.
+        """
+        stored = len(discovery.stored_color_models)
+        if stored:
+            text = f"此工位有 {stored} 個已建立的顏色模型可供比較。"
+        else:
+            text = (
+                f"{self.product}／{self.area}／{model_type} 尚未建立任何顏色模型，"
+                "因此只能使用所選 YOLO Bundle 內建的顏色設定。要比較顏色版本，"
+                "請先執行顏色基準重建。"
+            )
+        if discovery.exclusions:
+            text += f" 另有 {len(discovery.exclusions)} 個同工位項目無法使用，原因見清單。"
+        self.color_hint.setText(text)
 
     @staticmethod
     def _has_variant(table: QTableWidget, variant_id: str) -> bool:
@@ -536,13 +624,16 @@ class AcceptanceMatrixDialog(QDialog):
                 combination.model_label,
                 combination.color_label,
                 _format_rate(accuracy),
-                metrics.fp,
-                metrics.fn,
-                _format_rate(color.overkill_rate),
-                _format_color_escape(color.escape_rate),
+                format_count_with_rate(metrics.fp, metrics.overkill_rate, "無可用真 OK 樣本"),
+                format_count_with_rate(metrics.fn, metrics.escape_rate, "無可用真 NG 樣本"),
+                format_count_with_rate(color.fp, color.overkill_rate, "無可用真 OK 樣本"),
+                format_count_with_rate(color.fn, color.escape_rate, "無真顏色 NG"),
                 _format_number(combination.average_latency_ms),
                 _format_number(combination.p95_latency_ms),
-                combination.changed_from_reference,
+                # The first combination is the reference every other row is
+                # compared against, so its own 0 means "is the baseline", not
+                # "matches the baseline" -- two very different readings.
+                "基準組" if row == 0 else combination.changed_from_reference,
                 metrics.errors,
                 combination.error or "完成",
             )
@@ -550,10 +641,10 @@ class AcceptanceMatrixDialog(QDialog):
                 item = QTableWidgetItem(str(value))
                 item.setData(VARIANT_ROLE, combination.combination_id)
                 if (
-                    (column == 3 and metrics.fp > 0)
-                    or (column == 4 and metrics.fn > 0)
-                    or (column == 10 and metrics.errors > 0)
-                    or (column == 11 and combination.error)
+                    (column == COLUMN_OVERKILL and metrics.fp > 0)
+                    or (column == COLUMN_ESCAPE and metrics.fn > 0)
+                    or (column == COLUMN_ERRORS and metrics.errors > 0)
+                    or (column == COLUMN_STATUS and combination.error)
                 ):
                     item.setForeground(Qt.red)
                 self.result_table.setItem(row, column, item)
@@ -729,6 +820,18 @@ def _check_item(variant: object, *, checked: bool = True) -> QTableWidgetItem:
     return item
 
 
+def _excluded_item() -> QTableWidgetItem:
+    """Return the leading cell of a row that is shown but cannot be selected.
+
+    It carries no VARIANT_ROLE payload, so ``_selected_colors`` skips it on the
+    isinstance check even if the flags were ever loosened: being unselectable
+    does not depend on the widget state alone.
+    """
+    item = QTableWidgetItem()
+    item.setFlags(Qt.ItemIsSelectable)
+    return item
+
+
 def _next_release_version(releases) -> str:
     """Return a collision-free human version for one product/area."""
     patches = []
@@ -741,10 +844,6 @@ def _next_release_version(releases) -> str:
 
 def _format_rate(value: float | None) -> str:
     return "UNKNOWN" if value is None else f"{value:.2%}"
-
-
-def _format_color_escape(value: float | None) -> str:
-    return "UNKNOWN（無真顏色 NG）" if value is None else f"{value:.2%}"
 
 
 def _format_number(value: float | None) -> str:

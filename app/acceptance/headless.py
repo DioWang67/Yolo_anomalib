@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import sys
 from pathlib import Path
 
+from core.services.acceptance_artifacts import (
+    build_acceptance_artifact_bundle,
+    resolve_effective_color_model,
+)
 from core.services.acceptance_gate import (
     AcceptanceGatePolicy,
     run_candidate_acceptance,
@@ -16,7 +19,6 @@ from core.services.color_revision_contract import (
     color_revision_overrides,
     verify_active_color_revision_contract,
 )
-from core.services.model_acceptance import ModelIdentity
 from core.station_data import load_station_data_paths
 
 
@@ -69,23 +71,45 @@ def main(argv: list[str] | None = None) -> int:
         if args.color_revisions_root
         else load_station_data_paths(args.project_root).color_revisions
     )
+    effective_color = (
+        None
+        if color_path is not None
+        else resolve_effective_color_model(
+            model_config_path=config_path,
+            global_config_path=args.global_config,
+            models_root=args.models_root,
+        )
+    )
     color_revision_contract = capture_candidate_color_revision_contract(
         revisions_root=color_revisions_root,
         candidate_config_path=config_path,
         global_config_path=args.global_config,
-        color_model_present=color_path is not None,
+        color_model_present=(color_path is not None or effective_color is not None),
+        force_color_enabled=color_path is not None,
+        color_checker_type_override=("stats" if color_path is not None else None),
         product=args.product,
         area=args.area,
         inference_type=args.inference_type,
     )
     revision_overrides = color_revision_overrides(color_revision_contract)
-    identity = ModelIdentity(
+    artifact_bundle = build_acceptance_artifact_bundle(
+        product=args.product,
+        area=args.area,
+        inference_type=args.inference_type,
         version=str(args.candidate_version),
-        sha256=_sha256_file(weight_path),
-        runtime_config_sha256=_sha256_file(config_path),
-        color_model_sha256=(
-            _sha256_file(color_path) if color_path is not None else ""
+        global_config_path=args.global_config,
+        model_config_path=config_path,
+        models_root=args.models_root,
+        model_weight_path=weight_path,
+        color_model_path=(
+            color_path
+            if color_path is not None
+            else effective_color.path if effective_color is not None else None
         ),
+        color_model_is_override=color_path is not None,
+        color_revision_overrides=revision_overrides,
+        include_active_color_revisions=False,
+        color_revision_contract=color_revision_contract,
     )
     policy = AcceptanceGatePolicy(
         min_confirmed=args.min_confirmed,
@@ -121,10 +145,8 @@ def main(argv: list[str] | None = None) -> int:
         product=args.product,
         area=args.area,
         inference_type=args.inference_type,
-        model_identity=identity,
+        artifact_bundle=artifact_bundle,
         policy=policy,
-        color_revision_overrides=revision_overrides,
-        include_active_color_revisions=False,
         color_revision_contract=color_revision_contract,
         color_revision_contract_validator=verify_color_revisions,
         progress_callback=report_progress,
@@ -145,14 +167,6 @@ def _required_file(raw_path: str, label: str) -> Path:
     if not path.is_file():
         raise FileNotFoundError(f"{label} not found: {path}")
     return path
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 if __name__ == "__main__":

@@ -93,19 +93,20 @@ def test_headless_main_builds_hashed_contract_and_reports_result(
 
     assert headless.main(_headless_args(tmp_path)) == expected_exit
 
-    identity = captured["model_identity"]
+    bundle = captured["artifact_bundle"]
     policy = captured["policy"]
-    assert identity.version == "v9"
-    assert identity.sha256 == hashlib.sha256(b"weight").hexdigest()
-    assert identity.runtime_config_sha256 == hashlib.sha256(
+    assert bundle.version == "v9"
+    assert bundle.model_weight.sha256 == hashlib.sha256(b"weight").hexdigest()
+    assert bundle.model_config.sha256 == hashlib.sha256(
         (tmp_path / "config.yaml").read_bytes()
     ).hexdigest()
-    assert identity.color_model_sha256 == hashlib.sha256(b"color").hexdigest()
+    assert bundle.color_model.sha256 == hashlib.sha256(b"color").hexdigest()
+    assert bundle.color_model_mode == "override"
     assert policy.min_confirmed == 12
     assert not policy.require_all_confirmed
     assert not policy.require_no_errors
-    assert captured["color_revision_overrides"] == {}
-    assert captured["include_active_color_revisions"] is False
+    assert bundle.color_revision_overrides == ()
+    assert bundle.include_active_color_revisions is False
     assert captured["color_revision_contract"]["entries"] == []
     output = capsys.readouterr()
     assert "1/50" in output.out
@@ -127,7 +128,9 @@ def test_headless_optional_color_and_file_guards(monkeypatch, tmp_path: Path) ->
     )
 
     assert headless.main(_headless_args(tmp_path, color=False)) == 0
-    assert captured["model_identity"].color_model_sha256 == ""
+    bundle = captured["artifact_bundle"]
+    assert bundle.color_model.sha256 == hashlib.sha256(b"color").hexdigest()
+    assert bundle.color_model_mode == "embedded"
     assert headless._required_file(str(tmp_path / "candidate.pt"), "weight").is_file()
     with pytest.raises(FileNotFoundError, match="candidate weight not found"):
         headless._required_file(str(tmp_path / "missing.pt"), "candidate weight")

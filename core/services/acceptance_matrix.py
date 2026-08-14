@@ -29,6 +29,15 @@ from uuid import uuid4
 
 import yaml
 
+from core.services.acceptance_artifacts import (
+    AcceptanceArtifactBundle,
+    AcceptanceArtifactError,
+    artifact_ref,
+    build_acceptance_artifact_bundle,
+    color_scope_model_type,
+    resolve_configured_model_weight,
+    verify_acceptance_artifact_bundle,
+)
 from core.services.color_baseline_recalibration import (
     ALGORITHM_VERSION,
     ColorBaselineCandidateStore,
@@ -48,13 +57,15 @@ from core.services.model_acceptance import (
     calculate_acceptance_metrics,
     load_acceptance_manifest,
     load_model_identity,
+    verified_acceptance_image_path,
 )
 from core.services.model_version_registry import ModelVersionRecord
 from core.station_data import load_station_data_paths
+from core.stats_color_checker import stats_color_model_load_failure
 from tools.color_calibration_service import ColorCalibrationError
 from tools.color_configuration_revisions import ColorConfigurationRevisionStore
 
-MATRIX_REPORT_SCHEMA_VERSION = 1
+MATRIX_REPORT_SCHEMA_VERSION = 2
 
 
 class AcceptanceMatrixError(ValueError):
@@ -90,6 +101,42 @@ class AcceptanceColorVariant:
 
     def override_mapping(self) -> dict[str, str]:
         return dict(self.revision_overrides)
+
+
+@dataclass(frozen=True)
+class ColorVariantExclusion:
+    """An in-scope color artifact that exists but cannot be offered for acceptance.
+
+    A scope mismatch is not an exclusion: an artifact belonging to another
+    product, area, or model type was never a candidate here, and listing every
+    one of them would bury the cases that matter. Only artifacts the operator
+    created for *this* scope, and that the system then withheld on its own, are
+    reported -- those are the ones whose absence is otherwise unexplained and
+    reads as data loss.
+    """
+
+    label: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ColorVariantDiscovery:
+    """Selectable color variants plus the in-scope artifacts withheld from them."""
+
+    variants: tuple[AcceptanceColorVariant, ...]
+    exclusions: tuple[ColorVariantExclusion, ...] = ()
+
+    @property
+    def stored_color_models(self) -> tuple[AcceptanceColorVariant, ...]:
+        """Variants pinning a stored color model file.
+
+        The embedded and active variants always exist but carry no model file of
+        their own, so they are not evidence that this scope has any color
+        baseline to compare against.
+        """
+        return tuple(
+            variant for variant in self.variants if variant.color_model_path is not None
+        )
 
 
 @dataclass(frozen=True)
@@ -143,6 +190,7 @@ class AcceptanceMatrixCombinationResult:
     changed_from_reference: int
     changed_sample_ids: tuple[str, ...]
     error: str = ""
+    artifact_bundle: AcceptanceArtifactBundle | None = None
 
 
 @dataclass(frozen=True)
@@ -207,13 +255,31 @@ def build_registered_model_variant(
     *,
     models_root: str | Path,
 ) -> AcceptanceModelVariant:
-    """Describe one historical registry record without activating it."""
+    """Describe one registry record without activating it.
+
+    The current record uses the effective station ``config.yaml`` because that
+    is what the main acceptance window and production execute. Historical
+    records remain pinned to their immutable version snapshots. This prevents
+    two UI entries both labelled "currently deployed" from running different
+    configs after station-local settings have changed.
+    """
     root = Path(models_root).expanduser().resolve()
     if not record.exists:
         raise AcceptanceMatrixError(f"模型權重不存在或為空：{record.weight_path}")
     if not record.has_config_snapshot or record.config_snapshot_path is None:
         raise AcceptanceMatrixError(f"模型 {record.version} 缺少配套 config 快照，不能安全測試。")
-    config_path = record.config_snapshot_path.resolve()
+    active_config_path = (
+        root / record.product / record.area / record.model_type / "config.yaml"
+    )
+    config_path = (
+        active_config_path.resolve()
+        if record.is_current
+        else record.config_snapshot_path.resolve()
+    )
+    if not config_path.is_file():
+        raise AcceptanceMatrixError(
+            f"模型 {record.version} 缺少目前正式 config，不能安全測試。"
+        )
     identity = ModelIdentity(
         version=record.version,
         sha256=record.weight_sha256.lower(),
@@ -297,9 +363,16 @@ def discover_color_variants(
     checker_type: str = "stats",
     baselines_root: str | Path | None = None,
     profiles_root: str | Path | None = None,
-) -> tuple[AcceptanceColorVariant, ...]:
-    """Discover embedded, active, and exact immutable color revisions."""
+) -> ColorVariantDiscovery:
+    """Discover embedded, active, and exact immutable color revisions.
+
+    Returns both the selectable variants and the in-scope artifacts that were
+    withheld. The two are produced by this single scan on purpose: an exclusion
+    list rebuilt by a second pass would be free to drift out of agreement with
+    what was actually offered.
+    """
     store = ColorConfigurationRevisionStore(root=revisions_root)
+    exclusions: list[ColorVariantExclusion] = []
     variants: list[AcceptanceColorVariant] = [
         AcceptanceColorVariant(
             variant_id="color-embedded",
@@ -315,11 +388,38 @@ def discover_color_variants(
             model_type=model_type,
         ):
             if candidate.algorithm != ALGORITHM_VERSION:
+                # In scope, but built by a superseded algorithm. Reported rather
+                # than dropped: the operator created this candidate and nothing
+                # visibly happened to it, so an unexplained absence invites
+                # rebuilding a baseline that is not actually missing.
+                exclusions.append(
+                    ColorVariantExclusion(
+                        label=f"完整顏色基準 / {candidate.display_version}",
+                        reason=(
+                            f"演算法 {candidate.algorithm}（目前為 {ALGORITHM_VERSION}）："
+                            "裁切座標空間不同，納入比較會得到錯誤結論"
+                        ),
+                    )
+                )
+                continue
+            baseline_label = (
+                f"完整顏色基準 / {candidate.display_version}（{candidate.status}）"
+            )
+            # Status is deliberately not an exclusion criterion. An INCOMPLETE
+            # recalibration can still hold usable stats for the colors it did
+            # finish, and withholding it would hide a comparison the operator
+            # legitimately asked for. Whether the file actually loads is the
+            # unambiguous test, and it is the one that matters.
+            load_failure = _color_model_load_failure(candidate.color_model_path)
+            if load_failure:
+                exclusions.append(
+                    ColorVariantExclusion(label=baseline_label, reason=load_failure)
+                )
                 continue
             variants.append(
                 AcceptanceColorVariant(
                     variant_id=f"color-base-{candidate.candidate_id}",
-                    label=(f"完整顏色基準 / {candidate.display_version}（{candidate.status}）"),
+                    label=baseline_label,
                     color_model_path=candidate.color_model_path,
                     color_model_sha256=candidate.color_model_sha256,
                 )
@@ -337,13 +437,22 @@ def discover_color_variants(
                     profile.checker_type,
                 ) != (product, area, model_type, checker_type):
                     continue
+                profile_label = (
+                    f"完整顏色方案 / {profile.display_version}（{profile.summary}）"
+                )
+                load_failure = _color_model_load_failure(profile.color_model_path)
+                if load_failure:
+                    # A stored package whose model cannot load is worse than a
+                    # missing one: it is offered, selected, and only fails once
+                    # every sample of its combination has been inferred.
+                    exclusions.append(
+                        ColorVariantExclusion(label=profile_label, reason=load_failure)
+                    )
+                    continue
                 variants.append(
                     AcceptanceColorVariant(
                         variant_id=f"color-profile-{profile.package_id}",
-                        label=(
-                            f"完整顏色方案 / {profile.display_version}"
-                            f"（{profile.summary}）"
-                        ),
+                        label=profile_label,
                         revision_overrides=profile.revision_overrides,
                         include_active_revisions=False,
                         color_model_path=profile.color_model_path,
@@ -351,7 +460,9 @@ def discover_color_variants(
                     )
                 )
     if not store.root.is_dir():
-        return tuple(variants)
+        return ColorVariantDiscovery(
+            variants=tuple(variants), exclusions=tuple(exclusions)
+        )
     has_matching_active = False
     try:
         scopes = store.iter_scopes()
@@ -373,6 +484,9 @@ def discover_color_variants(
             has_matching_active = store.read_active_pointer(scope) is not None or has_matching_active
             for revision in store.list_revisions(scope):
                 if store.is_revoked(revision):
+                    # Deliberately not reported as an exclusion: revocation is an
+                    # explicit operator action, so this absence is already
+                    # accounted for and listing it would only grow forever.
                     continue
                 variants.append(
                     AcceptanceColorVariant(
@@ -397,7 +511,20 @@ def discover_color_variants(
                 include_active_revisions=True,
             ),
         )
-    return tuple(variants)
+    return ColorVariantDiscovery(variants=tuple(variants), exclusions=tuple(exclusions))
+
+
+def _color_model_load_failure(color_model_path: Path | None) -> str:
+    """Report why a stored color model cannot be used, or ``""`` when it can.
+
+    Both stores scanned here hold the stats format -- the baseline store by
+    construction, and profiles because the caller already filtered them on
+    ``checker_type`` -- so the stats loader is the right and only validator.
+    """
+
+    if color_model_path is None:
+        return ""
+    return stats_color_model_load_failure(color_model_path)
 
 
 def run_acceptance_matrix(
@@ -428,31 +555,82 @@ def run_acceptance_matrix(
             latencies: list[float] = []
             combination_error = ""
             service: _InferenceService | None = None
+            artifact_bundle: AcceptanceArtifactBundle | None = None
+            effective_model_variant = model_variant
+            effective_color_variant = color_variant
             try:
+                if model_variant.config_path is None or model_variant.weight_path is None:
+                    raise AcceptanceMatrixError(
+                        f"Model variant has incomplete artifact evidence: {model_variant.label}"
+                    )
+                artifact_bundle = build_acceptance_artifact_bundle(
+                    product=normalized.product,
+                    area=normalized.area,
+                    inference_type=normalized.inference_type,
+                    version=model_variant.identity.version,
+                    global_config_path=normalized.global_config_path,
+                    model_config_path=model_variant.config_path,
+                    models_root=model_variant.models_root,
+                    model_weight_path=model_variant.weight_path,
+                    color_model_path=color_variant.color_model_path,
+                    color_model_is_override=color_variant.color_model_path is not None,
+                    color_revision_overrides=color_variant.override_mapping(),
+                    include_active_color_revisions=(
+                        color_variant.include_active_revisions
+                    ),
+                )
+                effective_model_variant = replace(
+                    model_variant,
+                    identity=ModelIdentity(
+                        version=artifact_bundle.version,
+                        sha256=artifact_bundle.model_weight.sha256,
+                        runtime_config_sha256=artifact_bundle.model_config.sha256,
+                        color_model_sha256=(
+                            artifact_bundle.color_model.sha256
+                            if artifact_bundle.color_model is not None
+                            else ""
+                        ),
+                    ),
+                )
+                effective_color_variant = replace(
+                    color_variant,
+                    color_model_path=(
+                        artifact_bundle.color_model.path
+                        if artifact_bundle.color_model is not None
+                        else None
+                    ),
+                    color_model_sha256=(
+                        artifact_bundle.color_model.sha256
+                        if artifact_bundle.color_model is not None
+                        else ""
+                    ),
+                )
                 service = service_factory(
                     project_root=normalized.project_root,
                     models_root=model_variant.models_root,
-                    global_config_path=normalized.global_config_path,
-                    model_identity=model_variant.identity,
+                    global_config_path=artifact_bundle.global_config.path,
+                    model_identity=effective_model_variant.identity,
                     color_revisions_root=normalized.color_revisions_root,
-                    color_revision_overrides=color_variant.override_mapping(),
-                    include_active_color_revisions=(color_variant.include_active_revisions),
-                    model_config_overrides=(
-                        {
-                            (
-                                normalized.product,
-                                normalized.area,
-                                (
-                                    "yolo"
-                                    if normalized.inference_type.lower() == "fusion"
-                                    else normalized.inference_type.lower()
-                                ),
-                            ): model_variant.config_path
-                        }
-                        if model_variant.config_path is not None
-                        else {}
+                    color_revision_overrides=dict(
+                        artifact_bundle.color_revision_overrides
                     ),
-                    color_model_path_override=(color_variant.color_model_path),
+                    include_active_color_revisions=(
+                        artifact_bundle.include_active_color_revisions
+                    ),
+                    model_config_overrides={
+                        (
+                            normalized.product,
+                            normalized.area,
+                            color_scope_model_type(normalized.inference_type),
+                        ): artifact_bundle.model_config.path
+                    },
+                    model_weight_path_override=artifact_bundle.model_weight.path,
+                    color_model_path_override=(
+                        artifact_bundle.color_model.path
+                        if artifact_bundle.color_model is not None
+                        and artifact_bundle.color_model_mode == "override"
+                        else None
+                    ),
                 )
                 for record in records:
                     _raise_if_cancelled(cancel_callback)
@@ -462,15 +640,19 @@ def run_acceptance_matrix(
                         inference_type=normalized.inference_type,
                         cancel_cb=cancel_callback,
                     )
-                    inferred = _record_with_outcome(record, outcome)
+                    inferred = _record_with_outcome(
+                        record,
+                        outcome,
+                        expected_identity=effective_model_variant.identity,
+                    )
                     inferred_records.append(inferred)
                     if outcome.latency_ms >= 0 and not outcome.error:
                         latencies.append(outcome.latency_ms)
                     sample_rows.append(
                         _sample_row(
                             combination_id,
-                            model_variant,
-                            color_variant,
+                            effective_model_variant,
+                            effective_color_variant,
                             inferred,
                         )
                     )
@@ -482,6 +664,10 @@ def run_acceptance_matrix(
                             combination_label,
                             record.sample_id,
                         )
+                verify_acceptance_artifact_bundle(
+                    artifact_bundle,
+                    models_root=model_variant.models_root,
+                )
             except AcceptanceMatrixCancelled:
                 raise
             except (ImportError, OSError, RuntimeError, ValueError) as exc:
@@ -494,10 +680,14 @@ def run_acceptance_matrix(
                         record,
                         machine_status="ERROR",
                         machine_reasons="",
-                        model_version=model_variant.identity.version,
-                        model_sha256=model_variant.identity.sha256,
-                        runtime_config_sha256=(model_variant.identity.runtime_config_sha256),
-                        color_model_sha256=(model_variant.identity.color_model_sha256),
+                        model_version=effective_model_variant.identity.version,
+                        model_sha256=effective_model_variant.identity.sha256,
+                        runtime_config_sha256=(
+                            effective_model_variant.identity.runtime_config_sha256
+                        ),
+                        color_model_sha256=(
+                            effective_model_variant.identity.color_model_sha256
+                        ),
                         error=combination_error,
                         color_check_status="ERROR",
                         color_details_json="[]",
@@ -506,8 +696,8 @@ def run_acceptance_matrix(
                     sample_rows.append(
                         _sample_row(
                             combination_id,
-                            model_variant,
-                            color_variant,
+                            effective_model_variant,
+                            effective_color_variant,
                             failed,
                         )
                     )
@@ -521,7 +711,11 @@ def run_acceptance_matrix(
                         )
             finally:
                 if service is not None:
-                    service.close()
+                    try:
+                        service.close()
+                    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                        cleanup_error = f"Inference cleanup failed: {exc}"
+                        combination_error = combination_error or cleanup_error
 
             current_fingerprints = {record.sample_id: _decision_fingerprint(record) for record in inferred_records}
             if reference_fingerprints is None:
@@ -547,11 +741,28 @@ def run_acceptance_matrix(
                     changed_from_reference=len(changed_ids),
                     changed_sample_ids=changed_ids,
                     error=combination_error,
+                    artifact_bundle=artifact_bundle,
                 )
             )
 
     if _sha256_file(normalized.manifest_path) != manifest_sha256:
         raise AcceptanceMatrixError("驗收標註在測試期間被修改，報告已拒絕建立；請重新執行。")
+    model_roots = {
+        variant.variant_id: variant.models_root
+        for variant in normalized.model_variants
+    }
+    try:
+        for result in combination_results:
+            if result.artifact_bundle is None:
+                continue
+            verify_acceptance_artifact_bundle(
+                result.artifact_bundle,
+                models_root=model_roots[result.model_variant_id],
+            )
+    except (AcceptanceArtifactError, KeyError) as exc:
+        raise AcceptanceMatrixError(
+            "Acceptance artifacts changed before the matrix report was committed."
+        ) from exc
     run_time = (clock or (lambda: datetime.now(timezone.utc)))()
     if run_time.tzinfo is None:
         raise AcceptanceMatrixError("Matrix clock must return a timezone-aware datetime.")
@@ -606,31 +817,48 @@ def _validate_request(request: AcceptanceMatrixRequest) -> AcceptanceMatrixReque
         )
     normalized_models: list[AcceptanceModelVariant] = []
     for model_variant in request.model_variants:
-        config_path = (
-            Path(model_variant.config_path).expanduser().resolve() if model_variant.config_path is not None else None
-        )
-        if config_path is None or not config_path.is_file() or config_path.is_symlink():
+        if model_variant.config_path is None:
             raise AcceptanceMatrixError(f"模型缺少安全的 config 快照：{model_variant.label}")
-        actual_config_sha256 = _sha256_file(config_path)
+        models_root = Path(model_variant.models_root).expanduser().resolve()
+        try:
+            config_artifact = artifact_ref(
+                model_variant.config_path,
+                f"model config ({model_variant.label})",
+            )
+            configured_weight = resolve_configured_model_weight(
+                config_artifact.path,
+                models_root=models_root,
+            )
+            selected_weight = (
+                artifact_ref(
+                    model_variant.weight_path,
+                    f"model weight ({model_variant.label})",
+                )
+                if model_variant.weight_path is not None
+                else configured_weight
+            )
+        except AcceptanceArtifactError as exc:
+            raise AcceptanceMatrixError(str(exc)) from exc
+        if configured_weight.path != selected_weight.path:
+            raise AcceptanceMatrixError(
+                "Model config weights do not resolve to the selected matrix "
+                f"weight: {model_variant.label}"
+            )
+        config_path = config_artifact.path
+        actual_config_sha256 = config_artifact.sha256
         if (
             model_variant.identity.runtime_config_sha256
             and model_variant.identity.runtime_config_sha256 != actual_config_sha256
         ):
             raise AcceptanceMatrixError(f"模型 config 在選取後已變更：{model_variant.label}")
-        weight_path = (
-            Path(model_variant.weight_path).expanduser().resolve()
-            if model_variant.weight_path is not None
-            else _model_weight_path(config_path, model_variant.models_root)
-        )
-        if not weight_path.is_file() or weight_path.is_symlink():
-            raise AcceptanceMatrixError(f"模型權重不存在或不安全：{model_variant.label}")
-        actual_weight_sha256 = _sha256_file(weight_path)
+        weight_path = selected_weight.path
+        actual_weight_sha256 = selected_weight.sha256
         if model_variant.identity.sha256 and model_variant.identity.sha256.lower() != actual_weight_sha256:
             raise AcceptanceMatrixError(f"模型權重 SHA-256 不符：{model_variant.label}")
         normalized_models.append(
             replace(
                 model_variant,
-                models_root=Path(model_variant.models_root).expanduser().resolve(),
+                models_root=models_root,
                 identity=replace(
                     model_variant.identity,
                     sha256=actual_weight_sha256,
@@ -648,10 +876,17 @@ def _validate_request(request: AcceptanceMatrixRequest) -> AcceptanceMatrixReque
         raise AcceptanceMatrixError(f"找不到驗收照片目錄：{dataset_root}")
     output_root = Path(request.output_root).expanduser().resolve()
     _verify_output_writable(output_root)
+    try:
+        global_config_path = artifact_ref(
+            request.global_config_path,
+            "matrix global config",
+        ).path
+    except AcceptanceArtifactError as exc:
+        raise AcceptanceMatrixError(str(exc)) from exc
     return replace(
         request,
         project_root=Path(request.project_root).expanduser().resolve(),
-        global_config_path=Path(request.global_config_path).expanduser().resolve(),
+        global_config_path=global_config_path,
         color_revisions_root=(Path(request.color_revisions_root).expanduser().resolve()),
         dataset_root=dataset_root,
         manifest_path=manifest_path,
@@ -713,7 +948,14 @@ def _verify_output_writable(output_root: Path) -> None:
 
 
 def _validated_image_path(dataset_root: Path, record: AcceptanceRecord) -> Path:
-    image_path = (dataset_root / record.image_path).resolve()
+    try:
+        image_path = verified_acceptance_image_path(
+            dataset_root,
+            record,
+            verify_checksum=False,
+        )
+    except AcceptanceDataError as exc:
+        raise AcceptanceMatrixError(str(exc)) from exc
     try:
         image_path.relative_to(dataset_root)
     except ValueError as exc:
@@ -723,9 +965,28 @@ def _validated_image_path(dataset_root: Path, record: AcceptanceRecord) -> Path:
     return image_path
 
 
-def _record_with_outcome(record: AcceptanceRecord, outcome: AcceptanceInferenceOutcome) -> AcceptanceRecord:
+def _record_with_outcome(
+    record: AcceptanceRecord,
+    outcome: AcceptanceInferenceOutcome,
+    *,
+    expected_identity: ModelIdentity,
+) -> AcceptanceRecord:
     if outcome.sample_id != record.sample_id:
         raise AcceptanceMatrixError(f"推論結果 sample_id 不一致：{record.sample_id}")
+    if (
+        outcome.model_version,
+        outcome.model_sha256.lower(),
+        outcome.runtime_config_sha256.lower(),
+        outcome.color_model_sha256.lower(),
+    ) != (
+        expected_identity.version,
+        expected_identity.sha256.lower(),
+        expected_identity.runtime_config_sha256.lower(),
+        expected_identity.color_model_sha256.lower(),
+    ):
+        raise AcceptanceMatrixError(
+            "Inference identity does not match the pinned matrix artifact bundle."
+        )
     return replace(
         record,
         machine_status=outcome.machine_status,
@@ -901,6 +1162,11 @@ def _combination_mapping(
         "changed_from_reference": result.changed_from_reference,
         "changed_sample_ids": list(result.changed_sample_ids),
         "error": result.error,
+        "artifact_bundle": (
+            result.artifact_bundle.report_payload()
+            if result.artifact_bundle is not None
+            else None
+        ),
     }
 
 

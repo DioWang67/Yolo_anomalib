@@ -34,6 +34,7 @@ from app.gui.inspection_release_presentation import (
     format_component_summary,
     format_local_timestamp,
 )
+from app.gui.metric_presentation import format_count_with_rate
 from core.services.color_profile_store import ColorProfileStore
 from core.services.inspection_component_catalog import (
     InspectionComponentCatalog,
@@ -312,10 +313,10 @@ class InspectionVersionWorkspace(QWidget):
                 "組合版本",
                 "狀態",
                 "樣本數",
-                "誤殺",
-                "漏檢",
-                "顏色誤殺率",
-                "顏色逃逸率",
+                "誤殺（整體）",
+                "漏檢（整體）",
+                "顏色誤殺",
+                "顏色逃逸",
             )
         )
         self.validation_table.itemSelectionChanged.connect(
@@ -1010,14 +1011,25 @@ class InspectionVersionWorkspace(QWidget):
                 first_draft_row = row
             metrics = dict(release.validation.metrics)
             color = dict(release.validation.color_metrics)
+            # Overall and color-only counts share a row here, so each one is
+            # rendered with its own rate: a bare overall count beside a bare
+            # color rate reads as a single metric and never divides out.
             values = (
                 release.display_version,
                 release.status.value,
                 str(release.validation.sample_count),
-                str(metrics.get("fp", "—")),
-                str(metrics.get("fn", "—")),
-                self._percent(color.get("overkill_rate")),
-                self._percent(color.get("escape_rate")),
+                format_count_with_rate(
+                    metrics.get("fp"), metrics.get("overkill_rate"), "無可用真 OK 樣本"
+                ),
+                format_count_with_rate(
+                    metrics.get("fn"), metrics.get("escape_rate"), "無可用真 NG 樣本"
+                ),
+                format_count_with_rate(
+                    color.get("fp"), color.get("overkill_rate"), "無可用真 OK 樣本"
+                ),
+                format_count_with_rate(
+                    color.get("fn"), color.get("escape_rate"), "無真顏色 NG"
+                ),
             )
             self._set_release_row(self.validation_table, row, release, values)
         if self._releases:
@@ -1093,15 +1105,6 @@ class InspectionVersionWorkspace(QWidget):
     @staticmethod
     def _component_summary(release: InspectionRelease) -> str:
         return format_component_summary(release)
-
-    @staticmethod
-    def _percent(value: object) -> str:
-        if value is None:
-            return "UNKNOWN"
-        try:
-            return f"{float(value):.2%}"
-        except (TypeError, ValueError):
-            return "無效資料"
 
     def _refresh_acceptance_summary(self) -> None:
         root = self.data_paths.acceptance / self.product / self.area

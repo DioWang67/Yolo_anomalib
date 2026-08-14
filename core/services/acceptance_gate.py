@@ -6,12 +6,19 @@ import hashlib
 import json
 import os
 import tempfile
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from core.services.acceptance_artifacts import (
+    AcceptanceArtifactBundle,
+    AcceptanceArtifactError,
+    color_scope_model_type,
+    verify_acceptance_artifact_bundle,
+)
 from core.services.model_acceptance import (
     AcceptanceDataError,
     AcceptanceInferenceOutcome,
@@ -20,6 +27,7 @@ from core.services.model_acceptance import (
     ModelIdentity,
     calculate_acceptance_metrics,
     load_acceptance_manifest,
+    verified_acceptance_image_path,
 )
 
 
@@ -34,6 +42,17 @@ class AcceptanceGatePolicy:
     require_all_confirmed: bool = True
     require_no_errors: bool = True
     require_baseline_predictions: bool = True
+
+    def __post_init__(self) -> None:
+        if self.min_confirmed < 1:
+            raise ValueError("min_confirmed must be at least 1")
+        for field_name in (
+            "max_false_positives",
+            "max_false_negatives",
+            "max_regressions",
+        ):
+            if getattr(self, field_name) < 0:
+                raise ValueError(f"{field_name} cannot be negative")
 
 
 @dataclass(frozen=True)
@@ -61,10 +80,8 @@ def run_candidate_acceptance(
     product: str,
     area: str,
     inference_type: str,
-    model_identity: ModelIdentity,
+    artifact_bundle: AcceptanceArtifactBundle,
     policy: AcceptanceGatePolicy,
-    color_revision_overrides: Mapping[str, str] | None = None,
-    include_active_color_revisions: bool = True,
     color_revision_contract: Mapping[str, Any] | None = None,
     color_revision_contract_validator: Callable[[], Sequence[str]] | None = None,
     service_factory: InferenceServiceFactory = AcceptanceInferenceService,
@@ -74,29 +91,73 @@ def run_candidate_acceptance(
     resolved_dataset_root = Path(dataset_root).expanduser().resolve()
     resolved_snapshot = Path(snapshot_manifest_path).expanduser().resolve()
     resolved_report = Path(report_path).expanduser().resolve()
+    resolved_models_root = Path(models_root).expanduser().resolve()
     snapshot_sha256 = _sha256_file(resolved_snapshot)
     records = load_acceptance_manifest(resolved_snapshot)
-    failures = _validate_snapshot(
+    failures = _validate_bundle_target(
+        artifact_bundle,
+        product=product,
+        area=area,
+        inference_type=inference_type,
+        global_config_path=global_config_path,
+    )
+    try:
+        verify_acceptance_artifact_bundle(
+            artifact_bundle,
+            models_root=resolved_models_root,
+        )
+    except AcceptanceArtifactError as exc:
+        failures.append(str(exc))
+    failures.extend(_validate_snapshot(
         records,
         dataset_root=resolved_dataset_root,
         product=product,
         area=area,
         policy=policy,
+    ))
+    model_identity = ModelIdentity(
+        version=artifact_bundle.version,
+        sha256=artifact_bundle.model_weight.sha256,
+        runtime_config_sha256=artifact_bundle.model_config.sha256,
+        color_model_sha256=(
+            artifact_bundle.color_model.sha256
+            if artifact_bundle.color_model is not None
+            else ""
+        ),
     )
 
     candidate_records: list[AcceptanceRecord] = []
     sample_results: list[dict[str, Any]] = []
     if not failures:
-        service = service_factory(
-            project_root=project_root,
-            models_root=models_root,
-            global_config_path=global_config_path,
-            model_identity=model_identity,
-            color_revisions_root=color_revisions_root,
-            color_revision_overrides=dict(color_revision_overrides or {}),
-            include_active_color_revisions=include_active_color_revisions,
-        )
+        service: AcceptanceInferenceService | None = None
         try:
+            service = service_factory(
+                project_root=project_root,
+                models_root=resolved_models_root,
+                global_config_path=artifact_bundle.global_config.path,
+                model_identity=model_identity,
+                color_revisions_root=color_revisions_root,
+                color_revision_overrides=dict(
+                    artifact_bundle.color_revision_overrides
+                ),
+                include_active_color_revisions=(
+                    artifact_bundle.include_active_color_revisions
+                ),
+                model_config_overrides={
+                    (
+                        artifact_bundle.product,
+                        artifact_bundle.area,
+                        color_scope_model_type(artifact_bundle.inference_type),
+                    ): artifact_bundle.model_config.path
+                },
+                model_weight_path_override=artifact_bundle.model_weight.path,
+                color_model_path_override=(
+                    artifact_bundle.color_model.path
+                    if artifact_bundle.color_model is not None
+                    and artifact_bundle.color_model_mode == "override"
+                    else None
+                ),
+            )
             total = len(records)
             for index, record in enumerate(records, start=1):
                 try:
@@ -112,12 +173,32 @@ def run_candidate_acceptance(
                     image_path,
                     inference_type=inference_type,
                 )
+                identity_failure = _outcome_identity_failure(
+                    outcome,
+                    expected=model_identity,
+                )
+                if identity_failure:
+                    failures.append(identity_failure)
+                    break
                 candidate_records.append(_record_with_outcome(record, outcome))
                 sample_results.append(_sample_result(record, outcome))
                 if progress_callback is not None:
                     progress_callback(index, total, record.sample_id)
+        except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            failures.append(f"candidate inference failed: {exc}")
         finally:
-            service.close()
+            if service is not None:
+                try:
+                    service.close()
+                except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                    failures.append(f"candidate inference cleanup failed: {exc}")
+    try:
+        verify_acceptance_artifact_bundle(
+            artifact_bundle,
+            models_root=resolved_models_root,
+        )
+    except AcceptanceArtifactError as exc:
+        failures.append(str(exc))
     if _sha256_file(resolved_snapshot) != snapshot_sha256:
         failures.append("acceptance snapshot changed while inference was running")
     if color_revision_contract_validator is not None:
@@ -141,7 +222,7 @@ def run_candidate_acceptance(
         )
     )
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "passed": not failures,
         "failures": failures,
@@ -151,6 +232,7 @@ def run_candidate_acceptance(
             "inference_type": inference_type,
         },
         "candidate": asdict(model_identity),
+        "artifact_bundle": artifact_bundle.report_payload(),
         "dataset": {
             "root": str(resolved_dataset_root),
             "snapshot_manifest": str(resolved_snapshot),
@@ -173,6 +255,51 @@ def run_candidate_acceptance(
     )
 
 
+def _validate_bundle_target(
+    bundle: AcceptanceArtifactBundle,
+    *,
+    product: str,
+    area: str,
+    inference_type: str,
+    global_config_path: str | Path,
+) -> list[str]:
+    failures: list[str] = []
+    # Both sides are normalized the same way. The bundle stripped these values
+    # when it was built, so comparing them against raw arguments would report a
+    # target mismatch for a caller whose only sin was a trailing space.
+    if (bundle.product, bundle.area, bundle.inference_type) != (
+        product.strip(),
+        area.strip(),
+        inference_type.strip().lower(),
+    ):
+        failures.append("acceptance artifact bundle target does not match the gate target")
+    if bundle.global_config.path != Path(global_config_path).expanduser().resolve():
+        failures.append("acceptance artifact bundle global config does not match the gate")
+    return failures
+
+
+def _outcome_identity_failure(
+    outcome: AcceptanceInferenceOutcome,
+    *,
+    expected: ModelIdentity,
+) -> str:
+    actual = (
+        outcome.model_version,
+        outcome.model_sha256.lower(),
+        outcome.runtime_config_sha256.lower(),
+        outcome.color_model_sha256.lower(),
+    )
+    wanted = (
+        expected.version,
+        expected.sha256.lower(),
+        expected.runtime_config_sha256.lower(),
+        expected.color_model_sha256.lower(),
+    )
+    if actual == wanted:
+        return ""
+    return "candidate inference identity does not match the pinned artifact bundle"
+
+
 def _validate_snapshot(
     records: Sequence[AcceptanceRecord],
     *,
@@ -182,6 +309,37 @@ def _validate_snapshot(
     policy: AcceptanceGatePolicy,
 ) -> list[str]:
     failures: list[str] = []
+    if not records:
+        failures.append("acceptance snapshot is empty")
+    sample_ids = [record.sample_id for record in records]
+    duplicate_ids = sorted(
+        sample_id
+        for sample_id, count in Counter(sample_ids).items()
+        if count > 1
+    )
+    if duplicate_ids:
+        failures.append(
+            f"snapshot contains {len(duplicate_ids)} duplicate sample IDs"
+        )
+    invalid_truth = [
+        record.sample_id
+        for record in records
+        if record.review_status == "confirmed"
+        and record.expected_verdict not in {"OK", "NG"}
+    ]
+    if invalid_truth:
+        failures.append(
+            f"snapshot contains {len(invalid_truth)} confirmed samples without OK/NG truth"
+        )
+    invalid_image_digests = [
+        record.sample_id
+        for record in records
+        if not _is_sha256(record.image_sha256)
+    ]
+    if invalid_image_digests:
+        failures.append(
+            f"snapshot contains {len(invalid_image_digests)} invalid image checksums"
+        )
     confirmed = sum(record.review_status == "confirmed" for record in records)
     if confirmed < policy.min_confirmed:
         failures.append(
@@ -231,20 +389,11 @@ def _verified_image_path(
     *,
     verify_checksum: bool = True,
 ) -> Path:
-    image_path = (dataset_root / record.image_path).resolve()
-    if not image_path.is_relative_to(dataset_root):
-        raise AcceptanceDataError(
-            f"acceptance image escapes dataset root: {record.sample_id}"
-        )
-    if not image_path.is_file():
-        raise AcceptanceDataError(
-            f"acceptance image missing: {record.sample_id}"
-        )
-    if verify_checksum and _sha256_file(image_path) != record.image_sha256.lower():
-        raise AcceptanceDataError(
-            f"acceptance image checksum mismatch: {record.sample_id}"
-        )
-    return image_path
+    return verified_acceptance_image_path(
+        dataset_root,
+        record,
+        verify_checksum=verify_checksum,
+    )
 
 
 def _record_with_outcome(
@@ -352,6 +501,13 @@ def _is_correct(record: AcceptanceRecord) -> bool:
     if record.expected_verdict not in {"OK", "NG"}:
         return False
     return record.machine_status == record.expected_verdict
+
+
+def _is_sha256(value: str) -> bool:
+    normalized = value.strip().lower()
+    return len(normalized) == 64 and all(
+        character in "0123456789abcdef" for character in normalized
+    )
 
 
 def _metrics_payload(metrics: Any) -> dict[str, Any]:

@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 
+from core.services.acceptance_artifacts import build_acceptance_artifact_bundle
 from core.services.inspection_release_builder import (
     build_draft_release,
     build_release_from_matrix,
@@ -595,8 +596,23 @@ def test_builder_binds_exact_full_color_baseline_from_matrix(tmp_path):
         encoding="utf-8",
     )
     candidate_sha = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+    global_config = tmp_path / "config.yaml"
+    global_config.write_text("device: cpu\n", encoding="utf-8")
+    artifact_bundle = build_acceptance_artifact_bundle(
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        version="1.0.6",
+        global_config_path=global_config,
+        model_config_path=config_path,
+        models_root=models_root,
+        model_weight_path=model_path,
+        color_model_path=candidate_path,
+        color_model_is_override=True,
+        include_active_color_revisions=False,
+    )
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": "matrix-2",
         "product": "Cable1",
         "area": "A",
@@ -630,7 +646,18 @@ def test_builder_binds_exact_full_color_baseline_from_matrix(tmp_path):
                 "combination_id": "combo-2",
                 "model_variant_id": "model-1",
                 "color_variant_id": "color-base-candidate",
-                "metrics": {"errors": 0, "fn": 0, "fp": 0},
+                "artifact_bundle": artifact_bundle.report_payload(),
+                # A 250-sample combination with no errors and no mistakes has
+                # decided all 250, so tp/tn must be present: a report whose four
+                # confusion counts are all zero decided nothing and is now
+                # refused, which is the whole point of the check.
+                "metrics": {
+                    "errors": 0,
+                    "tp": 120,
+                    "fp": 0,
+                    "fn": 0,
+                    "tn": 130,
+                },
                 "color_metrics": {
                     "errors": 0,
                     "fn": 0,
@@ -655,6 +682,58 @@ def test_builder_binds_exact_full_color_baseline_from_matrix(tmp_path):
     assert Path(release.components[1].artifact_path).read_bytes() == (
         candidate_path.read_bytes()
     )
+
+
+def test_builder_rejects_combination_whose_samples_all_errored(tmp_path):
+    """A combination that decided nothing must not be publishable.
+
+    This is the shape a real failure takes: the inference service converts each
+    per-image failure into an ERROR outcome and carries on, so the combination's
+    own ``error`` field stays empty while every sample errored and all four
+    confusion counts are zero. Checking only ``error`` let such a report through.
+    """
+    report_path = tmp_path / "report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": "matrix-3",
+                "product": "Cable1",
+                "area": "A",
+                "inference_type": "yolo",
+                "sample_count": 250,
+                "model_variants": [],
+                "color_variants": [],
+                "combinations": [
+                    {
+                        "combination_id": "combo-failed",
+                        "model_variant_id": "model-1",
+                        "color_variant_id": "color-1",
+                        "error": "",
+                        "metrics": {
+                            "confirmed": 250,
+                            "errors": 250,
+                            "tp": 0,
+                            "fp": 0,
+                            "fn": 0,
+                            "tn": 0,
+                        },
+                        "color_metrics": {"errors": 250},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InspectionReleaseError, match="errors cannot be published"):
+        build_release_from_matrix(
+            report_path,
+            combination_id="combo-failed",
+            display_version="inspection-v1",
+            operator="tester",
+            reason="every sample errored",
+        )
 
 
 def test_builder_rejects_symbolic_active_color_pointer(tmp_path):

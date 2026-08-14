@@ -141,6 +141,52 @@ def test_contract_records_enabled_runtime_with_no_active_revisions(
     ) == contract
 
 
+def test_explicit_color_override_forces_revision_contract_enabled(
+    tmp_path: Path,
+) -> None:
+    contract = capture_candidate_color_revision_contract(
+        revisions_root=tmp_path / ".color_revisions",
+        candidate_config_path=_candidate_config(
+            tmp_path / "config.yaml",
+            enabled=False,
+        ),
+        color_model_present=True,
+        force_color_enabled=True,
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+    )
+
+    assert contract["enabled"] is True
+    assert contract["checker_type"] == "stats"
+
+
+def test_explicit_stats_baseline_overrides_configured_checker_type(
+    tmp_path: Path,
+) -> None:
+    config_path = _candidate_config(tmp_path / "config.yaml", enabled=False)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "color_checker_type: stats",
+            "color_checker_type: color_qc",
+        ),
+        encoding="utf-8",
+    )
+
+    contract = capture_candidate_color_revision_contract(
+        revisions_root=tmp_path / ".color_revisions",
+        candidate_config_path=config_path,
+        color_model_present=True,
+        force_color_enabled=True,
+        color_checker_type_override="stats",
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+    )
+
+    assert contract["checker_type"] == "stats"
+
+
 def test_contract_pins_multiple_matching_colors_and_ignores_other_station(
     tmp_path: Path,
 ) -> None:
@@ -371,8 +417,9 @@ def test_headless_pins_revisions_and_detects_pointer_switch_during_runner(
     color_path.write_bytes(b"color")
 
     def fake_run_candidate_acceptance(**kwargs):
-        assert kwargs["include_active_color_revisions"] is False
-        assert kwargs["color_revision_overrides"] == {
+        bundle = kwargs["artifact_bundle"]
+        assert bundle.include_active_color_revisions is False
+        assert dict(bundle.color_revision_overrides) == {
             scope.scope_hash: first.revision_id
         }
         _activate(store, second, expected_sha256=first.new_config_sha256)

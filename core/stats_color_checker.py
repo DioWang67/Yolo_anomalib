@@ -141,6 +141,31 @@ def _load_color_ranges(
     return ranges
 
 
+def stats_color_model_load_failure(stats_path: str | Path) -> str:
+    """Return why this file cannot back a stats color checker, or ``""`` if it can.
+
+    Deliberately implemented by running the real loader rather than by
+    re-listing the keys it needs: a separate schema check is free to drift from
+    the loader, and then a model would pass validation and still fail at
+    inference. Callers use this to decide whether to *offer* a color model at
+    all, which is the difference between a greyed-out row explaining itself and
+    a whole acceptance combination of ERROR results.
+    """
+
+    try:
+        _load_color_ranges(Path(stats_path))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return f"顏色模型無法讀取：{exc}"
+    except (KeyError, TypeError, ValueError) as exc:
+        missing = exc.args[0] if isinstance(exc, KeyError) and exc.args else ""
+        return (
+            f"顏色模型缺少必要統計量 {missing}"
+            if missing
+            else f"顏色模型格式無效：{exc}"
+        )
+    return ""
+
+
 def _optional_stat_array(stats: Mapping[str, object], key: str) -> np.ndarray | None:
     if key not in stats:
         return None

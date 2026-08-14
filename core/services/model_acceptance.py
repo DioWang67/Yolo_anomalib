@@ -15,19 +15,31 @@ import shutil
 import tempfile
 import threading
 import zipfile
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
 import yaml
 
-from core.detection_system import DetectionSystem
+from core.services.acceptance_artifacts import (
+    AcceptanceArtifactBundle,
+    AcceptanceArtifactError,
+    resolve_configured_model_weight,
+)
 from core.station_data import load_station_data_paths
 from core.types import DetectionResult
+from tools.cross_process_lock import (
+    CrossProcessLockTimeoutError,
+    cross_process_file_lock,
+)
+
+if TYPE_CHECKING:  # pragma: no cover
+    from core.detection_system import DetectionSystem
 
 ACCEPTANCE_REASON_CODES = (
     "MISSING",
@@ -69,6 +81,11 @@ MANIFEST_FIELDS = (
     "model_sha256",
     "runtime_config_sha256",
     "color_model_sha256",
+    "acceptance_run_id",
+    "artifact_bundle_sha256",
+    "color_revision_contract_sha256",
+    "color_revision_overrides_json",
+    "include_active_color_revisions",
     "inference_at",
     "latency_ms",
     "error",
@@ -105,6 +122,11 @@ class AcceptanceRecord:
     model_sha256: str = ""
     runtime_config_sha256: str = ""
     color_model_sha256: str = ""
+    acceptance_run_id: str = ""
+    artifact_bundle_sha256: str = ""
+    color_revision_contract_sha256: str = ""
+    color_revision_overrides_json: str = ""
+    include_active_color_revisions: str = ""
     inference_at: str = ""
     latency_ms: str = ""
     error: str = ""
@@ -121,6 +143,43 @@ class AcceptanceRecord:
         return replace(self, **changes)
 
 
+def verified_acceptance_image_path(
+    dataset_root: str | Path,
+    record: AcceptanceRecord,
+    *,
+    verify_checksum: bool = True,
+) -> Path:
+    """Resolve one evidence image without following symbolic-link components."""
+
+    root = Path(dataset_root).expanduser().resolve()
+    relative = Path(record.image_path)
+    if relative.is_absolute() or relative.drive or ".." in relative.parts:
+        raise AcceptanceDataError(
+            f"Acceptance image escapes its evidence directory: {record.image_path}"
+        )
+    candidate = root
+    for part in relative.parts:
+        candidate /= part
+        if candidate.is_symlink():
+            raise AcceptanceDataError(
+                f"Acceptance image is missing or unsafe: {record.sample_id}"
+            )
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(root):
+        raise AcceptanceDataError(
+            f"Acceptance image escapes its evidence directory: {record.image_path}"
+        )
+    if not resolved.is_file():
+        raise AcceptanceDataError(
+            f"Acceptance image is missing or unsafe: {record.sample_id}"
+        )
+    if verify_checksum and _sha256_file(resolved) != record.image_sha256.lower():
+        raise AcceptanceDataError(
+            f"Acceptance image checksum mismatch: {record.sample_id}"
+        )
+    return resolved
+
+
 @dataclass(frozen=True)
 class AcceptanceMetrics:
     """Confusion counts and yield indicators from confirmed samples."""
@@ -133,6 +192,10 @@ class AcceptanceMetrics:
     fn: int
     tn: int
     errors: int
+    #: Confirmed samples whose human verdict is neither OK nor NG. They are
+    #: corrupt evidence, so they are excluded from ``confirmed`` and from every
+    #: rate rather than being counted as a decided sample.
+    malformed: int = 0
 
     @property
     def true_yield(self) -> float | None:
@@ -216,18 +279,27 @@ class AcceptanceRepository:
         self.images_dir = self.root / "images"
         self._lock = threading.RLock()
         self.images_dir.mkdir(parents=True, exist_ok=True)
-        if not self.manifest_path.exists():
-            self._write_records(())
+        with self._exclusive_mutation():
+            if not self.manifest_path.exists():
+                self._write_records(())
 
     def records(self) -> tuple[AcceptanceRecord, ...]:
         with self._lock:
             return tuple(self._read_records())
 
+    def manifest_sha256(self) -> str:
+        with self._lock:
+            return _sha256_file(self.manifest_path)
+
     def image_file(self, record: AcceptanceRecord) -> Path:
-        candidate = (self.root / record.image_path).resolve()
-        if not candidate.is_relative_to(self.root):
-            raise AcceptanceDataError(f"Acceptance image escapes its evidence directory: {record.image_path}")
-        return candidate
+        return verified_acceptance_image_path(
+            self.root,
+            record,
+            verify_checksum=False,
+        )
+
+    def verified_image_file(self, record: AcceptanceRecord) -> Path:
+        return verified_acceptance_image_path(self.root, record)
 
     def import_images(
         self,
@@ -239,7 +311,7 @@ class AcceptanceRepository:
     ) -> tuple[AcceptanceRecord, ...]:
         normalized_product = _required_segment(product, "product")
         normalized_area = _required_segment(area, "area")
-        with self._lock:
+        with self._exclusive_mutation():
             records = self._read_records()
             by_hash = {record.image_sha256: record for record in records}
             imported: list[AcceptanceRecord] = []
@@ -315,23 +387,143 @@ class AcceptanceRepository:
     def save_inference(self, outcome: AcceptanceInferenceOutcome) -> AcceptanceRecord:
         return self._update(
             outcome.sample_id,
-            machine_status=outcome.machine_status,
-            machine_reasons="|".join(outcome.machine_reasons),
-            model_version=outcome.model_version,
-            model_sha256=outcome.model_sha256,
-            runtime_config_sha256=outcome.runtime_config_sha256,
-            color_model_sha256=outcome.color_model_sha256,
-            inference_at=outcome.inference_at,
-            latency_ms=f"{outcome.latency_ms:.3f}",
-            error=outcome.error,
-            color_check_status=outcome.color_check_status,
-            color_details_json=outcome.color_details_json,
+            **_inference_changes(outcome),
         )
 
-    def create_snapshot(self, *, label: str = "") -> AcceptanceSnapshot:
+    def save_inference_batch(
+        self,
+        outcomes: Sequence[AcceptanceInferenceOutcome],
+        *,
+        run_id: str,
+        artifact_bundle: AcceptanceArtifactBundle,
+        expected_manifest_sha256: str,
+    ) -> tuple[tuple[AcceptanceRecord, ...], str]:
+        """Atomically commit one completed run using checksum compare-and-swap."""
+
+        normalized_run_id = _required_segment(run_id, "acceptance run ID")
+        by_id = {outcome.sample_id: outcome for outcome in outcomes}
+        if not by_id or len(by_id) != len(outcomes):
+            raise AcceptanceDataError(
+                "Inference batch must contain unique, non-empty outcomes."
+            )
+        expected_identity = (
+            artifact_bundle.version,
+            artifact_bundle.model_weight.sha256.lower(),
+            artifact_bundle.model_config.sha256.lower(),
+            (
+                artifact_bundle.color_model.sha256.lower()
+                if artifact_bundle.color_model is not None
+                else ""
+            ),
+        )
+        if any(
+            (
+                outcome.model_version,
+                outcome.model_sha256.lower(),
+                outcome.runtime_config_sha256.lower(),
+                outcome.color_model_sha256.lower(),
+            )
+            != expected_identity
+            for outcome in outcomes
+        ):
+            raise AcceptanceDataError(
+                "Inference batch identity does not match its artifact bundle."
+            )
+        try:
+            with self._exclusive_mutation():
+                current_sha256 = _sha256_file(self.manifest_path)
+                if current_sha256 != expected_manifest_sha256.lower():
+                    raise AcceptanceDataError(
+                        "Acceptance manifest changed during inference; batch commit was rejected."
+                    )
+                records = self._read_records()
+                record_ids = {record.sample_id for record in records}
+                missing = sorted(set(by_id) - record_ids)
+                if missing:
+                    raise AcceptanceDataError(
+                        f"Inference batch contains {len(missing)} unknown samples."
+                    )
+                metadata = {
+                    "acceptance_run_id": normalized_run_id,
+                    "artifact_bundle_sha256": artifact_bundle.bundle_sha256,
+                    "color_revision_contract_sha256": (
+                        artifact_bundle.color_revision_contract_sha256
+                    ),
+                    "color_revision_overrides_json": json.dumps(
+                        dict(artifact_bundle.color_revision_overrides),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    "include_active_color_revisions": (
+                        "true"
+                        if artifact_bundle.include_active_color_revisions
+                        else "false"
+                    ),
+                }
+                updated_records = [
+                    _committed_record(
+                        record,
+                        by_id,
+                        metadata,
+                        artifact_bundle.bundle_sha256,
+                    )
+                    for record in records
+                ]
+                self._write_records(updated_records)
+                committed_sha256 = _sha256_file(self.manifest_path)
+                committed = tuple(
+                    record
+                    for record in updated_records
+                    if record.sample_id in by_id
+                )
+                return committed, committed_sha256
+        except CrossProcessLockTimeoutError as exc:
+            raise AcceptanceDataError(
+                "Another process is updating the acceptance manifest."
+            ) from exc
+
+    def create_snapshot(
+        self,
+        *,
+        label: str = "",
+        require_completed_run: bool = False,
+    ) -> AcceptanceSnapshot:
         """Create an immutable manifest and image-hash inventory."""
-        with self._lock:
+        with self._exclusive_mutation():
             records = self._read_records()
+            if require_completed_run:
+                # The property being protected is that every result came from
+                # one identical artifact combination, which is exactly what an
+                # equal ``artifact_bundle_sha256`` states. Requiring a single
+                # run ID instead would additionally forbid re-running the few
+                # samples that errored transiently, which loses no evidence.
+                bundle_ids = {record.artifact_bundle_sha256 for record in records}
+                run_ids = {record.acceptance_run_id for record in records}
+                if (
+                    not records
+                    or len(bundle_ids) != 1
+                    or "" in bundle_ids
+                    or "" in run_ids
+                    or any(
+                        record.machine_status not in {"OK", "NG"}
+                        for record in records
+                    )
+                    or any(
+                        record.review_status == "confirmed"
+                        and record.expected_verdict not in {"OK", "NG"}
+                        for record in records
+                    )
+                    or any(
+                        not _is_completed_acceptance_run(self.root, run_id)
+                        for run_id in run_ids
+                    )
+                ):
+                    raise AcceptanceDataError(
+                        "A formal snapshot requires every sample to carry a result "
+                        "from one identical artifact bundle, produced by completed "
+                        "runs, with no pending, error, or malformed results."
+                    )
             timestamp = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%z")
             safe_label = _safe_label(label)
             snapshot_id = timestamp + (f"-{safe_label}" if safe_label else "")
@@ -369,6 +561,16 @@ class AcceptanceRepository:
                     ),
                     "color_model_sha256": sorted(
                         {record.color_model_sha256 for record in records if record.color_model_sha256}
+                    ),
+                    "acceptance_run_ids": sorted(
+                        {record.acceptance_run_id for record in records if record.acceptance_run_id}
+                    ),
+                    "artifact_bundle_sha256": sorted(
+                        {
+                            record.artifact_bundle_sha256
+                            for record in records
+                            if record.artifact_bundle_sha256
+                        }
                     ),
                     "manifest_sha256": _sha256_file(manifest_path),
                     "metrics": _metrics_mapping(metrics),
@@ -468,7 +670,10 @@ class AcceptanceRepository:
                     if not path.is_file():
                         continue
                     relative = path.relative_to(self.root)
-                    if relative.parts and relative.parts[0] == "backups":
+                    # ``locks`` holds one zero-information byte per lock file, and
+                    # a lock held by another process makes it unreadable on
+                    # Windows, which would abort an otherwise valid backup.
+                    if relative.parts and relative.parts[0] in {"backups", "locks"}:
                         continue
                     if path.resolve() in {
                         destination_path,
@@ -483,16 +688,29 @@ class AcceptanceRepository:
         return destination_path
 
     def _update(self, sample_id: str, **changes: str) -> AcceptanceRecord:
-        with self._lock:
-            records = self._read_records()
-            for index, record in enumerate(records):
-                if record.sample_id != sample_id:
-                    continue
-                updated = record.with_changes(**changes)
-                records[index] = updated
-                self._write_records(records)
-                return updated
+        try:
+            with self._exclusive_mutation():
+                records = self._read_records()
+                for index, record in enumerate(records):
+                    if record.sample_id != sample_id:
+                        continue
+                    updated = record.with_changes(**changes)
+                    records[index] = updated
+                    self._write_records(records)
+                    return updated
+        except CrossProcessLockTimeoutError as exc:
+            raise AcceptanceDataError(
+                "Another process is updating the acceptance manifest."
+            ) from exc
         raise AcceptanceDataError(f"Acceptance sample not found: {sample_id}")
+
+    @contextmanager
+    def _exclusive_mutation(self) -> Iterator[None]:
+        with self._lock:
+            with cross_process_file_lock(
+                self.root / "locks" / "acceptance-manifest.lock"
+            ):
+                yield
 
     def _read_records(self) -> list[AcceptanceRecord]:
         if not self.manifest_path.exists():
@@ -532,7 +750,7 @@ class AcceptanceInferenceService:
         self,
         *,
         project_root: str | Path,
-        system_factory: Callable[..., DetectionSystem] = DetectionSystem,
+        system_factory: Callable[..., DetectionSystem] | None = None,
         models_root: str | Path | None = None,
         global_config_path: str | Path | None = None,
         model_identity: ModelIdentity | None = None,
@@ -540,8 +758,13 @@ class AcceptanceInferenceService:
         color_revision_overrides: Mapping[str, str] | None = None,
         include_active_color_revisions: bool = True,
         model_config_overrides: Mapping[tuple[str, str, str], str | Path] | None = None,
+        model_weight_path_override: str | Path | None = None,
         color_model_path_override: str | Path | None = None,
     ):
+        if system_factory is None:
+            from core.detection_system import DetectionSystem
+
+            system_factory = DetectionSystem
         self.project_root = Path(project_root).expanduser().resolve()
         self.data_paths = load_station_data_paths(self.project_root)
         self.models_root = (
@@ -556,13 +779,49 @@ class AcceptanceInferenceService:
         )
         self._temporary_config_root: tempfile.TemporaryDirectory[str] | None = None
         config_overrides = dict(model_config_overrides or {})
+        model_weight_sha256 = ""
         color_model_sha256 = ""
+        model_weight: Path | None = None
+        if model_weight_path_override is not None:
+            model_weight = Path(model_weight_path_override).expanduser().resolve()
+            if model_weight.is_symlink() or not model_weight.is_file():
+                raise AcceptanceDataError("Selected model weight is missing or unsafe.")
+            model_weight_sha256 = _sha256_file(model_weight)
+            if (
+                model_identity is not None
+                and model_identity.sha256
+                and model_identity.sha256.lower() != model_weight_sha256
+            ):
+                raise AcceptanceDataError(
+                    "Selected model weight checksum does not match its identity."
+                )
+            if not config_overrides:
+                raise AcceptanceDataError(
+                    "A version-matched model config is required for a model weight."
+                )
+            try:
+                for config_path in config_overrides.values():
+                    configured_weight = resolve_configured_model_weight(
+                        config_path,
+                        models_root=self.models_root,
+                    )
+                    if configured_weight.path != model_weight:
+                        raise AcceptanceDataError(
+                            "Selected model config does not reference the selected weight."
+                        )
+            except AcceptanceArtifactError as exc:
+                raise AcceptanceDataError(str(exc)) from exc
+        color_model: Path | None = None
         if color_model_path_override is not None:
             color_model = Path(color_model_path_override).expanduser().resolve()
             if color_model.is_symlink() or not color_model.is_file():
                 raise AcceptanceDataError("Selected color baseline is missing or unsafe.")
+            color_model_sha256 = _sha256_file(color_model)
+        if color_model is not None:
             if not config_overrides:
-                raise AcceptanceDataError("A version-matched model config is required for a color baseline override.")
+                raise AcceptanceDataError(
+                    "A version-matched model config is required for artifact overrides."
+                )
             self._temporary_config_root = tempfile.TemporaryDirectory(prefix="acceptance-color-config-")
             try:
                 temporary_root = Path(self._temporary_config_root.name)
@@ -572,6 +831,10 @@ class AcceptanceInferenceService:
                     payload = yaml.safe_load(source_config.read_text(encoding="utf-8")) or {}
                     if not isinstance(payload, dict):
                         raise AcceptanceDataError("Selected model config must be a YAML mapping.")
+                    if model_weight is not None:
+                        # The staged file lives in a temporary directory, so a
+                        # formerly config-relative path must be made absolute.
+                        payload["weights"] = str(model_weight)
                     payload["enable_color_check"] = True
                     payload["color_checker_type"] = "stats"
                     payload["color_model_path"] = str(color_model)
@@ -590,13 +853,14 @@ class AcceptanceInferenceService:
                 self._temporary_config_root = None
                 raise
             config_overrides = staged_overrides
-            color_model_sha256 = _sha256_file(color_model)
+        identity_changes: dict[str, str] = {}
+        if model_weight_sha256:
+            identity_changes["sha256"] = model_weight_sha256
+        if color_model_sha256:
+            identity_changes["color_model_sha256"] = color_model_sha256
         self._model_identity = (
-            replace(
-                model_identity,
-                color_model_sha256=color_model_sha256,
-            )
-            if model_identity is not None and color_model_sha256
+            replace(model_identity, **identity_changes)
+            if model_identity is not None and identity_changes
             else model_identity
         )
         try:
@@ -712,12 +976,21 @@ class AcceptanceInferenceService:
 def calculate_acceptance_metrics(
     records: Sequence[AcceptanceRecord],
 ) -> AcceptanceMetrics:
-    tp = fp = fn = tn = errors = 0
-    confirmed = sum(record.review_status == "confirmed" for record in records)
+    tp = fp = fn = tn = errors = malformed = confirmed = 0
     inferred = sum(bool(record.machine_status) for record in records)
     for record in records:
         if record.review_status != "confirmed":
             continue
+        if record.expected_verdict not in {"OK", "NG"}:
+            # Counted, never dropped and never raised from here. This helper is
+            # on the display and reporting path, so a corrupt row must not stop
+            # a manifest from being read; treating it as absent would instead
+            # report a clean sheet for a manifest that is not clean. Rejection
+            # belongs to the two decision points: the acceptance gate and a
+            # formal snapshot.
+            malformed += 1
+            continue
+        confirmed += 1
         actual_ng = record.expected_verdict == "NG"
         if record.machine_status == "ERROR":
             errors += 1
@@ -735,13 +1008,84 @@ def calculate_acceptance_metrics(
             tn += 1
     return AcceptanceMetrics(
         confirmed=confirmed,
-        pending=len(records) - confirmed,
+        pending=len(records) - confirmed - malformed,
         inferred=inferred,
         tp=tp,
         fp=fp,
         fn=fn,
         tn=tn,
         errors=errors,
+        malformed=malformed,
+    )
+
+
+def _inference_changes(outcome: AcceptanceInferenceOutcome) -> dict[str, str]:
+    return {
+        "machine_status": outcome.machine_status,
+        "machine_reasons": "|".join(outcome.machine_reasons),
+        "model_version": outcome.model_version,
+        "model_sha256": outcome.model_sha256,
+        "runtime_config_sha256": outcome.runtime_config_sha256,
+        "color_model_sha256": outcome.color_model_sha256,
+        "inference_at": outcome.inference_at,
+        "latency_ms": f"{outcome.latency_ms:.3f}",
+        "error": outcome.error,
+        "color_check_status": outcome.color_check_status,
+        "color_details_json": outcome.color_details_json,
+    }
+
+
+def _committed_record(
+    record: AcceptanceRecord,
+    by_id: Mapping[str, AcceptanceInferenceOutcome],
+    metadata: Mapping[str, str],
+    bundle_sha256: str,
+) -> AcceptanceRecord:
+    """Update this run's samples, keep same-bundle evidence, clear the rest.
+
+    A formal snapshot needs every result to come from one identical artifact
+    combination -- not from one invocation.  Clearing by bundle rather than by
+    run is what lets an operator re-run the three samples that failed on a
+    transient I/O error without discarding the other 197, which were produced
+    by the very same pinned bundle and are therefore still comparable.
+
+    A record whose bundle is empty carries no artifact evidence at all, so it
+    can never match and is always cleared.
+    """
+
+    if record.sample_id in by_id:
+        return record.with_changes(
+            **_inference_changes(by_id[record.sample_id]),
+            **metadata,
+        )
+    if record.artifact_bundle_sha256 == bundle_sha256:
+        return record
+    return record.with_changes(**_cleared_inference_changes())
+
+
+def _cleared_inference_changes() -> dict[str, str]:
+    """Remove stale machine evidence while preserving human ground truth."""
+
+    return dict.fromkeys(
+        (
+            "machine_status",
+            "machine_reasons",
+            "model_version",
+            "model_sha256",
+            "runtime_config_sha256",
+            "color_model_sha256",
+            "acceptance_run_id",
+            "artifact_bundle_sha256",
+            "color_revision_contract_sha256",
+            "color_revision_overrides_json",
+            "include_active_color_revisions",
+            "inference_at",
+            "latency_ms",
+            "error",
+            "color_check_status",
+            "color_details_json",
+        ),
+        "",
     )
 
 
@@ -897,6 +1241,18 @@ def _required_segment(value: str, label: str) -> str:
     return normalized
 
 
+def _is_completed_acceptance_run(root: Path, run_id: str) -> bool:
+    try:
+        normalized_run_id = _required_segment(run_id, "acceptance run ID")
+        state_path = root / "runs" / normalized_run_id / "state.json"
+        if state_path.is_symlink() or not state_path.is_file():
+            return False
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (AcceptanceDataError, OSError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, Mapping) and payload.get("state") == "COMPLETED"
+
+
 def _unique_sample_id(digest: str, records: Sequence[AcceptanceRecord]) -> str:
     used = {record.sample_id for record in records}
     for length in range(12, len(digest) + 1, 2):
@@ -965,6 +1321,7 @@ def _metrics_mapping(metrics: AcceptanceMetrics) -> dict[str, Any]:
         "fn": metrics.fn,
         "tn": metrics.tn,
         "errors": metrics.errors,
+        "malformed": metrics.malformed,
         "true_yield": metrics.true_yield,
         "machine_yield": metrics.machine_yield,
         "escape_rate": metrics.escape_rate,

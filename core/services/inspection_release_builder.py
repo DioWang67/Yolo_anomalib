@@ -54,9 +54,16 @@ def build_release_from_matrix(
         payload = json.loads(report.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise InspectionReleaseError("Acceptance report is invalid.") from exc
-    if payload.get("schema_version") != 1:
+    schema_version = payload.get("schema_version")
+    if schema_version not in {1, 2}:
         raise InspectionReleaseError("Unsupported acceptance matrix schema.")
     combination = _find(payload.get("combinations"), "combination_id", combination_id)
+    _reject_unpublishable_combination(
+        combination,
+        message=(
+            "A matrix combination with inference or evidence errors cannot be published."
+        ),
+    )
     model = _find(
         payload.get("model_variants"),
         "variant_id",
@@ -78,6 +85,30 @@ def build_release_from_matrix(
     revision_overrides = color.get("revision_overrides") or {}
     if not isinstance(revision_overrides, Mapping):
         raise InspectionReleaseError("Color revision overrides are invalid.")
+    color_model_path = str(color.get("color_model_path") or "")
+    color_model_sha256 = str(color.get("color_model_sha256") or "")
+    if schema_version == 2:
+        bundle = combination.get("artifact_bundle")
+        if not isinstance(bundle, Mapping):
+            raise InspectionReleaseError(
+                "Acceptance matrix combination has no pinned artifact bundle."
+            )
+        _validate_combination_artifact_bundle(
+            bundle,
+            model=model,
+            revision_overrides=revision_overrides,
+            product=product,
+            area=area,
+            inference_type=inference_type,
+        )
+        bundle_color = bundle.get("color_model")
+        if bundle_color is not None:
+            if not isinstance(bundle_color, Mapping):
+                raise InspectionReleaseError(
+                    "Acceptance matrix color artifact evidence is invalid."
+                )
+            color_model_path = str(bundle_color.get("path") or "")
+            color_model_sha256 = str(bundle_color.get("sha256") or "")
     project_root = Path(str(model.get("models_root") or "")).expanduser().resolve().parent
     data_paths = load_station_data_paths(project_root)
     profile = _profile_from_matrix(
@@ -87,8 +118,8 @@ def build_release_from_matrix(
         inference_type=inference_type,
         project_root=project_root,
         revision_overrides=revision_overrides,
-        color_model_path=str(color.get("color_model_path") or ""),
-        color_model_sha256=str(color.get("color_model_sha256") or ""),
+        color_model_path=color_model_path,
+        color_model_sha256=color_model_sha256,
     )
     if profile is not None:
         components.append(_profile_component(profile))
@@ -141,8 +172,9 @@ def build_validated_release_from_matrix(
         payload = json.loads(report.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise InspectionReleaseError("驗收報告無法讀取。") from exc
-    if not isinstance(payload, Mapping) or payload.get("schema_version") != 1:
+    if not isinstance(payload, Mapping) or payload.get("schema_version") not in {1, 2}:
         raise InspectionReleaseError("不支援的驗收矩陣格式。")
+    schema_version = int(payload["schema_version"])
     report_scope = InspectionScope(
         str(payload.get("product") or ""),
         str(payload.get("area") or ""),
@@ -161,8 +193,38 @@ def build_validated_release_from_matrix(
         "variant_id",
         str(combination.get("color_variant_id") or ""),
     )
+    _reject_unpublishable_combination(
+        combination,
+        message="含有推論或證據錯誤的組合不能發布。",
+    )
+    effective_color = dict(color)
+    revision_overrides = color.get("revision_overrides") or {}
+    if not isinstance(revision_overrides, Mapping):
+        raise InspectionReleaseError("驗收報告的逐色修訂格式無效。")
+    if schema_version == 2:
+        bundle = combination.get("artifact_bundle")
+        if not isinstance(bundle, Mapping):
+            raise InspectionReleaseError("驗收組合缺少固定的 artifact bundle。")
+        _validate_combination_artifact_bundle(
+            bundle,
+            model=model,
+            revision_overrides=revision_overrides,
+            product=str(payload.get("product") or ""),
+            area=str(payload.get("area") or ""),
+            inference_type=str(payload.get("inference_type") or ""),
+        )
+        bundle_color = bundle.get("color_model")
+        if bundle_color is not None:
+            if not isinstance(bundle_color, Mapping):
+                raise InspectionReleaseError("驗收組合的顏色 artifact 證據無效。")
+            effective_color["color_model_path"] = str(
+                bundle_color.get("path") or ""
+            )
+            effective_color["color_model_sha256"] = str(
+                bundle_color.get("sha256") or ""
+            )
     _verify_matrix_model_matches_draft(draft, model)
-    _verify_matrix_color_matches_draft(draft, color)
+    _verify_matrix_color_matches_draft(draft, effective_color)
     sample_count = int(payload.get("sample_count") or 0)
     if sample_count <= 0:
         raise InspectionReleaseError("驗收報告沒有已執行的人工確認樣本。")
@@ -380,6 +442,102 @@ def _verify_matrix_color_matches_draft(
     ):
         raise InspectionReleaseError(
             "驗收報告使用的顏色基準或逐色修訂不是選取的組合版本。"
+        )
+
+
+def _reject_unpublishable_combination(
+    combination: Mapping[str, Any],
+    *,
+    message: str,
+) -> None:
+    """Refuse a combination whose samples never produced usable verdicts.
+
+    A combination-level ``error`` only records a failure that aborted the whole
+    combination. The far more common path is per-sample: the inference service
+    turns each failure into an ERROR outcome and carries on, so a combination in
+    which every single image failed to load its color checker still reports
+    ``error: ""`` while carrying ``errors: 250`` and four zeroed confusion
+    counts. Checking the combination-level field alone therefore let a release
+    bind itself to evidence in which nothing was ever decided.
+    """
+
+    if str(combination.get("error") or "").strip():
+        raise InspectionReleaseError(message)
+    metrics = combination.get("metrics") or {}
+    if not isinstance(metrics, Mapping):
+        raise InspectionReleaseError("Acceptance matrix combination metrics are invalid.")
+    if _metric_count(metrics, "errors") > 0:
+        raise InspectionReleaseError(message)
+    if sum(_metric_count(metrics, key) for key in ("tp", "fp", "fn", "tn")) <= 0:
+        raise InspectionReleaseError(message)
+
+
+def _metric_count(metrics: Mapping[str, Any], key: str) -> int:
+    """Read one confusion count, treating an absent or unusable value as zero."""
+
+    value = metrics.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return int(value)
+
+
+def _validate_combination_artifact_bundle(
+    bundle: Mapping[str, Any],
+    *,
+    model: Mapping[str, Any],
+    revision_overrides: Mapping[str, Any],
+    product: str,
+    area: str,
+    inference_type: str,
+) -> None:
+    """Cross-check schema-v2 combination evidence before release packaging."""
+
+    # The report side is normalized to match how the bundle stored these values
+    # when it was built. Without it, a report naming its type as ``YOLO`` would
+    # be rejected against a bundle that lowercased the very same type.
+    if (
+        str(bundle.get("product") or ""),
+        str(bundle.get("area") or ""),
+        str(bundle.get("inference_type") or ""),
+    ) != (product.strip(), area.strip(), inference_type.strip().lower()):
+        raise InspectionReleaseError(
+            "Acceptance matrix artifact bundle target does not match the report."
+        )
+    identity = model.get("identity") or {}
+    if not isinstance(identity, Mapping):
+        raise InspectionReleaseError("Acceptance matrix model identity is invalid.")
+    model_config = bundle.get("model_config")
+    model_weight = bundle.get("model_weight")
+    if not isinstance(model_config, Mapping) or not isinstance(model_weight, Mapping):
+        raise InspectionReleaseError(
+            "Acceptance matrix model artifact evidence is incomplete."
+        )
+    if (
+        str(Path(str(model_config.get("path") or "")).expanduser().resolve())
+        != str(Path(str(model.get("config_path") or "")).expanduser().resolve())
+        or str(model_config.get("sha256") or "").lower()
+        != str(identity.get("runtime_config_sha256") or "").lower()
+        or str(Path(str(model_weight.get("path") or "")).expanduser().resolve())
+        != str(Path(str(model.get("weight_path") or "")).expanduser().resolve())
+        or str(model_weight.get("sha256") or "").lower()
+        != str(identity.get("sha256") or "").lower()
+    ):
+        raise InspectionReleaseError(
+            "Acceptance matrix artifact bundle does not match its model variant."
+        )
+    raw_overrides = bundle.get("color_revision_overrides") or {}
+    normalized_overrides = {
+        str(key): str(value) for key, value in revision_overrides.items()
+    }
+    if not isinstance(raw_overrides, Mapping) or {
+        str(key): str(value) for key, value in raw_overrides.items()
+    } != normalized_overrides:
+        raise InspectionReleaseError(
+            "Acceptance matrix artifact bundle does not match its color revisions."
+        )
+    if bool(bundle.get("include_active_color_revisions")):
+        raise InspectionReleaseError(
+            "A symbolic active color pointer cannot be published; select an exact revision."
         )
 
 
