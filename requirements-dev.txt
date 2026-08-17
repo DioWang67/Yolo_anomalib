@@ -16,7 +16,13 @@ flake8>=6.0.0
 
 # Build and Distribution
 build==1.3.0
-twine==7.0.0
+# twine 7.0.0 requires packaging>=26.1, which cannot coexist with the
+# packaging<25.0 that lightning 2.4.0 (pinned in requirements.txt) requires.
+# Installing the dev set as a second pip invocation therefore forced packaging
+# up to 26.3 and broke `pip check`. 6.2.0 is the newest twine that asks only for
+# packaging>=24.0, so the locked packaging==24.2 satisfies everything and pip has
+# no reason to upgrade it. Revisit when lightning relaxes its packaging cap.
+twine==6.2.0
 pyinstaller==6.17.0
 setuptools>=61.0
 wheel>=0.40.0

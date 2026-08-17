@@ -381,7 +381,15 @@ class ColorConfigurationRevisionStore:
                             "Completed activation event retained without an active "
                             f"pointer commit: {event_path}"
                         )
-                        pointer_error.add_note(evidence_note)
+                        # ``BaseException.add_note`` is Python 3.11+, but this
+                        # project supports 3.10 (see requires-python). Calling it
+                        # unconditionally raised AttributeError from inside this
+                        # handler and replaced the real activation failure with a
+                        # misleading one. The log line below records the same
+                        # evidence on every version, so 3.10 loses no diagnostics.
+                        add_note = getattr(pointer_error, "add_note", None)
+                        if callable(add_note):
+                            add_note(evidence_note)
                         _LOGGER.error("%s", evidence_note)
                         raise
                     return pointer_path

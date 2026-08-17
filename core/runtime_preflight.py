@@ -14,6 +14,18 @@ from core.exceptions import BackendInitializationError
 _DLL_DIRECTORY_HANDLES: list[object] = []
 
 
+def _is_windows() -> bool:
+    """Return whether this process runs on Windows.
+
+    Exists as a seam so tests can exercise the Windows-only branches on any
+    host. Patching the global ``os.name`` instead makes ``pathlib.Path()`` pick
+    ``WindowsPath``, which cannot be instantiated on POSIX — that raised
+    ``NotImplementedError`` inside these functions and, because it surfaced
+    while the patch was live, also crashed pytest's own reporting.
+    """
+    return os.name == "nt"
+
+
 def preload_onnxruntime_before_gui() -> None:
     """Best-effort preload of ONNX Runtime before Qt changes DLL resolution.
 
@@ -24,7 +36,7 @@ def preload_onnxruntime_before_gui() -> None:
     so installations using only ``.pt`` models can still open the application
     and the model-specific preflight can report full diagnostics.
     """
-    if os.name != "nt":
+    if not _is_windows():
         return
 
     try:
@@ -59,7 +71,7 @@ def _prepare_packaged_onnxruntime_dll_path() -> None:
     search that package subdirectory when importing ``onnxruntime_pybind11_state``,
     so register it before importing onnxruntime.
     """
-    if os.name != "nt" or not getattr(sys, "frozen", False):
+    if not _is_windows() or not getattr(sys, "frozen", False):
         return
     if not hasattr(os, "add_dll_directory"):
         return

@@ -65,7 +65,10 @@ def test_prepare_packaged_onnxruntime_dll_path_for_frozen_app(monkeypatch, tmp_p
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
-    monkeypatch.setattr("os.name", "nt")
+    # Patch the production seam, not the global ``os.name``: rebinding that
+    # makes pathlib.Path() resolve to WindowsPath, which cannot be
+    # instantiated on POSIX, so these tests took down pytest on Linux.
+    monkeypatch.setattr("core.runtime_preflight._is_windows", lambda: True)
     monkeypatch.setattr(
         "os.add_dll_directory",
         lambda path: added_paths.append(path) or fake_handle,
@@ -81,7 +84,10 @@ def test_prepare_packaged_onnxruntime_dll_path_for_frozen_app(monkeypatch, tmp_p
 
 def test_preload_onnxruntime_before_gui_on_windows(monkeypatch):
     imported_modules = []
-    monkeypatch.setattr("os.name", "nt")
+    # Patch the production seam, not the global ``os.name``: rebinding that
+    # makes pathlib.Path() resolve to WindowsPath, which cannot be
+    # instantiated on POSIX, so these tests took down pytest on Linux.
+    monkeypatch.setattr("core.runtime_preflight._is_windows", lambda: True)
     monkeypatch.setattr(
         "core.runtime_preflight._prepare_packaged_onnxruntime_dll_path",
         lambda: imported_modules.append("dll-path"),
@@ -98,7 +104,10 @@ def test_preload_onnxruntime_before_gui_on_windows(monkeypatch):
 
 @pytest.mark.parametrize("error_type", [ImportError, OSError])
 def test_preload_onnxruntime_defers_native_import_errors(monkeypatch, error_type):
-    monkeypatch.setattr("os.name", "nt")
+    # Patch the production seam, not the global ``os.name``: rebinding that
+    # makes pathlib.Path() resolve to WindowsPath, which cannot be
+    # instantiated on POSIX, so these tests took down pytest on Linux.
+    monkeypatch.setattr("core.runtime_preflight._is_windows", lambda: True)
 
     def raise_native_import_error(_name):
         raise error_type("native runtime unavailable")
