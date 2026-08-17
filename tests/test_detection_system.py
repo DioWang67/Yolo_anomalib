@@ -8,6 +8,7 @@ pollute other test files.
 
 import os
 import sys
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -125,12 +126,19 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         self.assertIsNotNone(mgr._sto_worker)
         self.assertTrue(mgr._acq_worker.is_alive())
 
-        # Use the production stop budget. AsyncPipelineManager.stop() keeps
-        # ownership on purpose when a worker misses the budget, so a 1.0s cap
-        # raced the scheduler on loaded CI runners and left pipeline_running
-        # True. stop() returns as soon as the workers are joined, so the larger
-        # budget costs nothing when they behave. The assertion is unchanged.
+        # ``stop()`` is a *bounded* stop by design: it keeps ownership and warns
+        # rather than blocking forever when a worker misses its budget, and
+        # ``running`` then auto-resets once the worker actually finishes. The
+        # acquisition worker here spins on a mock camera with no capture
+        # interval, so under coverage instrumentation on a shared runner it can
+        # still be inside a loop when the budget expires — this assertion raced
+        # that and flaked on CI while passing locally and on the uninstrumented
+        # jobs. Poll the documented end state instead of sampling it once; a
+        # pipeline that genuinely fails to stop still fails this test.
         self.system.stop_pipeline(timeout=10.0)
+        deadline = time.monotonic() + 10.0
+        while self.system.pipeline_running and time.monotonic() < deadline:
+            time.sleep(0.05)
         self.assertFalse(self.system.pipeline_running)
 
     def test_shutdown_cleanup(self):
