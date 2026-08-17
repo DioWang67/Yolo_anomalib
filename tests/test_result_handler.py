@@ -224,6 +224,12 @@ def test_save_results_yolo_success_and_flush(tmp_result_dir):
     assert len(out["cropped_paths"]) == 1 and os.path.exists(
         out["cropped_paths"][0])
 
+    # save_results confirms the image receipts synchronously but hands the
+    # derived Excel row to a background flush, so a row is not readable the
+    # moment it returns. test_buffer_and_manual_flush asserts exactly that.
+    # Synchronise on the documented boundary instead of racing the daemon
+    # thread, which is what made this read flake on CI.
+    h.flush()
     df = pd.read_excel(h.excel_path, engine="openpyxl")
     result_col = h.columns[5]
     confidence_col = h.columns[6]
@@ -367,6 +373,9 @@ def test_error_message_when_fail_and_missing_items(tmp_result_dir):
         ckpt_path=None,
     )
     assert out["status"] == "SUCCESS"
+    # The Excel row is flushed in the background; see the note in
+    # test_save_results_yolo_success_and_flush.
+    h.flush()
     df = pd.read_excel(h.excel_path, engine="openpyxl")
     row = df.iloc[-1]
     error_col = h.columns[10]
