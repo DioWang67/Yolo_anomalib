@@ -268,9 +268,16 @@ class TestGlobalPathValidator:
 
     def test_global_validator_blocks_external_paths(self):
         """Test that paths completely outside the project are blocked."""
-        from core.security import path_validator
+        from core.security import PROJECT_ROOT, path_validator
 
-        external_path = Path("C:/Users/Public/evil.txt")
+        # Build the "outside" path from the filesystem anchor so it is genuinely
+        # absolute on every host. A literal "C:/Users/Public/evil.txt" is
+        # absolute only on Windows; on POSIX it is a *relative* name that
+        # resolves inside the project root, so the validator correctly allowed it
+        # and this test failed for the wrong reason.
+        external_path = (
+            Path(Path(PROJECT_ROOT).anchor) / "definitely-outside-the-project" / "evil.txt"
+        )
         with pytest.raises(SecurityError):
             path_validator.validate_path(external_path)
 

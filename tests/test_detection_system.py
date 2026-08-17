@@ -125,7 +125,12 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         self.assertIsNotNone(mgr._sto_worker)
         self.assertTrue(mgr._acq_worker.is_alive())
 
-        self.system.stop_pipeline(timeout=1.0)
+        # Use the production stop budget. AsyncPipelineManager.stop() keeps
+        # ownership on purpose when a worker misses the budget, so a 1.0s cap
+        # raced the scheduler on loaded CI runners and left pipeline_running
+        # True. stop() returns as soon as the workers are joined, so the larger
+        # budget costs nothing when they behave. The assertion is unchanged.
+        self.system.stop_pipeline(timeout=10.0)
         self.assertFalse(self.system.pipeline_running)
 
     def test_shutdown_cleanup(self):

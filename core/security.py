@@ -6,7 +6,7 @@ and other security vulnerabilities related to file system access.
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from core.path_utils import project_root
 from core.station_data import load_station_data_paths
@@ -208,7 +208,13 @@ def resolve_result_output_dir(
     candidate = Path(raw).expanduser()
     if candidate.is_absolute():
         return ensure_subpath(candidate, root, must_exist=False)
-    if candidate.drive or candidate.root:
+    # A Windows drive prefix has to be rejected on every host, not just on
+    # Windows. ``config.yaml`` travels between machines, so an ``output_dir`` of
+    # ``C:relative`` written on Windows reached POSIX as an ordinary relative
+    # name and silently created a directory literally called ``C:relative``
+    # instead of being refused. ``PureWindowsPath`` parses the prefix on any
+    # platform, unlike the host-flavoured ``candidate``.
+    if candidate.drive or candidate.root or PureWindowsPath(raw).drive:
         raise SecurityError("Drive-relative Result output paths are not allowed")
     if ".." in candidate.parts:
         raise SecurityError("Result output path traversal is not allowed")
