@@ -21,13 +21,20 @@ if os.path.isdir(timm_cache_dir):
     datas.append((timm_cache_dir, 'timm_cache'))
 
 binaries = []
-hiddenimports = ['torch', 'torch.nn.functional', 'torchvision', 'cv2', 'numpy', 'scipy', 'scipy.special._ufuncs', 'PIL', 'kornia', 'anomalib', 'lightning', 'ultralytics', 'onnx', 'onnxruntime', 'onnxruntime.capi.onnxruntime_pybind11_state', 'pandas', 'openpyxl', 'openpyxl.cell._writer', 'yaml', 'pydantic', 'tqdm', 'timm', 'einops', 'FrEIA', 'imgaug', 'serial', 'serial.tools', 'serial.tools.list_ports', 'PyQt5', 'PyQt5.sip', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'pkg_resources', 'importlib.metadata', 'jsonargparse']
+# ``onnx`` is deliberately absent. The project depends on ``onnxruntime`` to
+# *run* .onnx models; the ``onnx`` package itself is only needed to *export*
+# them, and nothing here imports it. It is not in requirements.txt or
+# pyproject.toml either, so production installs have never had it — every
+# dependency that wants it does so through an optional extra (ultralytics
+# [export], anomalib[openvino], lightning[dev], ...). Naming it here made the
+# build succeed only on machines that happened to have one of those extras
+# installed, and copy_metadata('onnx') then failed outright on a clean runner.
+hiddenimports = ['torch', 'torch.nn.functional', 'torchvision', 'cv2', 'numpy', 'scipy', 'scipy.special._ufuncs', 'PIL', 'kornia', 'anomalib', 'lightning', 'ultralytics', 'onnxruntime', 'onnxruntime.capi.onnxruntime_pybind11_state', 'pandas', 'openpyxl', 'openpyxl.cell._writer', 'yaml', 'pydantic', 'tqdm', 'timm', 'einops', 'FrEIA', 'imgaug', 'serial', 'serial.tools', 'serial.tools.list_ports', 'PyQt5', 'PyQt5.sip', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'pkg_resources', 'importlib.metadata', 'jsonargparse']
 datas += collect_data_files('anomalib')
 datas += collect_data_files('open_clip')
 datas += collect_data_files('ultralytics')
 datas += copy_metadata('torch')
 datas += copy_metadata('ultralytics')
-datas += copy_metadata('onnx')
 datas += copy_metadata('onnxruntime')
 datas += copy_metadata('anomalib')
 datas += copy_metadata('lightning')
