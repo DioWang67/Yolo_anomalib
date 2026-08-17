@@ -116,3 +116,83 @@ def test_fusion_merges_failure_status_and_calls_anomalib_path_adjuster():
     assert result["inference_time"] == 0.5
     assert result["anomaly_score"] == 0.75
     adjuster.assert_called_once()
+
+
+def _merge(yolo_res, ano_res):
+    return FusionInferenceRunner._merge_results(
+        np.zeros((8, 8, 3), dtype=np.uint8), yolo_res, ano_res, MagicMock()
+    )
+
+
+def test_merge_carries_the_anomaly_verdict_not_only_the_score():
+    """``finalize_status`` re-derives the verdict from merged facts.
+
+    ``anomaly_score`` is a measurement; ``is_anomaly`` is the anomalib
+    backend's verdict against its own threshold. Dropping the verdict left the
+    anomalib half of a fusion run invisible downstream.
+    """
+    merged = _merge(
+        {"status": "PASS", "detections": [], "missing_items": [], "unexpected_items": []},
+        {
+            "status": "FAIL",
+            "detections": [],
+            "missing_items": [],
+            "unexpected_items": [],
+            "anomaly_score": 0.97,
+            "is_anomaly": True,
+        },
+    )
+
+    assert merged["status"] == "DETECTION_FAIL"
+    assert merged["is_anomaly"] is True
+    assert merged["anomaly_score"] == 0.97
+
+
+def test_merge_reports_no_anomaly_when_the_anomalib_half_is_clean():
+    merged = _merge(
+        {"status": "PASS", "detections": [], "missing_items": [], "unexpected_items": []},
+        {
+            "status": "PASS",
+            "detections": [],
+            "missing_items": [],
+            "unexpected_items": [],
+            "anomaly_score": 0.1,
+            "is_anomaly": False,
+        },
+    )
+
+    assert merged["status"] == "PASS"
+    assert merged["is_anomaly"] is False
+
+
+def test_merge_keeps_yolo_failure_without_claiming_an_anomaly():
+    """Fixing the anomaly path must not start attributing YOLO FAILs to it."""
+    merged = _merge(
+        {
+            "status": "FAIL",
+            "detections": [],
+            "missing_items": ["cover"],
+            "unexpected_items": [],
+        },
+        {
+            "status": "PASS",
+            "detections": [],
+            "missing_items": [],
+            "unexpected_items": [],
+            "anomaly_score": 0.1,
+            "is_anomaly": False,
+        },
+    )
+
+    assert merged["status"] == "DETECTION_FAIL"
+    assert merged["is_anomaly"] is False
+    assert merged["missing_items"] == ["cover"]
+
+
+def test_merge_defaults_is_anomaly_to_false_when_backend_omits_it():
+    merged = _merge(
+        {"status": "PASS", "detections": [], "missing_items": [], "unexpected_items": []},
+        {"status": "PASS", "detections": [], "missing_items": [], "unexpected_items": []},
+    )
+
+    assert merged["is_anomaly"] is False

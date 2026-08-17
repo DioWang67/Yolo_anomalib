@@ -815,9 +815,20 @@ class DetectionSystem:
         inference_type: str,
         run_logger,
     ) -> dict[str, Any]:
-        """Run one backend call while ``_inference_lock`` is held."""
-        if inference_type.lower() == "fusion":
-            return FusionInferenceRunner(
+        """Run one backend call while ``_inference_lock`` is held.
+
+        Every backend leaves through the same status boundary below: model
+        layers speak the legacy ``FAIL`` label, while everything downstream of
+        this method (pipeline, GUI, storage) is promised ``DETECTION_FAIL``.
+        Keeping that translation in one place is why fusion no longer returns
+        early — a second copy would drift, and fusion's YOLO-only fallback used
+        to leak a bare ``FAIL``.
+        """
+        inference_type_name = inference_type.lower()
+        output_path = None
+
+        if inference_type_name == "fusion":
+            result = FusionInferenceRunner(
                 self.model_manager, self.config, self.result_sink
             ).run(
                 frame,
@@ -826,21 +837,24 @@ class DetectionSystem:
                 run_logger,
                 adjust_anomalib_output_path=self._adjust_anomalib_output_path,
             )
+        else:
+            if not self.inference_engine:
+                return {"status": "INFERENCE_ERROR", "error": "Model not loaded"}
 
-        if not self.inference_engine:
-            return {"status": "INFERENCE_ERROR", "error": "Model not loaded"}
+            if inference_type_name == "anomalib":
+                output_path = self.result_sink.get_annotated_path(
+                    status="TEMP", detector=inference_type, product=product, area=area
+                )
 
-        inference_type_name = inference_type.lower()
-        output_path = None
-        if inference_type_name == "anomalib":
-            output_path = self.result_sink.get_annotated_path(
-                status="TEMP", detector=inference_type, product=product, area=area
+            raw_result = self.inference_engine.infer(
+                frame,
+                product,
+                area,
+                InferenceTypeToken(inference_type_name),
+                output_path,
             )
+            result = normalize_result(raw_result, inference_type_name, frame)
 
-        raw_result = self.inference_engine.infer(
-            frame, product, area, InferenceTypeToken(inference_type_name), output_path
-        )
-        result = normalize_result(raw_result, inference_type_name, frame)
         if result.get("status") == "FAIL":
             result["status"] = "DETECTION_FAIL"
 
@@ -1190,6 +1204,13 @@ class DetectionSystem:
                 processed_image=ctx.processed_image,
                 metadata={
                     "decision": result.get("decision"),
+                    # Persistence outcome, kept distinct from the inspection
+                    # verdict. The async path already publishes this on
+                    # ``task.result['save_result']``; carrying it here lets a
+                    # synchronous caller tell "the board failed" apart from
+                    # "the record was not written". ``None`` when no storage
+                    # stage ran (``persist=False``).
+                    "save_result": ctx.save_result,
                     "model_info": result.get("model_info"),
                     "inference_time": result.get("inference_time"),
                     "slot_check": result.get("slot_check"),

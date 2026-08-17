@@ -140,6 +140,49 @@ class TestPositionCheckStep:
         step.run(base_context)
         assert base_context.status == "FAIL"
 
+    def test_position_pass_does_not_clear_an_earlier_failure(
+        self, mock_env, base_context
+    ):
+        """The step may downgrade to FAIL; it may never publish PASS.
+
+        It sees only position and missing items. An earlier ColorCheckStep
+        FAIL is invisible to it, so writing its own PASS here would overwrite
+        a real defect. Only finalize_status, which sees every dimension, may
+        declare PASS.
+        """
+        base_context.config.position_config = _POSITION_CONFIG
+        base_context.result["detections"] = [{"class": "LED1", "cx": 50, "cy": 50}]
+        base_context.color_result = {"is_ok": False, "items": []}
+        base_context.status = "DETECTION_FAIL"
+
+        PositionCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+
+        assert base_context.result["detections"][0]["position_status"] == "CORRECT"
+        assert base_context.status == "DETECTION_FAIL"
+
+        finalize_status(base_context)
+
+        assert base_context.status == "DETECTION_FAIL"
+        assert base_context.result["decision"]["reasons"] == []
+
+    def test_position_pass_still_allows_finalize_to_declare_pass(
+        self, mock_env, base_context
+    ):
+        """Downgrade-only must not strand a genuinely good board in FAIL."""
+        base_context.config.position_config = _POSITION_CONFIG
+        base_context.result["detections"] = [{"class": "LED1", "cx": 50, "cy": 50}]
+        base_context.color_result = {"is_ok": True, "items": []}
+        base_context.status = "DETECTION_FAIL"
+
+        PositionCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+        finalize_status(base_context)
+
+        assert base_context.status == "PASS"
+
     # --- config lookup failure must not read as "disabled" --------------------
 
     def test_config_lookup_failure_is_not_treated_as_disabled(
@@ -697,9 +740,16 @@ class TestCountCheckStep:
         assert base_context.status == "DETECTION_FAIL"
         assert "J1" in base_context.result["missing_items"]
 
-    def test_run_strict_overwrites_stale_missing_decision_with_over_item(
+    def test_run_strict_publishes_over_item_facts_for_finalize(
         self, mock_env, base_context
     ):
+        """The step publishes facts; finalize_status owns the decision.
+
+        The step used to write ``result['decision']`` itself, which
+        ``finalize_status`` then recomputed anyway. What matters is that the
+        facts it leaves behind are enough for finalize to replace the stale
+        MISSING verdict with UNEXPECTED_COMPONENT.
+        """
         base_context.config.expected_items = {
             "TestProduct": {"TestArea": ["Black", "Green"]}
         }
@@ -726,7 +776,144 @@ class TestCountCheckStep:
         assert base_context.result["missing_items"] == []
         assert base_context.result["over_items"] == ["Black"]
         assert base_context.result["unexpected_items"] == ["Black"]
+
+        finalize_status(base_context)
+
+        assert base_context.status == "DETECTION_FAIL"
         assert base_context.result["decision"]["reasons"] == ["UNEXPECTED_COMPONENT"]
+
+    def test_strict_run_reports_a_foreign_class_as_unexpected(
+        self, mock_env, base_context
+    ):
+        """A class outside the expected set must survive the strict rewrite.
+
+        ``detected_counter`` only counts classes inside the expected set, so a
+        foreign class can never appear in ``over_items``. Assigning
+        ``unexpected_items = over_items`` therefore deleted every
+        UNEXPECTED_COMPONENT signal and let a board carrying a foreign part
+        pass; the list is now recomputed from the effective detections.
+        """
+        base_context.config.expected_items = {
+            "TestProduct": {"TestArea": ["Red", "Green"]}
+        }
+        base_context.result["detections"] = [
+            {"class": "Red"},
+            {"class": "Green"},
+            {"class": "Blue"},
+        ]
+
+        CountCheckStep(
+            mock_env.logger,
+            base_context.product,
+            base_context.area,
+            options={"strict": True},
+        ).run(base_context)
+
+        assert base_context.result["unexpected_items"] == ["Blue"]
+        assert base_context.result["over_items"] == []
+
+        finalize_status(base_context)
+
+        assert base_context.status == "DETECTION_FAIL"
+        assert base_context.result["decision"]["reasons"] == ["UNEXPECTED_COMPONENT"]
+
+    def test_strict_run_reports_foreign_classes_and_surplus_together(
+        self, mock_env, base_context
+    ):
+        base_context.config.expected_items = {
+            "TestProduct": {"TestArea": ["Red"]}
+        }
+        base_context.result["detections"] = [
+            {"class": "Red"},
+            {"class": "Red"},
+            {"class": "Blue"},
+        ]
+
+        CountCheckStep(
+            mock_env.logger,
+            base_context.product,
+            base_context.area,
+            options={"strict": True},
+        ).run(base_context)
+
+        # Foreign classes first, then surplus expected parts with their
+        # multiplicity preserved.
+        assert base_context.result["unexpected_items"] == ["Blue", "Red"]
+        assert base_context.result["over_items"] == ["Red"]
+
+    def test_strict_run_uses_the_color_corrected_class(self, mock_env, base_context):
+        """A class the color checker corrected into range is not foreign."""
+        base_context.config.expected_items = {
+            "TestProduct": {"TestArea": ["Red", "Green"]}
+        }
+        base_context.result["detections"] = [
+            {"class": "Red", "verified_class": "Red"},
+            {"class": "Blue", "verified_class": "Green"},
+        ]
+
+        CountCheckStep(
+            mock_env.logger,
+            base_context.product,
+            base_context.area,
+            options={"strict": True},
+        ).run(base_context)
+
+        assert base_context.result["unexpected_items"] == []
+        assert base_context.result["missing_items"] == []
+
+    def test_strict_run_drops_a_stale_unexpected_entry(self, mock_env, base_context):
+        """Recomputation must clear an entry the effective detections refute.
+
+        Guards the counterpart risk of the fix above: preserving the incoming
+        list instead of recomputing it would resurrect a class the duplicate
+        filter or color checker has already invalidated.
+        """
+        base_context.config.expected_items = {
+            "TestProduct": {"TestArea": ["Red"]}
+        }
+        base_context.result["detections"] = [{"class": "Red"}]
+        base_context.result["unexpected_items"] = ["Orange"]
+
+        CountCheckStep(
+            mock_env.logger,
+            base_context.product,
+            base_context.area,
+            options={"strict": True},
+        ).run(base_context)
+
+        assert base_context.result["unexpected_items"] == []
+
+        finalize_status(base_context)
+
+        assert base_context.status == "PASS"
+
+    def test_non_strict_run_leaves_unexpected_items_untouched(
+        self, mock_env, base_context
+    ):
+        base_context.config.expected_items = {
+            "TestProduct": {"TestArea": ["Red"]}
+        }
+        base_context.result["detections"] = [{"class": "Red"}, {"class": "Red"}]
+        base_context.result["unexpected_items"] = ["Blue"]
+
+        CountCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+
+        assert base_context.result["unexpected_items"] == ["Blue"]
+
+    def test_step_no_longer_publishes_a_provisional_decision(
+        self, mock_env, base_context
+    ):
+        """Only finalize_status may write ``result['decision']``."""
+        base_context.config.expected_items = {"TestProduct": {"TestArea": ["LED"]}}
+        base_context.result["detections"] = [{"class": "LED"}]
+
+        CountCheckStep(
+            mock_env.logger, base_context.product, base_context.area
+        ).run(base_context)
+
+        assert "decision" not in base_context.result
 
     def test_expected_items_lookup_failure_fails_closed(self, mock_env, base_context):
         """An unreadable expectation must not be treated as 'nothing expected'."""

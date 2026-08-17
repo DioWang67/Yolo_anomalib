@@ -218,6 +218,40 @@ pytest tests/test_yolo_inference_model.py -v
 pytest --cov=core --cov=app --cov-report=html
 ```
 
+### Windows 低磁碟空間：調整 pytest 暫存位置
+
+部分測試會走完整的結果保存流程，而 `ResultHandler` 在目標磁碟可用空間低於
+`min_free_disk_mb`（預設 1024 MiB）時會拒絕寫入。pytest 的 `tmp_path` 預設放在系統
+暫存目錄，因此當 **C 槽接近滿載** 時，這些測試會因為環境而失敗，而不是因為程式碼有問題
+（典型訊息：`ResultPersistenceError: Insufficient result disk space`）。
+
+可用 `YOLO11_TEST_TMP` 把「這一次測試」的暫存目錄移到其他磁碟：
+
+```powershell
+$env:YOLO11_TEST_TMP = "D:\yolo11_test_tmp"   # 換成你機器上有空間的路徑
+.\scripts\test.ps1 -q
+```
+
+`scripts\test.ps1` 的所有參數都會原樣傳給 pytest：
+
+```powershell
+.\scripts\test.ps1 tests/test_pipeline_finalize_status.py -v
+```
+
+未設定 `YOLO11_TEST_TMP` 時，維持系統預設暫存目錄，行為與直接執行 `pytest` 相同。
+
+需要理解的幾點：
+
+- 這**只**影響測試暫存位置。production 的 `Result/` 輸出路徑不受影響。
+- production 的 `min_free_disk_mb = 1024` **不會被調低**。磁碟空間檢查照常執行，只是改成
+  對一個真的有空間的磁碟做檢查。
+- 路徑僅為範例，`D:` 不是強制值，也沒有寫死在任何程式碼或設定檔中。
+- 只影響該次測試 process，不會修改 Windows 使用者/系統環境變數，也不會動到登錄檔。
+- 為什麼用 `TEMP`/`TMP` 而不是 `pytest --basetemp`：`tests/conftest.py` 會把
+  `tempfile.gettempdir()` 加進安全路徑白名單。只改 `--basetemp` 會讓測試檔案落在所有
+  允許的根目錄之外，把磁碟空間錯誤換成 `SecurityError`。改暫存目錄本身才能讓 pytest、
+  `tempfile` 與白名單三者一致。
+
 ## 開發
 
 ### 程式碼品質檢查

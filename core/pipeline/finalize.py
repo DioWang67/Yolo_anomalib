@@ -12,11 +12,26 @@ boards whose only problem was a YOLO misclassification the color checker fixed.
 
 ``finalize_status`` recomputes the verdict from the *current, corrected*
 signals just before results are saved. It is intentionally comprehensive so it
-never drops a failure dimension: a board passes only when color, sequence, and
-every YOLO-side dimension (missing / unexpected / slot mismatch / board
-alignment / position) are all clean. Products that do not populate a given
-signal simply skip that gate, so single-stage pipelines (e.g. PCBA's
-``count_check`` only) keep their previous behavior.
+never drops a failure dimension: a board passes only when color, sequence,
+count, anomaly, and every YOLO-side dimension (missing / unexpected / slot
+mismatch / board alignment / position) are all clean. Products that do not
+populate a given signal simply skip that gate, so single-stage pipelines (e.g.
+PCBA's ``count_check`` only) keep their previous behavior.
+
+Signals this module consumes but must never re-derive
+-----------------------------------------------------
+``is_anomaly`` is the anomalib backend's verdict against *its own* configured
+threshold. This module deliberately reads that boolean instead of comparing
+``anomaly_score`` here: the threshold belongs to the inference layer, and a
+second copy of it would drift. An anomalib-only or fusion pipeline leaves no
+detection-side signal behind at all, so without this gate their FAIL would be
+recomputed straight back to PASS.
+
+Likewise ``count_check['is_ok']`` is honoured directly rather than re-derived
+from ``unexpected_items``. A strict count check fails on surplus parts
+unconditionally, while the engine only reports ``UNEXPECTED_COMPONENT`` when
+``fail_on_unexpected`` is set — reading the check's own verdict keeps the two
+from disagreeing.
 
 One signal cannot be recomputed: a check that never ran. ``count_check`` failing
 to read its expected-items config leaves no missing/unexpected items behind, and
@@ -77,6 +92,13 @@ def finalize_status(ctx: Any, *, fail_on_unexpected: bool = True) -> None:
     sequence = result.get("sequence_check")
     sequence_failed = isinstance(sequence, dict) and not sequence.get("is_ok", True)
 
+    count = result.get("count_check")
+    count_failed = isinstance(count, dict) and not count.get("is_ok", True)
+
+    # The anomalib backend already applied its own threshold; consume its
+    # verdict, never re-derive one from ``anomaly_score``.
+    anomaly_failed = bool(result.get("is_anomaly", False))
+
     # A normal count/position FAIL reaches the engine as missing, unexpected, or
     # position_status signals, so it survives this recomputation on its own. A
     # check that could not run at all produces no such signal, so its FAIL must
@@ -97,6 +119,8 @@ def finalize_status(ctx: Any, *, fail_on_unexpected: bool = True) -> None:
     failed = (
         color_failed
         or sequence_failed
+        or count_failed
+        or anomaly_failed
         or unevaluated
         or decision.status != InspectionStatus.PASS
     )

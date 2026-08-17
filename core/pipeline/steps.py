@@ -16,7 +16,6 @@ from core.services.cross_class_duplicate_filter import (
     DuplicateFilterPolicy,
     analyze_cross_class_duplicates,
 )
-from core.services.decision_engine import InspectionDecisionEngine
 from core.services.result_sink import ExcelImageResultSink
 
 INFERENCE_ERROR_STATUS = "INFERENCE_ERROR"
@@ -317,10 +316,22 @@ class CountCheckStep(Step):
         detections = ctx.result.get("detections", []) or []
         detected_counter: Counter = Counter()
         expected_set = set(expected_counter)
+        # Classes the model reported that this area does not expect at all.
+        # They can never appear in ``over_items`` (that only tracks surplus
+        # copies of *expected* classes), so they have to be collected here or
+        # the strict branch below would publish an ``unexpected_items`` list
+        # that silently drops them.
+        foreign_items: list[str] = []
+        seen_foreign: set[str] = set()
         for det in detections:
             name = str(det.get("verified_class") or det.get("class", "")).strip()
-            if name and name in expected_set:
+            if not name:
+                continue
+            if name in expected_set:
                 detected_counter[name] += 1
+            elif name not in seen_foreign:
+                seen_foreign.add(name)
+                foreign_items.append(name)
 
         missing_items: list[str] = []
         over_items: list[str] = []
@@ -334,7 +345,11 @@ class CountCheckStep(Step):
         ctx.result["missing_items"] = missing_items
         ctx.result["over_items"] = over_items
         if strict:
-            ctx.result["unexpected_items"] = list(over_items)
+            # Recomputed from the *effective* detections, so this both drops a
+            # stale entry the color checker or duplicate filter has since
+            # invalidated and keeps a genuinely foreign class that the previous
+            # over_items-only assignment used to erase.
+            ctx.result["unexpected_items"] = foreign_items + over_items
         ctx.result["count_check"] = {
             "expected": dict(expected_counter),
             "detected": dict(detected_counter),
@@ -353,7 +368,6 @@ class CountCheckStep(Step):
             )
         else:
             self.logger.info("Count check PASS")
-        self._sync_count_decision(ctx, missing_items, over_items, strict)
 
     def _fail_closed_on_unreadable_expectation(
         self, ctx: DetectionContext, exc: Exception
@@ -384,23 +398,6 @@ class CountCheckStep(Step):
         }
         ctx.status = DETECTION_FAIL_STATUS
         self.logger.info("Count expectations unavailable -> overall FAIL")
-
-    @staticmethod
-    def _sync_count_decision(
-        ctx: DetectionContext,
-        missing_items: list[str],
-        over_items: list[str],
-        strict: bool,
-    ) -> None:
-        """Keep decision metadata aligned with post-color count check output."""
-        decision = InspectionDecisionEngine(fail_on_unexpected=True).evaluate(
-            detections=ctx.result.get("detections", []) or [],
-            missing_items=missing_items,
-            unexpected_items=list(over_items) if strict else [],
-            slot_mismatches=ctx.result.get("slot_mismatches", []) or [],
-            alignment_quality=ctx.result.get("alignment_quality"),
-        )
-        ctx.result["decision"] = decision.to_dict()
 
 
 class SequenceCheckStep(Step):
@@ -613,9 +610,12 @@ class PositionCheckStep(Step):
         missing = ctx.result.get("missing_items", [])
         try:
             new_status = validator.evaluate_status(dets, missing)
-            if new_status == "FAIL":
-                new_status = DETECTION_FAIL_STATUS
-            ctx.status = new_status
+            # Downgrade only. This step sees position and missing items; it
+            # knows nothing about color, sequence or count, so publishing its
+            # own PASS here would overwrite an earlier step's FAIL. Only
+            # finalize_status, which sees every dimension, may declare PASS.
+            if new_status in {"FAIL", DETECTION_FAIL_STATUS}:
+                ctx.status = DETECTION_FAIL_STATUS
             self.logger.info(f"Position check evaluated status: {new_status}")
         except (AttributeError, KeyError, TypeError, ValueError) as exc:
             # Deliberately not fail-closed. validate() above already annotated

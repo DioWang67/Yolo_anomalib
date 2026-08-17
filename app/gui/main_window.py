@@ -1342,6 +1342,7 @@ class DetectionSystemGUI(
         self.stop_btn.setEnabled(False)
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("READY")
+        self.info_panel.set_storage_state("hidden")
         self.update_camera_controls()
 
     def update_pipeline_stats(self):
@@ -1444,9 +1445,47 @@ class DetectionSystemGUI(
         if self._single_shot_running:
             self._schedule_manual_pipeline_release(self._run_generation)
 
+    @classmethod
+    def _initial_storage_state(cls, result) -> str:
+        """Storage state to show the moment a verdict reaches the display.
+
+        Async pipeline results are published by ``on_task_inferred`` *before*
+        the storage stage runs, so they start as ``pending`` and are settled
+        later by ``on_pipeline_storage_completed``. Synchronous ``detect()``
+        results have already been through persistence, so their outcome is
+        read straight off the result.
+        """
+        metadata = getattr(result, "metadata", None) or {}
+        if metadata.get("storage_completed") is False:
+            return "pending"
+        return cls.storage_state_from_save_result(metadata.get("save_result"))
+
+    @staticmethod
+    def storage_state_from_save_result(save_result) -> str:
+        """Map a ``save_result`` payload onto a storage display state.
+
+        ``None``/missing means no storage stage ran for this inspection
+        (``persist=False``, or ``save_results`` disabled), which is neither a
+        success nor a failure — so the row stays hidden rather than asserting
+        something untrue.
+        """
+        if not isinstance(save_result, dict):
+            return "hidden"
+        status = str(save_result.get("status") or "").upper()
+        if not status:
+            return "hidden"
+        return "saved" if status == "SUCCESS" else "failed"
+
     @pyqtSlot(object)
     def on_pipeline_storage_completed(self, task) -> None:
-        """Attach durable artifact paths without replaying the UI verdict."""
+        """Attach durable artifact paths and the storage outcome.
+
+        This must never replay the inspection verdict. ``SaveResultsStep``
+        rewrites ``ctx.status`` to ``ERROR`` when persistence fails, so calling
+        ``big_status_label.set_status(task.result["status"])`` here would turn a
+        perfectly good PASS into ERROR and tell the operator the inspection
+        failed when only the write did.
+        """
         from core.types import DetectionTask
 
         if not isinstance(task, DetectionTask) or task.result is None:
@@ -1454,6 +1493,8 @@ class DetectionSystemGUI(
         self.inspection_history_page.mark_dirty()
         current = self.current_result
         if current is None or current.metadata.get("task_id") != task.task_id:
+            # A newer inspection already owns the display; a late callback from
+            # the previous one must not stamp its storage state onto it.
             return
         result = task.result
         current.original_image_path = result.get("original_image_path", "")
@@ -1462,6 +1503,11 @@ class DetectionSystemGUI(
         current.heatmap_path = result.get("heatmap_path", "")
         current.cropped_paths = result.get("cropped_paths", [])
         current.metadata["storage_completed"] = True
+        storage_state = self.storage_state_from_save_result(result.get("save_result"))
+        current.metadata["save_result"] = result.get("save_result")
+        self.info_panel.set_storage_state(storage_state)
+        if storage_state == "failed":
+            self.log_message(self._t("storage_failed_hint"))
         self._refresh_detection_images()
 
     def _on_worker_finished(self) -> None:
@@ -1785,6 +1831,7 @@ class DetectionSystemGUI(
         self.result_image.clear()
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("RUNNING...")
+        self.info_panel.set_storage_state("hidden")
         self.info_panel.fail_reason_label.clear_reason()
         self.log_message(
             self._t("start_log", product=product, area=area, model=inference_type)
@@ -1888,6 +1935,12 @@ class DetectionSystemGUI(
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status(result.status)
 
+        # Reset the storage row for *this* inspection before anything else can
+        # update it, so a previous board's "FAILED" never bleeds into the next
+        # one. Async results arrive before storage runs and start as pending;
+        # sync results have already been persisted by the time detect() returns.
+        self.info_panel.set_storage_state(self._initial_storage_state(result))
+
         # In Auto Mode, push the verdict onto the always-visible phase banner.
         # This runs before the state machine transitions to SHOW_RESULT, so the
         # banner's result-owned guard keeps PASS/FAIL on screen until removal.
@@ -1927,6 +1980,7 @@ class DetectionSystemGUI(
         self.stop_btn.setEnabled(False)
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("ERROR")
+        self.info_panel.set_storage_state("hidden")
         if self._auto_controller is not None and self._auto_controller.is_running():
             self.image_panel.auto_phase_banner.set_result("ERROR", self.current_language)
         self.update_camera_controls()
@@ -2376,6 +2430,7 @@ class DetectionSystemGUI(
         self.use_camera_chk.setEnabled(False)
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("AUTO")
+        self.info_panel.set_storage_state("hidden")
         self.control_panel.set_auto_mode_status("WAIT_EMPTY")
         self.image_panel.auto_phase_banner.activate(self.current_language)
         self.log_message(
@@ -2426,6 +2481,7 @@ class DetectionSystemGUI(
         self.use_camera_chk.setEnabled(True)
         if getattr(self, "big_status_label", None):
             self.big_status_label.set_status("READY")
+        self.info_panel.set_storage_state("hidden")
         self.log_message("自動模式已停止")
         self.update_start_enabled()
         self.update_camera_controls()

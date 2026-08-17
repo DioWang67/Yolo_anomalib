@@ -411,6 +411,19 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "unexpected_items": "Unexpected Items",
         "none": "None",
         "position_check": "Position check",
+        "storage_state_label": "Record saved",
+        "storage_state_pending": "Saving...",
+        "storage_state_saved": "Yes",
+        "storage_state_failed": "FAILED",
+        # Deliberately does not say the verdict "is still valid": the operator
+        # manual classifies a storage error under ERROR -> "不可放行" (do not
+        # release), so wording that reads as release permission would
+        # contradict the SOP. It states only what is factually true — the
+        # decision completed, the record did not survive.
+        "storage_failed_hint": (
+            "⚠ This inspection was completed, but its record was not saved. "
+            "Please notify engineering."
+        ),
         "correct": "Correct",
         "abnormal": "Abnormal",
         "skipped": "Skipped",
@@ -806,6 +819,13 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "unexpected_items": "未預期項目",
         "none": "無",
         "position_check": "位置檢查",
+        "storage_state_label": "紀錄儲存",
+        "storage_state_pending": "儲存中...",
+        "storage_state_saved": "成功",
+        "storage_state_failed": "失敗",
+        "storage_failed_hint": (
+            "⚠ 此次檢測判定已完成，但紀錄未成功保存，請通知工程人員。"
+        ),
         "correct": "正確",
         "abnormal": "異常",
         "skipped": "略過",

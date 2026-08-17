@@ -1232,3 +1232,195 @@ def test_engineer_image_tab_toggles_hide_optional_tabs(gui):
 
     gui.show_original_tab_chk.setChecked(True)
     gui.show_processed_tab_chk.setChecked(True)
+
+
+# ======================================================================
+# Persistence status is shown separately from the inspection verdict
+#
+# The async pipeline publishes the verdict from ``on_task_inferred``, before
+# the storage stage runs. When storage then fails, ``SaveResultsStep`` rewrites
+# ``ctx.status`` to ``ERROR`` and ``_attach_pipeline_outputs`` copies that onto
+# the task — but a failed write does not make the board bad. Showing ERROR
+# would tell the operator the inspection failed, which is a different and wrong
+# instruction. The verdict and the storage outcome are therefore two separate
+# readouts.
+# ======================================================================
+
+
+def _pipeline_task(task_id: str, status: str = "PASS") -> DetectionTask:
+    return DetectionTask(
+        task_id=task_id,
+        timestamp=time.time(),
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        frame=np.zeros((8, 8, 3), dtype=np.uint8),
+        result={"status": status, "detections": []},
+    )
+
+
+_SAVE_OK = {
+    "status": "SUCCESS",
+    "original_path": "ok-original.jpg",
+    "preprocessed_path": "ok-processed.jpg",
+    "annotated_path": "ok-annotated.jpg",
+}
+_SAVE_FAILED = {
+    "status": "ERROR",
+    "error": "Insufficient result disk space",
+}
+
+
+def test_storage_success_reports_saved_without_touching_the_verdict(gui):
+    task = _pipeline_task("save-ok", status="PASS")
+    gui.on_pipeline_result(task)
+
+    assert gui.big_status_label.text() == "PASS"
+    assert gui.info_panel.storage_status_label.state == "pending"
+
+    task.result["save_result"] = dict(_SAVE_OK)
+    task.result["original_image_path"] = "ok-original.jpg"
+    gui.on_pipeline_storage_completed(task)
+
+    assert gui.info_panel.storage_status_label.state == "saved"
+    assert gui.big_status_label.text() == "PASS"
+
+
+def test_storage_failure_keeps_a_pass_verdict_and_flags_the_write(gui):
+    """PASS + save FAILED must read as both, never as ERROR."""
+    task = _pipeline_task("save-fail-pass", status="PASS")
+    gui.on_pipeline_result(task)
+    assert gui.big_status_label.text() == "PASS"
+
+    # SaveResultsStep rewrites the task status after finalization.
+    task.result["status"] = "ERROR"
+    task.result["save_result"] = dict(_SAVE_FAILED)
+    gui.on_pipeline_storage_completed(task)
+
+    assert gui.big_status_label.text() == "PASS", "verdict must survive a failed write"
+    assert gui.info_panel.storage_status_label.state == "failed"
+    assert not gui.info_panel.storage_status_label.isHidden()
+    assert tr(gui.current_language, "storage_state_failed") in (
+        gui.info_panel.storage_status_label.text()
+    )
+    assert tr(gui.current_language, "storage_failed_hint") in (
+        gui.info_panel.storage_status_label.text()
+    )
+
+
+def test_storage_failure_keeps_an_ng_verdict(gui):
+    """NG + save FAILED must stay NG, not degrade to ERROR."""
+    task = _pipeline_task("save-fail-ng", status="DETECTION_FAIL")
+    gui.on_pipeline_result(task)
+    assert gui.big_status_label.text() == "DETECTION FAIL"
+
+    task.result["status"] = "ERROR"
+    task.result["save_result"] = dict(_SAVE_FAILED)
+    gui.on_pipeline_storage_completed(task)
+
+    assert gui.big_status_label.text() == "DETECTION FAIL"
+    assert gui.info_panel.storage_status_label.state == "failed"
+
+
+def test_storage_failure_warning_does_not_leak_into_the_next_inspection(gui):
+    """A red 'save failed' row must not still be showing over the next board."""
+    failed_task = _pipeline_task("board-a", status="PASS")
+    gui.on_pipeline_result(failed_task)
+    failed_task.result["status"] = "ERROR"
+    failed_task.result["save_result"] = dict(_SAVE_FAILED)
+    gui.on_pipeline_storage_completed(failed_task)
+    assert gui.info_panel.storage_status_label.state == "failed"
+
+    next_task = _pipeline_task("board-b", status="PASS")
+    gui.on_pipeline_result(next_task)
+
+    assert gui.info_panel.storage_status_label.state == "pending"
+    assert gui.big_status_label.text() == "PASS"
+
+
+def test_late_storage_callback_cannot_stamp_an_older_board(gui):
+    """Board A's failure must not land on Board B's display."""
+    board_a = _pipeline_task("late-a", status="PASS")
+    gui.on_pipeline_result(board_a)
+    board_b = _pipeline_task("late-b", status="PASS")
+    gui.on_pipeline_result(board_b)
+
+    board_a.result["status"] = "ERROR"
+    board_a.result["save_result"] = dict(_SAVE_FAILED)
+    gui.on_pipeline_storage_completed(board_a)
+
+    assert gui.info_panel.storage_status_label.state == "pending"
+    assert gui.big_status_label.text() == "PASS"
+
+
+def test_storage_callback_never_replays_the_verdict(gui, monkeypatch):
+    """Regression lock: storage must not call set_status at all.
+
+    ``task.result['status']`` is ERROR after a failed write, so any
+    ``set_status(task.result['status'])`` added here would silently convert a
+    good inspection into an inference error.
+    """
+    task = _pipeline_task("no-replay", status="PASS")
+    gui.on_pipeline_result(task)
+
+    set_status_calls: list[str] = []
+    monkeypatch.setattr(
+        gui.big_status_label, "set_status", lambda status: set_status_calls.append(status)
+    )
+
+    task.result["status"] = "ERROR"
+    task.result["save_result"] = dict(_SAVE_FAILED)
+    gui.on_pipeline_storage_completed(task)
+
+    assert set_status_calls == []
+
+
+def test_sync_detect_result_reports_its_own_storage_outcome(gui):
+    """detect() persists before returning, so its outcome is known up front."""
+    saved = DetectionResult(
+        status="PASS",
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        metadata={"save_result": dict(_SAVE_OK)},
+    )
+    gui.on_detection_complete(saved)
+    assert gui.info_panel.storage_status_label.state == "saved"
+
+    failed = DetectionResult(
+        status="PASS",
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        metadata={"save_result": dict(_SAVE_FAILED)},
+    )
+    gui.on_detection_complete(failed)
+    assert gui.info_panel.storage_status_label.state == "failed"
+
+
+def test_run_without_a_storage_stage_hides_the_row(gui):
+    """persist=False / save_results disabled is neither success nor failure."""
+    result = DetectionResult(
+        status="PASS",
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        metadata={"save_result": None},
+    )
+    gui.on_detection_complete(result)
+
+    assert gui.info_panel.storage_status_label.state == "hidden"
+    assert gui.info_panel.storage_status_label.isHidden()
+
+
+def test_storage_row_is_localized_and_follows_language_changes(gui):
+    task = _pipeline_task("i18n", status="PASS")
+    gui.on_pipeline_result(task)
+    task.result["save_result"] = dict(_SAVE_FAILED)
+    gui.on_pipeline_storage_completed(task)
+
+    gui.apply_language("en")
+    assert "FAILED" in gui.info_panel.storage_status_label.text()
+
+    gui.apply_language("zh")
+    assert "失敗" in gui.info_panel.storage_status_label.text()

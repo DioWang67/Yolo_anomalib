@@ -201,6 +201,78 @@ class BigStatusLabel(QLabel):
             )
 
 
+class StorageStatusLabel(QLabel):
+    """Whether this inspection's record reached durable storage.
+
+    Deliberately separate from :class:`BigStatusLabel`. A failed write does not
+    make the inspection verdict wrong — the board really was PASS or NG — it
+    only means the evidence was not kept. Folding the two together would show
+    ``ERROR`` for a perfectly good inspection and read to the operator as
+    "the model failed", which is a different (and wrong) instruction.
+    """
+
+    #: state -> (i18n key for the value, background, text, border)
+    _STATES: dict[str, tuple[str, str, str, str]] = {
+        "pending": ("storage_state_pending", "#e5e7eb", "#374151", "#cbd5e1"),
+        "saved": ("storage_state_saved", "#e7f4ee", "#12643f", "#b7e0cb"),
+        "failed": ("storage_state_failed", "#fde8e6", "#8a1c12", "#f3b8b1"),
+    }
+
+    def __init__(self) -> None:
+        super().__init__("")
+        self.setWordWrap(True)
+        self.setFont(QFont("Microsoft JhengHei", 9))
+        self._language = "en"
+        self._state = "hidden"
+        self.hide()
+
+    def set_state(self, state: str, language: str | None = None) -> None:
+        """Show one of ``pending`` / ``saved`` / ``failed``; anything else hides.
+
+        ``hidden`` is the honest state for a run with no storage stage at all
+        (``persist=False``, or ``save_results`` disabled): claiming "saved"
+        there would be a lie, and claiming "failed" a false alarm.
+        """
+        if language is not None:
+            self._language = normalize_language(language)
+        self._state = state if state in self._STATES else "hidden"
+        self._render()
+
+    def set_language(self, language: str) -> None:
+        self._language = normalize_language(language)
+        self._render()
+
+    @property
+    def state(self) -> str:
+        """Current state, for tests and callers that need to re-render."""
+        return self._state
+
+    def _render(self) -> None:
+        if self._state == "hidden":
+            self.clear()
+            self.setToolTip("")
+            self.hide()
+            return
+
+        value_key, background, color, border = self._STATES[self._state]
+        text = (
+            f"{tr(self._language, 'storage_state_label')}: "
+            f"{tr(self._language, value_key)}"
+        )
+        if self._state == "failed":
+            text = f"{text}\n{tr(self._language, 'storage_failed_hint')}"
+            self.setToolTip(tr(self._language, "storage_failed_hint"))
+        else:
+            self.setToolTip("")
+        self.setText(text)
+        self.setAccessibleName(text)
+        self.setStyleSheet(
+            f"QLabel {{ background-color: {background}; color: {color}; "
+            f"border: 1px solid {border}; border-radius: 6px; padding: 6px 8px; }}"
+        )
+        self.show()
+
+
 class AutoPhaseBanner(QLabel):
     """Always-visible phase banner for Auto Mode.
 

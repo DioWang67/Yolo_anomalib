@@ -149,6 +149,19 @@ ignore = [
 
 [tool.mypy]
 python_version = "3.11"
+# ``app`` is a PEP 420 namespace package (no ``app/__init__.py``) while
+# ``app/acceptance`` is a regular one. Walking up from
+# ``app/acceptance/window.py``, mypy stops at the missing ``app/__init__.py``
+# and names the module ``acceptance.window``; the code imports it as
+# ``app.acceptance.window``, so the same file arrives under two names and mypy
+# aborts before building the graph. Anchoring package bases at the repo root
+# makes the name mypy derives from the path match the one the imports use,
+# without adding an ``__init__.py`` that would turn ``app`` into a regular
+# package and change how it is discovered at runtime and by PyInstaller.
+# CI already passes --explicit-package-bases for its own mypy step; this keeps
+# a plain ``mypy app`` working the same way locally.
+mypy_path = "."
+explicit_package_bases = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
