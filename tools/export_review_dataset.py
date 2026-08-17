@@ -1956,6 +1956,10 @@ def _preflight_ready_canonical_selection(
                     pending_replacements.setdefault(target, set()).add(identity)
                 continue
             item: ExportedReviewItem | None = None
+            # Canonical selection compares sample identity, annotation status,
+            # image SHA-256 and normalized label text only. Copying the image
+            # into a throwaway tree would double the I/O of every submission
+            # while the export lock is held, so only the label is materialized.
             if review_label in {"confirmed_ng", "position_false_reject"}:
                 item, _reason = _export_snapshot_verified_row(
                     row,
@@ -1963,6 +1967,7 @@ def _preflight_ready_canonical_selection(
                     manifest_path,
                     row_preflight_root,
                     materialize=True,
+                    copy_image=False,
                 )
             elif review_label == "verified_empty":
                 item, _reason = _export_verified_empty_row(
@@ -1970,6 +1975,7 @@ def _preflight_ready_canonical_selection(
                     manifest_path,
                     row_preflight_root,
                     materialize=True,
+                    copy_image=False,
                 )
             if item is not None:
                 affected_targets.add((item.product, item.area))

@@ -622,6 +622,80 @@ def test_operator_handoff_exports_position_false_reject_as_verified_data(tmp_pat
     )
 
 
+def test_canonical_preflight_never_copies_images_into_its_temporary_tree(
+    tmp_path, monkeypatch
+):
+    """The preflight only needs label text, so it must not double image I/O."""
+    import shutil as shutil_module
+
+    original = tmp_path / "original.jpg"
+    processed = tmp_path / "processed.jpg"
+    _save_test_image(original, color=(10, 20, 30))
+    _save_test_image(processed, color=(10, 20, 30))
+    manifest = tmp_path / "preflight_review.csv"
+    fields = {
+        "product": "Cable1",
+        "area": "A",
+        "status": "FAIL",
+        "decision_reasons": "NG",
+        "config_snapshot_path": "preflight.json",
+        "original_path": str(original),
+        "preprocessed_path": str(processed),
+        "detections_json": json.dumps(
+            [
+                {
+                    "class_id": 0,
+                    "confidence": 0.9,
+                    "bbox": [10, 20, 30, 60],
+                    "image_width": 100,
+                    "image_height": 100,
+                }
+            ]
+        ),
+        "class_names_json": json.dumps(["Black"]),
+        "class_map_json": '{"0":"Black"}',
+        "review_label": "confirmed_ng",
+    }
+    with manifest.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerow(fields)
+
+    copied_destinations: list[Path] = []
+    real_copy2 = shutil_module.copy2
+
+    def _recording_copy2(source, destination, *args, **kwargs):
+        copied_destinations.append(Path(destination))
+        return real_copy2(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "tools.export_review_dataset.shutil.copy2", _recording_copy2
+    )
+
+    output = tmp_path / "training-data"
+    report = export_operator_handoff(
+        manifest,
+        output,
+        inference_models_dir=tmp_path / "models",
+    )
+
+    assert report.ready_count == 1
+    preflight_copies = [
+        path
+        for path in copied_destinations
+        if any(part.startswith(".canonical-preflight-") for part in path.parts)
+    ]
+    assert not preflight_copies, (
+        "Canonical preflight copied images it never reads: "
+        f"{[str(path) for path in preflight_copies]}"
+    )
+    # The real dataset image is still published exactly once.
+    dataset_copies = [
+        path for path in copied_destinations if path.parent.name == "images"
+    ]
+    assert len(dataset_copies) == 1
+
+
 def test_operator_handoff_exports_verified_boxes_and_routes_missed_cases(tmp_path):
     processed = tmp_path / "processed.jpg"
     processed_missed = tmp_path / "processed_missed.jpg"

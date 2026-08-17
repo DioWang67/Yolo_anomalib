@@ -103,6 +103,13 @@ LARGE_HISTORY_REFRESH_INTERVAL_MS = 15000
 CLEARABLE_JOB_STATES = frozenset(
     {"deployed", "failed", "cancelled", "invalid", "waiting_feedback"}
 )
+RESUMABLE_JOB_STATES = frozenset(
+    {"queued", "waiting_annotation", "failed", "cancelled"}
+)
+# A data shortage is not resumable: the operator has to collect more cases and
+# submit a new batch. Offering that as the next step keeps the dead end out of
+# the workflow instead of leaving a disabled button with no explanation.
+COLLECT_MORE_JOB_STATES = frozenset({"waiting_feedback"})
 PROCESS_BOUND_JOB_STATES = frozenset(
     {
         "queued",
@@ -774,11 +781,14 @@ class ModelUpdateStatusDialog(QDialog):
             return
         self._render_workflow(job)
         can_resume = (
-            job.state in {"queued", "waiting_annotation", "failed", "cancelled"}
+            job.state in RESUMABLE_JOB_STATES
             and job.job_id not in self._resume_requested_job_ids
         )
+        collect_more = job.state in COLLECT_MORE_JOB_STATES
         process_active = operator_process_is_active(job) if can_resume else False
-        self.resume_button.setEnabled(can_resume and not process_active)
+        self.resume_button.setEnabled(
+            collect_more or (can_resume and not process_active)
+        )
         cancel_requested = (
             job.cancel_request_pending
             or job.job_id in self._cancel_requested_job_ids
@@ -811,44 +821,62 @@ class ModelUpdateStatusDialog(QDialog):
         self.resume_button.setText(
             self._text(
                 (
-                    "開啟／繼續補標"
-                    if job.pending_count > 0
+                    "回到複核畫面繼續收集"
+                    if collect_more
                     else (
-                        "修正後重新嘗試"
-                        if job.state == "failed"
+                        "開啟／繼續補標"
+                        if job.pending_count > 0
                         else (
-                            "從中斷處繼續補訓"
-                            if job.state == "cancelled"
-                            else "繼續這筆補訓"
+                            "修正後重新嘗試"
+                            if job.state == "failed"
+                            else (
+                                "從中斷處繼續補訓"
+                                if job.state == "cancelled"
+                                else "繼續這筆補訓"
+                            )
                         )
                     )
                 ),
                 (
-                    "Open / continue annotation"
-                    if job.pending_count > 0
+                    "Back to review and keep collecting"
+                    if collect_more
                     else (
-                        "Retry after correction"
-                        if job.state == "failed"
+                        "Open / continue annotation"
+                        if job.pending_count > 0
                         else (
-                            "Resume retraining from checkpoint"
-                            if job.state == "cancelled"
-                            else "Continue this retraining job"
+                            "Retry after correction"
+                            if job.state == "failed"
+                            else (
+                                "Resume retraining from checkpoint"
+                                if job.state == "cancelled"
+                                else "Continue this retraining job"
+                            )
                         )
                     )
                 ),
             )
         )
         resume_requested = job.job_id in self._resume_requested_job_ids
-        self.resume_button.setToolTip(
-            self._text(
-                "正在重新開啟補訓視窗"
-                if resume_requested
-                else ("補訓視窗仍在執行中" if process_active else "重新開啟這筆既有工作"),
-                "Reopening the retraining window"
-                if resume_requested
-                else ("The retraining window is still running" if process_active else "Reopen this existing job"),
+        if collect_more:
+            resume_tooltip = self._text(
+                "這批資料已安全保存，但數量不足以開始補訓。"
+                "請回到複核畫面繼續累積案例，足夠後再送出一批。",
+                "This batch is stored safely but is too small to start "
+                "retraining. Keep collecting cases and submit a new batch.",
             )
-        )
+        elif resume_requested:
+            resume_tooltip = self._text(
+                "正在重新開啟補訓視窗", "Reopening the retraining window"
+            )
+        elif process_active:
+            resume_tooltip = self._text(
+                "補訓視窗仍在執行中", "The retraining window is still running"
+            )
+        else:
+            resume_tooltip = self._text(
+                "重新開啟這筆既有工作", "Reopen this existing job"
+            )
+        self.resume_button.setToolTip(resume_tooltip)
         version = job.batch_version or self._text(
             "舊任務（未命名）",
             "Legacy (unnamed)",
@@ -942,12 +970,14 @@ class ModelUpdateStatusDialog(QDialog):
 
     def _resume_selected_job(self) -> None:
         job = self._selected_job()
-        if job is None or job.state not in {
-            "queued",
-            "waiting_annotation",
-            "failed",
-            "cancelled",
-        }:
+        if job is None:
+            return
+        if job.state in COLLECT_MORE_JOB_STATES:
+            # Nothing to resume: close the progress view so the operator lands
+            # back on the review screen and can keep accumulating cases.
+            self.accept()
+            return
+        if job.state not in RESUMABLE_JOB_STATES:
             return
         if operator_process_is_active(job):
             self.resume_button.setEnabled(False)

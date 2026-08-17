@@ -2438,6 +2438,154 @@ def test_handed_off_reconciliation_does_not_rewrite_unchanged_exclusion(
     store.set_training_selection.assert_not_called()
 
 
+def _dialog_with_one_saved_case(tmp_path, qtbot):
+    """Build a review dialog holding a single saved FAIL case."""
+    metadata = (
+        tmp_path
+        / "Result"
+        / "20260715"
+        / "Cable1"
+        / "A"
+        / "FAIL"
+        / "metadata"
+        / "yolo"
+    )
+    metadata.mkdir(parents=True)
+    preprocessed = tmp_path / "Result" / "saved_case.png"
+    preprocessed.write_bytes(b"saved-evidence")
+    (metadata / "case_config_snapshot.json").write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-07-15T10:00:00",
+                "product": "Cable1",
+                "area": "A",
+                "status": "FAIL",
+                "detector": "yolo",
+                "detections": [],
+                "artifacts": {"preprocessed_path": str(preprocessed)},
+            }
+        ),
+        encoding="utf-8",
+    )
+    dialog = ReviewCasesDialog(
+        result_root=tmp_path / "Result",
+        manifest_path=tmp_path / "review.csv",
+        training_data_dir=tmp_path / "training-data",
+        language="zh_TW",
+    )
+    qtbot.addWidget(dialog)
+    return dialog
+
+
+def _write_accumulated_ready_manifest(training_data_dir, count):
+    manifest = (
+        training_data_dir
+        / "Cable1"
+        / "A"
+        / "metadata"
+        / "review_dataset_manifest.csv"
+    )
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    with manifest.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["sample_id"])
+        writer.writeheader()
+        for index in range(count):
+            writer.writerow({"sample_id": f"history{index}"})
+
+
+def test_thin_dataset_warns_before_any_export_work(tmp_path, qtbot, monkeypatch):
+    """A shortage must be reported before the blocking export, not after."""
+    dialog = _dialog_with_one_saved_case(tmp_path, qtbot)
+    dialog.store.set_review(0, "verified_empty")
+    monkeypatch.setattr(
+        "app.gui.review_cases_dialog.RetrainingSettingsDialog.exec_",
+        lambda _self: QDialog.Accepted,
+    )
+
+    def fail_if_exported(*_args, **_kwargs):
+        raise AssertionError("export must not run when the operator declines")
+
+    monkeypatch.setattr(
+        "app.gui.review_cases_dialog.export_operator_handoff", fail_if_exported
+    )
+    asked = {}
+
+    def decline(_parent, _title, text, *_args, **_kwargs):
+        asked["text"] = text
+        return QMessageBox.No
+
+    monkeypatch.setattr(
+        "app.gui.review_cases_dialog.QMessageBox.question", decline
+    )
+
+    dialog._submit_selected_indices({0})
+
+    assert "還需要約" in asked["text"]
+    assert "不會開始補訓" in asked["text"]
+    assert dialog.store.rows[0]["training_selected"] == "1"
+
+
+def test_station_with_enough_history_submits_without_a_warning(
+    tmp_path, qtbot, monkeypatch
+):
+    dialog = _dialog_with_one_saved_case(tmp_path, qtbot)
+    dialog.store.set_review(0, "verified_empty")
+    _write_accumulated_ready_manifest(tmp_path / "training-data", 20)
+    monkeypatch.setattr(
+        "app.gui.review_cases_dialog.RetrainingSettingsDialog.exec_",
+        lambda _self: QDialog.Accepted,
+    )
+
+    def refuse_question(*_args, **_kwargs):
+        raise AssertionError("a sufficient dataset must not prompt the operator")
+
+    monkeypatch.setattr(
+        "app.gui.review_cases_dialog.QMessageBox.question", refuse_question
+    )
+    exported = {}
+
+    def record_export(*_args, **_kwargs):
+        exported["called"] = True
+        raise OSError("stop after the readiness gate")
+
+    monkeypatch.setattr(
+        "app.gui.review_cases_dialog.export_operator_handoff", record_export
+    )
+    monkeypatch.setattr(
+        "app.gui.review_cases_dialog.QMessageBox.critical",
+        lambda *_args, **_kwargs: None,
+    )
+
+    dialog._submit_selected_indices({0})
+
+    assert exported.get("called") is True
+
+
+def test_export_busy_state_always_restores_the_cursor(tmp_path, qtbot, monkeypatch):
+    """A failed export must not leave the operator with a stuck wait cursor."""
+    from PyQt5.QtWidgets import QApplication
+
+    dialog = _dialog_with_one_saved_case(tmp_path, qtbot)
+    dialog.store.set_review(0, "verified_empty")
+    _write_accumulated_ready_manifest(tmp_path / "training-data", 20)
+    monkeypatch.setattr(
+        "app.gui.review_cases_dialog.RetrainingSettingsDialog.exec_",
+        lambda _self: QDialog.Accepted,
+    )
+    monkeypatch.setattr(
+        "app.gui.review_cases_dialog.export_operator_handoff",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    monkeypatch.setattr(
+        "app.gui.review_cases_dialog.QMessageBox.critical",
+        lambda *_args, **_kwargs: None,
+    )
+
+    dialog._submit_selected_indices({0})
+
+    assert QApplication.overrideCursor() is None
+
+
 def test_cancelled_retraining_settings_keeps_queue_and_does_not_export(
     tmp_path, qtbot, monkeypatch
 ):

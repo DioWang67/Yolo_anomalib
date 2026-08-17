@@ -70,7 +70,7 @@ from app.gui.training_batch_dialog import (
     DIRECT_TRAIN_LABELS,
     TrainingBatchDialog,
 )
-from core.retraining_options import RetrainingOptions
+from core.retraining_options import POSITION_MODE_YOLO_ONLY, RetrainingOptions
 from core.services.inspection_repository import InspectionRepository
 from core.station_data import (
     load_station_data_paths,
@@ -116,6 +116,7 @@ from tools.processing_plan_validation import (
     build_validation_context_from_manifest,
 )
 from tools.processing_run_store import ProcessingRunStore
+from tools.retraining_readiness import evaluate_retraining_readiness
 from tools.retraining_workspaces import (
     RetrainingWorkspace,
     load_retraining_workspace,
@@ -3718,6 +3719,23 @@ class ReviewCasesDialog(QDialog):
             ) as exc:
                 QMessageBox.warning(self, self.windowTitle(), str(exc))
                 return
+        if (
+            not feedback_only
+            and not color_only
+            and not self._confirm_training_data_volume(
+                selected_indices,
+                product=batch_product,
+                area=batch_area,
+                training_options=training_options,
+            )
+        ):
+            return
+        # Hashing and copying every selected image can take minutes on a network
+        # share. Without a visible busy state the window looks frozen and an
+        # operator may kill it, which leaves the export lock behind.
+        export_error: Exception | None = None
+        report = None
+        self._set_export_busy(True, len(selected_indices))
         try:
             selected_manifest = self._write_selected_manifest(
                 selected_indices,
@@ -3742,7 +3760,11 @@ class ReviewCasesDialog(QDialog):
                 ),
             )
         except (OSError, ValueError, IndexError, csv.Error) as exc:
-            QMessageBox.critical(self, self.windowTitle(), str(exc))
+            export_error = exc
+        finally:
+            self._set_export_busy(False, len(selected_indices))
+        if export_error is not None or report is None:
+            QMessageBox.critical(self, self.windowTitle(), str(export_error))
             return
         message = self._text(
             f"本次可訓練：{report.ready_count} 張\n"
@@ -3858,6 +3880,90 @@ class ReviewCasesDialog(QDialog):
         ):
             self._remove_submitted_rows_from_queue(selected_indices)
             self._show_submission_active(message, reused_existing=False)
+
+    def _confirm_training_data_volume(
+        self,
+        selected_indices: set[int],
+        *,
+        product: str,
+        area: str,
+        training_options: RetrainingOptions | None,
+    ) -> bool:
+        """Tell the operator up front whether this batch can reach training.
+
+        The training project only reports a shortage after review, annotation,
+        augmentation and lint have already been paid for. Reporting it here
+        keeps the submission worthwhile — the data still accumulates — while
+        setting the right expectation about what happens next.
+        """
+        trainable_indices = {
+            index
+            for index in selected_indices
+            if 0 <= index < len(self.store.rows)
+            and _is_trainable_review(self.store.rows[index])
+        }
+        golden_count = sum(
+            str(self.store.rows[index].get("review_label") or "").strip()
+            == "position_false_reject"
+            for index in trainable_indices
+        )
+        position_enabled = (
+            training_options is not None
+            and training_options.position_training_mode
+            != POSITION_MODE_YOLO_ONLY
+        )
+        try:
+            readiness = evaluate_retraining_readiness(
+                self.training_data_dir,
+                product=product,
+                area=area,
+                submitted_count=len(trainable_indices),
+                position_golden_count=golden_count if position_enabled else 0,
+            )
+        except OSError:
+            # A readiness estimate must never be the reason a submission fails.
+            return True
+        if readiness.is_ready:
+            return True
+        answer = QMessageBox.question(
+            self,
+            self.windowTitle(),
+            self._text(
+                f"{readiness.to_operator_text(language='zh_TW')}\n\n"
+                "現在送出仍會把這批資料安全保存並累積起來，"
+                "但這次不會開始補訓。要送出嗎？",
+                f"{readiness.to_operator_text(language='en')}\n\n"
+                "Submitting now still stores this batch safely so it "
+                "accumulates, but retraining will not start yet. Submit?",
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        return answer == QMessageBox.Yes
+
+    def _set_export_busy(self, busy: bool, image_count: int) -> None:
+        """Show or clear the blocking-export busy state.
+
+        The export runs on the GUI thread, so the cursor and message must be
+        painted before the work starts, otherwise the operator only ever sees a
+        window that stopped responding.
+        """
+        if busy:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+        else:
+            while QApplication.overrideCursor() is not None:
+                QApplication.restoreOverrideCursor()
+        if hasattr(self, "export_button"):
+            self.export_button.setEnabled(not busy)
+        if busy and hasattr(self, "feedback_label"):
+            self.feedback_label.setText(
+                self._text(
+                    f"正在建立訓練資料（{image_count} 張），請勿關閉視窗…",
+                    f"Preparing training data ({image_count} image(s)); "
+                    "please keep this window open…",
+                )
+            )
+        QApplication.processEvents()
 
     def _selected_rows_match_target(
         self,

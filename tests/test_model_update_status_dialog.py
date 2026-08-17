@@ -4,7 +4,7 @@ import json
 import time
 from pathlib import Path
 
-from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtWidgets import QDialog, QMessageBox
 
 from app.gui.model_update_status_dialog import (
     ModelUpdateStatusDialog,
@@ -209,6 +209,40 @@ def test_cancelled_job_can_resume_from_checkpoint(tmp_path: Path, qtbot) -> None
 
     assert dialog.resume_button.isEnabled() is True
     assert dialog.resume_button.text() == "從中斷處繼續補訓"
+
+
+def test_data_shortage_offers_collecting_more_instead_of_a_dead_end(
+    tmp_path: Path, qtbot
+) -> None:
+    """A shortage cannot be resumed, so the button must point somewhere real."""
+    data_root = tmp_path / "data"
+    _write_job(
+        data_root,
+        "job-thin",
+        state="waiting_feedback",
+        status_values={"message": "補標資料已安全保存，但目前樣本數不足"},
+    )
+    dialog = ModelUpdateStatusDialog(data_root=data_root, language="zh_TW")
+    qtbot.addWidget(dialog)
+
+    assert dialog.resume_button.isEnabled() is True
+    assert dialog.resume_button.text() == "回到複核畫面繼續收集"
+    assert "繼續累積案例" in dialog.resume_button.toolTip()
+    # The record stays clearable so the operator can tidy the list afterwards.
+    assert dialog.clear_record_button.isEnabled() is True
+
+
+def test_collect_more_button_closes_the_progress_view(tmp_path: Path, qtbot) -> None:
+    data_root = tmp_path / "data"
+    _write_job(data_root, "job-thin", state="waiting_feedback")
+    dialog = ModelUpdateStatusDialog(data_root=data_root, language="zh_TW")
+    qtbot.addWidget(dialog)
+    finished: list[int] = []
+    dialog.finished.connect(finished.append)
+
+    dialog.resume_button.click()
+
+    assert finished == [QDialog.Accepted]
 
 
 def test_dead_training_process_is_projected_as_retryable_failure(
