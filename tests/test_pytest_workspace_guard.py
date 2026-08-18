@@ -14,6 +14,7 @@ from conftest import (
     _assert_safe_workspace_environment,
     _describe_snapshot_changes,
     _install_default_workspace_isolation,
+    _live_station_data_roots,
     _snapshot_tree,
     _validated_external_basetemp,
 )
@@ -113,6 +114,17 @@ def test_dynamic_live_workspace_environment_is_rejected(
 
     with pytest.raises(pytest.UsageError, match="Refusing unsafe"):
         load_workspace_paths(ROOT)
+
+
+def test_standalone_guard_excludes_runtime_diagnostic_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pytest_config, "_LIVE_WORKSPACE_MANIFEST", None)
+
+    guarded_roots = _live_station_data_roots()
+
+    assert ROOT / "logs" not in guarded_roots
+    assert ROOT / "Result" in guarded_roots
 
 
 @pytest.mark.parametrize(

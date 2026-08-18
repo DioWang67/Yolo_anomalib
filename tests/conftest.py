@@ -281,7 +281,10 @@ def _live_station_data_roots() -> tuple[Path, ...]:
 
     # A standalone legacy checkout stores mutable station state in the source
     # tree. Protect only its known mutable roots so normal pytest cache and
-    # coverage files do not produce false positives.
+    # coverage files do not produce false positives. Runtime logs are
+    # intentionally excluded: application initialization creates dated
+    # diagnostic logs during normal tests, and those logs are not station
+    # evidence or an input to release decisions.
     return tuple(
         ROOT / name
         for name in (
@@ -293,7 +296,6 @@ def _live_station_data_roots() -> tuple[Path, ...]:
             ".review_repairs",
             "acceptance",
             "acceptance_reports",
-            "logs",
             "Result",
         )
     )
