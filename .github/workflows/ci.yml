@@ -45,6 +45,7 @@ jobs:
             core/services/inspection_excel_report.py \
             core/services/inspection_history.py \
             core/services/inspection_maintenance.py \
+            core/services/inspection_release_store.py \
             core/services/inspection_sync.py \
             app/gui/inspection_history_page.py \
             app/gui/panels/control_panel.py \
@@ -60,6 +61,7 @@ jobs:
             core/services/inspection_excel_report.py \
             core/services/inspection_history.py \
             core/services/inspection_maintenance.py \
+            core/services/inspection_release_store.py \
             core/services/inspection_sync.py \
             app/gui/inspection_history_page.py \
             app/gui/panels/control_panel.py \
@@ -180,6 +182,7 @@ jobs:
             tests/test_inspection_database.py \
             tests/test_inspection_excel_report.py \
             tests/test_inspection_maintenance.py \
+            tests/test_inspection_release.py \
             tests/test_inspection_sync.py \
             tests/test_inspection_sync_admin.py \
             tests/test_production_preflight.py \
@@ -190,6 +193,7 @@ jobs:
             --cov=core.services.inspection_database \
             --cov=core.services.inspection_excel_report \
             --cov=core.services.inspection_maintenance \
+            --cov=core.services.inspection_release_store \
             --cov=core.services.inspection_history \
             --cov=core.services.inspection_sync \
             --cov=app.gui.inspection_history_page \

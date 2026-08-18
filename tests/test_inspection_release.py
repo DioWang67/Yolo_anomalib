@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+import core.services.inspection_release_store as release_store_module
 from core.services.acceptance_artifacts import build_acceptance_artifact_bundle
 from core.services.inspection_release_builder import (
     build_draft_release,
@@ -436,6 +438,310 @@ def test_atomic_activation_compare_and_swap_and_rollback(tmp_path):
     )
     assert restored["release_id"] == baseline.release_id
     assert restored["previous_release_id"] == candidate.release_id
+
+
+def test_activation_rechecks_latest_validation_after_acquiring_scope_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft = _release(tmp_path / "artifacts", status=ReleaseStatus.DRAFT)
+    store = InspectionReleaseStore(tmp_path / "store")
+    concurrent_store = InspectionReleaseStore(tmp_path / "store")
+    store.commit(draft)
+    tested = store.commit_validation(
+        replace(draft, status=ReleaseStatus.TESTED),
+        validator="reviewer",
+        reason="initial validation passed",
+    )
+    blocked_report_path, blocked_report_sha = _write(
+        tmp_path / "blocked" / "report.json",
+        b'{"blocked": true}',
+    )
+    blocked = replace(
+        draft,
+        status=ReleaseStatus.BLOCKED,
+        validation=replace(
+            draft.validation,
+            report_path=blocked_report_path,
+            report_sha256=blocked_report_sha,
+            run_id="blocked-validation",
+            combination_id="blocked-combination",
+        ),
+    )
+    real_cross_process_lock = store._cross_process_lock
+
+    @contextmanager
+    def validation_interleaving(scope_hash: str):
+        concurrent_store.commit_validation(
+            blocked,
+            validator="reviewer",
+            reason="later validation blocked the release",
+        )
+        with real_cross_process_lock(scope_hash):
+            yield
+
+    monkeypatch.setattr(store, "_cross_process_lock", validation_interleaving)
+
+    with pytest.raises(InspectionReleasePolicyError, match="blocked"):
+        store.activate(
+            tested,
+            mode=ActivationMode.LIMITED_TRIAL,
+            operator="operator",
+            reason="must use the latest validation",
+            expected_release_id=None,
+        )
+
+    assert store.active_pointer(draft.scope) is None
+
+
+def test_blocked_validation_cannot_supersede_an_active_release(tmp_path: Path) -> None:
+    draft = _release(tmp_path / "artifacts", status=ReleaseStatus.DRAFT)
+    store = InspectionReleaseStore(tmp_path / "store")
+    store.commit(draft)
+    tested = store.commit_validation(
+        replace(draft, status=ReleaseStatus.TESTED),
+        validator="reviewer",
+        reason="initial validation passed",
+    )
+    store.activate(
+        tested,
+        mode=ActivationMode.LIMITED_TRIAL,
+        operator="operator",
+        reason="supervised validation",
+        expected_release_id=None,
+    )
+    blocked_report_path, blocked_report_sha = _write(
+        tmp_path / "blocked" / "report.json",
+        b'{"blocked": true}',
+    )
+    blocked = replace(
+        draft,
+        status=ReleaseStatus.BLOCKED,
+        validation=replace(
+            draft.validation,
+            report_path=blocked_report_path,
+            report_sha256=blocked_report_sha,
+            run_id="blocked-validation",
+            combination_id="blocked-combination",
+        ),
+    )
+
+    with pytest.raises(InspectionReleasePolicyError, match="active"):
+        store.commit_validation(
+            blocked,
+            validator="reviewer",
+            reason="new evidence blocks the release",
+        )
+
+    assert store.load(draft.scope, draft.release_id).status is ReleaseStatus.TESTED
+    assert store.resolve_active("Cable1", "A", "yolo") == tested
+
+
+def test_activation_event_failure_preserves_previous_pointer_and_wraps_io_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = InspectionReleaseStore(tmp_path / "store")
+    baseline = store.commit(_release(tmp_path / "baseline"))
+    candidate = store.commit(
+        _release(tmp_path / "candidate", display_version="inspection-v1.0.2")
+    )
+    first = store.activate(
+        baseline,
+        mode=ActivationMode.LIMITED_TRIAL,
+        operator="operator",
+        reason="baseline",
+        expected_release_id=None,
+    )
+    real_write_json_atomic = release_store_module._write_json_atomic
+
+    def fail_activation_event(path: Path, payload: object) -> None:
+        if path.parent.parent.name == "events":
+            raise OSError("simulated audit storage failure")
+        real_write_json_atomic(path, payload)
+
+    monkeypatch.setattr(
+        release_store_module,
+        "_write_json_atomic",
+        fail_activation_event,
+    )
+
+    with pytest.raises(InspectionReleaseError, match="event"):
+        store.activate(
+            candidate,
+            mode=ActivationMode.LIMITED_TRIAL,
+            operator="operator",
+            reason="candidate",
+            expected_release_id=baseline.release_id,
+        )
+
+    assert store.active_pointer(baseline.scope) == first
+    assert store.resolve_active("Cable1", "A", "yolo") == baseline
+
+
+def test_activation_pointer_failure_retains_old_pointer_and_ignores_orphan_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = InspectionReleaseStore(tmp_path / "store")
+    baseline = store.commit(_release(tmp_path / "baseline"))
+    candidate = store.commit(
+        _release(tmp_path / "candidate", display_version="inspection-v1.0.2")
+    )
+    first = store.activate(
+        baseline,
+        mode=ActivationMode.LIMITED_TRIAL,
+        operator="operator",
+        reason="baseline",
+        expected_release_id=None,
+    )
+    real_write_json_atomic = release_store_module._write_json_atomic
+
+    def fail_active_pointer(path: Path, payload: object) -> None:
+        if path.parent.name == "active":
+            raise OSError("simulated pointer storage failure")
+        real_write_json_atomic(path, payload)
+
+    monkeypatch.setattr(
+        release_store_module,
+        "_write_json_atomic",
+        fail_active_pointer,
+    )
+
+    with pytest.raises(InspectionReleaseError, match="pointer"):
+        store.activate(
+            candidate,
+            mode=ActivationMode.LIMITED_TRIAL,
+            operator="operator",
+            reason="candidate",
+            expected_release_id=baseline.release_id,
+        )
+
+    assert store.active_pointer(baseline.scope) == first
+    assert store._pointer_for_release(baseline.scope, candidate.release_id) is None
+    assert store.resolve_active("Cable1", "A", "yolo") == baseline
+
+
+@pytest.mark.parametrize("failure_target", ["event", "pointer"])
+def test_activation_recovers_when_atomic_write_committed_before_reporting_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_target: str,
+) -> None:
+    store = InspectionReleaseStore(tmp_path / "store")
+    baseline = store.commit(_release(tmp_path / "baseline"))
+    candidate = store.commit(
+        _release(tmp_path / "candidate", display_version="inspection-v1.0.2")
+    )
+    store.activate(
+        baseline,
+        mode=ActivationMode.LIMITED_TRIAL,
+        operator="operator",
+        reason="baseline",
+        expected_release_id=None,
+    )
+    real_write_json_atomic = release_store_module._write_json_atomic
+
+    def write_then_report_error(path: Path, payload: object) -> None:
+        real_write_json_atomic(path, payload)
+        is_event = path.parent.parent.name == "events"
+        is_pointer = path.parent.name == "active"
+        if (failure_target == "event" and is_event) or (
+            failure_target == "pointer" and is_pointer
+        ):
+            raise OSError("simulated post-replace durability error")
+
+    monkeypatch.setattr(
+        release_store_module,
+        "_write_json_atomic",
+        write_then_report_error,
+    )
+
+    pointer = store.activate(
+        candidate,
+        mode=ActivationMode.LIMITED_TRIAL,
+        operator="operator",
+        reason="candidate",
+        expected_release_id=baseline.release_id,
+    )
+
+    reopened = InspectionReleaseStore(store.root)
+    assert reopened.active_pointer(candidate.scope) == pointer
+    assert reopened.resolve_active("Cable1", "A", "yolo") == candidate
+
+
+def test_schema2_active_pointer_requires_its_exact_activation_event(
+    tmp_path: Path,
+) -> None:
+    store = InspectionReleaseStore(tmp_path / "store")
+    release = store.commit(_release(tmp_path / "artifacts"))
+    pointer = store.activate(
+        release,
+        mode=ActivationMode.LIMITED_TRIAL,
+        operator="operator",
+        reason="verified",
+        expected_release_id=None,
+    )
+    event_path = (
+        store.root
+        / "events"
+        / release.scope.scope_hash
+        / f"{pointer['event_id']}.json"
+    )
+    event_path.unlink()
+
+    with pytest.raises(InspectionReleaseError, match="event"):
+        store.active_pointer(release.scope)
+
+
+def test_schema2_activation_and_rollback_preserve_schema1_history(
+    tmp_path: Path,
+) -> None:
+    store = InspectionReleaseStore(tmp_path / "store")
+    baseline = store.commit(_release(tmp_path / "baseline"))
+    candidate = store.commit(
+        _release(tmp_path / "candidate", display_version="inspection-v1.0.2")
+    )
+    legacy_event_id = str(uuid4())
+    legacy_pointer = {
+        "schema_version": 1,
+        "scope_hash": baseline.scope.scope_hash,
+        "release_id": baseline.release_id,
+        "display_version": baseline.display_version,
+        "mode": ActivationMode.LIMITED_TRIAL.value,
+        "activated_at": "2026-01-01T00:00:00+00:00",
+        "operator": "legacy-operator",
+        "reason": "legacy activation",
+        "previous_release_id": None,
+        "event_id": legacy_event_id,
+    }
+    release_store_module._write_json_atomic(
+        store.root
+        / "events"
+        / baseline.scope.scope_hash
+        / f"20260101T000000+0000-{legacy_event_id}.json",
+        legacy_pointer,
+    )
+    release_store_module._write_json_atomic(
+        store.root / "active" / f"{baseline.scope.scope_hash}.json",
+        legacy_pointer,
+    )
+
+    store.activate(
+        candidate,
+        mode=ActivationMode.LIMITED_TRIAL,
+        operator="operator",
+        reason="schema 2 activation",
+        expected_release_id=baseline.release_id,
+    )
+    restored = store.rollback(
+        baseline.scope,
+        operator="operator",
+        reason="restore legacy release",
+    )
+
+    assert restored["release_id"] == baseline.release_id
+    assert store.resolve_active("Cable1", "A", "yolo") == baseline
 
 
 def test_resolver_caches_unchanged_release_and_revalidates_changed_artifact(tmp_path):

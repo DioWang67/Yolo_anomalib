@@ -1,5 +1,8 @@
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 from core.services.inspection_maintenance import (
     InspectionMaintenanceService,
@@ -179,6 +182,160 @@ def test_apply_backs_up_database_deletes_image_and_keeps_metadata(tmp_path):
         "SELECT event_type, affected_files FROM maintenance_events"
     )
     assert events == [{"event_type": "retention_cleanup", "affected_files": 1}]
+    assert not (result_root / ".inspection_retention_quarantine").exists()
+
+
+def test_event_failure_rolls_back_database_and_restores_quarantined_file(
+    tmp_path,
+    monkeypatch,
+):
+    result_root = tmp_path / "Result"
+    result_root.mkdir()
+    repository = InspectionRepository(result_root / "inspection_records.sqlite3")
+    expired = result_root / "expired.jpg"
+    expired.write_bytes(b"evidence")
+    inspection_id = _add_inspection(
+        repository,
+        tmp_path,
+        name="expired",
+        status="PASS",
+        timestamp="2026-01-01T00:00:00+00:00",
+        artifacts={"original_path": str(expired)},
+    )
+    service = InspectionMaintenanceService(
+        result_root,
+        now_provider=lambda: NOW,
+    )
+
+    def fail_event_insert(*args, **kwargs):
+        raise sqlite3.OperationalError("injected event failure")
+
+    monkeypatch.setattr(service, "_insert_maintenance_event", fail_event_insert)
+
+    with pytest.raises(sqlite3.OperationalError, match="injected event failure"):
+        service.run(dry_run=False, backup_before_apply=False)
+
+    assert expired.read_bytes() == b"evidence"
+    assert repository.query(
+        "SELECT original_path FROM inspections WHERE inspection_id=?",
+        (inspection_id,),
+    ) == [{"original_path": str(expired)}]
+    assert repository.query(
+        "SELECT path FROM inspection_artifacts WHERE inspection_id=?",
+        (inspection_id,),
+    ) == [{"path": str(expired)}]
+    assert repository.query("SELECT * FROM maintenance_events") == []
+    assert not (result_root / ".inspection_retention_quarantine").exists()
+
+
+def test_database_reference_failure_restores_evidence_and_rolls_back_changes(
+    tmp_path,
+    monkeypatch,
+):
+    result_root = tmp_path / "Result"
+    result_root.mkdir()
+    repository = InspectionRepository(result_root / "inspection_records.sqlite3")
+    expired = result_root / "expired.jpg"
+    expired.write_bytes(b"evidence")
+    inspection_id = _add_inspection(
+        repository,
+        tmp_path,
+        name="expired",
+        status="PASS",
+        timestamp="2026-01-01T00:00:00+00:00",
+        artifacts={"original_path": str(expired)},
+    )
+    service = InspectionMaintenanceService(
+        result_root,
+        now_provider=lambda: NOW,
+    )
+    real_remove_references = service._remove_database_artifact_references
+
+    def update_then_fail(connection, candidate):
+        real_remove_references(connection, candidate)
+        raise sqlite3.OperationalError("injected database write failure")
+
+    monkeypatch.setattr(
+        service,
+        "_remove_database_artifact_references",
+        update_then_fail,
+    )
+
+    with pytest.raises(sqlite3.OperationalError, match="database write failure"):
+        service.run(dry_run=False, backup_before_apply=False)
+
+    assert expired.read_bytes() == b"evidence"
+    assert repository.query(
+        "SELECT original_path FROM inspections WHERE inspection_id=?",
+        (inspection_id,),
+    ) == [{"original_path": str(expired)}]
+    assert repository.query(
+        "SELECT path FROM inspection_artifacts WHERE inspection_id=?",
+        (inspection_id,),
+    ) == [{"path": str(expired)}]
+    assert repository.query("SELECT * FROM maintenance_events") == []
+    assert not (result_root / ".inspection_retention_quarantine").exists()
+
+
+def test_final_delete_failure_keeps_audited_quarantine_for_retry(
+    tmp_path,
+    monkeypatch,
+):
+    result_root = tmp_path / "Result"
+    result_root.mkdir()
+    repository = InspectionRepository(result_root / "inspection_records.sqlite3")
+    expired = result_root / "expired.jpg"
+    expired.write_bytes(b"evidence")
+    inspection_id = _add_inspection(
+        repository,
+        tmp_path,
+        name="expired",
+        status="PASS",
+        timestamp="2026-01-01T00:00:00+00:00",
+        artifacts={"original_path": str(expired)},
+    )
+    service = InspectionMaintenanceService(
+        result_root,
+        now_provider=lambda: NOW,
+    )
+
+    def fail_final_delete(path):
+        raise OSError(f"injected final delete failure: {path}")
+
+    monkeypatch.setattr(service, "_delete_quarantined_file", fail_final_delete)
+
+    report = service.run(dry_run=False, backup_before_apply=False)
+
+    assert report.deleted_files == 1
+    assert not expired.exists()
+    assert repository.query(
+        "SELECT original_path FROM inspections WHERE inspection_id=?",
+        (inspection_id,),
+    ) == [{"original_path": ""}]
+    assert (
+        repository.query(
+            "SELECT path FROM inspection_artifacts WHERE inspection_id=?",
+            (inspection_id,),
+        )
+        == []
+    )
+    assert repository.query("SELECT event_type, affected_files FROM maintenance_events") == [
+        {"event_type": "retention_cleanup", "affected_files": 1}
+    ]
+    quarantine_root = result_root / ".inspection_retention_quarantine"
+    assert list(quarantine_root.glob("*/manifest.json"))
+    assert list(quarantine_root.glob("*/files/*"))
+
+    retry_report = InspectionMaintenanceService(
+        result_root,
+        now_provider=lambda: NOW,
+    ).run(dry_run=False, backup_before_apply=False)
+
+    assert retry_report.candidates == ()
+    assert not quarantine_root.exists()
+    assert repository.query("SELECT event_type, affected_files FROM maintenance_events") == [
+        {"event_type": "retention_cleanup", "affected_files": 1}
+    ]
 
 
 def test_dry_run_never_changes_files_or_database(tmp_path):

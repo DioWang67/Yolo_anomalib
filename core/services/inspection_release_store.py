@@ -13,7 +13,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from core.services.inspection_release_models import (
     ActivationMode,
@@ -62,6 +62,13 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _json_file_matches(path: Path, payload: Mapping[str, Any]) -> bool:
+    try:
+        return bool(json.loads(path.read_text(encoding="utf-8")) == dict(payload))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
 
 
 class InspectionReleasePolicy:
@@ -164,8 +171,12 @@ class InspectionReleaseStore:
             else:  # pragma: no cover - production station is Windows
                 import fcntl
 
+                fcntl_api: Any = fcntl
                 try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl_api.flock(
+                        handle.fileno(),
+                        fcntl_api.LOCK_EX | fcntl_api.LOCK_NB,
+                    )
                 except OSError as exc:
                     raise InspectionReleaseConflictError(
                         "Another process is changing this inspection release."
@@ -181,13 +192,22 @@ class InspectionReleaseStore:
                 else:  # pragma: no cover - production station is Windows
                     import fcntl
 
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    fcntl_unlock_api: Any = fcntl
+                    fcntl_unlock_api.flock(
+                        handle.fileno(),
+                        fcntl_unlock_api.LOCK_UN,
+                    )
             except OSError:
                 pass
             handle.close()
 
     def release_dir(self, release: InspectionRelease) -> Path:
-        return self.root / "releases" / release.scope.scope_hash / release.release_id
+        return (
+            self.root
+            / "releases"
+            / str(release.scope.scope_hash)
+            / str(release.release_id)
+        )
 
     def commit(self, release: InspectionRelease) -> InspectionRelease:
         """Commit one immutable release after validating all referenced files."""
@@ -280,6 +300,13 @@ class InspectionReleaseStore:
                         "Validation attestation ID already exists with different evidence."
                     )
                 return self.load(base.scope, base.release_id)
+            active = self.active_pointer(base.scope)
+            if active and str(active.get("release_id") or "") == base.release_id:
+                raise InspectionReleasePolicyError(
+                    "An active inspection release cannot receive new validation "
+                    "evidence. Activate another release or roll back before "
+                    "recording the new validation result."
+                )
             attestation = ReleaseValidationAttestation(
                 attestation_id=attestation_id,
                 release_id=base.release_id,
@@ -310,9 +337,9 @@ class InspectionReleaseStore:
         return (
             self.root
             / "validations"
-            / scope.scope_hash
-            / release_id
-            / f"{attestation_id}.json"
+            / str(scope.scope_hash)
+            / str(release_id)
+            / f"{str(attestation_id)}.json"
         )
 
     def load(self, scope: InspectionScope, release_id: str) -> InspectionRelease:
@@ -455,9 +482,20 @@ class InspectionReleaseStore:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise InspectionReleaseError("Active release pointer is invalid.") from exc
+        if not isinstance(payload, Mapping):
+            raise InspectionReleaseError("Active release pointer is invalid.")
         if payload.get("scope_hash") != scope.scope_hash:
             raise InspectionReleaseError("Active release scope mismatch.")
-        return payload
+        schema_version = payload.get("schema_version")
+        if type(schema_version) is not int or schema_version not in {1, 2}:
+            raise InspectionReleaseError("Active release pointer schema is invalid.")
+        if schema_version == 2:
+            event = self._activation_event(scope, str(payload.get("event_id") or ""))
+            if event != dict(payload):
+                raise InspectionReleaseError(
+                    "Active release activation event is missing or invalid."
+                )
+        return dict(payload)
 
     def resolve_active(
         self, product: str, area: str, inference_type: str
@@ -484,11 +522,11 @@ class InspectionReleaseStore:
             raise InspectionReleasePolicyError(
                 "Activation operator and reason are required."
             )
-        committed = self.load(release.scope, release.release_id)
-        self.policy.require_allowed(committed, mode)
-        self._verify_external_evidence(committed)
         lock = self._lock_for(release.scope.scope_hash)
         with lock, self._cross_process_lock(release.scope.scope_hash):
+            committed = self.load(release.scope, release.release_id)
+            self.policy.require_allowed(committed, mode)
+            self._verify_external_evidence(committed)
             current = self.active_pointer(release.scope)
             current_id = str(current.get("release_id") or "") if current else None
             if current_id != expected_release_id:
@@ -498,28 +536,45 @@ class InspectionReleaseStore:
             event_id = str(uuid4())
             now = datetime.now(timezone.utc).isoformat()
             pointer = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "scope_hash": release.scope.scope_hash,
                 "release_id": release.release_id,
-                "display_version": release.display_version,
+                "display_version": committed.display_version,
                 "mode": mode.value,
                 "activated_at": now,
                 "operator": operator.strip(),
                 "reason": reason.strip(),
                 "previous_release_id": current_id,
+                "previous_event_id": (
+                    str(current.get("event_id") or "") if current else None
+                ),
                 "event_id": event_id,
             }
-            _write_json_atomic(
-                self.root / "active" / f"{release.scope.scope_hash}.json",
-                pointer,
-            )
-            _write_json_atomic(
-                self.root
-                / "events"
-                / release.scope.scope_hash
-                / f"{now.replace(':', '')}-{event_id}.json",
-                pointer,
-            )
+            event_path = self._activation_event_path(release.scope, event_id)
+            pointer_path = self.root / "active" / f"{release.scope.scope_hash}.json"
+            if event_path.exists() or event_path.is_symlink():
+                raise InspectionReleaseConflictError(
+                    "Activation event identity already exists; retry activation."
+                )
+            # The immutable event is the write-ahead record; replacing the
+            # active pointer is the commit point. Unreachable schema 2 events
+            # are aborted attempts and are excluded from rollback history.
+            try:
+                _write_json_atomic(event_path, pointer)
+            except (OSError, TypeError, ValueError) as exc:
+                if not _json_file_matches(event_path, pointer):
+                    raise InspectionReleaseError(
+                        "Activation event could not be recorded; the active "
+                        "release pointer was not changed."
+                    ) from exc
+            try:
+                _write_json_atomic(pointer_path, pointer)
+            except (OSError, TypeError, ValueError) as exc:
+                if not _json_file_matches(pointer_path, pointer):
+                    raise InspectionReleaseError(
+                        "Active release pointer could not be recorded; the "
+                        "previous release remains active."
+                    ) from exc
             return pointer
 
     def rollback(
@@ -554,7 +609,25 @@ class InspectionReleaseStore:
     def _pointer_for_release(
         self, scope: InspectionScope, release_id: str
     ) -> dict[str, Any] | None:
-        event_root = self.root / "events" / scope.scope_hash
+        current = self.active_pointer(scope)
+        event = current
+        visited: set[str] = set()
+        while event is not None and event.get("schema_version") == 2:
+            event_id = str(event.get("event_id") or "")
+            if not event_id or event_id in visited:
+                raise InspectionReleaseError("Activation event history is invalid.")
+            visited.add(event_id)
+            if event.get("release_id") == release_id:
+                return event
+            previous_event_id = str(event.get("previous_event_id") or "")
+            if not previous_event_id:
+                break
+            event = self._activation_event(scope, previous_event_id)
+
+        # Schema 1 events predate the committed-event chain. They remain
+        # readable for rollback compatibility, while unreachable schema 2
+        # events are ignored as aborted activation attempts.
+        event_root = self.root / "events" / str(scope.scope_hash)
         if not event_root.is_dir():
             return None
         for path in sorted(event_root.glob("*.json"), reverse=True):
@@ -562,15 +635,63 @@ class InspectionReleaseStore:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            if payload.get("release_id") == release_id:
-                return payload
+            if (
+                isinstance(payload, Mapping)
+                and payload.get("schema_version") == 1
+                and payload.get("release_id") == release_id
+            ):
+                return dict(payload)
         return None
+
+    def _activation_event_path(
+        self,
+        scope: InspectionScope,
+        event_id: str,
+    ) -> Path:
+        try:
+            canonical_event_id = str(UUID(event_id))
+        except (TypeError, ValueError) as exc:
+            raise InspectionReleaseError("Activation event identity is invalid.") from exc
+        if canonical_event_id != event_id.lower():
+            raise InspectionReleaseError("Activation event identity is invalid.")
+        event_root = self.root / "events" / str(scope.scope_hash)
+        if event_root.parent.is_symlink() or event_root.is_symlink():
+            raise InspectionReleaseError("Activation event directory is unsafe.")
+        return event_root / f"{canonical_event_id}.json"
+
+    def _activation_event(
+        self,
+        scope: InspectionScope,
+        event_id: str,
+    ) -> dict[str, Any]:
+        exact_path = self._activation_event_path(scope, event_id)
+        candidates = [exact_path] if exact_path.is_file() else []
+        if not candidates:
+            candidates = sorted(exact_path.parent.glob(f"*-{event_id}.json"))
+        if len(candidates) != 1:
+            raise InspectionReleaseError(
+                "Active release activation event is missing or ambiguous."
+            )
+        path = candidates[0]
+        if path.is_symlink():
+            raise InspectionReleaseError("Activation event cannot be a symlink.")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise InspectionReleaseError("Activation event is invalid.") from exc
+        if (
+            not isinstance(payload, Mapping)
+            or str(payload.get("event_id") or "").lower() != event_id.lower()
+            or payload.get("scope_hash") != scope.scope_hash
+        ):
+            raise InspectionReleaseError("Activation event is invalid.")
+        return dict(payload)
 
     def _resolve_external_path(self, path_value: str) -> Path:
         path = Path(path_value).expanduser()
         if path.exists() or self._station_paths is None:
             return path.resolve()
-        return self._station_paths.relocate_legacy_path(path)
+        return Path(self._station_paths.relocate_legacy_path(path))
 
     def _relocate_external_paths(
         self,
