@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import shutil
@@ -160,7 +161,7 @@ class InspectionReleaseStore:
                 handle.flush()
             handle.seek(0)
             if os.name == "nt":
-                import msvcrt
+                msvcrt: Any = importlib.import_module("msvcrt")
 
                 try:
                     msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
@@ -169,9 +170,7 @@ class InspectionReleaseStore:
                         "Another process is changing this inspection release."
                     ) from exc
             else:  # pragma: no cover - production station is Windows
-                import fcntl
-
-                fcntl_api: Any = fcntl
+                fcntl_api: Any = importlib.import_module("fcntl")
                 try:
                     fcntl_api.flock(
                         handle.fileno(),
@@ -186,13 +185,15 @@ class InspectionReleaseStore:
             try:
                 handle.seek(0)
                 if os.name == "nt":
-                    import msvcrt
+                    msvcrt_unlock: Any = importlib.import_module("msvcrt")
 
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    msvcrt_unlock.locking(
+                        handle.fileno(),
+                        msvcrt_unlock.LK_UNLCK,
+                        1,
+                    )
                 else:  # pragma: no cover - production station is Windows
-                    import fcntl
-
-                    fcntl_unlock_api: Any = fcntl
+                    fcntl_unlock_api: Any = importlib.import_module("fcntl")
                     fcntl_unlock_api.flock(
                         handle.fileno(),
                         fcntl_unlock_api.LOCK_UN,
