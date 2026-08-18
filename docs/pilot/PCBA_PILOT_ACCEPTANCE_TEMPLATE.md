@@ -10,6 +10,11 @@ Use this record for each product/area before enabling unattended production deci
 - Fixture / camera ID:
 - Model config path:
 - Model weights path:
+- Inference Git SHA (40 characters):
+- Training Git SHA (40 characters):
+- Git worktrees clean at pilot start/end:
+- Runtime config SHA-256:
+- Model weights SHA-256:
 - Operator / engineer:
 
 ## Readiness Gate
@@ -64,7 +69,12 @@ Run without blocking production decisions. Review all FAIL cases before acceptin
 - False negative count:
 - Uncertain count:
 - Review manifest path:
+- Review manifest SHA-256:
 - Exported review dataset path:
+- Pilot started at:
+- Pilot completed at:
+- Shift duration:
+- Live production cycle count (minimum 500 and at least one complete shift):
 
 ## Go / No-Go
 
@@ -74,6 +84,30 @@ Run without blocking production decisions. Review all FAIL cases before acceptin
 - [ ] Known NG cases fail with expected reason codes.
 - [ ] Dry-run review has acceptable false positive / false negative rates.
 - [ ] Rollback config and weights are documented.
+- [ ] Preflight evidence and backup/restore drill are attached by SHA-256;
+      `--strict` was used when company sync is in rollout scope.
+- [ ] Inspection-history XLSX was reopened and spot-checked against SQLite.
+- [ ] Duplicate-suppression PASS candidates are all reviewed as `confirmed_ok`.
+- [ ] Camera disconnect/reconnect was exercised on this exact code/artifact identity.
+- [ ] Company sync is either explicitly out of scope or has verified receipt,
+      reconnect, idempotency, and zero-pending-outbox evidence.
+
+## Evidence Bundle and Authenticated Approval
+
+- Evidence bundle/report path:
+- Evidence bundle/report SHA-256:
+- Protected PR or signed approval record URL:
+
+Every approval must reference the same evidence SHA-256. A local CLI field or
+typed name is not approval; record identity and decision in an authenticated PR
+review or externally signed record.
+
+| Required role | Authenticated identity | Approved at (ISO-8601) | Decision | Review/signature URL |
+| --- | --- | --- | --- | --- |
+| Process owner |  |  |  |  |
+| AI/ML owner |  |  |  |  |
+| Software owner |  |  |  |  |
+| Production line owner |  |  |  |  |
 
 Decision:
 
@@ -81,4 +115,7 @@ Decision:
 - [ ] Go for unattended production
 - [ ] No-go
 
-Approver:
+Legacy single approver field (not sufficient for unattended-production approval):
+
+這份本機紀錄只屬於佐證，不是經身分驗證的核准。製程、AI、軟體及產線負責人
+必須在受保護的 PR review 或外部簽章紀錄中，核准完全相同的 evidence SHA。

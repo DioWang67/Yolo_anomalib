@@ -135,3 +135,30 @@ def test_duplicate_filter_rejects_unsafe_pipeline_order(steps):
     env = _make_env(enable_color=True)
     with pytest.raises(ValueError, match="cross_class_duplicate_filter"):
         build_pipeline(steps, env, {})
+
+
+@pytest.mark.parametrize(
+    "repeated_step",
+    [
+        "color_check",
+        "position_check",
+        "cross_class_duplicate_filter",
+        "count_check",
+        "sequence_check",
+        "save_results",
+    ],
+)
+def test_pipeline_rejects_repeated_critical_orchestration_steps(repeated_step):
+    env = _make_env(enable_color=True)
+    steps = [
+        "color_check",
+        "position_check",
+        "cross_class_duplicate_filter",
+        "count_check",
+        "sequence_check",
+        "save_results",
+    ]
+    steps.insert(steps.index(repeated_step), repeated_step)
+
+    with pytest.raises(ValueError, match="must not be repeated"):
+        build_pipeline(steps, env, {})

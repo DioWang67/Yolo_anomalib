@@ -49,6 +49,7 @@ _LABEL_TO_CELL: dict[str, str] = {
     "false_positive": "fp",
     "false_negative": "fn",
     "confirmed_ok": "tn",
+    "verified_empty": "fp",
     "wrong_box": "tp",
     "wrong_class": "tp",
     "confirmed_pass": "tn",
@@ -105,9 +106,7 @@ def _safe_ratio(numerator: int, denominator: int) -> float | None:
     return round(numerator / denominator, 4)
 
 
-def _classify(
-    label: str, status: str, product_verdict: str = ""
-) -> tuple[str, bool]:
+def _classify(label: str, status: str, product_verdict: str = "") -> tuple[str, bool]:
     """Map a review label to a confusion cell.
 
     Returns ``(cell, is_inconsistent)`` where *cell* is one of
@@ -161,9 +160,7 @@ def build_confusion_matrix(rows: list[dict[str, Any]]) -> ConfusionMatrix:
     )
 
 
-def metrics_from_matrix(
-    matrix: ConfusionMatrix, *, scope: str, product: str = "", area: str = ""
-) -> InspectionMetrics:
+def metrics_from_matrix(matrix: ConfusionMatrix, *, scope: str, product: str = "", area: str = "") -> InspectionMetrics:
     """Derive trust metrics from a confusion matrix, with caveats as notes."""
     escape_rate = _safe_ratio(matrix.fn, matrix.tp + matrix.fn)
     recall = _safe_ratio(matrix.tp, matrix.tp + matrix.fn)
@@ -182,19 +179,13 @@ def metrics_from_matrix(
             "false_negative boards."
         )
     if matrix.tn == 0 and matrix.fp > 0:
-        notes.append(
-            "overkill_rate needs confirmed_ok (TN) labels; only false_positive "
-            "(FP) counts are available."
-        )
+        notes.append("overkill_rate needs confirmed_ok (TN) labels; only false_positive (FP) counts are available.")
     if matrix.inconsistent > 0:
         notes.append(
-            f"{matrix.inconsistent} row(s) have a label contradicting their "
-            "machine status (data quality issue)."
+            f"{matrix.inconsistent} row(s) have a label contradicting their machine status (data quality issue)."
         )
     if matrix.unknown_label > 0:
-        notes.append(
-            f"{matrix.unknown_label} row(s) have an unrecognized review_label."
-        )
+        notes.append(f"{matrix.unknown_label} row(s) have an unrecognized review_label.")
 
     return InspectionMetrics(
         scope=scope,
@@ -302,9 +293,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="inspection_metrics.json",
         help="Output metrics JSON path (omit with --no-json to skip)",
     )
-    parser.add_argument(
-        "--no-json", action="store_true", help="Do not write the JSON report"
-    )
+    parser.add_argument("--no-json", action="store_true", help="Do not write the JSON report")
     return parser
 
 

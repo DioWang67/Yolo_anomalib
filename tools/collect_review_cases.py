@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import os
@@ -45,6 +46,10 @@ logger = logging.getLogger(__name__)
 
 class ReviewManifestReadError(RuntimeError):
     """Raised when an existing review manifest cannot be read safely."""
+
+
+class ReviewCaseCollectionError(RuntimeError):
+    """Raised when strict evidence collection cannot prove a complete scope."""
 
 
 @dataclass(frozen=True)
@@ -122,6 +127,7 @@ def collect_review_cases(
     end_time: datetime | str | None = None,
     product: str | None = None,
     area: str | None = None,
+    strict_evidence: bool = False,
 ) -> list[ReviewCase]:
     """Collect review cases from result metadata snapshots.
 
@@ -132,12 +138,24 @@ def collect_review_cases(
         end_time: Optional inclusive upper timestamp bound.
         product: Optional exact product filter applied before artifact discovery.
         area: Optional exact station/area filter applied before artifact discovery.
+        strict_evidence: Reject unreadable snapshots and ambiguous active filter
+            fields instead of silently producing an incomplete manifest.
 
     Returns:
         Sorted list of ReviewCase records.
     """
     root = Path(result_root)
     if not root.exists():
+        if strict_evidence:
+            raise ReviewCaseCollectionError(f"result root does not exist: {root}")
+        return []
+    if root.is_symlink():
+        if strict_evidence:
+            raise ReviewCaseCollectionError(f"result root cannot be a symbolic link: {root}")
+        return []
+    if not root.is_dir():
+        if strict_evidence:
+            raise ReviewCaseCollectionError(f"result root is not a directory: {root}")
         return []
     normalized_start = normalize_time_bound(start_time, field_name="start_time")
     normalized_end = normalize_time_bound(end_time, field_name="end_time")
@@ -148,59 +166,79 @@ def collect_review_cases(
     legacy_crop_cache: dict[Path, tuple[Path, ...]] = {}
 
     cases: list[ReviewCase] = []
-    for snapshot_path in _iter_snapshot_paths(root):
+    for snapshot_path in _iter_snapshot_paths(root, strict_evidence=strict_evidence):
+        if snapshot_path.is_symlink():
+            if strict_evidence:
+                raise ReviewCaseCollectionError(f"snapshot cannot be a symbolic link: {snapshot_path}")
+            continue
         snapshot = _load_json(snapshot_path)
         if snapshot is None:
+            if strict_evidence:
+                raise ReviewCaseCollectionError(
+                    f"snapshot is unreadable, malformed, or not a JSON object: {snapshot_path}"
+                )
             continue
+        raw_product = snapshot.get("product")
+        if product_filter and (not isinstance(raw_product, str) or not raw_product.strip()):
+            if strict_evidence:
+                raise ReviewCaseCollectionError(f"snapshot has invalid product for an active filter: {snapshot_path}")
+        product_name = str(raw_product or "")
+        if product_filter and product_name != product_filter:
+            continue
+        raw_area = snapshot.get("area")
+        if area_filter and (not isinstance(raw_area, str) or not raw_area.strip()):
+            if strict_evidence:
+                raise ReviewCaseCollectionError(f"snapshot has invalid area for an active filter: {snapshot_path}")
+        area_name = str(raw_area or "")
+        if area_filter and area_name != area_filter:
+            continue
+        raw_timestamp = snapshot.get("timestamp")
+        timestamp = str(raw_timestamp or "")
+        if normalized_start is not None or normalized_end is not None:
+            try:
+                observed_timestamp = normalize_time_bound(
+                    raw_timestamp if isinstance(raw_timestamp, (datetime, str)) else None,
+                    field_name="timestamp",
+                )
+            except ValueError as exc:
+                if strict_evidence:
+                    raise ReviewCaseCollectionError(
+                        f"snapshot has invalid timestamp for an active filter: {snapshot_path}"
+                    ) from exc
+                observed_timestamp = None
+            if observed_timestamp is None:
+                if strict_evidence:
+                    raise ReviewCaseCollectionError(
+                        f"snapshot has invalid timestamp for an active filter: {snapshot_path}"
+                    )
+                continue
+            if normalized_start is not None and observed_timestamp < normalized_start:
+                continue
+            if normalized_end is not None and observed_timestamp > normalized_end:
+                continue
+
         status = str(snapshot.get("status") or "").upper()
         if not include_pass and status not in FAIL_STATUSES:
             continue
-        timestamp = str(snapshot.get("timestamp") or "")
-        if not timestamp_in_range(
-            timestamp, start_time=normalized_start, end_time=normalized_end
-        ):
-            continue
-        product = str(snapshot.get("product") or "")
-        area = str(snapshot.get("area") or "")
-        if product_filter and product != product_filter:
-            continue
-        if area_filter and area != area_filter:
-            continue
 
         detector = str(snapshot.get("detector") or "")
-        decision = snapshot.get("decision") if isinstance(snapshot.get("decision"), dict) else {}
-        model_info = snapshot.get("model_info") if isinstance(snapshot.get("model_info"), dict) else {}
-        color_result = (
-            snapshot.get("color_result")
-            if isinstance(snapshot.get("color_result"), dict)
-            else {}
-        )
-        runtime_config = (
-            snapshot.get("config")
-            if isinstance(snapshot.get("config"), dict)
-            else {}
-        )
-        equipment = (
-            snapshot.get("equipment")
-            if isinstance(snapshot.get("equipment"), dict)
-            else {}
-        )
-        artifacts = (
-            snapshot.get("artifacts")
-            if isinstance(snapshot.get("artifacts"), dict)
-            else {}
-        )
+        decision = _mapping_or_empty(snapshot.get("decision"))
+        model_info = _mapping_or_empty(snapshot.get("model_info"))
+        color_result = _mapping_or_empty(snapshot.get("color_result"))
+        runtime_config = _mapping_or_empty(snapshot.get("config"))
+        equipment = _mapping_or_empty(snapshot.get("equipment"))
+        artifacts = _mapping_or_empty(snapshot.get("artifacts"))
         raw_detections = snapshot.get("detections")
         has_detection_contract = isinstance(raw_detections, list)
-        detections = raw_detections if has_detection_contract else []
+        detections: list[Any] = raw_detections if isinstance(raw_detections, list) else []
         preprocessed_path = _artifact_or_fallback(
             snapshot,
             "preprocessed_path",
             _find_evidence_image(
                 snapshot_path,
                 detector,
-                product,
-                area,
+                product_name,
+                area_name,
                 directory_name="preprocessed",
             ),
         )
@@ -226,14 +264,8 @@ def collect_review_cases(
         class_names = _normalize_class_names(model_info.get("class_names"))
         observed_class_map = _observed_class_map(detections)
         artifact_crop_values = artifacts.get("cropped_paths")
-        has_artifact_crop_contract = isinstance(
-            artifact_crop_values, (list, tuple)
-        )
-        artifact_crop_paths = [
-            Path(str(path))
-            for path in _path_list(artifact_crop_values)
-            if str(path or "").strip()
-        ]
+        has_artifact_crop_contract = isinstance(artifact_crop_values, (list, tuple))
+        artifact_crop_paths = [Path(str(path)) for path in _path_list(artifact_crop_values) if str(path or "").strip()]
         failure_crop_paths = (
             [path for path in artifact_crop_paths if "_NG_" in path.name]
             if has_artifact_crop_contract
@@ -247,17 +279,14 @@ def collect_review_cases(
         cases.append(
             ReviewCase(
                 timestamp=timestamp,
-                product=product,
-                area=area,
+                product=product_name,
+                area=area_name,
                 machine_id=str(equipment.get("machine_id") or ""),
                 work_order=str(equipment.get("work_order") or ""),
                 camera_id=str(equipment.get("camera_id") or ""),
                 status=status,
                 detector=detector,
-                decision_reasons="|".join(
-                    str(item)
-                    for item in _snapshot_fail_reasons(snapshot, decision)
-                ),
+                decision_reasons="|".join(str(item) for item in _snapshot_fail_reasons(snapshot, decision)),
                 model_version=str(model_info.get("model_version") or ""),
                 weights=str(model_info.get("weights") or ""),
                 inference_time=_format_inference_time(snapshot.get("inference_time")),
@@ -266,7 +295,12 @@ def collect_review_cases(
                     _artifact_or_fallback(
                         snapshot,
                         "original_path",
-                        _find_original_path(snapshot_path, detector, product, area),
+                        _find_original_path(
+                            snapshot_path,
+                            detector,
+                            product_name,
+                            area_name,
+                        ),
                     )
                 ),
                 preprocessed_path=str(preprocessed_path),
@@ -274,37 +308,26 @@ def collect_review_cases(
                     _artifact_or_fallback(
                         snapshot,
                         "annotated_path",
-                        _find_annotated_path(snapshot_path, detector, product, area),
+                        _find_annotated_path(
+                            snapshot_path,
+                            detector,
+                            product_name,
+                            area_name,
+                        ),
                     )
                 ),
-                detections_json=json.dumps(
-                    detections, ensure_ascii=False, separators=(",", ":")
-                ),
-                detected_box_count=(
-                    "" if detected_box_count is None else str(detected_box_count)
-                ),
+                detections_json=json.dumps(detections, ensure_ascii=False, separators=(",", ":")),
+                detected_box_count=("" if detected_box_count is None else str(detected_box_count)),
                 detection_evidence_source=detection_evidence_source,
-                class_names_json=json.dumps(
-                    class_names, ensure_ascii=False, separators=(",", ":")
-                ),
-                class_map_json=json.dumps(
-                    observed_class_map, ensure_ascii=False, separators=(",", ":")
-                ),
-                failure_crop_paths="|".join(
-                    str(path) for path in failure_crop_paths
-                ),
+                class_names_json=json.dumps(class_names, ensure_ascii=False, separators=(",", ":")),
+                class_map_json=json.dumps(observed_class_map, ensure_ascii=False, separators=(",", ":")),
+                failure_crop_paths="|".join(str(path) for path in failure_crop_paths),
                 crop_paths="|".join(str(path) for path in artifact_crop_paths),
                 mask_paths="|".join(
-                    str(path)
-                    for path in _path_list(artifacts.get("mask_paths"))
-                    if str(path or "").strip()
+                    str(path) for path in _path_list(artifacts.get("mask_paths")) if str(path or "").strip()
                 ),
-                color_result_json=json.dumps(
-                    color_result, ensure_ascii=False, separators=(",", ":")
-                ),
-                color_checker_type=str(
-                    runtime_config.get("color_checker_type") or ""
-                ),
+                color_result_json=json.dumps(color_result, ensure_ascii=False, separators=(",", ":")),
+                color_checker_type=str(runtime_config.get("color_checker_type") or ""),
                 color_failure_count=str(_color_failure_count(color_result)),
             )
         )
@@ -313,9 +336,12 @@ def collect_review_cases(
     return cases
 
 
-def _snapshot_fail_reasons(
-    snapshot: dict[str, Any], decision: dict[str, Any]
-) -> list[str]:
+def _mapping_or_empty(value: Any) -> dict[str, Any]:
+    """Return a typed mapping for optional snapshot sections."""
+    return value if isinstance(value, dict) else {}
+
+
+def _snapshot_fail_reasons(snapshot: dict[str, Any], decision: dict[str, Any]) -> list[str]:
     """Return stable failure reason codes from new or legacy snapshots."""
     raw_reasons = snapshot.get("fail_reasons")
     if not isinstance(raw_reasons, list):
@@ -335,10 +361,7 @@ def _color_failure_count(color_result: dict[str, Any]) -> int:
     items = color_result.get("items")
     if not isinstance(items, list):
         return 0
-    return sum(
-        isinstance(item, dict) and item.get("is_ok") is False
-        for item in items
-    )
+    return sum(isinstance(item, dict) and item.get("is_ok") is False for item in items)
 
 
 def _normalize_class_names(value: Any) -> list[str]:
@@ -366,9 +389,7 @@ def _observed_class_map(detections: list[Any]) -> dict[str, str]:
             class_id = int(detection["class_id"])
         except (KeyError, TypeError, ValueError):
             continue
-        class_name = str(
-            detection.get("class") or detection.get("class_name") or ""
-        ).strip()
+        class_name = str(detection.get("class") or detection.get("class_name") or "").strip()
         if class_id >= 0 and class_name:
             observed[str(class_id)] = class_name
     return observed
@@ -377,16 +398,12 @@ def _observed_class_map(detections: list[Any]) -> dict[str, str]:
 def _usable_detection_count(detections: list[Any]) -> int:
     """Count structured detections that carry a usable bounding box."""
     return sum(
-        isinstance(detection, dict)
-        and isinstance(detection.get("bbox"), (list, tuple))
-        and len(detection["bbox"]) >= 4
+        isinstance(detection, dict) and isinstance(detection.get("bbox"), (list, tuple)) and len(detection["bbox"]) >= 4
         for detection in detections
     )
 
 
-def normalize_time_bound(
-    value: datetime | str | None, *, field_name: str
-) -> datetime | None:
+def normalize_time_bound(value: datetime | str | None, *, field_name: str) -> datetime | None:
     """Normalize a local/ISO timestamp bound to a timezone-naive local value.
 
     Args:
@@ -435,20 +452,38 @@ def timestamp_in_range(
     return True
 
 
-def _iter_snapshot_paths(root: Path) -> list[Path]:
-    """Return snapshots while skipping directories that cannot be read."""
+def _iter_snapshot_paths(
+    root: Path,
+    *,
+    strict_evidence: bool = False,
+) -> list[Path]:
+    """Return snapshots, optionally rejecting incomplete directory scans."""
+
+    def handle_walk_error(error: OSError) -> None:
+        if strict_evidence:
+            raise ReviewCaseCollectionError(
+                f"result directory could not be scanned: {error.filename or root}: {error}"
+            ) from error
+
     paths: list[Path] = []
-    for directory, child_dirs, filenames in os.walk(root, onerror=lambda _error: None):
+    for directory, child_dirs, filenames in os.walk(
+        root,
+        onerror=handle_walk_error,
+        followlinks=False,
+    ):
         child_dirs.sort()
+        if strict_evidence:
+            for child_name in child_dirs:
+                child_path = Path(directory) / child_name
+                if child_path.is_symlink():
+                    raise ReviewCaseCollectionError(f"result directory cannot contain symbolic links: {child_path}")
         for filename in sorted(filenames):
             if filename.endswith("_config_snapshot.json"):
                 paths.append(Path(directory) / filename)
     return paths
 
 
-def _artifact_or_fallback(
-    snapshot: dict[str, Any], key: str, fallback: Path | str
-) -> Path | str:
+def _artifact_or_fallback(snapshot: dict[str, Any], key: str, fallback: Path | str) -> Path | str:
     """Prefer the schema-v2 artifact path when it still exists."""
     artifacts = snapshot.get("artifacts")
     if isinstance(artifacts, dict):
@@ -458,9 +493,7 @@ def _artifact_or_fallback(
     return fallback
 
 
-def _attach_image_dimensions(
-    detections: list[Any], image_path: Path | str
-) -> list[dict[str, Any]]:
+def _attach_image_dimensions(detections: list[Any], image_path: Path | str) -> list[dict[str, Any]]:
     """Add image dimensions needed to convert pixel boxes into YOLO labels.
 
     Existing schema-v2 records did not always include these values. Reading the
@@ -468,9 +501,7 @@ def _attach_image_dimensions(
     failing safely when that evidence image is unavailable or corrupt.
     """
     normalized = [dict(item) for item in detections if isinstance(item, dict)]
-    if not normalized or all(
-        item.get("image_width") and item.get("image_height") for item in normalized
-    ):
+    if not normalized or all(item.get("image_width") and item.get("image_height") for item in normalized):
         return normalized
     dimensions = _read_image_dimensions(image_path)
     if dimensions is None:
@@ -509,7 +540,7 @@ def write_manifest(
     output_json: str | Path | None = None,
 ) -> None:
     """Write review cases while preserving existing human review fields."""
-    csv_path = Path(output_csv)
+    csv_path, json_path = validate_manifest_destinations(output_csv, output_json)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     existing_reviews = _load_existing_reviews(csv_path)
     rows: list[dict[str, Any]] = []
@@ -537,9 +568,41 @@ def write_manifest(
     fieldnames = list(ReviewCase.__dataclass_fields__.keys())
     _write_csv_atomic(csv_path, fieldnames, rows)
 
-    if output_json is not None:
-        json_path = Path(output_json)
+    if json_path is not None:
         _write_json_atomic(json_path, rows)
+
+
+def validate_manifest_destinations(
+    output_csv: str | Path,
+    output_json: str | Path | None,
+    *,
+    result_root: str | Path | None = None,
+) -> tuple[Path, Path | None]:
+    """Canonicalize manifest outputs and keep them away from result evidence."""
+    csv_candidate = Path(output_csv).expanduser()
+    json_candidate = Path(output_json).expanduser() if output_json is not None else None
+    for candidate in (csv_candidate, json_candidate):
+        if candidate is not None and candidate.is_symlink():
+            raise ValueError("review manifest destination cannot be a symbolic link")
+    csv_path = csv_candidate.resolve(strict=False)
+    json_path = json_candidate.resolve(strict=False) if json_candidate is not None else None
+    if csv_path.suffix.lower() != ".csv":
+        raise ValueError("review manifest CSV destination must use a .csv suffix")
+    if json_path is not None and json_path.suffix.lower() != ".json":
+        raise ValueError("review manifest JSON destination must use a .json suffix")
+    if json_path is not None and csv_path == json_path:
+        raise ValueError("review manifest CSV and JSON destinations must be different")
+    if result_root is not None:
+        protected_root = Path(result_root).expanduser().resolve(strict=False)
+        for destination in (csv_path, json_path):
+            if destination is None:
+                continue
+            try:
+                destination.relative_to(protected_root)
+            except ValueError:
+                continue
+            raise ValueError(f"review manifest destinations must be outside the result root: {protected_root}")
+    return csv_path, json_path
 
 
 def _load_existing_reviews(csv_path: Path) -> dict[str, dict[str, str]]:
@@ -552,8 +615,7 @@ def _load_existing_reviews(csv_path: Path) -> dict[str, dict[str, str]]:
             reader = csv.DictReader(handle, strict=True)
             if not reader.fieldnames or "config_snapshot_path" not in reader.fieldnames:
                 raise ReviewManifestReadError(
-                    "Existing review manifest is missing the "
-                    f"config_snapshot_path column: {csv_path}"
+                    f"Existing review manifest is missing the config_snapshot_path column: {csv_path}"
                 )
             for row in reader:
                 key = str(row.get("config_snapshot_path") or "")
@@ -572,13 +634,10 @@ def _load_existing_reviews(csv_path: Path) -> dict[str, dict[str, str]]:
                     "skip_reason": str(row.get("skip_reason") or ""),
                     "review_label": review_label,
                     "review_note": str(row.get("review_note") or ""),
-                    "review_selected": (
-                        "1" if str(row.get("review_selected") or "0") == "1" else "0"
-                    ),
+                    "review_selected": ("1" if str(row.get("review_selected") or "0") == "1" else "0"),
                     "training_selected": (
                         "0"
-                        if review_label
-                        in {"confirmed_ok", "uncertain", "image_quality_issue"}
+                        if review_label in {"confirmed_ok", "uncertain", "image_quality_issue"}
                         or str(row.get("training_selected") or "1") == "0"
                         else "1"
                     ),
@@ -598,8 +657,7 @@ def _load_existing_reviews(csv_path: Path) -> dict[str, dict[str, str]]:
             exc_info=True,
         )
         raise ReviewManifestReadError(
-            "Unable to read existing review manifest; the original file was not "
-            f"changed: {csv_path}: {exc}"
+            f"Unable to read existing review manifest; the original file was not changed: {csv_path}: {exc}"
         ) from exc
 
 
@@ -701,9 +759,7 @@ def _find_annotated_path(
             return candidate
 
     prefix = f"{detector_prefix}_{product}_{area}_"
-    matches = sorted(annotated_dir.glob(f"{prefix}*.jpg")) + sorted(
-        annotated_dir.glob(f"{prefix}*.png")
-    )
+    matches = sorted(annotated_dir.glob(f"{prefix}*.jpg")) + sorted(annotated_dir.glob(f"{prefix}*.png"))
     return matches[0] if matches else ""
 
 
@@ -714,9 +770,7 @@ def _find_original_path(
     area: str,
 ) -> Path | str:
     """Return the clean source image saved for one inspection."""
-    return _find_evidence_image(
-        snapshot_path, detector, product, area, directory_name="original"
-    )
+    return _find_evidence_image(snapshot_path, detector, product, area, directory_name="original")
 
 
 def _find_evidence_image(
@@ -741,9 +795,7 @@ def _find_evidence_image(
 
     prefix = f"{detector_prefix}_{product}_{area}_"
     matches = sorted(
-        path
-        for path in evidence_dir.glob(f"{prefix}*")
-        if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
+        path for path in evidence_dir.glob(f"{prefix}*") if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
     )
     return matches[0] if matches else ""
 
@@ -758,11 +810,7 @@ def _find_failure_crop_paths(
     if base_path is None:
         return []
     crop_dir = base_path / "cropped" / detector.lower()
-    return [
-        path
-        for path in _legacy_crop_files(crop_dir, directory_cache=directory_cache)
-        if "_NG_" in path.name
-    ]
+    return [path for path in _legacy_crop_files(crop_dir, directory_cache=directory_cache) if "_NG_" in path.name]
 
 
 def _find_detection_crop_paths(
@@ -825,6 +873,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--start-time", help="Inclusive ISO-8601 lower bound")
     parser.add_argument("--end-time", help="Inclusive ISO-8601 upper bound")
+    parser.add_argument("--product", help="Exact product filter")
+    parser.add_argument("--area", help="Exact area filter")
+    parser.add_argument(
+        "--strict-evidence",
+        action="store_true",
+        help="Fail when any snapshot or active scope field cannot be verified",
+    )
     return parser
 
 
@@ -832,16 +887,43 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     args = build_arg_parser().parse_args(argv)
     result_root = resolve_result_root(args.result_root)
-    output_csv = resolve_review_manifest(args.output_csv)
-    output_json = resolve_review_manifest(
-        args.output_json,
-        default_name="review_manifest.json",
+    for raw_path in (args.output_csv, args.output_json):
+        if raw_path is not None and Path(raw_path).expanduser().is_symlink():
+            raise ValueError("review manifest destination cannot be a symbolic link")
+    filter_key = "\x1f".join(
+        (
+            args.product or "",
+            args.area or "",
+            args.start_time or "",
+            args.end_time or "",
+        )
     )
+    filtered = bool(filter_key.strip("\x1f"))
+    default_csv_name = (
+        f"review_manifest_filtered_{hashlib.sha256(filter_key.encode('utf-8')).hexdigest()[:12]}.csv"
+        if filtered
+        else "review_manifest.csv"
+    )
+    output_csv = resolve_review_manifest(args.output_csv, default_name=default_csv_name)
+    output_json = (
+        resolve_review_manifest(args.output_json) if args.output_json is not None else output_csv.with_suffix(".json")
+    )
+    output_csv, validated_json = validate_manifest_destinations(
+        output_csv,
+        output_json,
+        result_root=result_root,
+    )
+    if validated_json is None:  # pragma: no cover - output_json is paired above
+        raise AssertionError("paired review JSON destination was not resolved")
+    output_json = validated_json
     cases = collect_review_cases(
         result_root,
         include_pass=args.include_pass,
         start_time=args.start_time,
         end_time=args.end_time,
+        product=args.product,
+        area=args.area,
+        strict_evidence=args.strict_evidence,
     )
     write_manifest(cases, output_csv, output_json)
     print(f"Wrote {len(cases)} review cases to {output_csv}")

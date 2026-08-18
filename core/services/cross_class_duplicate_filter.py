@@ -16,6 +16,29 @@ class DuplicateFilterMode(str, Enum):
     SUPPRESS = "suppress"
 
 
+def duplicate_filter_position_block_status(
+    *,
+    require_position_disabled: bool,
+    position_state: str,
+) -> str | None:
+    """Return the runtime block status for the position-safety guard."""
+
+    if not require_position_disabled:
+        return None
+    normalized_state = str(position_state).strip().lower()
+    if normalized_state == "disabled":
+        return None
+    if normalized_state == "enabled":
+        return "blocked_position_enabled"
+    return "blocked_position_state_unknown"
+
+
+def duplicate_filter_color_block_status(*, has_color_items: bool) -> str | None:
+    """Return the runtime block status when color evidence is unavailable."""
+
+    return None if has_color_items else "blocked_color_result_unavailable"
+
+
 @dataclass(frozen=True)
 class DuplicateFilterPolicy:
     """Immutable safety policy for cross-class duplicate analysis."""

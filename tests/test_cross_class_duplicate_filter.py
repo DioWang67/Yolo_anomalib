@@ -213,6 +213,26 @@ def test_position_enabled_blocks_suppression_fail_closed() -> None:
     )
 
 
+@pytest.mark.parametrize("color_result", [{}, {"items": []}])
+def test_missing_or_empty_color_items_block_before_duplicate_analysis(
+    color_result,
+) -> None:
+    context = _context()
+    context.color_result = color_result
+    step = CrossClassDuplicateFilterStep(
+        logging.getLogger(__name__),
+        options=_policy().to_dict(),
+    )
+
+    step.run(context)
+
+    metadata = context.result["duplicate_filter"]
+    assert metadata["status"] == "blocked_color_result_unavailable"
+    assert metadata["candidate_count"] == 0
+    assert metadata["would_suppress_count"] == 0
+    assert "raw_detections" not in context.result
+
+
 class _PipelineConfig(_PositionConfig):
     def get_items_by_area(self, product: str, area: str) -> list[str]:
         return ["Red", "Green", "Orange", "Yellow", "Black", "Black"]

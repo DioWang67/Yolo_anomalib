@@ -84,24 +84,45 @@ position_config:
 .\pcba.bat collect --result-root ..\Result
 .\pcba.bat collect --result-root ..\Result --include-pass
 
-# 依人工標註後的 manifest 建立摘要
-.\pcba.bat summary A
-.\pcba.bat summary B
+# 將證據限制在單一產品／區域，以及實站 pilot 的精確時間窗。
+.\pcba.bat collect --result-root ..\Result --product PCBA1 --area A `
+  --start-time <ISO-8601> --end-time <ISO-8601> --include-pass --strict-evidence `
+  --output-csv ..\release_artifacts\yolo11_inference\review_manifest_PCBA1_A.csv `
+  --output-json ..\release_artifacts\yolo11_inference\review_manifest_PCBA1_A.json
 
-# 一次執行 readiness、收集與摘要
-.\pcba.bat pilot A --result-root ..\Result --include-pass
-.\pcba.bat pilot B --result-root ..\Result --include-pass
+# 依人工標註後的 manifest 建立摘要
+.\pcba.bat summary A `
+  --review-manifest-csv ..\release_artifacts\yolo11_inference\review_manifest_PCBA1_A.csv
+# B 區需先以相同方式收集 B 的 scoped manifest，再把該 CSV 明確傳給 summary B。
+
+# 一次執行 readiness、精確時窗收集與 pre-pilot 摘要
+.\pcba.bat pilot A --product PCBA1 --result-root ..\Result --include-pass `
+  --start-time <ISO-8601> --end-time <ISO-8601>
+.\pcba.bat pilot B --product PCBA1 --result-root ..\Result --include-pass `
+  --start-time <ISO-8601> --end-time <ISO-8601>
 ```
 
 上例的 `..\Result` 對應目前 `workspace.yaml` 的 `inference_results: Result`。
 若部署環境使用其他工作區設定，改傳該設定解析後的實際結果目錄。
+任何 product/area/time filter 都會使用一對 deterministic scope-specific CSV/JSON
+預設檔名；若明確指定其中一個 CSV，JSON 會自動使用同 stem。輸出禁止放在
+`Result` 樹內，避免覆寫檢測 snapshot、SQLite 或備份。
 
-預設輸出：
+輸出位置：
 
-- `readiness_report_A.json`／`readiness_report_B.json`
-- `review_manifest.csv`／`review_manifest.json`
-- `pilot_acceptance_summary_A.json`／`.md`
-- `pilot_acceptance_summary_B.json`／`.md`
+- standalone readiness：`readiness_report_A.json`／`readiness_report_B.json`
+- 未篩選 collect：在 station review root 產生
+  `review_manifest.csv`／`review_manifest.json`
+- 有 product／area／time filter 的 collect 或 one-step pilot：在 `workspace.yaml`
+  指定的 station review root（目前 `..\station_data\yolo11_inference`）產生
+  `review_manifest_<PRODUCT>_<AREA>_<scope-hash>.csv`／`.json`
+- one-step pilot 在目前目錄產生
+  `readiness_report_<PRODUCT>_<AREA>_<scope-hash>.json` 與
+  `pilot_acceptance_summary_<PRODUCT>_<AREA>_<scope-hash>.json`／`.md`
+
+`pilot_acceptance_summary` **只代表 pilot 前篩檢**。其 `merge_eligible` 永遠為
+`false`，不能代表現場驗收完成或人工核准。Exit code `0` 只表示可開始受監督
+pilot；readiness 的 `WARN` 在具名工程接受紀錄完成前仍維持 HOLD。
 
 ## 4. 試產順序
 
@@ -112,7 +133,8 @@ position_config:
 4. 以核准的 Golden OK 板做重複取像，確認結果與治具穩定性。
 5. 以每個宣稱支援的已知 NG 類型驗證原因碼與證據保存。
 6. 在不阻擋產線判定的模式執行 dry run，人工複核全部 FAIL 與抽樣 PASS。
-7. 在 `review_manifest.csv` 填寫 `review_label` 與 `review_note`。
+7. 在該輪 scoped manifest CSV 填寫 `review_label` 與 `review_note`，並將同一路徑
+   明確傳給 `summary --review-manifest-csv`。
 8. 需要補訓時，以 `tools/export_review_dataset.py` 匯出後人工標註；空標籤檔
    不可直接當成真值。
 9. 產生 acceptance summary，並填寫

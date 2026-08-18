@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,17 @@ from typing import Any
 import yaml
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_position_check_enabled(
+    position_config: Mapping[str, Any],
+    product: str,
+    area: str,
+) -> bool:
+    """Resolve a scoped position flag with the production runtime semantics."""
+
+    scope = position_config.get(product, {}).get(area, {})
+    return bool(scope.get("enabled", False))
 
 
 try:  # pragma: no cover - runtime optional depending on pydantic version
@@ -482,8 +494,7 @@ class DetectionConfig:
         Returns:
             bool: True if 'enabled' is True in the position config.
         """
-        cfg = self.get_position_config(product, area)
-        return bool(cfg.get("enabled", False))
+        return resolve_position_check_enabled(self.position_config, product, area)
 
     def get_tolerance_ratio(self, product: str, area: str) -> float:
         """Retrieves the tolerance ratio for position validation.

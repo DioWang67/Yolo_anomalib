@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import tempfile
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +28,7 @@ def run_readiness_checks(
     *,
     product: str | None = None,
     area: str | None = None,
+    source_paths: set[Path] | None = None,
 ) -> list[ReadinessCheck]:
     """Run production readiness checks against a YAML config.
 
@@ -32,12 +36,22 @@ def run_readiness_checks(
         config_path: Global or model-specific inference config.
         product: Product override. Falls back to ``current_product``.
         area: Area override. Falls back to ``current_area``.
+        source_paths: Optional collector populated with every resolved file path
+            used by the checks. Callers writing a report must protect these paths
+            from destination collisions.
 
     Returns:
         Ordered readiness check results.
     """
     path = Path(config_path)
     config, effective_path = _load_effective_config(path, product, area)
+    if source_paths is not None:
+        source_paths.update(
+            {
+                path.expanduser().resolve(strict=False),
+                effective_path.expanduser().resolve(strict=False),
+            }
+        )
     product_name = product or str(config.get("current_product") or "")
     area_name = area or str(config.get("current_area") or "")
     checks: list[ReadinessCheck] = []
@@ -49,10 +63,17 @@ def run_readiness_checks(
         effective_path.exists(),
         f"effective_config={effective_path}",
     )
-    _add(checks, "product_area", bool(product_name and area_name), f"product={product_name or '-'}, area={area_name or '-'}")
+    _add(
+        checks,
+        "product_area",
+        bool(product_name and area_name),
+        f"product={product_name or '-'}, area={area_name or '-'}",
+    )
 
     weights = str(config.get("weights") or "")
     weights_path = _resolve_existing_path(effective_path.parent, weights) if weights else None
+    if source_paths is not None and weights_path is not None:
+        source_paths.add(weights_path.expanduser().resolve(strict=False))
     _add(checks, "weights_configured", bool(weights), "weights path is configured")
     _add(
         checks,
@@ -66,11 +87,14 @@ def run_readiness_checks(
 
     position_cfg = _position_config(config, product_name, area_name)
     position_required = _position_required(config, position_cfg)
+    position_enabled = position_cfg.get("enabled", False)
     _add(
         checks,
         "position_check_enabled",
-        not position_required or bool(position_cfg.get("enabled")),
+        not position_required or position_enabled is True,
         "position validation enabled"
+        if position_required and isinstance(position_enabled, bool)
+        else "position_config.enabled must be a YAML boolean"
         if position_required
         else "position validation is not declared in defect coverage",
     )
@@ -100,20 +124,58 @@ def run_readiness_checks(
     _add_alignment_quality_gate_check(checks, position_cfg)
     _add_defect_coverage_checks(checks, config)
 
-    _add(checks, "save_original", bool(config.get("save_original", True)), "raw image evidence should be saved")
-    _add(checks, "save_annotated", bool(config.get("save_annotated", True)), "annotated image evidence should be saved")
-    _add(checks, "save_crops", bool(config.get("save_crops", True)), "NG crop evidence should be saved")
-    _add(checks, "output_dir", bool(str(config.get("output_dir") or "").strip()), f"output_dir={config.get('output_dir') or '-'}")
-    _add(checks, "fail_on_unexpected", bool(config.get("fail_on_unexpected", True)), "unexpected classes should fail in production")
-    _add_color_readiness_checks(checks, effective_path.parent, config)
+    _add_required_boolean_check(
+        checks,
+        "save_original",
+        config,
+        "save_original",
+        default=True,
+        message="raw image evidence should be saved",
+    )
+    _add_required_boolean_check(
+        checks,
+        "save_annotated",
+        config,
+        "save_annotated",
+        default=True,
+        message="annotated image evidence should be saved",
+    )
+    _add_required_boolean_check(
+        checks,
+        "save_crops",
+        config,
+        "save_crops",
+        default=True,
+        message="NG crop evidence should be saved",
+    )
+    _add(
+        checks,
+        "output_dir",
+        bool(str(config.get("output_dir") or "").strip()),
+        f"output_dir={config.get('output_dir') or '-'}",
+    )
+    _add_required_boolean_check(
+        checks,
+        "fail_on_unexpected",
+        config,
+        "fail_on_unexpected",
+        default=True,
+        message="unexpected classes should fail in production",
+    )
+    color_model_path = _add_color_readiness_checks(checks, effective_path.parent, config)
+    if source_paths is not None and color_model_path is not None:
+        source_paths.add(color_model_path.expanduser().resolve(strict=False))
 
     missing_slot = position_cfg.get("missing_slot_check") if isinstance(position_cfg, dict) else {}
     if isinstance(missing_slot, dict):
+        missing_slot_enabled = missing_slot.get("enabled", False)
         _add(
             checks,
             "missing_slot_check",
-            bool(missing_slot.get("enabled", False)),
-            "recommended for missing-item false fail reduction",
+            missing_slot_enabled is True,
+            "recommended for missing-item false fail reduction"
+            if isinstance(missing_slot_enabled, bool)
+            else "missing_slot_check.enabled must be a YAML boolean",
             warn_only=True,
         )
     else:
@@ -127,14 +189,51 @@ def has_blocking_failures(checks: list[ReadinessCheck]) -> bool:
     return any(check.status == "FAIL" for check in checks)
 
 
-def write_report(checks: list[ReadinessCheck], output_json: str | Path | None = None) -> None:
-    """Optionally write readiness checks to JSON."""
+def write_report(
+    checks: list[ReadinessCheck],
+    output_json: str | Path | None = None,
+    *,
+    protected_sources: Iterable[str | Path] = (),
+) -> None:
+    """Optionally write readiness checks to collision-safe atomic JSON."""
     if output_json is None:
         return
-    path = Path(output_json)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump([asdict(check) for check in checks], handle, ensure_ascii=False, indent=2)
+    candidate = Path(output_json).expanduser()
+    if candidate.is_symlink():
+        raise ValueError("readiness report destination cannot be a symbolic link")
+    destination = candidate.resolve(strict=False)
+    sources = {Path(source).expanduser().resolve(strict=False) for source in protected_sources}
+    if destination in sources:
+        raise ValueError("readiness report destination cannot overwrite source evidence")
+    if destination.suffix.lower() != ".json":
+        raise ValueError("readiness report destination must use a .json suffix")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(
+                [asdict(check) for check in checks],
+                handle,
+                ensure_ascii=False,
+                indent=2,
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, destination)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -145,9 +244,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _load_effective_config(
-    path: Path, product: str | None, area: str | None
-) -> tuple[dict[str, Any], Path]:
+def _load_effective_config(path: Path, product: str | None, area: str | None) -> tuple[dict[str, Any], Path]:
     """Merge the selected model config when a global config is supplied."""
     base = _load_yaml(path)
     product_name = product or str(base.get("current_product") or "")
@@ -181,7 +278,8 @@ def _position_required(config: dict[str, Any], position_cfg: dict[str, Any]) -> 
     required_defects = {"missing_component", "position_shift", "wrong_position"}
     if covered:
         return bool(required_defects.intersection(_normalize_string_list(covered)))
-    return bool(position_cfg.get("enabled"))
+    enabled = position_cfg.get("enabled", False)
+    return enabled if isinstance(enabled, bool) else True
 
 
 def _resolve_existing_path(base_dir: Path, value: str) -> Path:
@@ -272,9 +370,24 @@ def _add_color_readiness_checks(
     checks: list[ReadinessCheck],
     base_dir: Path,
     config: dict[str, Any],
-) -> None:
-    if not bool(config.get("enable_color_check", False)):
-        return
+) -> Path | None:
+    enabled = config.get("enable_color_check", False)
+    if not isinstance(enabled, bool):
+        _add(
+            checks,
+            "color_check_enabled",
+            False,
+            "enable_color_check must be a YAML boolean",
+        )
+        return None
+    _add(
+        checks,
+        "color_check_enabled",
+        True,
+        f"enabled={str(enabled).lower()}",
+    )
+    if not enabled:
+        return None
 
     color_model = str(config.get("color_model_path") or "").strip()
     color_model_path = _resolve_existing_path(base_dir, color_model) if color_model else None
@@ -293,9 +406,10 @@ def _add_color_readiness_checks(
     _add(
         checks,
         "color_fail_closed",
-        bool(config.get("color_fail_closed", True)),
+        config.get("color_fail_closed", True) is True,
         "color checker failures should block production inspections",
     )
+    return color_model_path
 
 
 def _add_alignment_quality_gate_check(
@@ -306,20 +420,21 @@ def _add_alignment_quality_gate_check(
     alignment = alignment if isinstance(alignment, dict) else {}
     gate = alignment.get("quality_gate") if isinstance(alignment, dict) else {}
     gate = gate if isinstance(gate, dict) else {}
-    enabled = bool(gate.get("enabled", False))
+    raw_enabled = gate.get("enabled", False)
+    enabled = raw_enabled if isinstance(raw_enabled, bool) else False
     _add(
         checks,
         "alignment_quality_gate",
         enabled,
-        "recommended to fail when board alignment sources or shift exceed limits",
+        "recommended to fail when board alignment sources or shift exceed limits"
+        if isinstance(raw_enabled, bool)
+        else "alignment quality_gate.enabled must be a YAML boolean",
         warn_only=True,
     )
     if not enabled:
         return
 
-    has_limit = any(
-        key in gate for key in ("max_abs_dx_px", "max_abs_dy_px", "max_shift_px")
-    )
+    has_limit = any(key in gate for key in ("max_abs_dx_px", "max_abs_dy_px", "max_shift_px"))
     _add(
         checks,
         "alignment_shift_limits",
@@ -366,6 +481,25 @@ def _normalize_string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _add_required_boolean_check(
+    checks: list[ReadinessCheck],
+    name: str,
+    config: dict[str, Any],
+    key: str,
+    *,
+    default: bool,
+    message: str,
+) -> None:
+    """Require an enabled YAML boolean without truthy-string coercion."""
+    value = config.get(key, default)
+    _add(
+        checks,
+        name,
+        value is True,
+        message if isinstance(value, bool) else f"{key} must be a YAML boolean",
+    )
+
+
 def _add(
     checks: list[ReadinessCheck],
     name: str,
@@ -389,10 +523,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    checks = run_readiness_checks(args.config, product=args.product, area=args.area)
+    source_paths: set[Path] = set()
+    checks = run_readiness_checks(
+        args.config,
+        product=args.product,
+        area=args.area,
+        source_paths=source_paths,
+    )
     for check in checks:
         print(f"[{check.status}] {check.name}: {check.message}")
-    write_report(checks, args.output_json)
+    try:
+        write_report(
+            checks,
+            args.output_json,
+            protected_sources=source_paths,
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        print(f"[FAIL] readiness_report: {exc}")
+        return 1
     return 1 if has_blocking_failures(checks) else 0
 
 

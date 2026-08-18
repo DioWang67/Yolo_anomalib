@@ -126,7 +126,6 @@ dist\yolo11_inference\
 
 ```powershell
 python -m tools.production_preflight `
-  --result-root Result `
   --config config.yaml `
   --backup-restore-drill
 ```
@@ -221,10 +220,14 @@ PASS。位置檢測啟用時，首版會 fail-closed 顯示
 歷史資料唯讀重播：
 
 ```powershell
-python tools/audit_cross_class_duplicates.py Result\20260729\Cable1\A
+python tools/audit_cross_class_duplicates.py ..\Result\20260729\Cable1\A `
+  --config models\Cable1\A\yolo\config.yaml `
+  --output-json ..\release_artifacts\yolo11_inference\duplicate_audit_Cable1_A.json
 ```
 
-需要程式讀取時加`--json`。停用或回滾時，在模型設定取消啟用；Pipeline 會
+`--config` 將 replay 綁定到實際 duplicate policy；evidence 輸出必須在掃描的
+`Result` 樹外。snapshot/config/結構錯誤或 runtime 不可執行的 policy 會回傳非零。
+需要 stdout 程式讀取時再加`--json`。停用或回滾時，在模型設定取消啟用；Pipeline 會
 同步移除`cross_class_duplicate_filter`，已保存的 raw detections 不受影響。
 Cable1/A 1.0.6 的現行設定與版本設定快照都包含相同 policy，避免切換版本後
 遺失本次修正。
@@ -621,11 +624,14 @@ python -m tools.production_preflight `
 
 ```powershell
 python -m tools.production_preflight `
-  --result-root Result `
   --config config.yaml `
   --backup-restore-drill `
-  --json > production_preflight.json
+  --output-json ..\release_artifacts\production_preflight.json
 ```
+
+`--output-json` 會原子寫入含 schema version、精確 config SHA-256 與備份驗證
+資訊的稽核證據；輸出必須放在 `Result` 樹外。`--json` 僅是相容用的 console
+輸出，不可取代歸檔證據。
 
 ## 15. 事故處理
 

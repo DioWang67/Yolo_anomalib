@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
@@ -73,7 +74,7 @@ def build_pipeline(
     normalized_names = [
         str(raw_name).strip().lower() for raw_name in step_names
     ]
-    _validate_duplicate_filter_order(normalized_names)
+    validate_duplicate_filter_order(normalized_names)
     steps: list[Step] = []
     seen_save = False
     for key in normalized_names:
@@ -99,22 +100,44 @@ def build_pipeline(
     return steps
 
 
-def _validate_duplicate_filter_order(step_names: list[str]) -> None:
+def validate_duplicate_filter_order(step_names: Iterable[str]) -> None:
+    """Reject pipeline orders that cannot safely run duplicate filtering."""
+
+    normalized_names = [
+        str(raw_name).strip().lower() for raw_name in step_names
+    ]
+    orchestration_steps = (
+        "color_check",
+        "position_check",
+        "cross_class_duplicate_filter",
+        "count_check",
+        "sequence_check",
+        "save_results",
+    )
+    counts = Counter(normalized_names)
+    repeated_steps = [
+        name for name in orchestration_steps if counts[name] > 1
+    ]
+    if repeated_steps:
+        raise ValueError(
+            "critical pipeline steps must not be repeated: "
+            + ", ".join(repeated_steps)
+        )
     duplicate_name = "cross_class_duplicate_filter"
-    if duplicate_name not in step_names:
+    if duplicate_name not in normalized_names:
         return
-    duplicate_index = step_names.index(duplicate_name)
-    if "color_check" not in step_names:
+    duplicate_index = normalized_names.index(duplicate_name)
+    if "color_check" not in normalized_names:
         raise ValueError(
             "cross_class_duplicate_filter requires color_check in the pipeline"
         )
-    if step_names.index("color_check") > duplicate_index:
+    if normalized_names.index("color_check") > duplicate_index:
         raise ValueError(
             "cross_class_duplicate_filter must run after color_check"
         )
     downstream = ("count_check", "sequence_check", "save_results")
     for name in downstream:
-        if name in step_names and step_names.index(name) < duplicate_index:
+        if name in normalized_names and normalized_names.index(name) < duplicate_index:
             raise ValueError(
                 f"cross_class_duplicate_filter must run before {name}"
             )

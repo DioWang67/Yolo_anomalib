@@ -15,6 +15,8 @@ from core.services.cross_class_duplicate_filter import (
     DuplicateFilterMode,
     DuplicateFilterPolicy,
     analyze_cross_class_duplicates,
+    duplicate_filter_color_block_status,
+    duplicate_filter_position_block_status,
 )
 from core.services.result_sink import ExcelImageResultSink
 
@@ -179,23 +181,29 @@ class CrossClassDuplicateFilterStep(Step):
             metadata["status"] = "no_detections"
             return
 
-        if self.policy.require_position_disabled:
-            position_state = self._position_check_state(ctx)
-            if position_state != "disabled":
-                metadata["status"] = (
-                    "blocked_position_enabled"
-                    if position_state == "enabled"
-                    else "blocked_position_state_unknown"
-                )
-                self.logger.warning(
-                    "Cross-class duplicate filter blocked: position check state=%s",
-                    position_state,
-                )
-                return
+        position_state = (
+            self._position_check_state(ctx)
+            if self.policy.require_position_disabled
+            else "unknown"
+        )
+        block_status = duplicate_filter_position_block_status(
+            require_position_disabled=self.policy.require_position_disabled,
+            position_state=position_state,
+        )
+        if block_status is not None:
+            metadata["status"] = block_status
+            self.logger.warning(
+                "Cross-class duplicate filter blocked: position check state=%s",
+                position_state,
+            )
+            return
 
         color_items = self._color_items_by_index(ctx.color_result)
-        if not color_items:
-            metadata["status"] = "blocked_color_result_unavailable"
+        color_block_status = duplicate_filter_color_block_status(
+            has_color_items=bool(color_items)
+        )
+        if color_block_status is not None:
+            metadata["status"] = color_block_status
             self.logger.warning(
                 "Cross-class duplicate filter blocked: color result unavailable"
             )

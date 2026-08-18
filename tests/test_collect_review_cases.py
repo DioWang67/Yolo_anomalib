@@ -8,8 +8,10 @@ import numpy as np
 import pytest
 
 from tools.collect_review_cases import (
+    ReviewCaseCollectionError,
     ReviewManifestReadError,
     collect_review_cases,
+    validate_manifest_destinations,
     write_manifest,
 )
 
@@ -101,6 +103,29 @@ def test_write_manifest_replace_failure_preserves_original(tmp_path, monkeypatch
 
     assert manifest.read_bytes() == original
     assert not list(tmp_path.glob(".review_manifest.csv.*.tmp"))
+
+
+def test_manifest_destinations_cannot_overwrite_result_evidence(tmp_path):
+    result_root = tmp_path / "Result"
+    result_root.mkdir()
+
+    with pytest.raises(ValueError, match="outside the result root"):
+        validate_manifest_destinations(
+            result_root / "inspection_records.csv",
+            tmp_path / "manifest.json",
+            result_root=result_root,
+        )
+
+
+def test_write_manifest_rejects_non_manifest_suffix_before_write(tmp_path):
+    protected = tmp_path / "config.yaml"
+    original = b"weights: best.onnx\n"
+    protected.write_bytes(original)
+
+    with pytest.raises(ValueError, match="must use a .csv suffix"):
+        write_manifest([], protected)
+
+    assert protected.read_bytes() == original
 
 
 def test_collect_review_cases_skips_pass_by_default(tmp_path):
@@ -225,20 +250,92 @@ def test_collect_review_cases_rejects_reversed_time_range(tmp_path):
         )
 
 
-def test_target_filter_runs_before_expensive_artifact_discovery(
-    tmp_path, monkeypatch
-):
+def test_strict_collection_rejects_malformed_snapshot(tmp_path):
+    metadata_dir = tmp_path / "Result" / "20260714" / "PCBA" / "TOP" / "FAIL" / "metadata" / "yolo"
+    metadata_dir.mkdir(parents=True)
+    malformed = metadata_dir / "broken_config_snapshot.json"
+    malformed.write_text("{not-json", encoding="utf-8")
+
+    assert collect_review_cases(tmp_path / "Result") == []
+    with pytest.raises(ReviewCaseCollectionError, match="unreadable, malformed"):
+        collect_review_cases(
+            tmp_path / "Result",
+            product="PCBA",
+            area="TOP",
+            start_time="2026-07-14T08:00:00",
+            end_time="2026-07-14T17:00:00",
+            strict_evidence=True,
+        )
+
+
+def test_strict_collection_rejects_result_root_that_is_a_file(tmp_path):
+    result_root = tmp_path / "Result"
+    result_root.write_text("not a directory", encoding="utf-8")
+
+    assert collect_review_cases(result_root) == []
+    with pytest.raises(ReviewCaseCollectionError, match="not a directory"):
+        collect_review_cases(result_root, strict_evidence=True)
+
+
+def test_strict_collection_rejects_invalid_timestamp_in_target_scope(tmp_path):
+    metadata_dir = tmp_path / "Result" / "20260714" / "PCBA" / "TOP" / "FAIL" / "metadata" / "yolo"
+    metadata_dir.mkdir(parents=True)
+    (metadata_dir / "broken_time_config_snapshot.json").write_text(
+        json.dumps(
+            {
+                "timestamp": "not-a-time",
+                "status": "FAIL",
+                "product": "PCBA",
+                "area": "TOP",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ReviewCaseCollectionError, match="invalid timestamp"):
+        collect_review_cases(
+            tmp_path / "Result",
+            product="PCBA",
+            area="TOP",
+            start_time="2026-07-14T08:00:00",
+            end_time="2026-07-14T17:00:00",
+            strict_evidence=True,
+        )
+
+
+def test_strict_collection_filters_other_scope_before_timestamp_validation(tmp_path):
+    result_root = tmp_path / "Result"
+    metadata_dir = result_root / "20260714" / "Other" / "A" / "FAIL" / "metadata" / "yolo"
+    metadata_dir.mkdir(parents=True)
+    (metadata_dir / "legacy_config_snapshot.json").write_text(
+        json.dumps(
+            {
+                "timestamp": "not-a-time",
+                "status": "FAIL",
+                "product": "Other",
+                "area": "A",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        collect_review_cases(
+            result_root,
+            product="PCBA",
+            area="TOP",
+            start_time="2026-07-14T08:00:00",
+            end_time="2026-07-14T17:00:00",
+            strict_evidence=True,
+        )
+        == []
+    )
+
+
+def test_target_filter_runs_before_expensive_artifact_discovery(tmp_path, monkeypatch):
     result_root = tmp_path / "Result"
     for product, area in (("Cable1", "A"), ("PCBA1", "TOP")):
-        metadata = (
-            result_root
-            / "20260721"
-            / product
-            / area
-            / "FAIL"
-            / "metadata"
-            / "yolo"
-        )
+        metadata = result_root / "20260721" / product / area / "FAIL" / "metadata" / "yolo"
         metadata.mkdir(parents=True)
         (metadata / f"{product}_config_snapshot.json").write_text(
             json.dumps(
@@ -277,19 +374,8 @@ def test_target_filter_runs_before_expensive_artifact_discovery(
     assert discovered == ["Cable1_config_snapshot.json"] * 2
 
 
-def test_schema_v2_detection_and_crop_contracts_skip_legacy_globs(
-    tmp_path, monkeypatch
-):
-    metadata = (
-        tmp_path
-        / "Result"
-        / "20260721"
-        / "Cable1"
-        / "A"
-        / "FAIL"
-        / "metadata"
-        / "yolo"
-    )
+def test_schema_v2_detection_and_crop_contracts_skip_legacy_globs(tmp_path, monkeypatch):
+    metadata = tmp_path / "Result" / "20260721" / "Cable1" / "A" / "FAIL" / "metadata" / "yolo"
     metadata.mkdir(parents=True)
     normal_crop = tmp_path / "case_Red_0.png"
     failure_crop = tmp_path / "case_NG_MISSING_0.png"
@@ -301,9 +387,7 @@ def test_schema_v2_detection_and_crop_contracts_skip_legacy_globs(
                 "product": "Cable1",
                 "area": "A",
                 "detections": [],
-                "artifacts": {
-                    "cropped_paths": [str(normal_crop), str(failure_crop)]
-                },
+                "artifacts": {"cropped_paths": [str(normal_crop), str(failure_crop)]},
             }
         ),
         encoding="utf-8",
@@ -345,9 +429,7 @@ def test_collect_review_cases_adds_saved_image_dimensions(tmp_path):
                 "product": "PCBA",
                 "area": "TOP",
                 "artifacts": {"preprocessed_path": str(processed_path)},
-                "detections": [
-                    {"class_id": 0, "confidence": 0.9, "bbox": [1, 2, 10, 15]}
-                ],
+                "detections": [{"class_id": 0, "confidence": 0.9, "bbox": [1, 2, 10, 15]}],
             }
         ),
         encoding="utf-8",
@@ -390,16 +472,7 @@ def test_write_manifest_outputs_csv_and_json(tmp_path):
 
 
 def test_write_manifest_preserves_existing_operator_review(tmp_path):
-    metadata_dir = (
-        tmp_path
-        / "Result"
-        / "20260518"
-        / "PCBA"
-        / "TOP"
-        / "FAIL"
-        / "metadata"
-        / "yolo"
-    )
+    metadata_dir = tmp_path / "Result" / "20260518" / "PCBA" / "TOP" / "FAIL" / "metadata" / "yolo"
     metadata_dir.mkdir(parents=True)
     snapshot = metadata_dir / "yolo_PCBA_TOP_123456_config_snapshot.json"
     snapshot.write_text(

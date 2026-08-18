@@ -177,23 +177,40 @@ engineering/PCBA pilot alternatives, not the primary operator workflow.
 After pilot inference has generated `Result\`, collect review evidence:
 
 ```powershell
-.\pcba.bat collect --include-pass
-.\pcba.bat summary <AREA>
+.\pcba.bat collect --product <PRODUCT> --area <AREA> --include-pass `
+  --start-time <ISO-8601> --end-time <ISO-8601> `
+  --strict-evidence `
+  --output-csv ..\release_artifacts\yolo11_inference\review_manifest_<PRODUCT>_<AREA>.csv `
+  --output-json ..\release_artifacts\yolo11_inference\review_manifest_<PRODUCT>_<AREA>.json
+.\pcba.bat summary <AREA> --product <PRODUCT> `
+  --readiness-json readiness_report_<PRODUCT>_<AREA>.json `
+  --review-manifest-csv ..\release_artifacts\yolo11_inference\review_manifest_<PRODUCT>_<AREA>.csv `
+  --output-json ..\release_artifacts\yolo11_inference\pilot_acceptance_summary_<PRODUCT>_<AREA>.json `
+  --output-md ..\release_artifacts\yolo11_inference\pilot_acceptance_summary_<PRODUCT>_<AREA>.md
 ```
 
-Or run the one-step helper:
+Or run the one-step helper. Because it does not pass explicit manifest output
+paths, it writes the deterministic hash-scoped defaults described below:
 
 ```powershell
-.\pcba.bat pilot <AREA> --include-pass
+.\pcba.bat pilot <AREA> --product <PRODUCT> --include-pass `
+  --start-time <ISO-8601> --end-time <ISO-8601>
 ```
 
-Expected outputs include:
+The explicit collect/summary example writes:
 
-- `readiness_report_<AREA>.json`
-- `review_manifest.csv`
-- `review_manifest.json`
-- `pilot_acceptance_summary_<AREA>.json`
-- `pilot_acceptance_summary_<AREA>.md`
+- `readiness_report_<PRODUCT>_<AREA>.json`
+- `..\release_artifacts\yolo11_inference\review_manifest_<PRODUCT>_<AREA>.csv`
+- `..\release_artifacts\yolo11_inference\review_manifest_<PRODUCT>_<AREA>.json`
+- `..\release_artifacts\yolo11_inference\pilot_acceptance_summary_<PRODUCT>_<AREA>.json`
+- `..\release_artifacts\yolo11_inference\pilot_acceptance_summary_<PRODUCT>_<AREA>.md`
+
+The one-step helper instead writes `readiness_report_<PRODUCT>_<AREA>_<scope-hash>.json`
+and `pilot_acceptance_summary_<PRODUCT>_<AREA>_<scope-hash>.{json,md}` in the
+current directory. Its paired `review_manifest_<PRODUCT>_<AREA>_<scope-hash>.{csv,json}`
+is written under the station review root configured by `workspace.yaml` (currently
+`..\station_data\yolo11_inference`). Pass that exact CSV to any later standalone
+`summary` command; do not substitute the global `review_manifest.csv`.
 
 Operators must fill `review_label` and `review_note` before the data is used
 for retraining or go/no-go decisions.

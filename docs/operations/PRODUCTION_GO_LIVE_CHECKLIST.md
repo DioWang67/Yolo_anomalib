@@ -10,7 +10,7 @@
 Run this before product-specific acceptance:
 
 ```powershell
-python -m tools.production_preflight --result-root Result --config config.yaml --backup-restore-drill
+python -m tools.production_preflight --config config.yaml --backup-restore-drill
 ```
 
 `FAIL` always blocks release. `WARN` requires a named engineering acceptance
@@ -19,8 +19,12 @@ with `--strict`; it must return only `PASS`, and the offline/reconnect and
 duplicate-prevention pilot in `docs/data/COMPANY_SERVER_SYNC.md` is mandatory:
 
 ```powershell
-python -m tools.production_preflight --result-root Result --config config.yaml --backup-restore-drill --strict
+python -m tools.production_preflight --config config.yaml --backup-restore-drill --strict
 ```
+
+要產生可稽核證據，請另外傳入 `--output-json <Result 樹外的 path>`。報告會以 atomic replace
+寫入並記錄精確 config SHA-256。設定檢查為 PASS 不代表公司伺服器 live handshake
+或重送冪等性已通過。
 
 When company synchronization is explicitly outside the current rollout,
 `company_sync_configuration: WARN` documents that limitation. It is not
@@ -53,7 +57,7 @@ This checklist targets controlled PCBA inspection rollout. Passing it means the 
 Run the config gate:
 
 ```powershell
-python tools\production_readiness_check.py --config config.yaml --product PCBA --area TOP --output-json readiness_report.json
+python tools\production_readiness_check.py --config config.yaml --product PCBA --area TOP --output-json readiness_report_PCBA_TOP.json
 ```
 
 Blocking `FAIL` checks should be resolved before production use. `WARN` checks can be accepted only with an explicit engineering note.
@@ -81,7 +85,10 @@ Do not mark unattended production ready until these warnings are either fixed or
 1. Collect review manifest:
 
 ```powershell
-python tools\collect_review_cases.py --result-root Result --output-csv review_manifest.csv --output-json review_manifest.json
+python tools\collect_review_cases.py --product PCBA --area TOP `
+  --start-time <ISO-8601> --end-time <ISO-8601> --include-pass --strict-evidence `
+  --output-csv ..\release_artifacts\yolo11_inference\review_manifest_PCBA_TOP.csv `
+  --output-json ..\release_artifacts\yolo11_inference\review_manifest_PCBA_TOP.json
 ```
 
 2. Fill `review_label` and `review_note`.
@@ -89,7 +96,9 @@ python tools\collect_review_cases.py --result-root Result --output-csv review_ma
 3. Export reviewed images for annotation:
 
 ```powershell
-python tools\export_review_dataset.py --manifest-csv review_manifest.csv --output-dir ..\Yolo11_auto_train\data\pcba_review
+python tools\export_review_dataset.py `
+  --manifest-csv ..\release_artifacts\yolo11_inference\review_manifest_PCBA_TOP.csv `
+  --output-dir ..\Yolo11_auto_train\data\pcba_review
 ```
 
 4. Annotate `raw/images` and `raw/labels`, then run the Yolo11_auto_train pipeline.
@@ -97,5 +106,18 @@ python tools\export_review_dataset.py --manifest-csv review_manifest.csv --outpu
 5. Build the pilot acceptance summary:
 
 ```powershell
-python tools\pilot_acceptance_report.py --product PCBA --area TOP --readiness-json readiness_report.json --review-manifest-csv review_manifest.csv --output-json pilot_acceptance_summary.json --output-md pilot_acceptance_summary.md
+python tools\pilot_acceptance_report.py --product PCBA --area TOP `
+  --readiness-json readiness_report_PCBA_TOP.json `
+  --review-manifest-csv ..\release_artifacts\yolo11_inference\review_manifest_PCBA_TOP.csv `
+  --output-json ..\release_artifacts\yolo11_inference\pilot_acceptance_summary_PCBA_TOP.json `
+  --output-md ..\release_artifacts\yolo11_inference\pilot_acceptance_summary_PCBA_TOP.md
 ```
+
+The product, area, and time window must identify the same pilot scope in every
+command. Never build a station-specific summary from the unfiltered global
+manifest. These commands run from `yolo11_inference`; omitting `--result-root`
+uses the canonical path from the paired workspace manifest.
+
+此命令採 fail-closed：`NO_GO` 與 `HOLD` recommendation 會回傳非零 exit code。
+即使 exit code 為零，也只代表 `READY_TO_START_SUPERVISED_PILOT`；報告固定記錄
+`operational_acceptance_status: NOT_CAPTURED` 與 `merge_eligible: false`。
