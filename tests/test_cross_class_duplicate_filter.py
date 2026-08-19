@@ -166,6 +166,76 @@ def test_color_result_must_match_attached_verified_class() -> None:
     assert result["candidate_count"] == 0
 
 
+def _refuted_box_scores_higher() -> tuple[list[dict], dict[int, dict]]:
+    """The 2026-08-19 16:03 incident, where confidence pointed the wrong way.
+
+    One orange wire, two boxes: the detector called the higher-scoring one
+    ``Red`` (0.808) and the lower-scoring one ``Orange`` (0.664), and the pixels
+    measured Orange. Whichever box survives carries its own color verdict, so
+    ranking by confidence alone decided the board's fate by coin-flip.
+    """
+    detections = [
+        {"class": "Red", "verified_class": "Orange", "confidence": 0.807896,
+         "bbox": [113, 386, 145, 434]},
+        {"class": "Orange", "verified_class": "Orange", "confidence": 0.663847,
+         "bbox": [113, 385, 145, 433]},
+    ]
+    color_items = {
+        0: {"index": 0, "best_color": "Orange", "is_ok": False,
+            "measurement_is_ok": True},
+        1: {"index": 1, "best_color": "Orange", "is_ok": True,
+            "measurement_is_ok": True},
+    }
+    return detections, color_items
+
+
+def test_corroborated_box_outranks_a_higher_confidence_refuted_one() -> None:
+    detections, color_items = _refuted_box_scores_higher()
+
+    result = analyze_cross_class_duplicates(detections, color_items, _policy())
+
+    assert result["candidate_count"] == 1
+    suppression = result["proposed_suppressions"][0]
+    assert suppression["kept_index"] == 1
+    assert suppression["kept_raw_class"] == "Orange"
+    assert suppression["suppressed_index"] == 0
+    assert suppression["suppressed_raw_class"] == "Red"
+    # Deliberately keeping the lower-scoring box: the measurement corroborates
+    # its class, and evidence outranks a self-reported score.
+    assert suppression["kept_confidence"] < suppression["suppressed_confidence"]
+
+
+def test_keeping_the_corroborated_box_clears_the_color_verdict() -> None:
+    """The payoff: no spurious color FAIL survives on the winner."""
+    detections, color_items = _refuted_box_scores_higher()
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    context = DetectionContext(
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        frame=frame,
+        processed_image=frame,
+        result={"detections": detections},
+        status="DETECTION_FAIL",
+        color_result={
+            "is_ok": False,
+            "status": "evaluated",
+            "items": list(color_items.values()),
+        },
+        config=_PositionConfig(False),
+    )
+
+    CrossClassDuplicateFilterStep(
+        logging.getLogger(__name__),
+        options={**_policy().to_dict(), "enabled": True},
+    ).run(context)
+
+    assert context.result["detections"][0]["class"] == "Orange"
+    assert context.color_result["is_ok"] is True
+    finalize_status(context)
+    assert context.status == "PASS"
+
+
 def test_geometry_guard_rejects_boxes_with_insufficient_overlap() -> None:
     detections = _incident_detections()
     detections[1]["bbox"] = [120, 353, 147, 396]

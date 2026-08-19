@@ -118,7 +118,13 @@ class _DetectionView:
     verified_class: str
     confidence: float
     bbox: tuple[float, float, float, float]
+    #: The measurement is trustworthy -- gates whether a pair may be considered
+    #: at all. True for both boxes of a duplicate, so it cannot tell them apart.
     color_check_passed: bool
+    #: The detector's own class agrees with the measured color. Exactly one box
+    #: of a cross-class duplicate can have this, which is what makes it the
+    #: right key for deciding which one to keep.
+    detector_agrees_with_color: bool
 
 
 @dataclass(frozen=True)
@@ -290,6 +296,9 @@ def _build_view(
             and verified_class
             and color_best.casefold() == verified_class.casefold()
         ),
+        detector_agrees_with_color=bool(
+            color_item is not None and color_item.get("is_ok") is True
+        ),
     )
 
 
@@ -339,9 +348,22 @@ def _qualified_pair(
 
 
 def _retention_sort_key(view: _DetectionView) -> tuple[Any, ...]:
-    # Confidence is authoritative. Geometry and names make equal-confidence
-    # outcomes stable even if an inference backend changes list ordering.
+    # Agreement with the measured color outranks confidence. Both boxes of a
+    # duplicate cover one object, so keeping the one whose class the pixels
+    # corroborate is strictly better than keeping the one the pixels refute:
+    # detector confidence is self-reported, the measurement is evidence.
+    #
+    # Ranking by confidence alone let the refuted box win whenever it happened
+    # to score higher, which left its color mismatch pinned on the survivor
+    # after the agreeing box was discarded. The verdict then turned on which of
+    # two boxes scored higher rather than on the board, so the same physical
+    # duplicate passed or failed by coin-flip.
+    #
+    # Confidence still breaks ties within one agreement class, and geometry and
+    # names keep equal-confidence outcomes stable if a backend reorders its
+    # detection list.
     return (
+        not view.detector_agrees_with_color,
         -view.confidence,
         view.bbox,
         view.raw_class.casefold(),
