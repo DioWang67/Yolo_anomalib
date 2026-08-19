@@ -1,12 +1,16 @@
 # Cable1/A 1.0.6 跨類別重複框問題與改善企畫書
 
-文件狀態：**已實作／曾於 2026-08-05 至 08-19 靜默失效並已修復／Cable1/A `suppress`／現場 Gate 尚待完成**
+文件狀態：**已實作／曾於 2026-08-05 至 08-19 靜默失效並已修復／Cable1/A 維持 `report_only`／現場 Gate 尚待完成**
 適用範圍：`Cable1 / A / YOLO 1.0.6`
 建立日期：2026-07-29
 最後更新：2026-08-19（見 §17 回歸事件紀錄）
 變更類型：推論後處理、結果可視化、品質 Gate
-目前執行設定：`Cable1/A 1.0.6` 為 `suppress`；未修改 YOLO NMS
+目前執行設定：`Cable1/A 1.0.6` 維持 `report_only`；未修改 YOLO NMS
 `iou_thres=0.45`，也未修改線序。位置檢測啟用時會 fail-closed 停止自動消除。
+
+§17 的修復讓本機制**第一次能真正產生 report-only 候選資料**，但不改變
+§10／§15 的切換條件：`suppress` 仍須完成 500 次、完整班次與具名批准。
+`tests/test_pilot_config_safety.py` 會強制 config 維持 `report_only`。
 
 > **⚠️ 讀本文件前必看**：本文件在 2026-08-05 至 08-19 期間所描述的機制**實際上無法
 > 觸發**。§6.2 條件 6 與 §6.3 規則 6 所寫的「兩框顏色檢查都必須通過」，在顏色檢查
@@ -249,8 +253,9 @@ cross_class_duplicate_filter:
 > 現改為只要求「量測可信」：本閘門真正要擋的是**用猜出來的顏色去刪框**；「兩框是否
 > 同一物」由條件 5 負責，而條件 5 在修正後才真正比較的是量測到的顏色。
 
-目前門檻已寫入 Cable1/A 1.0.6 現行 config，`mode` 為 `suppress`（2026-08-19 起，
-見 §17）。其他產品／工位預設不啟用。
+目前門檻已寫入 Cable1/A 1.0.6 現行 config；production checkout 固定為
+`report_only`。歷史版本快照若仍記錄 `suppress`，只視為 Pilot 候選，未完成
+500 次、完整班次與具名批准前不得啟用；其他產品／工位預設不啟用。
 條件不完整時保留全部框，交由 strict count 判 NG，採 fail-closed。
 
 ### 6.3 群組與保留規則
@@ -519,7 +524,7 @@ filter_policy_version
 
 請逐項勾選或修改：
 
-- [x] 已實作`report_only`與`suppress`；Cable1/A 於 2026-08-19 設為 `suppress`（依據見 §17，取代原「完成 500 次與完整班次 Gate 後才可切換」的前提）。
+- [x] 已實作`report_only`與`suppress`，Cable1/A 目前維持 report-only；完成 500 次與完整班次 Gate 後才可切換。§17 的修復只讓 report-only 開始產生候選資料，未改變本條件。
 - [x] 首版僅在`Cable1/A 1.0.6`現行設定啟用。
 - [x] 初始 IoU 候選門檻為`0.90`。
 - [x] 中心距離與面積相似度必須同時通過。
@@ -564,8 +569,8 @@ filter_policy_version
 | 2026-07-30 ~ 08-04 | — | 22 筆真實抑制紀錄，含 1 筆讓良品順利 PASS |
 | **2026-08-05** | `0e9e6ad` | 「feat: harden color baselines and camera lifecycle」加入 `_is_expected_color_match`，**同時打斷兩處機制** |
 | 2026-08-05 ~ 08-18 | — | **稽核零命中**，斷點精準落在 08-05 |
-| 2026-08-19 | `8582a8b` | 改為 `report_only` |
-| 2026-08-19 | `931e0cf` `7668525` `4262c3c` | 修復並改回 `suppress` |
+| 2026-08-19 | `8582a8b` | 改為 `report_only`，並新增 `tests/test_pilot_config_safety.py` 鎖住，明訂未完成 500 次、完整班次與具名批准前不得切換 |
+| 2026-08-19 | `931e0cf` `7668525` `4262c3c` | 修復三處缺陷；**`mode` 維持 `report_only`**（切換屬 §15 治理決定，不隨修復變動）|
 
 ### 17.2 根因：一個 fail-closed 強化造成的雙重死亡
 
@@ -646,6 +651,12 @@ filter_policy_version
 ```
 
 判定維持 FAIL（該板線序確實錯誤），但**只站在真實原因上**。
+
+上述「修正後」是**在 `suppress` 下離線重放**得到的結果，用以證明修正有效；
+production 仍為 `report_only`，因此線上不會消除框，`over=['Orange']` 與
+`length_mismatch` 仍會出現。這是 §15 治理條件未完成的預期後果，不是缺陷 —
+消除框需要具名批准，不是再改一次程式。此重放正是 §10 所要求的
+「report-only 與 suppress 的結果差異 A/B 報告」可用的第一批素材。
 
 新增測試 20 項、取代 2 項，重點涵蓋：疊圖與判定序列必須同源、可信量測可覆寫
 detector 標籤、低信心量測仍須退回、顏色不符不得使判定變寬鬆、detector 不一致本身
