@@ -11,6 +11,7 @@ from core.services.alignment import (
     extract_layout_alignment,
     resolve_missing_expected_keys,
 )
+from core.services.detection_sequence import left_right_sequence
 from core.services.results.customer_message import (
     COLOR_FAILURE_LOW_CONFIDENCE,
     COLOR_FAILURE_MISMATCH,
@@ -358,7 +359,9 @@ def _build_color_summary_lines(
             line_color = (0, 255, 0) if is_ok else (0, 0, 255)
             lines.append((line, line_color))
         if detections:
-            seq = _left_right_color_sequence(detections, color_result)
+            # Must stay the shared helper: the panel reports the labels the
+            # decision was made from, not the color checker's raw best match.
+            seq = left_right_sequence(detections)
             if seq:
                 seq_line = seq[0] if len(seq) == 1 else " -> ".join(seq)
                 lines.append((f"LR: {seq_line}", (200, 200, 200)))
@@ -484,30 +487,6 @@ def _format_color_lines(
     except Exception:
         pass
     return lines
-
-
-def _left_right_color_sequence(
-    detections: list[dict[str, Any]], color_result: dict[str, Any]
-) -> list[str]:
-    try:
-        items = (color_result or {}).get("items", []) or []
-        items_by_index = _items_by_index(items)
-        seq: list[tuple[float, str]] = []
-        for idx, det in enumerate(detections or []):
-            item = items_by_index.get(_source_index(det, idx))
-            if item is None:
-                continue
-            bbox = det.get("bbox")
-            if not bbox or len(bbox) < 4:
-                continue
-            x1, _, x2, _ = bbox
-            center = (float(x1) + float(x2)) / 2.0
-            best = str(item.get("best_color") or "-")
-            seq.append((center, best))
-        seq.sort(key=lambda item: item[0])
-        return [color for _, color in seq]
-    except Exception:
-        return []
 
 
 def _position_color(detection: dict[str, Any]) -> tuple[int, int, int]:

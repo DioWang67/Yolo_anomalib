@@ -235,6 +235,32 @@ def analyze_cross_class_duplicates(
     }
 
 
+def _measurement_is_ok(color_item: Mapping[str, Any]) -> bool:
+    """Return whether the color measurement itself cleared its threshold.
+
+    Deliberately *not* ``is_ok``. ``is_ok`` also demands that the measurement
+    agree with the detector class, which no cross-class duplicate can satisfy:
+    two boxes over one wire measure one color, so at most one of their two
+    differing detector classes can match it. Reading ``is_ok`` here therefore
+    made ``require_color_check_pass`` and ``require_different_raw_class``
+    jointly unsatisfiable -- the filter could never propose the very duplicates
+    it exists to find.
+
+    What this gate is actually for is rejecting a *guess*: a color that missed
+    its own threshold is no evidence that two boxes cover the same object.
+    ``require_same_verified_class`` separately enforces that they measured the
+    same color.
+
+    Falls back to ``is_ok`` for payloads persisted before the two verdicts were
+    recorded apart; that keeps replays of old results on their old behavior
+    rather than inventing evidence those runs never produced.
+    """
+    measurement = color_item.get("measurement_is_ok")
+    if measurement is None:
+        measurement = color_item.get("is_ok")
+    return measurement is True
+
+
 def _build_view(
     index: int,
     detection: Mapping[str, Any],
@@ -260,7 +286,7 @@ def _build_view(
         bbox=bbox,
         color_check_passed=bool(
             color_item is not None
-            and color_item.get("is_ok") is True
+            and _measurement_is_ok(color_item)
             and verified_class
             and color_best.casefold() == verified_class.casefold()
         ),

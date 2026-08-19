@@ -38,10 +38,28 @@ def _incident_detections() -> list[dict]:
     ]
 
 
-def _color_items(*, second_ok: bool = True) -> dict[int, dict]:
+def _color_items(*, second_measured: bool = True) -> dict[int, dict]:
+    """Color items as ``ColorCheckerService`` really emits them for a duplicate.
+
+    Both boxes cover one orange wire, so both measure ``Orange``. The box the
+    detector called ``Red`` therefore has ``is_ok=False`` -- a measured color
+    can never agree with two different detector classes at once. Asserting
+    ``is_ok=True`` on it, as this fixture once did, describes a state the
+    service cannot produce and hid that the filter was unreachable.
+    """
     return {
-        0: {"index": 0, "best_color": "Orange", "is_ok": True},
-        1: {"index": 1, "best_color": "Orange", "is_ok": second_ok},
+        0: {
+            "index": 0,
+            "best_color": "Orange",
+            "is_ok": True,
+            "measurement_is_ok": True,
+        },
+        1: {
+            "index": 1,
+            "best_color": "Orange",
+            "is_ok": False,
+            "measurement_is_ok": second_measured,
+        },
     }
 
 
@@ -89,10 +107,46 @@ def test_same_verified_color_is_required() -> None:
     assert result["proposed_suppressions"] == []
 
 
-def test_both_color_checks_must_pass() -> None:
+def test_unmeasurable_color_blocks_the_pair() -> None:
+    """A color that missed its own threshold is no evidence of one object."""
     result = analyze_cross_class_duplicates(
         _incident_detections(),
-        _color_items(second_ok=False),
+        _color_items(second_measured=False),
+        _policy(),
+    )
+
+    assert result["candidate_count"] == 0
+
+
+def test_detector_disagreement_alone_does_not_block_the_pair() -> None:
+    """The defining trait of a cross-class duplicate must not disqualify it.
+
+    Exactly one of two differently-labelled boxes over one wire can agree with
+    the measured color, so requiring both to agree made this filter dead code.
+    """
+    color_items = _color_items()
+    assert color_items[1]["is_ok"] is False, "the incident's box really does fail"
+
+    result = analyze_cross_class_duplicates(
+        _incident_detections(),
+        color_items,
+        _policy(),
+    )
+
+    assert result["candidate_count"] == 1
+    assert result["proposed_suppressions"][0]["suppressed_index"] == 1
+
+
+def test_legacy_color_payload_without_measurement_field_still_works() -> None:
+    """Replays of results persisted before the two verdicts were split."""
+    color_items = {
+        0: {"index": 0, "best_color": "Orange", "is_ok": True},
+        1: {"index": 1, "best_color": "Orange", "is_ok": False},
+    }
+
+    result = analyze_cross_class_duplicates(
+        _incident_detections(),
+        color_items,
         _policy(),
     )
 
@@ -158,6 +212,57 @@ def _context(*, position_enabled: bool = False) -> DetectionContext:
         color_result={"is_ok": True, "items": list(_color_items().values())},
         config=_PositionConfig(position_enabled),
     )
+
+
+def test_suppression_retracts_the_color_failure_it_removed() -> None:
+    """The removed box must not keep failing the board it is no longer part of."""
+    context = _context()
+    context.color_result["is_ok"] = False
+    context.color_result["status"] = "evaluated"
+    step = CrossClassDuplicateFilterStep(
+        logging.getLogger(__name__),
+        options={**_policy().to_dict(), "enabled": True},
+    )
+
+    step.run(context)
+
+    assert context.color_result["is_ok"] is True
+    # The evidence is kept for review even though it no longer votes.
+    assert len(context.color_result["items"]) == 2
+    finalize_status(context)
+    assert context.status == "PASS"
+
+
+def test_suppression_keeps_a_failure_that_belongs_to_a_surviving_box() -> None:
+    context = _context()
+    context.color_result["is_ok"] = False
+    context.color_result["status"] = "evaluated"
+    context.color_result["items"][0]["is_ok"] = False
+    step = CrossClassDuplicateFilterStep(
+        logging.getLogger(__name__),
+        options={**_policy().to_dict(), "enabled": True},
+    )
+
+    step.run(context)
+
+    assert context.color_result["is_ok"] is False
+    finalize_status(context)
+    assert context.status == "DETECTION_FAIL"
+
+
+def test_suppression_does_not_reinterpret_an_unevaluated_color_check() -> None:
+    """A check that measured nothing has no verdict to recompute."""
+    context = _context()
+    context.color_result["is_ok"] = False
+    context.color_result["status"] = "no_detections"
+    step = CrossClassDuplicateFilterStep(
+        logging.getLogger(__name__),
+        options={**_policy().to_dict(), "enabled": True},
+    )
+
+    step.run(context)
+
+    assert context.color_result["is_ok"] is False
 
 
 def test_suppress_mode_preserves_raw_and_updates_effective_detections() -> None:

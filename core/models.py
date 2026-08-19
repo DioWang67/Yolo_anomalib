@@ -31,7 +31,16 @@ class ColorCheckItemResult:
     best_color: str
     diff: float
     threshold: float
+    #: Whether the item satisfies the color check overall: the measurement is
+    #: trustworthy *and* it agrees with the detector class.
     is_ok: bool
+    #: Whether the measurement alone cleared its own threshold, independent of
+    #: whether it agrees with the detector class. ``is_ok`` collapses those two
+    #: questions, but they call for opposite responses: a measurement that is
+    #: untrustworthy tells us nothing, while a trustworthy one that contradicts
+    #: the detector is evidence *against the detector*. Only the latter may
+    #: correct ``verified_class``, so the distinction has to survive here.
+    measurement_is_ok: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

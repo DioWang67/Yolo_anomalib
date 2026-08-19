@@ -28,7 +28,7 @@ pipeline:
 steps:
   cross_class_duplicate_filter:
     enabled: true
-    mode: report_only
+    mode: suppress
     iou_threshold: 0.9
     center_distance_ratio_max: 0.1
     area_similarity_min: 0.8

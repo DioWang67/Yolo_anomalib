@@ -8,6 +8,7 @@ from core.exceptions import ResultPersistenceError
 from core.pipeline.context import DetectionContext
 from core.position_validator import PositionValidator
 from core.services.color_checker import (
+    COLOR_CHECK_EVALUATED_STATUS,
     COLOR_CHECK_NO_DETECTIONS_STATUS,
     ColorCheckerService,
 )
@@ -18,6 +19,7 @@ from core.services.cross_class_duplicate_filter import (
     duplicate_filter_color_block_status,
     duplicate_filter_position_block_status,
 )
+from core.services.detection_sequence import left_right_sequence
 from core.services.result_sink import ExcelImageResultSink
 
 INFERENCE_ERROR_STATUS = "INFERENCE_ERROR"
@@ -103,12 +105,25 @@ class ColorCheckStep(Step):
             generic_classes=self.options.get("generic_classes"),
         )
 
-        # Only an accepted color result may replace the detector class. A rejected
-        # best match is diagnostic evidence, not a trustworthy downstream label.
+        # A measured color may replace the detector class whenever the
+        # measurement itself is trustworthy -- including, especially, when it
+        # contradicts the detector. Gating this on ``is_ok`` made the
+        # correction inert for the only case it exists for: ``is_ok`` already
+        # requires ``best_color == class``, so it only ever reassigned a class
+        # to itself, and every genuine detector error fell back to the very
+        # label the measurement had just refuted. A board with an orange wire
+        # misread as ``Red`` then reported ``missing=[Orange]`` while the
+        # overlay showed ``Red`` in that slot, and the wrong label propagated
+        # into the review dataset that retrains the detector.
+        #
+        # An untrustworthy measurement is a different case and still falls
+        # back: it carries no evidence, so it may not overrule anything.
         for idx, it in enumerate(c_res.items):
             if 0 <= idx < len(detections):
                 detections[idx]["verified_class"] = (
-                    it.best_color if it.is_ok else detections[idx].get("class")
+                    it.best_color
+                    if it.measurement_is_ok and it.best_color
+                    else detections[idx].get("class")
                 )
 
         ctx.color_result = c_res.to_dict()
@@ -247,12 +262,66 @@ class CrossClassDuplicateFilterStep(Step):
         metadata["suppressions"] = proposed
         metadata["suppressed_count"] = len(proposed)
         metadata["effective_count"] = len(ctx.result["detections"])
+        self._retract_suppressed_color_failures(ctx, suppressed_indices)
         self.logger.info(
             "Cross-class duplicate boxes suppressed: raw=%s, effective=%s, indices=%s",
             len(detections),
             len(ctx.result["detections"]),
             sorted(suppressed_indices),
         )
+
+    def _retract_suppressed_color_failures(
+        self, ctx: DetectionContext, suppressed_indices: set[int]
+    ) -> None:
+        """Recompute the color verdict over the boxes that survived suppression.
+
+        A suppressed duplicate is no longer part of the board's evidence, so
+        the color mismatch it raised must stop pinning the verdict to FAIL.
+        Every cross-class duplicate raises one by construction -- two boxes
+        over one wire carry two different detector classes, and the measured
+        color can only agree with one -- so without this, suppression removes
+        the box but keeps the failure it caused, and a good board is rejected
+        for a duplicate the filter had already decided to discard.
+
+        The suppressed item stays in ``items`` as diagnostic evidence; only the
+        aggregate verdict is recomputed. ``ctx.status`` is left alone because
+        ``finalize_status`` recomputes it from this verdict later.
+        """
+        color_result = ctx.color_result
+        if not isinstance(color_result, dict):
+            return
+        # Only a check that actually measured every ROI may be recomputed. Any
+        # other status records that no evidence exists, which must keep failing
+        # closed rather than be reinterpreted from a shorter list of items.
+        if str(color_result.get("status") or "") != COLOR_CHECK_EVALUATED_STATUS:
+            return
+
+        surviving = [
+            item
+            for position, item in enumerate(color_result.get("items") or [])
+            if isinstance(item, dict)
+            and self._item_index(item, position) not in suppressed_indices
+        ]
+        if not surviving:
+            return
+
+        was_ok = bool(color_result.get("is_ok", True))
+        color_result["is_ok"] = all(
+            bool(item.get("is_ok", False)) for item in surviving
+        )
+        if not was_ok and color_result["is_ok"]:
+            self.logger.info(
+                "Color check verdict cleared: every remaining failure belonged to "
+                "a suppressed duplicate box (indices=%s)",
+                sorted(suppressed_indices),
+            )
+
+    @staticmethod
+    def _item_index(item: dict[str, Any], position: int) -> int:
+        try:
+            return int(item.get("index", position))
+        except (TypeError, ValueError):
+            return position
 
     @staticmethod
     def _color_items_by_index(
@@ -434,7 +503,7 @@ class SequenceCheckStep(Step):
             return
 
         detections = ctx.result.get("detections", []) or []
-        observed = self._left_right_sequence(detections)
+        observed = left_right_sequence(detections)
         direction = str(self.options.get("direction", "left_to_right")).lower()
         if direction in {"right_to_left", "rtl"}:
             observed = list(reversed(observed))
@@ -464,26 +533,6 @@ class SequenceCheckStep(Step):
             )
         else:
             self.logger.info("Sequence check PASS")
-
-    @staticmethod
-    def _left_right_sequence(detections: list[dict[str, Any]]) -> list[str]:
-        seq: list[tuple[float, str]] = []
-        for det in detections or []:
-            bbox = det.get("bbox")
-            if not bbox or len(bbox) < 4:
-                continue
-            x1, _, x2, _ = bbox
-            try:
-                center = (float(x1) + float(x2)) / 2.0
-            except (TypeError, ValueError):
-                continue
-            # Prioritize verified_class from ColorCheckStep over YOLO class
-            name = str(det.get("verified_class") or det.get("class", "")).strip()
-            if not name:
-                continue
-            seq.append((center, name))
-        seq.sort(key=lambda item: item[0])
-        return [name for _, name in seq]
 
 
 class SaveResultsStep(Step):

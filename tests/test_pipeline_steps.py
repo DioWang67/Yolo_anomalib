@@ -545,9 +545,10 @@ class TestColorCheckStep:
         assert base_context.status == "PASS"
         assert base_context.color_result["is_ok"] is False
 
-    def test_rejected_color_mismatch_does_not_replace_detector_class(
-        self, mock_env, base_context, mock_color_service
-    ):
+    def _run_color_then_count(
+        self, mock_env, base_context, mock_color_service, *, item: dict
+    ) -> None:
+        """Drive color check then count check over one mocked color item."""
         mock_color_service.is_ready.return_value = True
         base_context.config.expected_items = {
             "TestProduct": {"TestArea": ["Black"]}
@@ -555,27 +556,9 @@ class TestColorCheckStep:
         base_context.result["detections"] = [
             {"class": "Black", "bbox": [0, 0, 10, 10]}
         ]
-        mock_it = MagicMock(
-            index=0,
-            class_name="Black",
-            best_color="Orange",
-            diff=0.60,
-            threshold=0.75,
-            is_ok=False,
-        )
         mock_res = MagicMock()
-        mock_res.items = [mock_it]
-        mock_res.to_dict.return_value = {
-            "is_ok": False,
-            "items": [
-                {
-                    "index": 0,
-                    "class_name": "Black",
-                    "best_color": "Orange",
-                    "is_ok": False,
-                }
-            ],
-        }
+        mock_res.items = [MagicMock(**item)]
+        mock_res.to_dict.return_value = {"is_ok": False, "items": [dict(item)]}
         mock_color_service.check_items.side_effect = None
         mock_color_service.check_items.return_value = mock_res
 
@@ -587,9 +570,94 @@ class TestColorCheckStep:
             options={"strict": True},
         ).run(base_context)
 
+    def test_confident_color_mismatch_replaces_detector_class(
+        self, mock_env, base_context, mock_color_service
+    ):
+        """A measurement that cleared its threshold outranks the detector.
+
+        ``diff <= threshold`` means the color itself was measured reliably, so
+        disagreeing with the detector is evidence against the *detector*.
+        Keeping the detector class here made every downstream reason describe
+        the misclassification instead of the board.
+        """
+        self._run_color_then_count(
+            mock_env,
+            base_context,
+            mock_color_service,
+            item={
+                "index": 0,
+                "class_name": "Black",
+                "best_color": "Orange",
+                "diff": 0.60,
+                "threshold": 0.75,
+                "is_ok": False,
+                "measurement_is_ok": True,
+            },
+        )
+
+        assert base_context.result["detections"][0]["verified_class"] == "Orange"
+        # The board is now described as it actually is: the expected Black is
+        # absent and a foreign Orange is present, rather than the previous
+        # "everything matches, but the color check objects".
+        assert base_context.result["missing_items"] == ["Black"]
+        assert base_context.result["unexpected_items"] == ["Orange"]
+        assert base_context.status == "DETECTION_FAIL"
+
+    def test_low_confidence_color_failure_keeps_detector_class(
+        self, mock_env, base_context, mock_color_service
+    ):
+        """An unreliable measurement carries no evidence, so it overrules nothing."""
+        self._run_color_then_count(
+            mock_env,
+            base_context,
+            mock_color_service,
+            item={
+                "index": 0,
+                "class_name": "Black",
+                "best_color": "Orange",
+                "diff": 0.90,
+                "threshold": 0.75,
+                "is_ok": False,
+                "measurement_is_ok": False,
+            },
+        )
+
         assert base_context.result["detections"][0]["verified_class"] == "Black"
         assert base_context.result["missing_items"] == []
         assert base_context.result["over_items"] == []
+        assert base_context.status == "DETECTION_FAIL"
+
+    def test_color_mismatch_never_turns_into_a_pass(
+        self, mock_env, base_context, mock_color_service
+    ):
+        """Adopting the measured color must not soften the verdict.
+
+        Correcting the label makes count check agree with the board, which on
+        its own would clear the count FAIL. The color mismatch itself has to
+        keep the verdict at FAIL so a swapped wire can never be shipped.
+        """
+        self._run_color_then_count(
+            mock_env,
+            base_context,
+            mock_color_service,
+            item={
+                "index": 0,
+                "class_name": "Orange",
+                "best_color": "Black",
+                "diff": 0.30,
+                "threshold": 0.75,
+                "is_ok": False,
+                "measurement_is_ok": True,
+            },
+        )
+
+        # Count check is satisfied by the corrected label ...
+        assert base_context.result["detections"][0]["verified_class"] == "Black"
+        assert base_context.result["missing_items"] == []
+        assert base_context.result["over_items"] == []
+        # ... yet the verdict still stands on the color mismatch alone.
+        assert base_context.status == "DETECTION_FAIL"
+        finalize_status(base_context)
         assert base_context.status == "DETECTION_FAIL"
 
     def test_color_fail_always_sets_detection_fail_status(

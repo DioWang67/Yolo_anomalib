@@ -283,15 +283,17 @@ class ColorCheckerService:
                 candidate_pool = (det.get("class"),)
             allowed = _supported_candidates(candidate_pool, supported_colors)
             c_res = self._checker.check(roi, allowed_colors=allowed)
-            item_is_ok = (
-                bool(c_res.is_ok)
-                and configured_colors_are_supported
-                and _is_expected_color_match(
-                    det.get("class"),
-                    c_res.best_color,
-                    supported_colors,
-                    generic_detector_classes,
-                )
+            # The measurement's own verdict, kept separate from whether it
+            # agrees with the detector. An unsupported configured vocabulary
+            # folds in here rather than below: it means the measurement was
+            # taken against the wrong palette, so the color itself is not
+            # trustworthy either.
+            measurement_is_ok = bool(c_res.is_ok) and configured_colors_are_supported
+            item_is_ok = measurement_is_ok and _is_expected_color_match(
+                det.get("class"),
+                c_res.best_color,
+                supported_colors,
+                generic_detector_classes,
             )
             items.append(
                 ColorCheckItemResult(
@@ -302,6 +304,7 @@ class ColorCheckerService:
                     diff=float(c_res.diff),
                     threshold=float(c_res.threshold),
                     is_ok=item_is_ok,
+                    measurement_is_ok=measurement_is_ok,
                 )
             )
             if not item_is_ok:
