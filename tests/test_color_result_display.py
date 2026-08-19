@@ -155,6 +155,87 @@ def test_customer_message_joins_multiple_color_failures_distinctly():
     assert message.details == ["顏色不符: Red → Orange; Green 顏色信心不足"]
 
 
+def _duplicate_incident_color_check() -> dict:
+    """One orange wire seen twice; the box called ``Red`` failed and was removed.
+
+    Replays Cable1/A 2026-08-19: ``#5`` carried class ``Red`` against a measured
+    Orange and was suppressed as a duplicate of ``#6``, while a surviving Black
+    box separately missed its own threshold.
+    """
+    return {
+        "is_ok": False,
+        "items": [
+            {"index": 4, "class": "Black", "best_color": "Black", "is_ok": False},
+            {"index": 5, "class": "Red", "best_color": "Orange", "is_ok": False},
+            {"index": 6, "class": "Orange", "best_color": "Orange", "is_ok": True},
+        ],
+    }
+
+
+def test_customer_message_omits_a_suppressed_duplicates_color_failure():
+    result = DetectionResult(
+        status="DETECTION_FAIL",
+        color_check=_duplicate_incident_color_check(),
+        metadata={
+            "duplicate_filter": {
+                "status": "suppressed",
+                "suppressions": [{"suppressed_index": 5, "kept_index": 6}],
+            }
+        },
+    )
+
+    message = build_customer_message(result)
+
+    # The surviving Black still needs operator attention ...
+    assert message.details == ["Black 顏色信心不足"]
+    # ... but the removed box's mismatch reports the detector, not the board.
+    assert "Red → Orange" not in " ".join(message.details)
+
+
+def test_customer_message_keeps_color_failures_that_were_only_proposed():
+    """Report-only mode leaves the box on the board, so it still counts."""
+    result = DetectionResult(
+        status="DETECTION_FAIL",
+        color_check=_duplicate_incident_color_check(),
+        metadata={
+            "duplicate_filter": {
+                "status": "reported",
+                "suppressions": [],
+                "proposed_suppressions": [
+                    {"suppressed_index": 5, "kept_index": 6}
+                ],
+            }
+        },
+    )
+
+    message = build_customer_message(result)
+
+    assert message.details == ["Black 顏色信心不足; 顏色不符: Red → Orange"]
+
+
+def test_customer_message_keeps_full_frame_failure_when_boxes_were_suppressed():
+    """A ``-1`` item is not a box, so suppression must never filter it away."""
+    result = DetectionResult(
+        status="DETECTION_FAIL",
+        color_check={
+            "is_ok": False,
+            "items": [
+                {"index": -1, "class": None, "best_color": "Red", "is_ok": False}
+            ],
+        },
+        metadata={
+            "duplicate_filter": {
+                "status": "suppressed",
+                "suppressions": [{"suppressed_index": 5, "kept_index": 6}],
+            }
+        },
+    )
+
+    message = build_customer_message(result)
+
+    assert message.details == ["未偵測到元件（全畫面檢查）"]
+
+
 def test_classify_color_check_failure_is_case_insensitive():
     from core.services.results.customer_message import (
         COLOR_FAILURE_LOW_CONFIDENCE,

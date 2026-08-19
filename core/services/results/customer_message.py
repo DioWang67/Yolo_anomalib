@@ -182,10 +182,17 @@ def build_customer_message(result: DetectionResult) -> CustomerMessage:
 
     color_check = result.color_check or {}
     if color_check and not color_check.get("is_ok", True):
+        # A box the duplicate filter removed is no longer part of the board, so
+        # its color failure is not something an operator can act on: it reports
+        # the detector's error, not the product's condition. The detail panel and
+        # the annotated overlay already drop these; this card has to agree or the
+        # three surfaces describe different failures for one inspection.
+        suppressed = _suppressed_source_indices(result)
         bad = [
             _describe_color_check_failure(item)
-            for item in (color_check.get("items") or [])
+            for position, item in enumerate(color_check.get("items") or [])
             if not item.get("is_ok", True)
+            and _color_item_source_index(item, position) not in suppressed
         ]
         return CustomerMessage(
             headline="顏色檢查異常",
@@ -239,6 +246,34 @@ def _get_duplicate_filter(result: DetectionResult) -> dict[str, Any]:
     metadata = result.metadata or {}
     value = metadata.get("duplicate_filter")
     return value if isinstance(value, dict) else {}
+
+
+def _suppressed_source_indices(result: DetectionResult) -> set[int]:
+    """Return the source indices of boxes the duplicate filter removed.
+
+    Reads ``suppressions`` rather than inferring removal from a box's absence
+    among the effective items: absence also covers a legacy full-frame check
+    (``index == -1``) and any result that carries no items at all, and silently
+    dropping those failures would hide real evidence. ``proposed_suppressions``
+    is deliberately not consulted -- in report-only mode those boxes are still
+    on the board and still count.
+    """
+    indices: set[int] = set()
+    for record in _get_duplicate_filter(result).get("suppressions") or []:
+        if not isinstance(record, dict):
+            continue
+        try:
+            indices.add(int(record["suppressed_index"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return indices
+
+
+def _color_item_source_index(item: dict[str, Any], position: int) -> int:
+    try:
+        return int(item.get("index", position))
+    except (TypeError, ValueError):
+        return position
 
 
 def _color_item_label(item: dict[str, Any]) -> str:
