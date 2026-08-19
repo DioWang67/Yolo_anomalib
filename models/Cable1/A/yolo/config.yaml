@@ -130,4 +130,5 @@ exposure_time: '74765.0000'
 save_annotated: true
 save_processed: true
 save_crops: true
+image_queue_maxsize: 16
 model_version: 1.0.6

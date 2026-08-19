@@ -117,6 +117,17 @@ inspection_sync_allow_insecure_http: false
 
 # Bounded queues keep full-resolution frames from exhausting RAM during slow
 # disk writes. Set image_queue_maxsize to 0 only for synchronous diagnostics.
+#
+# Size image_queue_maxsize against one inspection's burst, not against an
+# average: a single result enqueues the original frame, the preprocessed frame,
+# one crop per detection (uncapped unless max_crops_per_frame is set), and one
+# more per failure crop, all drained by a single writer thread. A product with
+# six detections therefore enqueues eight images at once, which backs up a
+# default queue of 8 and warns at 0.8 of capacity. Overflow is safe but costly:
+# it falls back to a synchronous write that blocks the inspection. Roughly
+# double the expected burst and leave headroom above the warn threshold.
+# RAM stays bounded by image_queue_max_mb regardless of this value, so raising
+# it trades queue slots, not memory safety.
 # buffer_limit: 10
 # storage_queue_maxsize: 8
 # image_queue_maxsize: 8
