@@ -5,9 +5,8 @@ import time
 import numpy as np
 import pytest
 
-from core.types import DetectionTask
 from core.queues import OverwriteQueue
-
+from core.types import DetectionTask
 
 # =====================================================================
 # DetectionTask DTO Tests

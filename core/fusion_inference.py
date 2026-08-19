@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Any
 
 import numpy as np
@@ -215,6 +216,12 @@ class FusionInferenceRunner:
             "inference_time": yolo_res.get("inference_time", 0.0)
             + ano_res.get("inference_time", 0.0),
             "anomaly_score": ano_res.get("anomaly_score"),
+            # ``anomaly_score`` is a measurement; ``is_anomaly`` is the verdict
+            # the anomalib backend already reached against its own threshold.
+            # finalize_status recomputes the merged verdict from facts, so the
+            # anomaly fact must survive the merge or the anomalib branch's FAIL
+            # is silently dropped and a defective board passes.
+            "is_anomaly": bool(ano_res.get("is_anomaly", False)),
             "original_image": yolo_res.get("original_image", frame),
             "annotated_path": ano_res.get("annotated_path")
             or yolo_res.get("annotated_path", ""),

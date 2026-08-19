@@ -31,6 +31,11 @@ def test_from_yaml_normalizes_pipeline_and_numeric(tmp_path):
         jpeg_quality: 88
         png_compression: 7
         max_crops_per_frame: 5
+        storage_queue_maxsize: 6
+        image_queue_maxsize: 4
+        image_queue_max_mb: 128
+        image_write_timeout_seconds: 12.5
+        min_free_disk_mb: 512
     """,
     )
     cfg = DetectionConfig.from_yaml(str(cfg_path))
@@ -38,6 +43,11 @@ def test_from_yaml_normalizes_pipeline_and_numeric(tmp_path):
     assert cfg.jpeg_quality == 88
     assert cfg.png_compression == 7
     assert cfg.max_crops_per_frame == 5
+    assert cfg.storage_queue_maxsize == 6
+    assert cfg.image_queue_maxsize == 4
+    assert cfg.image_queue_max_mb == 128
+    assert cfg.image_write_timeout_seconds == 12.5
+    assert cfg.min_free_disk_mb == 512
 
 
 def test_from_yaml_parses_camera_resilience_fields(tmp_path):
@@ -62,6 +72,42 @@ def test_camera_resilience_defaults_keep_legacy_behavior(tmp_path):
     assert cfg.camera_lost_threshold == 5
     assert cfg.camera_reconnect_attempts == 0  # auto-reconnect disabled
     assert cfg.camera_reconnect_backoff == 2.0
+
+
+def test_from_yaml_parses_inspection_maintenance_and_sync(tmp_path):
+    cfg_path = write_config(
+        tmp_path,
+        """
+        weights: "models/model.pt"
+        inspection_backup_interval_hours: 12
+        inspection_retention_cleanup_enabled: true
+        inspection_pass_image_days: 31
+        inspection_fail_preprocessed_days: 91
+        inspection_fail_all_image_days: 181
+        inspection_sync_enabled: true
+        inspection_sync_endpoint: "https://company.example/inspections"
+        inspection_sync_api_token_env: "COMPANY_TOKEN"
+        inspection_sync_timeout_seconds: 8
+        inspection_sync_interval_seconds: 15
+        inspection_sync_batch_size: 25
+        inspection_sync_max_attempts: 9
+    """,
+    )
+
+    cfg = DetectionConfig.from_yaml(str(cfg_path))
+
+    assert cfg.inspection_backup_interval_hours == 12
+    assert cfg.inspection_retention_cleanup_enabled is True
+    assert cfg.inspection_pass_image_days == 31
+    assert cfg.inspection_fail_preprocessed_days == 91
+    assert cfg.inspection_fail_all_image_days == 181
+    assert cfg.inspection_sync_enabled is True
+    assert cfg.inspection_sync_endpoint.endswith("/inspections")
+    assert cfg.inspection_sync_api_token_env == "COMPANY_TOKEN"
+    assert cfg.inspection_sync_timeout_seconds == 8
+    assert cfg.inspection_sync_interval_seconds == 15
+    assert cfg.inspection_sync_batch_size == 25
+    assert cfg.inspection_sync_max_attempts == 9
 
 
 def test_local_overlay_overrides_global_values(tmp_path):
@@ -110,6 +156,9 @@ def test_normalize_model_dict_validates_imgsz(tmp_path):
         {"jpeg_quality": 101},
         {"png_compression": 10},
         {"buffer_limit": 0},
+        {"storage_queue_maxsize": 33},
+        {"image_queue_maxsize": 33},
+        {"min_free_disk_mb": -1},
         {"imgsz": [640, 0]},
     ],
 )

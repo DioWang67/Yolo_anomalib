@@ -1,0 +1,850 @@
+"""YOLO × color-revision matrix dialog for the independent acceptance tool."""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Callable
+from pathlib import Path
+
+from PyQt5.QtCore import Qt, QThread, QUrl, pyqtSignal
+from PyQt5.QtGui import QColor, QDesktopServices
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
+    QLabel,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+)
+
+from app.gui.metric_presentation import format_count_with_rate
+from core.services.acceptance_artifacts import color_scope_model_type
+from core.services.acceptance_matrix import (
+    AcceptanceColorVariant,
+    AcceptanceMatrixCancelled,
+    AcceptanceMatrixRequest,
+    AcceptanceMatrixResult,
+    AcceptanceModelVariant,
+    ColorVariantDiscovery,
+    ColorVariantExclusion,
+    build_model_variant,
+    build_registered_model_variant,
+    build_release_acceptance_variants,
+    discover_color_variants,
+    run_acceptance_matrix,
+)
+from core.services.inspection_release_models import (
+    InspectionRelease,
+    InspectionReleaseError,
+    ReleaseStatus,
+)
+from core.services.model_acceptance import AcceptanceRepository
+from core.services.model_version_registry import (
+    ModelVersionRegistry,
+    ModelVersionRegistryError,
+)
+from core.station_data import load_station_data_paths
+
+VARIANT_ROLE = Qt.UserRole
+
+#: Result columns as ``(header, tooltip)``. The tooltip carries the exact
+#: denominator because a bare count next to a bare percentage reads as one
+#: metric split in two, and the two families here do not share a numerator:
+#: 顏色誤殺 counts only the overkills attributable to color, so it is always a
+#: subset of 誤殺. Every count is therefore rendered together with its own rate
+#: in one cell, never as a count in one column and a rate in the next.
+RESULT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("YOLO", "本列使用的 YOLO 模型 Bundle。"),
+    ("顏色設定", "本列使用的顏色設定；不會啟用，也不會改動 Active 版本。"),
+    ("準確率", "判定正確張數 ÷ 已確認且推論成功張數＝(TP+TN)／(TP+FP+FN+TN)。"),
+    (
+        "誤殺（整體）",
+        "真實 OK 但模型判 NG 的張數；括號為誤殺率＝誤殺 ÷ 真實 OK 張數。\n"
+        "包含所有原因，不只顏色。",
+    ),
+    (
+        "漏檢（整體）",
+        "真實 NG 但模型判 OK 的張數；括號為漏檢率＝漏檢 ÷ 真實 NG 張數。",
+    ),
+    (
+        "顏色誤殺",
+        "上列誤殺中，判定原因含 COLOR_MISMATCH 或顏色檢查 FAIL 的張數；\n"
+        "括號同樣以真實 OK 張數為分母。此值必定 ≤ 整體誤殺。",
+    ),
+    (
+        "顏色逃逸",
+        "人工標記為 COLOR_MISMATCH 的真 NG 中，模型顏色判定為 OK 的張數；\n"
+        "括號以人工標記顏色 NG 的張數為分母。",
+    ),
+    ("平均 ms", "本組每張照片的平均推論耗時。"),
+    ("P95 ms", "本組推論耗時的 95 百分位；反映最慢的情況。"),
+    (
+        "相較首組變動",
+        "與第一組（基準組）相比，機器判定或判定原因不同的張數。\n"
+        "第一列本身即基準組，因此顯示「基準組」而非 0。",
+    ),
+    ("錯誤", "推論失敗的張數；這些張不計入上述任何統計。"),
+    ("狀態", "本組是否完成，或失敗原因。"),
+)
+COLUMN_OVERKILL = 3
+COLUMN_ESCAPE = 4
+COLUMN_ERRORS = 10
+COLUMN_STATUS = 11
+
+
+class AcceptanceMatrixWorker(QThread):
+    """Run GPU/CPU inference outside the UI thread, sequentially per matrix."""
+
+    progress_changed = pyqtSignal(int, int, str, str)
+    completed = pyqtSignal(object)
+    failed = pyqtSignal(str)
+    cancelled = pyqtSignal()
+
+    def __init__(
+        self,
+        request: AcceptanceMatrixRequest,
+        *,
+        runner: Callable[..., AcceptanceMatrixResult] = run_acceptance_matrix,
+    ) -> None:
+        super().__init__()
+        self._request = request
+        self._runner = runner
+
+    def run(self) -> None:
+        try:
+            result = self._runner(
+                self._request,
+                progress_callback=self._emit_progress,
+                cancel_callback=self.isInterruptionRequested,
+            )
+            self.completed.emit(result)
+        except AcceptanceMatrixCancelled:
+            self.cancelled.emit()
+        except (ImportError, OSError, RuntimeError, ValueError) as exc:
+            self.failed.emit(str(exc))
+
+    def _emit_progress(
+        self,
+        current: int,
+        total: int,
+        combination_label: str,
+        sample_id: str,
+    ) -> None:
+        self.progress_changed.emit(
+            current,
+            total,
+            combination_label,
+            sample_id,
+        )
+
+
+class AcceptanceMatrixDialog(QDialog):
+    """Select model/config columns and inspect the append-only matrix result."""
+
+    release_validated = pyqtSignal(object)
+
+    def __init__(
+        self,
+        *,
+        project_root: Path,
+        repository: AcceptanceRepository,
+        product: str,
+        area: str,
+        inference_type: str,
+        target_release: InspectionRelease | None = None,
+        runner: Callable[..., AcceptanceMatrixResult] = run_acceptance_matrix,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.project_root = project_root.resolve()
+        self.data_paths = load_station_data_paths(self.project_root)
+        self.repository = repository
+        self.product = product.strip()
+        self.area = area.strip()
+        self.inference_type = inference_type.strip()
+        self.target_release = target_release
+        if target_release is not None:
+            expected_scope = (
+                target_release.scope.product,
+                target_release.scope.area,
+                target_release.scope.inference_type,
+            )
+            if expected_scope != (self.product, self.area, self.inference_type):
+                raise InspectionReleaseError(
+                    "快速驗收目標與目前產品、區域或檢測類型不符。"
+                )
+            if target_release.status is not ReleaseStatus.DRAFT:
+                raise InspectionReleaseError("只有 DRAFT 組合可以進行快速驗收。")
+        self._runner = runner
+        self._worker: AcceptanceMatrixWorker | None = None
+        self._result: AcceptanceMatrixResult | None = None
+        self._close_when_finished = False
+        self.setWindowTitle(
+            f"快速驗收｜{target_release.display_version}"
+            if target_release is not None
+            else "檢測組合驗收"
+        )
+        self.resize(1220, 760)
+        self._build_ui()
+        self._load_initial_variants()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        self.description = QLabel(
+            "每個勾選的 YOLO 會和每個勾選的顏色設定配對，使用相同且已確認的"
+            "驗收照片重新推論。此功能不會切換正式模型、不會改 Active 顏色版本，"
+            "也不會覆寫人工標註。"
+        )
+        if self.target_release is not None:
+            self.description.setText(
+                f"只驗收 {self.target_release.display_version} 綁定的模型、config、"
+                "完整顏色基準與逐色修訂。原始候選版本不覆寫；完成後會以驗收證明"
+                "讓同一版本顯示為 TESTED。"
+            )
+        self.description.setWordWrap(True)
+        layout.addWidget(self.description)
+
+        layout.addWidget(QLabel("1. 選擇 YOLO 模型 Bundle"))
+        self.model_table = QTableWidget(0, 4)
+        self.model_table.setHorizontalHeaderLabels(("測試", "顯示名稱", "模型版本", "models 根目錄"))
+        self.model_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.model_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.model_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.model_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.model_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        layout.addWidget(self.model_table)
+
+        model_actions = QHBoxLayout()
+        self.add_model_button = QPushButton("加入其他 models 目錄")
+        self.remove_model_button = QPushButton("移除選取列")
+        model_hint = QLabel(
+            "可加入訓練工作目錄中的 acceptance_candidate/models，"
+            "或任何具有 <產品>/<區域>/yolo/config.yaml 的完整 Bundle。"
+        )
+        model_hint.setWordWrap(True)
+        model_actions.addWidget(self.add_model_button)
+        model_actions.addWidget(self.remove_model_button)
+        model_actions.addWidget(model_hint, 1)
+        layout.addLayout(model_actions)
+
+        layout.addWidget(QLabel("2. 選擇顏色設定"))
+        self.color_table = QTableWidget(0, 3)
+        self.color_table.setHorizontalHeaderLabels(("測試", "顏色設定", "套用方式"))
+        self.color_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.color_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.color_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.color_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.color_table.setMaximumHeight(210)
+        layout.addWidget(self.color_table)
+
+        self.color_hint = QLabel()
+        self.color_hint.setWordWrap(True)
+        layout.addWidget(self.color_hint)
+
+        controls = QHBoxLayout()
+        self.workload_label = QLabel()
+        self.run_button = QPushButton("開始驗收")
+        self.run_button.setStyleSheet("QPushButton { background: #006f5f; color: white; padding: 8px 18px; }")
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.setEnabled(False)
+        self.open_report_button = QPushButton("開啟報告資料夾")
+        self.open_report_button.setEnabled(False)
+        self.create_release_button = QPushButton("建立候選組合版本")
+        if self.target_release is not None:
+            self.create_release_button.setText(
+                f"確認驗收 {self.target_release.display_version}"
+            )
+        self.create_release_button.setEnabled(False)
+        self.close_button = QPushButton("關閉")
+        controls.addWidget(self.workload_label, 1)
+        controls.addWidget(self.run_button)
+        controls.addWidget(self.cancel_button)
+        controls.addWidget(self.open_report_button)
+        controls.addWidget(self.create_release_button)
+        controls.addWidget(self.close_button)
+        layout.addLayout(controls)
+
+        self.progress = QProgressBar()
+        self.progress.setVisible(False)
+        self.progress_detail = QLabel()
+        self.progress_detail.setWordWrap(True)
+        layout.addWidget(self.progress)
+        layout.addWidget(self.progress_detail)
+
+        self.result_table = QTableWidget(0, len(RESULT_COLUMNS))
+        for column, (title, tooltip) in enumerate(RESULT_COLUMNS):
+            header_item = QTableWidgetItem(title)
+            header_item.setToolTip(tooltip)
+            self.result_table.setHorizontalHeaderItem(column, header_item)
+        self.result_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.result_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.result_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.result_table, 1)
+
+        warning = QLabel(
+            "注意：「誤殺／漏檢」是整體判定結果，「顏色誤殺／顏色逃逸」只計入歸因於"
+            "顏色的部分，因此顏色誤殺必定 ≤ 整體誤殺，兩者不可互相對照。"
+            "每格括號內都是該欄自己的比率。"
+            "如果驗收集中沒有任何人工標為 COLOR_MISMATCH 的真 NG，"
+            "顏色逃逸會顯示 UNKNOWN；這不是 0%，而是缺少可驗證逃逸的樣本。"
+        )
+        warning.setWordWrap(True)
+        warning.setStyleSheet("color: #9a5b00;")
+        layout.addWidget(warning)
+
+        self.add_model_button.clicked.connect(self._add_model_root)
+        self.remove_model_button.clicked.connect(self._remove_selected_model)
+        self.run_button.clicked.connect(self._start)
+        self.cancel_button.clicked.connect(self._cancel)
+        self.open_report_button.clicked.connect(self._open_report_folder)
+        self.create_release_button.clicked.connect(self._create_release)
+        self.close_button.clicked.connect(self.close)
+        self.model_table.itemChanged.connect(self._update_workload)
+        self.color_table.itemChanged.connect(self._update_workload)
+        self.result_table.itemSelectionChanged.connect(self._update_release_button)
+
+    def _load_initial_variants(self) -> None:
+        try:
+            if self.target_release is not None:
+                model_variant, color_variant = build_release_acceptance_variants(
+                    self.target_release,
+                    project_root=self.project_root,
+                )
+                self._append_model_variant(model_variant)
+                self._append_color_variant(color_variant)
+                self.model_table.setEnabled(False)
+                self.color_table.setEnabled(False)
+                self.add_model_button.setEnabled(False)
+                self.remove_model_button.setEnabled(False)
+                self.progress_detail.setText(
+                    "已鎖定選取版本；本次固定執行 1 組，不讀取目前 Active 版本。"
+                )
+                self._update_workload()
+                return
+            models_root = self.data_paths.models
+            registry = ModelVersionRegistry(models_root)
+            records = registry.list_versions(
+                product=self.product,
+                area=self.area,
+                model_type="yolo",
+            )
+            skipped: list[str] = []
+            for record in records:
+                if not record.exists or not record.has_config_snapshot:
+                    skipped.append(f"{record.version}（{record.warning or '缺少完整檔案'}）")
+                    continue
+                try:
+                    self._append_model_variant(
+                        build_registered_model_variant(
+                            record,
+                            models_root=models_root,
+                        ),
+                        checked=record.is_current,
+                    )
+                except (OSError, RuntimeError, ValueError) as exc:
+                    skipped.append(f"{record.version}（{exc}）")
+            if self.model_table.rowCount() == 0:
+                self._append_model_variant(
+                    build_model_variant(
+                        models_root,
+                        product=self.product,
+                        area=self.area,
+                        inference_type=self.inference_type,
+                        label="目前推論專案模型",
+                    )
+                )
+            if skipped:
+                self.progress_detail.setText("未列入不完整／不可信的歷史模型：" + "、".join(skipped))
+            color_model_type = color_scope_model_type(self.inference_type)
+            discovery = discover_color_variants(
+                self.data_paths.color_revisions,
+                product=self.product,
+                area=self.area,
+                model_type=color_model_type,
+                baselines_root=self.data_paths.color_baselines,
+                profiles_root=self.data_paths.color_profiles,
+            )
+            for variant in discovery.variants:
+                self._append_color_variant(variant)
+            for exclusion in discovery.exclusions:
+                self._append_color_exclusion(exclusion)
+            self._render_color_availability(discovery, model_type=color_model_type)
+        except (
+            ModelVersionRegistryError,
+            OSError,
+            RuntimeError,
+            ValueError,
+        ) as exc:
+            QMessageBox.critical(self, "無法載入矩陣選項", str(exc))
+        self._update_workload()
+
+    def _append_model_variant(
+        self,
+        variant: AcceptanceModelVariant,
+        *,
+        checked: bool = True,
+    ) -> None:
+        if self._has_variant(self.model_table, variant.variant_id):
+            return
+        row = self.model_table.rowCount()
+        self.model_table.insertRow(row)
+        check_item = _check_item(variant, checked=checked)
+        self.model_table.setItem(row, 0, check_item)
+        self.model_table.setItem(row, 1, QTableWidgetItem(variant.label))
+        self.model_table.setItem(row, 2, QTableWidgetItem(variant.identity.version))
+        self.model_table.setItem(row, 3, QTableWidgetItem(str(variant.models_root)))
+
+    def _append_color_variant(self, variant: AcceptanceColorVariant) -> None:
+        if self._has_variant(self.color_table, variant.variant_id):
+            return
+        row = self.color_table.rowCount()
+        self.color_table.insertRow(row)
+        self.color_table.setItem(row, 0, _check_item(variant))
+        self.color_table.setItem(row, 1, QTableWidgetItem(variant.label))
+        if variant.color_model_path is not None and variant.revision_overrides:
+            source = "鎖定完整顏色方案（基準＋逐色修訂，不啟用）"
+        elif variant.color_model_path is not None:
+            source = "鎖定 immutable 完整顏色基準（不啟用）"
+        elif variant.include_active_revisions:
+            source = "執行當下讀取正式 Active（不修改）"
+        elif variant.revision_overrides:
+            source = "鎖定 immutable revision（不啟用）"
+        else:
+            source = "只用所選 YOLO Bundle 內建 config"
+        self.color_table.setItem(row, 2, QTableWidgetItem(source))
+
+    def _append_color_exclusion(self, exclusion: ColorVariantExclusion) -> None:
+        """Show an in-scope color artifact that exists but cannot be selected.
+
+        Shown rather than hidden: an operator who built this baseline would
+        otherwise read its absence as lost data and rebuild it, which costs a
+        recalibration run and can pull unintended evidence into a new baseline.
+        """
+        row = self.color_table.rowCount()
+        self.color_table.insertRow(row)
+        self.color_table.setItem(row, 0, _excluded_item())
+        label_item = QTableWidgetItem(exclusion.label)
+        reason_item = QTableWidgetItem(f"無法使用：{exclusion.reason}")
+        for item in (label_item, reason_item):
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            item.setForeground(QColor("#8a8f98"))
+        self.color_table.setItem(row, 1, label_item)
+        self.color_table.setItem(row, 2, reason_item)
+
+    def _render_color_availability(
+        self, discovery: ColorVariantDiscovery, *, model_type: str
+    ) -> None:
+        """State whether this scope has any stored color model to compare against.
+
+        Without this, a scope that never had a color baseline looks identical to
+        a broken tool: the table still lists the bundle's built-in setting, so
+        there is nothing on screen to distinguish the two. ``model_type`` is the
+        type actually searched, which is not always the selected inference type.
+        """
+        stored = len(discovery.stored_color_models)
+        if stored:
+            text = f"此工位有 {stored} 個已建立的顏色模型可供比較。"
+        else:
+            text = (
+                f"{self.product}／{self.area}／{model_type} 尚未建立任何顏色模型，"
+                "因此只能使用所選 YOLO Bundle 內建的顏色設定。要比較顏色版本，"
+                "請先執行顏色基準重建。"
+            )
+        if discovery.exclusions:
+            text += f" 另有 {len(discovery.exclusions)} 個同工位項目無法使用，原因見清單。"
+        self.color_hint.setText(text)
+
+    @staticmethod
+    def _has_variant(table: QTableWidget, variant_id: str) -> bool:
+        return any(
+            getattr(table.item(row, 0).data(VARIANT_ROLE), "variant_id", "") == variant_id
+            for row in range(table.rowCount())
+            if table.item(row, 0) is not None
+        )
+
+    def _add_model_root(self) -> None:
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "選擇完整 models 根目錄",
+            str(self.project_root.parent),
+        )
+        if not selected:
+            return
+        try:
+            variant = build_model_variant(
+                selected,
+                product=self.product,
+                area=self.area,
+                inference_type=self.inference_type,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.warning(self, "無法加入模型", str(exc))
+            return
+        self._append_model_variant(variant)
+        self._update_workload()
+
+    def _remove_selected_model(self) -> None:
+        rows = sorted(
+            {index.row() for index in self.model_table.selectedIndexes()},
+            reverse=True,
+        )
+        for row in rows:
+            self.model_table.removeRow(row)
+        self._update_workload()
+
+    def _selected_models(self) -> tuple[AcceptanceModelVariant, ...]:
+        return tuple(
+            item
+            for row in range(self.model_table.rowCount())
+            if (check := self.model_table.item(row, 0)) is not None
+            and check.checkState() == Qt.Checked
+            and isinstance(
+                (item := check.data(VARIANT_ROLE)),
+                AcceptanceModelVariant,
+            )
+        )
+
+    def _selected_colors(self) -> tuple[AcceptanceColorVariant, ...]:
+        return tuple(
+            item
+            for row in range(self.color_table.rowCount())
+            if (check := self.color_table.item(row, 0)) is not None
+            and check.checkState() == Qt.Checked
+            and isinstance(
+                (item := check.data(VARIANT_ROLE)),
+                AcceptanceColorVariant,
+            )
+        )
+
+    def _update_workload(self, _item=None) -> None:
+        samples = sum(record.review_status == "confirmed" for record in self.repository.records())
+        combinations = len(self._selected_models()) * len(self._selected_colors())
+        self.workload_label.setText(
+            f"{samples} 張已確認照片 × {combinations} 組 = {samples * combinations} 次推論（循序執行）"
+        )
+
+    def _start(self) -> None:
+        if self._worker is not None:
+            return
+        models = self._selected_models()
+        colors = self._selected_colors()
+        if self.target_release is not None and (
+            len(models) != 1 or len(colors) != 1
+        ):
+            QMessageBox.critical(
+                self,
+                "快速驗收組合無效",
+                "快速驗收必須精確鎖定一個模型與一個顏色設定。",
+            )
+            return
+        if not models or not colors:
+            QMessageBox.warning(
+                self,
+                "缺少組合",
+                "至少勾選一個 YOLO 與一個顏色設定。",
+            )
+            return
+        request = AcceptanceMatrixRequest(
+            project_root=self.project_root,
+            global_config_path=self.project_root / "config.yaml",
+            color_revisions_root=self.data_paths.color_revisions,
+            dataset_root=self.repository.root,
+            manifest_path=self.repository.manifest_path,
+            output_root=(self.data_paths.acceptance_reports / self.product / self.area / "matrix_runs"),
+            product=self.product,
+            area=self.area,
+            inference_type=self.inference_type,
+            model_variants=models,
+            color_variants=colors,
+        )
+        worker = AcceptanceMatrixWorker(request, runner=self._runner)
+        worker.progress_changed.connect(self._progress_changed)
+        worker.completed.connect(self._completed)
+        worker.failed.connect(self._failed)
+        worker.cancelled.connect(self._cancelled)
+        worker.finished.connect(self._finished)
+        self._worker = worker
+        total = (
+            sum(record.review_status == "confirmed" for record in self.repository.records()) * len(models) * len(colors)
+        )
+        self.progress.setRange(0, total)
+        self.progress.setValue(0)
+        self.progress.setVisible(True)
+        self.result_table.setRowCount(0)
+        self._set_running(True)
+        worker.start()
+
+    def _cancel(self) -> None:
+        if self._worker is not None:
+            self._worker.requestInterruption()
+            self.cancel_button.setEnabled(False)
+            self.progress_detail.setText("正在安全停止；不會留下半份報告…")
+
+    def _progress_changed(
+        self,
+        current: int,
+        total: int,
+        combination_label: str,
+        sample_id: str,
+    ) -> None:
+        self.progress.setRange(0, total)
+        self.progress.setValue(current)
+        self.progress_detail.setText(f"{current}/{total}｜{combination_label}｜{sample_id}")
+
+    def _completed(self, raw_result: object) -> None:
+        if not isinstance(raw_result, AcceptanceMatrixResult):
+            self._failed("矩陣執行器回傳了無效結果。")
+            return
+        self._result = raw_result
+        self.open_report_button.setEnabled(True)
+        self._render_results(raw_result)
+        if self.result_table.rowCount():
+            self.result_table.selectRow(0)
+        self.progress_detail.setText(
+            f"完成：{raw_result.sample_count} 張、{len(raw_result.combinations)} 組。報告：{raw_result.run_root}"
+        )
+
+    def _render_results(self, result: AcceptanceMatrixResult) -> None:
+        self.result_table.setRowCount(0)
+        for combination in result.combinations:
+            metrics = combination.metrics
+            color = combination.color_metrics
+            denominator = metrics.tp + metrics.fp + metrics.fn + metrics.tn
+            accuracy = (metrics.tp + metrics.tn) / denominator if denominator else None
+            row = self.result_table.rowCount()
+            self.result_table.insertRow(row)
+            values = (
+                combination.model_label,
+                combination.color_label,
+                _format_rate(accuracy),
+                format_count_with_rate(metrics.fp, metrics.overkill_rate, "無可用真 OK 樣本"),
+                format_count_with_rate(metrics.fn, metrics.escape_rate, "無可用真 NG 樣本"),
+                format_count_with_rate(color.fp, color.overkill_rate, "無可用真 OK 樣本"),
+                format_count_with_rate(color.fn, color.escape_rate, "無真顏色 NG"),
+                _format_number(combination.average_latency_ms),
+                _format_number(combination.p95_latency_ms),
+                # The first combination is the reference every other row is
+                # compared against, so its own 0 means "is the baseline", not
+                # "matches the baseline" -- two very different readings.
+                "基準組" if row == 0 else combination.changed_from_reference,
+                metrics.errors,
+                combination.error or "完成",
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                item.setData(VARIANT_ROLE, combination.combination_id)
+                if (
+                    (column == COLUMN_OVERKILL and metrics.fp > 0)
+                    or (column == COLUMN_ESCAPE and metrics.fn > 0)
+                    or (column == COLUMN_ERRORS and metrics.errors > 0)
+                    or (column == COLUMN_STATUS and combination.error)
+                ):
+                    item.setForeground(Qt.red)
+                self.result_table.setItem(row, column, item)
+        self.result_table.resizeColumnsToContents()
+        self.result_table.horizontalHeader().setStretchLastSection(True)
+        self._update_release_button()
+
+    def _failed(self, message: str) -> None:
+        self.progress_detail.setText(f"失敗：{message}")
+        QMessageBox.critical(self, "組合驗收失敗", message)
+
+    def _cancelled(self) -> None:
+        self.progress_detail.setText("已取消；未建立半份報告。")
+
+    def _finished(self) -> None:
+        worker = self._worker
+        self._worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self._set_running(False)
+        if self._close_when_finished:
+            self._close_when_finished = False
+            self.close()
+
+    def _set_running(self, running: bool) -> None:
+        variants_editable = not running and self.target_release is None
+        self.model_table.setEnabled(variants_editable)
+        self.color_table.setEnabled(variants_editable)
+        self.add_model_button.setEnabled(variants_editable)
+        self.remove_model_button.setEnabled(variants_editable)
+        self.run_button.setEnabled(not running)
+        self.cancel_button.setEnabled(running)
+        self.close_button.setEnabled(not running)
+        self._update_release_button()
+
+    def _update_release_button(self) -> None:
+        self.create_release_button.setEnabled(
+            self._worker is None and self._result is not None and self.result_table.currentRow() >= 0
+        )
+
+    def _create_release(self) -> None:
+        """Create an immutable candidate; activation stays in Engineering."""
+        if self._result is None or self.result_table.currentRow() < 0:
+            return
+        row = self.result_table.currentRow()
+        item = self.result_table.item(row, 0)
+        combination_id = str(item.data(VARIANT_ROLE) or "") if item else ""
+        if not combination_id:
+            QMessageBox.warning(self, "建立發布版本", "找不到選取的組合識別碼。")
+            return
+        if self.target_release is not None:
+            self._attest_target_release(combination_id)
+            return
+        try:
+            from core.services.inspection_release_builder import (
+                build_release_from_matrix,
+            )
+            from core.services.inspection_release_models import ActivationMode
+            from core.services.inspection_release_store import (
+                InspectionReleaseStore,
+            )
+
+            store = InspectionReleaseStore(self.data_paths.inspection_releases)
+            existing = store.list_releases(product=self.product, area=self.area)
+            suggested = _next_release_version(existing)
+            version, ok = QInputDialog.getText(
+                self,
+                "建立檢測發布版本",
+                "發布版本：",
+                text=suggested,
+            )
+            if not ok or not version.strip():
+                return
+            operator, ok = QInputDialog.getText(self, "建立檢測發布版本", "建立人員：")
+            if not ok or not operator.strip():
+                return
+            reason, ok = QInputDialog.getMultiLineText(self, "建立檢測發布版本", "建立原因：")
+            if not ok or not reason.strip():
+                return
+            release = build_release_from_matrix(
+                self._result.report_path,
+                combination_id=combination_id,
+                display_version=version.strip(),
+                operator=operator.strip(),
+                reason=reason.strip(),
+            )
+            store.commit(release)
+            allowed = store.policy.allowed_modes(release)
+            if ActivationMode.FULL in allowed:
+                policy = "驗收完整，可正式上線或先有限試跑。"
+            else:
+                policy = "驗收資料仍有風險；工程控制台中可選有限試跑，也可記錄風險接受後套用。"
+            QMessageBox.information(
+                self,
+                "發布版本已建立",
+                f"{release.display_version} 已建立，但尚未套用。\n{policy}",
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, "建立發布版本失敗", str(exc))
+
+    def _attest_target_release(self, combination_id: str) -> None:
+        if self._result is None or self.target_release is None:
+            return
+        operator, ok = QInputDialog.getText(
+            self,
+            "確認快速驗收",
+            "驗收人員：",
+        )
+        if not ok or not operator.strip():
+            return
+        reason, ok = QInputDialog.getMultiLineText(
+            self,
+            "確認快速驗收",
+            "驗收說明：",
+            text=f"完成 {self.target_release.display_version} 單一組合驗收",
+        )
+        if not ok or not reason.strip():
+            return
+        try:
+            from core.services.inspection_release_builder import (
+                build_validated_release_from_matrix,
+            )
+            from core.services.inspection_release_store import (
+                InspectionReleaseStore,
+            )
+
+            validated = build_validated_release_from_matrix(
+                self.target_release,
+                self._result.report_path,
+                combination_id=combination_id,
+            )
+            store = InspectionReleaseStore(
+                self.data_paths.inspection_releases
+            )
+            committed = store.commit_validation(
+                validated,
+                validator=operator.strip(),
+                reason=reason.strip(),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, "快速驗收失敗", str(exc))
+            return
+        self.target_release = committed
+        self.release_validated.emit(committed)
+        QMessageBox.information(
+            self,
+            "快速驗收完成",
+            f"{committed.display_version} 已保留原版本編號並更新為 TESTED。\n"
+            f"驗收樣本：{committed.validation.sample_count} 張。",
+        )
+        self.accept()
+
+    def _open_report_folder(self) -> None:
+        if self._result is None:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._result.run_root)))
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.requestInterruption()
+            self._close_when_finished = True
+            self.progress_detail.setText("正在安全停止；停止後會自動關閉。")
+            event.ignore()
+            return
+        event.accept()
+
+
+def _check_item(variant: object, *, checked: bool = True) -> QTableWidgetItem:
+    item = QTableWidgetItem()
+    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable | Qt.ItemIsSelectable)
+    item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+    item.setData(VARIANT_ROLE, variant)
+    return item
+
+
+def _excluded_item() -> QTableWidgetItem:
+    """Return the leading cell of a row that is shown but cannot be selected.
+
+    It carries no VARIANT_ROLE payload, so ``_selected_colors`` skips it on the
+    isinstance check even if the flags were ever loosened: being unselectable
+    does not depend on the widget state alone.
+    """
+    item = QTableWidgetItem()
+    item.setFlags(Qt.ItemIsSelectable)
+    return item
+
+
+def _next_release_version(releases) -> str:
+    """Return a collision-free human version for one product/area."""
+    patches = []
+    for release in releases:
+        match = re.fullmatch(r"inspection-v1\.0\.(\d+)", release.display_version.strip())
+        if match:
+            patches.append(int(match.group(1)))
+    return f"inspection-v1.0.{max(patches, default=0) + 1}"
+
+
+def _format_rate(value: float | None) -> str:
+    return "UNKNOWN" if value is None else f"{value:.2%}"
+
+
+def _format_number(value: float | None) -> str:
+    return "—" if value is None else f"{value:.2f}"

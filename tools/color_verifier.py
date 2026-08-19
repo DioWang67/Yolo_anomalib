@@ -8,8 +8,8 @@ import argparse
 import csv
 import json
 import logging
-from collections.abc import Callable, Iterable, MutableMapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
@@ -19,18 +19,16 @@ SUPPORTED_FORMATS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
 
 # Default sampling thresholds
 DEFAULT_SAT_THRESHOLD = 20.0
-DEFAULT_VAL_THRESHOLD = 250.0
 DEFAULT_EDGE_MARGIN = 0.12
-DEFAULT_CENTER_SIGMA = 0.25
 DEFAULT_MIN_VALID_PIXELS = 40
-DEFAULT_TOPK = 5
-DEFAULT_MIN_SAT_RATIO = 0.15
-DEFAULT_MAX_EDGE_RATIO = 0.25
 
 # Black detection thresholds
 BLACK_S_THRESHOLD = 50.0
 BLACK_V_THRESHOLD = 80.0
 BLACK_MIN_COVERAGE = 0.6
+# Median statistics are less sensitive to highlights, so require a stricter
+# fraction of the black thresholds before accepting that signal alone.
+BLACK_MEDIAN_STRICTNESS_RATIO = 0.8
 
 # Yellow detection
 YELLOW_H_RANGE = (20, 35)
@@ -39,13 +37,16 @@ YELLOW_V_MIN = 150
 
 ORANGE_RED_TIE_MARGIN = 0.15
 GREEN_DOMINANCE_RATIO = 0.3
-CENTER_MARGIN_RATIO = 0.15
+MIN_HSV_MATCH_RATIO = 0.01
 COLOR_CONF_THRESHOLDS = {
     "Black": 0.45,
     "Yellow": 0.20,
     "Orange": 0.25,
     "Red": 0.25,
     "Green": 0.30,
+}
+CANONICAL_COLOR_NAMES = {
+    name.casefold(): name for name in COLOR_CONF_THRESHOLDS
 }
 
 
@@ -66,26 +67,6 @@ class ColorRange:
 
 
 @dataclass
-class StripOptions:
-    enabled: bool = False
-    segments: int = 8
-    orientation: str = "vertical"
-    min_strip_ratio: float = 0.05
-    ratio_threshold: float = 0.35
-    edge_margin: float = DEFAULT_EDGE_MARGIN
-    sat_threshold: float = DEFAULT_SAT_THRESHOLD
-    val_threshold: float = DEFAULT_VAL_THRESHOLD
-    center_bias: bool = True
-    center_sigma: float = DEFAULT_CENTER_SIGMA
-    min_valid_pixels: int = DEFAULT_MIN_VALID_PIXELS
-    top_k: int = DEFAULT_TOPK
-    min_sat_ratio: float = DEFAULT_MIN_SAT_RATIO
-    max_edge_ratio: float = DEFAULT_MAX_EDGE_RATIO
-    black_s_threshold: float = BLACK_S_THRESHOLD
-    black_v_threshold: float = BLACK_V_THRESHOLD
-
-
-@dataclass
 class ColorDecision:
     image: Path
     predicted_color: str
@@ -93,7 +74,7 @@ class ColorDecision:
     confidence: float
     status: str
     ratios: dict[str, float]
-    debug_info: dict[str, object] = None
+    debug_info: dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         result = {
@@ -116,12 +97,98 @@ class DecisionContext:
     debug_info: dict[str, object]
     hsv_img: np.ndarray
     lab_img: np.ndarray
+    edge_margin: float
+    sat_threshold: float
 
 
 DecisionRule = Callable[[str, float, "DecisionContext"], tuple[str, float] | None]
 
 
+class VerificationReportWriteError(OSError):
+    """Raised when color analysis succeeds but a requested report cannot be written."""
+
+
 # ============= 新增: 核心改進函數 =============
+
+def _validate_evaluation_options(
+    *,
+    edge_margin: float,
+    sat_threshold: float,
+    min_valid_pixels: int,
+) -> None:
+    if not 0.0 <= edge_margin < 0.5:
+        raise ValueError("edge_margin must be in the range [0.0, 0.5).")
+    if not 0.0 <= sat_threshold <= 255.0:
+        raise ValueError("sat_threshold must be in the range [0.0, 255.0].")
+    if min_valid_pixels < 1:
+        raise ValueError("min_valid_pixels must be at least 1.")
+
+
+def _center_slices(shape: Sequence[int], margin_ratio: float) -> tuple[slice, slice]:
+    """Return per-axis center slices while preserving rectangular image geometry."""
+    if len(shape) < 2:
+        raise ValueError("An image must have at least two dimensions.")
+    if not 0.0 <= margin_ratio < 0.5:
+        raise ValueError("margin_ratio must be in the range [0.0, 0.5).")
+
+    height, width = int(shape[0]), int(shape[1])
+    margin_y = int(height * margin_ratio)
+    margin_x = int(width * margin_ratio)
+    return slice(margin_y, height - margin_y), slice(margin_x, width - margin_x)
+
+
+def _crop_center(img: np.ndarray, margin_ratio: float = DEFAULT_EDGE_MARGIN) -> np.ndarray:
+    """Return the single center region used by every color decision path."""
+    y_slice, x_slice = _center_slices(img.shape, margin_ratio)
+    return img[y_slice, x_slice]
+
+
+def _expand_center_mask(
+    center_mask: np.ndarray,
+    image_shape: Sequence[int],
+    margin_ratio: float,
+) -> np.ndarray:
+    full_mask = np.zeros((int(image_shape[0]), int(image_shape[1])), dtype=bool)
+    y_slice, x_slice = _center_slices(image_shape, margin_ratio)
+    full_mask[y_slice, x_slice] = center_mask
+    return full_mask
+
+
+def _clamp_confidence(value: float) -> float:
+    return float(np.clip(value, 0.0, 1.0))
+
+
+def _hsv_color_mask(
+    hsv_vals: np.ndarray,
+    color_range: ColorRange,
+) -> np.ndarray:
+    h_vals = hsv_vals[:, 0]
+    s_vals = hsv_vals[:, 1]
+    v_vals = hsv_vals[:, 2]
+
+    hue_min = float(color_range.hsv_min[0])
+    hue_max = float(color_range.hsv_max[0])
+    hue_mask = (h_vals >= hue_min) & (h_vals <= hue_max)
+    if hue_min > hue_max:
+        hue_mask = (h_vals >= hue_min) | (h_vals <= hue_max)
+    return (
+        hue_mask
+        & (s_vals >= color_range.hsv_min[1])
+        & (s_vals <= color_range.hsv_max[1])
+        & (v_vals >= color_range.hsv_min[2])
+        & (v_vals <= color_range.hsv_max[2])
+    )
+
+
+def _lab_color_mask(lab_vals: np.ndarray, color_range: ColorRange) -> np.ndarray:
+    return (
+        (lab_vals[:, 0] >= color_range.lab_min[0])
+        & (lab_vals[:, 0] <= color_range.lab_max[0])
+        & (lab_vals[:, 1] >= color_range.lab_min[1])
+        & (lab_vals[:, 1] <= color_range.lab_max[1])
+        & (lab_vals[:, 2] >= color_range.lab_min[2])
+        & (lab_vals[:, 2] <= color_range.lab_max[2])
+    )
 
 def circular_hue_distance(h1: float, h2: float) -> float:
     """計算色相的循環距離 (0-180 度)"""
@@ -141,47 +208,17 @@ def improved_match_ratio(
 
     debug = {}
     h_vals = hsv_vals[:, 0]
-    s_vals = hsv_vals[:, 1]
-    v_vals = hsv_vals[:, 2]
-
-    # 針對不同顏色的特殊邏輯
-    if color_name == "Red":
-        h_mask = ((h_vals <= 10) | (h_vals >= 170)) & \
-                 (s_vals >= max(color_range.hsv_min[1], 130)) & \
-                 (v_vals >= max(color_range.hsv_min[2], 80))
-    elif color_name == "Orange":
-        h_mask = (h_vals >= 5) & (h_vals <= 20) & \
-                 (s_vals >= max(color_range.hsv_min[1], 130)) & \
-                 (v_vals >= max(color_range.hsv_min[2], 100))
-    elif color_name == "Yellow":
-        h_mask = (h_vals >= 20) & (h_vals <= 35) & \
-                 (s_vals >= 80) & (v_vals >= 150)
-    elif color_name == "Green":
-        h_mask = (h_vals >= 70) & (h_vals <= 100) & \
-                 (s_vals >= 75) & \
-                 (v_vals >= 30) & (v_vals <= 100)
-    elif color_name == "Black":
-        h_mask = (s_vals < BLACK_S_THRESHOLD) & (v_vals < BLACK_V_THRESHOLD)
-    else:
-        h_mask = (h_vals >= color_range.hsv_min[0]) & \
-                 (h_vals <= color_range.hsv_max[0]) & \
-                 (s_vals >= color_range.hsv_min[1]) & \
-                 (s_vals <= color_range.hsv_max[1]) & \
-                 (v_vals >= color_range.hsv_min[2]) & \
-                 (v_vals <= color_range.hsv_max[2])
+    h_mask = _hsv_color_mask(hsv_vals, color_range)
 
     hsv_ratio = float(np.count_nonzero(h_mask)) / len(hsv_vals)
     debug["hsv_ratio"] = hsv_ratio
+    if hsv_ratio < MIN_HSV_MATCH_RATIO:
+        debug["hsv_gate_rejected"] = True
+        debug["final_score"] = 0.0
+        return 0.0, debug
 
     # LAB 匹配
-    lab_mask = (
-        (lab_vals[:, 0] >= color_range.lab_min[0]) &
-        (lab_vals[:, 0] <= color_range.lab_max[0]) &
-        (lab_vals[:, 1] >= color_range.lab_min[1]) &
-        (lab_vals[:, 1] <= color_range.lab_max[1]) &
-        (lab_vals[:, 2] >= color_range.lab_min[2]) &
-        (lab_vals[:, 2] <= color_range.lab_max[2])
-    )
+    lab_mask = _lab_color_mask(lab_vals, color_range)
     lab_ratio = float(np.count_nonzero(lab_mask)) / len(lab_vals)
     debug["lab_ratio"] = lab_ratio
 
@@ -228,7 +265,8 @@ def improved_match_ratio(
         lab_chroma_similarity * weights["lab_chroma"]
     )
 
-    debug["final_score"] = float(final_score)
+    final_score = _clamp_confidence(final_score)
+    debug["final_score"] = final_score
     return final_score, debug
 
 def separate_orange_red_improved(
@@ -239,7 +277,11 @@ def separate_orange_red_improved(
 ) -> tuple[str, float, dict]:
     """改進的 Orange vs Red 分離"""
     if len(hsv_vals) == 0:
-        return ("Red" if red_score >= orange_score else "Orange", max(red_score, orange_score), {})
+        return (
+            "Red" if red_score >= orange_score else "Orange",
+            _clamp_confidence(max(red_score, orange_score)),
+            {},
+        )
 
     debug = {}
     hue_vals = hsv_vals[:, 0]
@@ -292,23 +334,39 @@ def separate_orange_red_improved(
         confidence = max(orange_score, red_score) * 0.9
 
     debug["decision"] = predicted
-    return predicted, confidence, debug
+    return predicted, _clamp_confidence(confidence), debug
 
 
 # ============= 主要評估函數 (整合改進邏輯) =============
 
 def _evaluate_image_improved(
-    image: np.ndarray,
     hsv_img: np.ndarray,
     lab_img: np.ndarray,
     color_ranges: dict[str, ColorRange],
+    *,
+    edge_margin: float = DEFAULT_EDGE_MARGIN,
+    sat_threshold: float = DEFAULT_SAT_THRESHOLD,
+    min_valid_pixels: int = DEFAULT_MIN_VALID_PIXELS,
 ) -> tuple[dict[str, float], dict[str, np.ndarray], dict[str, object]]:
     """整合改進邏輯的圖片評估函數"""
-    debug_info = {}
-    h, w = hsv_img.shape[:2]
+    _validate_evaluation_options(
+        edge_margin=edge_margin,
+        sat_threshold=sat_threshold,
+        min_valid_pixels=min_valid_pixels,
+    )
+    debug_info: dict[str, object] = {
+        "edge_margin": edge_margin,
+        "sat_threshold": sat_threshold,
+        "min_valid_pixels": min_valid_pixels,
+    }
 
     # 快速檢查黑色
-    is_black, black_conf = _is_black_image(hsv_img, BLACK_S_THRESHOLD, BLACK_V_THRESHOLD)
+    is_black, black_conf, black_mask = _is_black_image(
+        hsv_img,
+        BLACK_S_THRESHOLD,
+        BLACK_V_THRESHOLD,
+        edge_margin=edge_margin,
+    )
     debug_info["is_black_detected"] = is_black
     debug_info["black_confidence"] = float(black_conf)
 
@@ -316,11 +374,15 @@ def _evaluate_image_improved(
         ratios = dict.fromkeys(color_ranges.keys(), 0.0)
         ratios["Black"] = black_conf
         masks = {color: np.zeros(hsv_img.shape[:2], dtype=bool) for color in color_ranges.keys()}
-        masks["Black"] = np.ones(hsv_img.shape[:2], dtype=bool)
+        masks["Black"] = black_mask
+        debug_info["shortcut"] = "Black"
         return ratios, masks, debug_info
 
     # 快速檢查黃色
-    is_yellow, yellow_conf = _detect_yellow_special(hsv_img)
+    is_yellow, yellow_conf, yellow_mask = _detect_yellow_special(
+        hsv_img,
+        edge_margin=edge_margin,
+    )
     debug_info["is_yellow_detected"] = is_yellow
     debug_info["yellow_confidence"] = float(yellow_conf)
 
@@ -328,29 +390,31 @@ def _evaluate_image_improved(
         ratios = dict.fromkeys(color_ranges.keys(), 0.0)
         ratios["Yellow"] = yellow_conf
         masks = {color: np.zeros(hsv_img.shape[:2], dtype=bool) for color in color_ranges.keys()}
-        masks["Yellow"] = np.ones(hsv_img.shape[:2], dtype=bool)
+        masks["Yellow"] = yellow_mask
+        debug_info["shortcut"] = "Yellow"
         return ratios, masks, debug_info
 
-    # 取中心區域
-    margin_y = int(h * 0.15)
-    margin_x = int(w * 0.15)
-    center_hsv = hsv_img[margin_y:h - margin_y, margin_x:w - margin_x]
-    center_lab = lab_img[margin_y:h - margin_y, margin_x:w - margin_x]
+    center_hsv = _crop_center(hsv_img, edge_margin)
+    center_lab = _crop_center(lab_img, edge_margin)
 
     # 過濾低飽和度
-    sat_mask = center_hsv[:, :, 1] >= DEFAULT_SAT_THRESHOLD
+    sat_mask = center_hsv[:, :, 1] >= sat_threshold
     valid_hsv = center_hsv[sat_mask].reshape(-1, 3)
     valid_lab = center_lab[sat_mask].reshape(-1, 3)
+    debug_info["valid_pixel_count"] = len(valid_hsv)
 
-    if len(valid_hsv) < 50:
+    if len(valid_hsv) < min_valid_pixels:
         ratios = dict.fromkeys(color_ranges.keys(), 0.0)
-        if "Black" in ratios:
-            ratios["Black"] = 0.7
         masks = {color: np.zeros(hsv_img.shape[:2], dtype=bool) for color in color_ranges.keys()}
+        debug_info["low_saturation_fallback"] = True
         return ratios, masks, debug_info
 
-    ratios = {}
-    all_debug = {}
+    ratios: dict[str, float] = {}
+    all_debug: dict[str, dict[str, float]] = {}
+    masks: dict[str, np.ndarray] = {}
+    flat_center_hsv = center_hsv.reshape(-1, 3)
+    flat_center_lab = center_lab.reshape(-1, 3)
+    flat_sat_mask = sat_mask.reshape(-1)
 
     for color_name, color_range in color_ranges.items():
         score, color_debug = improved_match_ratio(
@@ -359,21 +423,29 @@ def _evaluate_image_improved(
         ratios[color_name] = score
         all_debug[color_name] = color_debug
 
-    debug_info["color_details"] = all_debug
+        center_color_mask = _hsv_color_mask(flat_center_hsv, color_range)
+        if color_name != "Black":
+            center_color_mask &= flat_sat_mask
+        center_color_mask &= _lab_color_mask(flat_center_lab, color_range)
+        masks[color_name] = _expand_center_mask(
+            center_color_mask.reshape(center_hsv.shape[:2]),
+            hsv_img.shape,
+            edge_margin,
+        )
 
-    masks = {color: np.ones(hsv_img.shape[:2], dtype=bool) for color in color_ranges.keys()}
+    debug_info["color_details"] = all_debug
     return ratios, masks, debug_info
 
 
-def _is_black_image(hsv_img: np.ndarray, s_thresh: float, v_thresh: float) -> tuple[bool, float]:
+def _is_black_image(
+    hsv_img: np.ndarray,
+    s_thresh: float,
+    v_thresh: float,
+    *,
+    edge_margin: float = DEFAULT_EDGE_MARGIN,
+) -> tuple[bool, float, np.ndarray]:
     """檢測是否為黑色圖片"""
-    h, w = hsv_img.shape[:2]
-    margin_y = int(h * 0.15)
-    margin_x = int(w * 0.15)
-    center_region = hsv_img[margin_y:h - margin_y, margin_x:w - margin_x]
-
-    if center_region.size == 0:
-        center_region = hsv_img
+    center_region = _crop_center(hsv_img, edge_margin)
 
     mean_s = float(np.mean(center_region[:, :, 1]))
     mean_v = float(np.mean(center_region[:, :, 2]))
@@ -385,22 +457,25 @@ def _is_black_image(hsv_img: np.ndarray, s_thresh: float, v_thresh: float) -> tu
 
     is_black = (
         (mean_s < s_thresh and mean_v < v_thresh) or
-        (median_s < s_thresh * 0.8 and median_v < v_thresh * 0.8) or
+        (
+            median_s < s_thresh * BLACK_MEDIAN_STRICTNESS_RATIO
+            and median_v < v_thresh * BLACK_MEDIAN_STRICTNESS_RATIO
+        ) or
         (black_coverage > BLACK_MIN_COVERAGE)
     )
 
     confidence = black_coverage if is_black else 0.0
-    return is_black, confidence
+    full_mask = _expand_center_mask(black_mask, hsv_img.shape, edge_margin)
+    return is_black, confidence, full_mask
 
 
-def _detect_yellow_special(hsv_img: np.ndarray) -> tuple[bool, float]:
+def _detect_yellow_special(
+    hsv_img: np.ndarray,
+    *,
+    edge_margin: float = DEFAULT_EDGE_MARGIN,
+) -> tuple[bool, float, np.ndarray]:
     """快速檢測黃色"""
-    h, w = hsv_img.shape[:2]
-    margin = int(min(h, w) * 0.15)
-    center = hsv_img[margin:h - margin, margin:w - margin]
-
-    if center.size == 0:
-        center = hsv_img
+    center = _crop_center(hsv_img, edge_margin)
 
     h_vals = center[:, :, 0]
     s_vals = center[:, :, 1]
@@ -413,34 +488,29 @@ def _detect_yellow_special(hsv_img: np.ndarray) -> tuple[bool, float]:
         (v_vals >= YELLOW_V_MIN)
     )
 
+    orange_like_mask = (h_vals < YELLOW_H_RANGE[0]) & (h_vals > 5) & (s_vals > 100)
     yellow_mask_secondary = (
         (h_vals >= 18) & (h_vals <= 38) &
-        (s_vals >= 60) & (v_vals >= 180)
+        (s_vals >= 60) & (v_vals >= 180) &
+        ~orange_like_mask
     )
 
     yellow_mask = yellow_mask_primary | yellow_mask_secondary
     yellow_ratio = float(np.count_nonzero(yellow_mask)) / yellow_mask.size
 
-    orange_like_mask = (h_vals < 20) & (h_vals > 5) & (s_vals > 100)
     orange_ratio = float(np.count_nonzero(orange_like_mask)) / orange_like_mask.size
 
     is_yellow = (yellow_ratio > 0.25) and (yellow_ratio > orange_ratio * 1.3)
-    return is_yellow, yellow_ratio
-
-def _extract_center_pixels(img: np.ndarray, margin_ratio: float = CENTER_MARGIN_RATIO) -> np.ndarray:
-    """Return the center crop used for rule-based decisions."""
-    h, w = img.shape[:2]
-    margin = int(min(h, w) * margin_ratio)
-    if margin == 0:
-        return img
-    center = img[margin:h - margin, margin:w - margin]
-    return center if center.size else img
-
+    full_mask = _expand_center_mask(yellow_mask, hsv_img.shape, edge_margin)
+    return is_yellow, yellow_ratio, full_mask
 
 def _initial_prediction(ratios: dict[str, float]) -> tuple[str, float]:
     if not ratios:
         raise ValueError("No ratios provided for prediction.")
-    return max(ratios.items(), key=lambda item: item[1])
+    predicted_color, confidence = max(ratios.items(), key=lambda item: item[1])
+    if confidence <= 0.0:
+        return "Unknown", 0.0
+    return predicted_color, confidence
 
 
 def _apply_color_rules(
@@ -452,29 +522,7 @@ def _apply_color_rules(
         result = rule(predicted_color, confidence, context)
         if result is not None:
             predicted_color, confidence = result
-    return predicted_color, confidence
-
-
-def _rule_black(
-    predicted_color: str,
-    confidence: float,
-    context: DecisionContext,
-) -> tuple[str, float] | None:
-    if context.debug_info.get("is_black_detected") and "Black" in context.ratios:
-        new_conf = context.debug_info.get("black_confidence", confidence)
-        return "Black", new_conf
-    return None
-
-
-def _rule_yellow(
-    predicted_color: str,
-    confidence: float,
-    context: DecisionContext,
-) -> tuple[str, float] | None:
-    if context.debug_info.get("is_yellow_detected") and "Yellow" in context.ratios:
-        new_conf = context.debug_info.get("yellow_confidence", confidence)
-        return "Yellow", new_conf
-    return None
+    return predicted_color, _clamp_confidence(confidence)
 
 
 def _rule_orange_red_tiebreak(
@@ -491,8 +539,8 @@ def _rule_orange_red_tiebreak(
     ):
         return None
 
-    center_hsv = _extract_center_pixels(context.hsv_img)
-    center_lab = _extract_center_pixels(context.lab_img)
+    center_hsv = _crop_center(context.hsv_img, context.edge_margin)
+    center_lab = _crop_center(context.lab_img, context.edge_margin)
 
     if center_hsv.size == 0 or center_lab.size == 0:
         return None
@@ -503,7 +551,7 @@ def _rule_orange_red_tiebreak(
     if flat_hsv.size == 0 or flat_lab.size == 0:
         return None
 
-    sat_mask = flat_hsv[:, 1] >= DEFAULT_SAT_THRESHOLD
+    sat_mask = flat_hsv[:, 1] >= context.sat_threshold
     valid_hsv = flat_hsv[sat_mask]
     valid_lab = flat_lab[sat_mask]
 
@@ -526,16 +574,21 @@ def _rule_green_correction(
     if predicted_color != "Red" or "Green" not in context.ratios:
         return None
 
-    center_hsv = _extract_center_pixels(context.hsv_img)
+    center_hsv = _crop_center(context.hsv_img, context.edge_margin)
     if center_hsv.size == 0:
         return None
 
-    h_vals = center_hsv[:, :, 0] if center_hsv.ndim == 3 else center_hsv
+    h_vals = center_hsv[:, :, 0]
+    s_vals = center_hsv[:, :, 1]
     total_pixels = h_vals.size
     if total_pixels == 0:
         return None
 
-    green_pixels = np.sum((h_vals >= 70) & (h_vals <= 100))
+    green_pixels = np.sum(
+        (h_vals >= 70)
+        & (h_vals <= 100)
+        & (s_vals >= context.sat_threshold)
+    )
     green_ratio = green_pixels / total_pixels
 
     if green_ratio > GREEN_DOMINANCE_RATIO:
@@ -545,28 +598,48 @@ def _rule_green_correction(
 
 
 _COLOR_RULES: list[DecisionRule] = [
-    _rule_black,
-    _rule_yellow,
     _rule_orange_red_tiebreak,
     _rule_green_correction,
 ]
 
 
+def _validate_confidence_threshold(default_threshold: float) -> None:
+    if not np.isfinite(default_threshold) or not 0.0 <= default_threshold <= 1.0:
+        raise ValueError("ratio_threshold must be in the range [0.0, 1.0].")
+
+
 def _confidence_threshold_for(color: str, default_threshold: float) -> float:
-    return COLOR_CONF_THRESHOLDS.get(color, default_threshold)
+    _validate_confidence_threshold(default_threshold)
+    return max(default_threshold, COLOR_CONF_THRESHOLDS.get(color, default_threshold))
 
 # ============= 載入與驗證函數 =============
 
-def _margin_vector(margin: Sequence[float] | float, default: float) -> np.ndarray:
+def _margin_vector(margin: Sequence[float] | float) -> np.ndarray:
     if isinstance(margin, Sequence) and not isinstance(margin, (str, bytes)):
-        values = list(margin)
-        if len(values) == 1:
-            values *= 3
+        values = [float(value) for value in margin]
     else:
-        values = [float(margin if not isinstance(margin, Sequence) else margin[0])] * 3
+        values = [float(margin)]
+    if len(values) == 1:
+        values *= 3
     if len(values) != 3:
         raise ValueError("margin must contain 1 or 3 values.")
     return np.asarray(values, dtype=np.float32)
+
+
+def _canonical_color_name(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("color_stats contains an empty or non-string color name.")
+    name = value.strip()
+    return CANONICAL_COLOR_NAMES.get(name.casefold(), name)
+
+
+def _required_stat_array(stats: Mapping[str, object], key: str) -> np.ndarray:
+    if key not in stats:
+        raise ValueError(f"color_stats entry is missing {key}.")
+    value = np.asarray(stats[key], dtype=np.float32)
+    if value.shape != (3,) or not np.all(np.isfinite(value)):
+        raise ValueError(f"color_stats {key} must contain three finite values.")
+    return value
 
 
 def load_color_ranges(
@@ -581,35 +654,48 @@ def load_color_ranges(
     if not isinstance(summary, dict) or not summary:
         raise ValueError("color_stats summary missing.")
 
-    hsv_margin_vec = _margin_vector(hsv_margin, 0.0)
-    lab_margin_vec = _margin_vector(lab_margin, 0.0)
+    hsv_margin_vec = _margin_vector(hsv_margin)
+    lab_margin_vec = _margin_vector(lab_margin)
     ranges: dict[str, ColorRange] = {}
+    seen_names: set[str] = set()
     for color, stats in summary.items():
-        hsv_min = np.asarray(stats["hsv_min"], dtype=np.float32) - hsv_margin_vec
-        hsv_max = np.asarray(stats["hsv_max"], dtype=np.float32) + hsv_margin_vec
-        lab_min = np.asarray(stats["lab_min"], dtype=np.float32) - lab_margin_vec
-        lab_max = np.asarray(stats["lab_max"], dtype=np.float32) + lab_margin_vec
+        canonical_color = _canonical_color_name(color)
+        collision_key = canonical_color.casefold()
+        if collision_key in seen_names:
+            raise ValueError(f"color_stats contains duplicate color name: {canonical_color}")
+        if not isinstance(stats, Mapping):
+            raise ValueError(f"color_stats entry for {canonical_color} must be an object.")
+        seen_names.add(collision_key)
 
-        def _optional_array(key: str) -> np.ndarray | None:
-            if key not in stats:
-                return None
-            return np.asarray(stats[key], dtype=np.float32)
+        hsv_min = _required_stat_array(stats, "hsv_min") - hsv_margin_vec
+        hsv_max = _required_stat_array(stats, "hsv_max") + hsv_margin_vec
+        lab_min = _required_stat_array(stats, "lab_min") - lab_margin_vec
+        lab_max = _required_stat_array(stats, "lab_max") + lab_margin_vec
 
-        ranges[color] = ColorRange(
-            color,
+        ranges[canonical_color] = ColorRange(
+            canonical_color,
             hsv_min,
             hsv_max,
             lab_min,
             lab_max,
-            hsv_mean=_optional_array("hsv_mean"),
-            lab_mean=_optional_array("lab_mean"),
+            hsv_mean=_optional_stat_array(stats, "hsv_mean"),
+            lab_mean=_optional_stat_array(stats, "lab_mean"),
             coverage_mean=float(stats["coverage_mean"]) if "coverage_mean" in stats else None,
-            hsv_p10=_optional_array("hsv_p10"),
-            hsv_p90=_optional_array("hsv_p90"),
-            lab_p10=_optional_array("lab_p10"),
-            lab_p90=_optional_array("lab_p90"),
+            hsv_p10=_optional_stat_array(stats, "hsv_p10"),
+            hsv_p90=_optional_stat_array(stats, "hsv_p90"),
+            lab_p10=_optional_stat_array(stats, "lab_p10"),
+            lab_p90=_optional_stat_array(stats, "lab_p90"),
         )
     return ranges
+
+
+def _optional_stat_array(stats: Mapping[str, object], key: str) -> np.ndarray | None:
+    if key not in stats:
+        return None
+    value = np.asarray(stats[key], dtype=np.float32)
+    if value.shape != (3,) or not np.all(np.isfinite(value)):
+        raise ValueError(f"color_stats {key} must contain three finite values.")
+    return value
 
 
 def _load_expected_map(path: Path | None) -> dict[str, str]:
@@ -643,10 +729,12 @@ def _resolve_expected_color(
     infer_from_name: bool,
 ) -> str | None:
     name = image_path.name.lower()
+    known_by_name = {color.casefold(): color for color in known_colors}
     if name in lookup:
-        return lookup[name]
+        expected = lookup[name].strip()
+        return known_by_name.get(expected.casefold(), expected)
     if infer_from_name:
-        for color in known_colors:
+        for color in known_by_name.values():
             if color.lower() in name:
                 return color
     return None
@@ -666,12 +754,20 @@ def verify_directory(
     hsv_margin: Sequence[float] | float = (0.0, 0.0, 0.0),
     lab_margin: Sequence[float] | float = (0.0, 0.0, 0.0),
     ratio_threshold: float = 0.35,
+    sat_threshold: float = DEFAULT_SAT_THRESHOLD,
+    edge_margin: float = DEFAULT_EDGE_MARGIN,
+    min_valid_pixels: int = DEFAULT_MIN_VALID_PIXELS,
     debug_plot: bool = False,
     debug_dir: Path | None = None,
     logger: logging.Logger | None = None,
-    **kwargs
 ) -> tuple[dict[str, object], list[ColorDecision]]:
     logger = logger or logging.getLogger(__name__)
+    _validate_evaluation_options(
+        edge_margin=edge_margin,
+        sat_threshold=sat_threshold,
+        min_valid_pixels=min_valid_pixels,
+    )
+    _validate_confidence_threshold(ratio_threshold)
     input_dir = input_dir.resolve()
     if not input_dir.exists():
         raise FileNotFoundError(input_dir)
@@ -709,10 +805,13 @@ def verify_directory(
         lab_img = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
 
         ratios, masks, debug_info = _evaluate_image_improved(
-            image, hsv_img, lab_img, ranges
+            hsv_img,
+            lab_img,
+            ranges,
+            edge_margin=edge_margin,
+            sat_threshold=sat_threshold,
+            min_valid_pixels=min_valid_pixels,
         )
-        if debug_info is None:
-            debug_info = {}
 
         predicted_color, confidence = _initial_prediction(ratios)
         context = DecisionContext(
@@ -720,24 +819,25 @@ def verify_directory(
             debug_info=debug_info,
             hsv_img=hsv_img,
             lab_img=lab_img,
+            edge_margin=edge_margin,
+            sat_threshold=sat_threshold,
         )
         predicted_color, confidence = _apply_color_rules(predicted_color, confidence, context)
 
         expected = _resolve_expected_color(image_path, expected_lookup, ranges.keys(), infer_expected_from_name)
-        status = "match"
-        if expected is None:
+        base_threshold = _confidence_threshold_for(predicted_color, ratio_threshold)
+        if confidence < base_threshold:
+            status = "low_confidence"
+            counters["low_confidence"] += 1
+        elif expected is None:
             status = "predicted_only"
             counters["predicted_only"] += 1
         elif expected != predicted_color:
             status = "mismatch"
             counters["mismatched"] += 1
         else:
+            status = "match"
             counters["matched"] += 1
-
-        base_threshold = _confidence_threshold_for(predicted_color, ratio_threshold)
-        if confidence < base_threshold:
-            status = "low_confidence" if status == "match" else f"{status}_low_conf"
-            counters["low_confidence"] += 1
 
         decision = ColorDecision(
             image=image_path.relative_to(input_dir),
@@ -751,7 +851,7 @@ def verify_directory(
         results.append(decision)
 
         if debug_root:
-            mask = masks.get(predicted_color, np.ones(image.shape[:2], dtype=bool))
+            mask = masks.get(predicted_color, np.zeros(image.shape[:2], dtype=bool))
             visualize_debug(
                 image_bgr=image,
                 predicted_color=predicted_color,
@@ -760,6 +860,7 @@ def verify_directory(
                 mask=mask,
                 output_path=debug_root / f"{image_path.stem}_analysis.png",
                 debug_info=debug_info,
+                edge_margin=edge_margin,
             )
 
     summary = {
@@ -776,39 +877,47 @@ def verify_directory(
 
     report = {"summary": summary, "items": [item.to_dict() for item in results]}
     if output_json:
-        output_json.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            output_json.parent.mkdir(parents=True, exist_ok=True)
 
-        def _safe_convert(obj):
-            if isinstance(obj, np.generic):
-                return obj.item()
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            if isinstance(obj, dict):
-                return {k: _safe_convert(v) for k, v in obj.items()}
-            if isinstance(obj, list):
-                return [_safe_convert(v) for v in obj]
-            return obj
+            def _safe_convert(obj):
+                if isinstance(obj, np.generic):
+                    return obj.item()
+                if isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                if isinstance(obj, dict):
+                    return {k: _safe_convert(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [_safe_convert(v) for v in obj]
+                return obj
 
-        report = _safe_convert(report)
-        output_json.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+            report = _safe_convert(report)
+            output_json.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError as exc:
+            raise VerificationReportWriteError(f"Failed to write JSON report: {output_json}") from exc
     if output_csv:
-        output_csv.parent.mkdir(parents=True, exist_ok=True)
-        with output_csv.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(["image", "predicted_color", "expected_color", "status", "confidence", "match", "ratios_json"])
-            for item in results:
-                data = item.to_dict()
+        try:
+            output_csv.parent.mkdir(parents=True, exist_ok=True)
+            with output_csv.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle)
                 writer.writerow(
-                    [
-                        data["image"],
-                        data["predicted_color"],
-                        data["expected_color"],
-                        data["status"],
-                        f"{data['confidence']:.4f}",
-                        data["match"],
-                        json.dumps(data["ratios"], ensure_ascii=False),
-                    ]
+                    ["image", "predicted_color", "expected_color", "status", "confidence", "match", "ratios_json"]
                 )
+                for item in results:
+                    data = item.to_dict()
+                    writer.writerow(
+                        [
+                            data["image"],
+                            data["predicted_color"],
+                            data["expected_color"],
+                            data["status"],
+                            f"{data['confidence']:.4f}",
+                            data["match"],
+                            json.dumps(data["ratios"], ensure_ascii=False),
+                        ]
+                    )
+        except OSError as exc:
+            raise VerificationReportWriteError(f"Failed to write CSV report: {output_csv}") from exc
 
     return summary, results
 
@@ -820,22 +929,27 @@ def visualize_debug(
     ratios: dict[str, float],
     mask: np.ndarray,
     output_path: Path,
-    debug_info: dict[str, object] = None,
+    debug_info: Mapping[str, object] | None = None,
+    *,
+    edge_margin: float = DEFAULT_EDGE_MARGIN,
 ) -> None:
     try:
         import matplotlib.pyplot as plt
         from matplotlib import gridspec
-    except Exception:
+    except (ImportError, OSError) as exc:
+        logging.getLogger(__name__).warning("Debug visualization unavailable: %s", exc)
         return
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    mask_uint8 = mask.astype(np.uint8) * 255 if mask.dtype != np.uint8 else mask
+    analysis_image = _crop_center(image_bgr, edge_margin)
+    analysis_mask = _crop_center(mask, edge_margin)
+    image_rgb = cv2.cvtColor(analysis_image, cv2.COLOR_BGR2RGB)
+    mask_uint8 = analysis_mask.astype(np.uint8) * 255 if analysis_mask.dtype != np.uint8 else analysis_mask
     mask_uint8 = mask_uint8 if mask_uint8.max() > 1 else mask_uint8 * 255
     overlay = cv2.applyColorMap(mask_uint8, cv2.COLORMAP_JET)
     overlay = cv2.addWeighted(image_rgb, 0.7, cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), 0.3, 0)
 
-    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    hsv = cv2.cvtColor(analysis_image, cv2.COLOR_BGR2HSV)
     hue = hsv[:, :, 0].flatten()
     sat = hsv[:, :, 1].flatten()
 
@@ -886,9 +1000,11 @@ def visualize_debug(
             debug_text += "Orange/Red disambiguation triggered\n"
         if debug_info.get("green_correction"):
             debug_text += "Green correction applied\n"
+        if debug_info.get("low_saturation_fallback"):
+            debug_text += "Low-saturation fallback: no color accepted\n"
 
     fig.text(0.02, 0.02, debug_text, fontsize=8, verticalalignment="bottom",
-             bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
+             bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.5})
 
     fig.suptitle(f"Color decision: {predicted_color}", fontsize=14, fontweight="bold")
     fig.tight_layout(rect=[0, 0.05, 1, 0.96])
@@ -908,6 +1024,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hsv-margin", type=float, nargs="*", default=[8.0, 35.0, 40.0])
     parser.add_argument("--lab-margin", type=float, nargs="*", default=[12.0, 8.0, 12.0])
     parser.add_argument("--ratio-threshold", type=float, default=0.35, help="Base confidence threshold")
+    parser.add_argument(
+        "--sat-threshold",
+        type=float,
+        default=DEFAULT_SAT_THRESHOLD,
+        help="Minimum HSV saturation accepted for color matching",
+    )
+    parser.add_argument(
+        "--edge-margin",
+        type=float,
+        default=DEFAULT_EDGE_MARGIN,
+        help="Fraction removed from each edge before color analysis (0.0 <= value < 0.5)",
+    )
+    parser.add_argument(
+        "--min-valid-pixels",
+        type=int,
+        default=DEFAULT_MIN_VALID_PIXELS,
+        help="Minimum saturated pixels required for a color decision",
+    )
     parser.add_argument("--debug-plot", action="store_true", help="Save per-image debug visualizations")
     parser.add_argument("--debug-dir", help="Directory to store debug visualizations")
 
@@ -924,12 +1058,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     logger = logging.getLogger(__name__)
 
-    try:
-        logger.info("Starting IMPROVED color verification pipeline...")
-        logger.info(f"Input directory: {args.input_dir}")
-        logger.info(f"Color stats: {args.color_stats}")
+    logger.info("Starting IMPROVED color verification pipeline...")
+    logger.info("Input directory: %s", args.input_dir)
+    logger.info("Color stats: %s", args.color_stats)
 
-        summary, results = verify_directory(
+    try:
+        summary, _ = verify_directory(
             input_dir=Path(args.input_dir),
             color_stats=Path(args.color_stats),
             output_json=Path(args.output_json) if args.output_json else None,
@@ -940,27 +1074,42 @@ def main(argv: Sequence[str] | None = None) -> int:
             hsv_margin=args.hsv_margin,
             lab_margin=args.lab_margin,
             ratio_threshold=args.ratio_threshold,
+            sat_threshold=args.sat_threshold,
+            edge_margin=args.edge_margin,
+            min_valid_pixels=args.min_valid_pixels,
             debug_plot=args.debug_plot,
             debug_dir=Path(args.debug_dir) if args.debug_dir else None,
             logger=logger,
         )
 
-        logger.info("=" * 60)
-        logger.info("Verification complete")
-        logger.info(f"Total images: {summary['total_images']}")
-        logger.info(f"Matched: {summary['matched']}")
-        logger.info(f"Mismatched: {summary['mismatched']}")
-        logger.info(f"Accuracy: {summary['accuracy']}")
-        logger.info(f"Low-confidence: {summary['low_confidence']}")
-        if args.output_json:
-            logger.info(f"JSON report: {args.output_json}")
-        if args.output_csv:
-            logger.info(f"CSV report: {args.output_csv}")
-        logger.info("=" * 60)
-
-    except Exception as exc:
-        logger.error(f"Verification failed: {exc}", exc_info=True)
+    except FileNotFoundError as exc:
+        logger.error("Color verification input was not found: %s", exc)
         return 1
+    except VerificationReportWriteError as exc:
+        logger.error("Color verification report could not be written: %s", exc)
+        return 1
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        logger.error("Color verification input or configuration is invalid: %s", exc)
+        return 1
+    except cv2.error as exc:
+        logger.error("OpenCV failed while analyzing an image: %s", exc)
+        return 1
+    except OSError as exc:
+        logger.error("Color verification I/O failed: %s", exc)
+        return 1
+
+    logger.info("=" * 60)
+    logger.info("Verification complete")
+    logger.info("Total images: %s", summary["total_images"])
+    logger.info("Matched: %s", summary["matched"])
+    logger.info("Mismatched: %s", summary["mismatched"])
+    logger.info("Accuracy: %s", summary["accuracy"])
+    logger.info("Low-confidence: %s", summary["low_confidence"])
+    if args.output_json:
+        logger.info("JSON report: %s", args.output_json)
+    if args.output_csv:
+        logger.info("CSV report: %s", args.output_csv)
+    logger.info("=" * 60)
     return 0
 
 

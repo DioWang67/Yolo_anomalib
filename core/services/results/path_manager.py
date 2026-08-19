@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -8,8 +9,9 @@ from pathlib import Path
 from core.security import ensure_subpath, safe_segment
 
 
-@dataclass
+@dataclass(frozen=True)
 class SavePathBundle:
+    inspection_id: str
     base_path: str
     detector_prefix: str
     timestamp: str
@@ -64,7 +66,11 @@ class ResultPathManager:
     ) -> SavePathBundle:
         timestamp_dt = timestamp or datetime.now()
         date_folder = timestamp_dt.strftime("%Y%m%d")
-        ts = timestamp_dt.strftime("%H%M%S")
+        inspection_id = uuid.uuid4().hex
+        # Human-readable time plus a random identity prevents two inspections
+        # completed in the same second (or thread scheduling tick) from ever
+        # sharing an artifact path.
+        ts = f"{timestamp_dt:%H%M%S_%f}_{inspection_id[:12]}"
         detector_prefix = safe_segment(
             (detector or "unknown").lower(), field_name="detector"
         )
@@ -103,6 +109,7 @@ class ResultPathManager:
             ensure_subpath(output_path, self.allowed_root, must_exist=False)
 
         return SavePathBundle(
+            inspection_id=inspection_id,
             base_path=base_path,
             detector_prefix=detector_prefix,
             timestamp=ts,

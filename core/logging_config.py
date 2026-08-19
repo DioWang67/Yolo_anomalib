@@ -61,12 +61,14 @@ def configure_logging(
 
     handlers: dict[str, dict[str, Any]] = {
         "file": {
-            "class": "logging.FileHandler",
+            "class": "logging.handlers.RotatingFileHandler",
             "level": level_name,
             "formatter": "detailed",
             "filename": str(log_file),
             "encoding": "utf-8",
             "delay": True,
+            "maxBytes": 20 * 1024 * 1024,
+            "backupCount": 10,
             "filters": ["context"],
         }
     }

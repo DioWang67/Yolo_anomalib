@@ -19,7 +19,7 @@ class DetectionController:
     1. System Lifecycle (Init / Shutdown)
     2. Worker Factory (DI Injection)
     3. Bridge between GUI and Core
-    
+
     NO Business Logic allowed here.
     """
 

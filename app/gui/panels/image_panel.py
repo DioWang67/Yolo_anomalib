@@ -48,13 +48,13 @@ class ImagePanel(QGroupBox):
         )
 
         self.original_image = ImageViewer("Original image")
-        self.image_tabs.addTab(self.original_image, "Original")
 
         self.processed_image = ImageViewer("Processed image")
-        self.image_tabs.addTab(self.processed_image, "Processed")
 
         self.result_image = ImageViewer("Result image")
-        self.image_tabs.addTab(self.result_image, "Result")
+        self._show_original_tab = True
+        self._show_processed_tab = True
+        self._rebuild_tabs()
 
         layout.addWidget(self.image_tabs)
         self.setLayout(layout)
@@ -70,13 +70,51 @@ class ImagePanel(QGroupBox):
         self.processed_image.clear()
         self.result_image.clear()
 
+    def set_optional_tabs_visible(
+        self, *, show_original: bool, show_processed: bool
+    ) -> None:
+        """Show or hide optional image tabs while keeping the result tab visible.
+
+        Args:
+            show_original: Whether the original-image tab is visible.
+            show_processed: Whether the processed-image tab is visible.
+
+        Returns:
+            None.
+        """
+        self._show_original_tab = bool(show_original)
+        self._show_processed_tab = bool(show_processed)
+        self._rebuild_tabs()
+        self.set_language(self._language)
+
+    def _rebuild_tabs(self) -> None:
+        """Rebuild tab order from current visibility preferences."""
+        current_widget = self.image_tabs.currentWidget()
+        self.image_tabs.clear()
+        if self._show_original_tab:
+            self.image_tabs.addTab(self.original_image, tr(self._language, "original"))
+        if self._show_processed_tab:
+            self.image_tabs.addTab(self.processed_image, tr(self._language, "processed"))
+        self.image_tabs.addTab(self.result_image, tr(self._language, "result"))
+
+        if current_widget is not None:
+            index = self.image_tabs.indexOf(current_widget)
+            if index >= 0:
+                self.image_tabs.setCurrentIndex(index)
+
     def set_language(self, language: str) -> None:
         """Update visible viewer labels."""
         self._language = normalize_language(language)
         self.setTitle(tr(self._language, "viewer"))
-        self.image_tabs.setTabText(0, tr(self._language, "original"))
-        self.image_tabs.setTabText(1, tr(self._language, "processed"))
-        self.image_tabs.setTabText(2, tr(self._language, "result"))
+        tab_labels = (
+            (self.original_image, "original"),
+            (self.processed_image, "processed"),
+            (self.result_image, "result"),
+        )
+        for widget, key in tab_labels:
+            index = self.image_tabs.indexOf(widget)
+            if index >= 0:
+                self.image_tabs.setTabText(index, tr(self._language, key))
         self.original_image.set_language(self._language)
         self.processed_image.set_language(self._language)
         self.result_image.set_language(self._language)

@@ -101,8 +101,10 @@ class _FakeSdkCam:
         self._value = value
         self.freed = 0
         self._buf = None
+        self.last_timeout_ms = None
 
     def MV_CC_GetImageBuffer(self, st_out, timeout_ms):
+        self.last_timeout_ms = timeout_ms
         n = self._height * self._width
         self._buf = (c_ubyte * n)(*([self._value] * n))
         st_out.pBufAddr = cast(self._buf, POINTER(c_ubyte))
@@ -133,6 +135,17 @@ def test_frame_decode_copies_pixels_out_of_sdk_buffer(mock_config):
     # Frame must not alias the (already released) SDK buffer.
     fake._buf[0] = 0
     assert np.all(frame == 37)
+
+
+def test_frame_decode_accepts_per_capture_timeout_override(mock_config):
+    camera = MVSCamera(mock_config)
+    fake = _FakeSdkCam(8, 8)
+    camera.cam = fake
+
+    frame = camera._get_frame_internal(timeout_ms=250)
+
+    assert frame is not None
+    assert fake.last_timeout_ms == 250
 
 
 def test_frame_decode_rejects_short_buffer(mock_config):

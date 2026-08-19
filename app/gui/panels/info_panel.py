@@ -23,6 +23,7 @@ from app.gui.widgets import (
     OperatorGuidanceCard,
     ResultDisplayWidget,
     SessionStatsWidget,
+    StorageStatusLabel,
 )
 
 if TYPE_CHECKING:
@@ -45,6 +46,12 @@ class InfoPanel(QWidget):
 
         self.big_status_label = BigStatusLabel()
         layout.addWidget(self.big_status_label)
+
+        # Directly under the verdict, because the two are read together but
+        # mean different things: the verdict is about the board, this is about
+        # whether the record survived.
+        self.storage_status_label = StorageStatusLabel()
+        layout.addWidget(self.storage_status_label)
 
         self.operator_guidance_card = OperatorGuidanceCard()
         layout.addWidget(self.operator_guidance_card)
@@ -128,6 +135,10 @@ class InfoPanel(QWidget):
         self.setLayout(layout)
         self.set_language(self._language)
 
+    def set_storage_state(self, state: str) -> None:
+        """Show whether this inspection's record reached durable storage."""
+        self.storage_status_label.set_state(state, self._language)
+
     def update_result(self, result: DetectionResult) -> None:
         """Update status indicators, fail reason, stats, and detail text."""
         self.result_widget.update_result(result)
@@ -158,6 +169,7 @@ class InfoPanel(QWidget):
         self._clear_log_btn.setText(tr(self._language, "clear_log"))
         self._dismiss_alert_btn.setToolTip("Dismiss alert" if self._language == "en" else "關閉警示")
 
+        self.storage_status_label.set_language(self._language)
         self.fail_reason_label.set_language(self._language)
         self.operator_guidance_card.set_language(self._language)
         self.session_stats.set_language(self._language)

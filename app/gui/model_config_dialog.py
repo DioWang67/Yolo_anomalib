@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Dialog for editing common per-model settings without opening YAML."""
+
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
@@ -17,14 +17,16 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
+    QMessageBox,
     QPlainTextEdit,
+    QPushButton,
     QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
+from app.gui.dialog_geometry import configure_responsive_dialog
 from app.gui.i18n import normalize_language
 from core.services.model_config_editor import load_model_config
 
@@ -50,11 +52,15 @@ class ModelConfigDialog(QDialog):
         self.language = normalize_language(language)
         self._config = load_model_config(config_path)
         self.setWindowTitle(
-            f"{self._l('Edit Model Config', '編輯機種設定')} - "
-            f"{product}/{area}/{inference_type}"
+            f"{self._l('Inspection Parameter Settings', '檢測參數設定')}｜"
+            f"{product} / {area} / {inference_type}"
         )
-        self.setMinimumWidth(560)
-        self.resize(640, 720)
+        configure_responsive_dialog(
+            self,
+            preferred=(640, 720),
+            minimum=(480, 420),
+            parent=parent,
+        )
         self._build_ui()
         self._load_values()
 
@@ -79,12 +85,21 @@ class ModelConfigDialog(QDialog):
             "color_checker_type": self.color_checker_combo.currentText().strip(),
             "color_score_threshold": self.color_score_spin.value(),
             "position_check_enabled": self.position_check_chk.isChecked(),
-            "position_mode": self.position_mode_combo.currentText().strip(),
+            "position_mode": str(self.position_mode_combo.currentData()),
             "position_tolerance": self.position_tolerance_spin.value(),
-            "position_tolerance_unit": self.position_unit_combo.currentText().strip(),
+            "position_tolerance_unit": str(self.position_unit_combo.currentData()),
             "position_alignment_enabled": self.position_alignment_chk.isChecked(),
             "missing_slot_check_enabled": self.missing_slot_chk.isChecked(),
             "count_check_strict": self.count_check_strict_chk.isChecked(),
+            "duplicate_filter_enabled": self.duplicate_filter_enabled_chk.isChecked(),
+            "duplicate_filter_mode": self.duplicate_filter_mode_combo.currentData(),
+            "duplicate_filter_iou_threshold": self.duplicate_filter_iou_spin.value(),
+            "duplicate_filter_center_distance_ratio_max": (
+                self.duplicate_filter_center_spin.value()
+            ),
+            "duplicate_filter_area_similarity_min": (
+                self.duplicate_filter_area_spin.value()
+            ),
             "fail_on_unexpected": self.fail_on_unexpected_chk.isChecked(),
             "save_original": self.save_original_chk.isChecked(),
             "save_processed": self.save_processed_chk.isChecked(),
@@ -102,11 +117,33 @@ class ModelConfigDialog(QDialog):
         scroll.setFrameShape(QScrollArea.NoFrame)
         content = QWidget()
         content_layout = QVBoxLayout(content)
+
+        scope_label = QLabel(
+            self._l("Editing scope", "編輯範圍")
+            + f"：{self.product} / {self.area} / {self.inference_type}"
+        )
+        scope_label.setStyleSheet("font-size:11pt;font-weight:600;color:#1f3347;")
+        content_layout.addWidget(scope_label)
+
+        impact_label = QLabel(
+            self._l(
+                "Production impact: saving directly updates the active inspection "
+                "parameters. The next inspection will use the new values.",
+                "正式檢測影響：儲存後會直接更新目前檢測參數，下一次檢測將使用新值。",
+            )
+        )
+        impact_label.setWordWrap(True)
+        impact_label.setStyleSheet(
+            "background:#fff7e8;color:#8a5a00;border:1px solid #ead3a3;"
+            "border-radius:6px;padding:10px;font-weight:600;"
+        )
+        content_layout.addWidget(impact_label)
+
         content_layout.addWidget(
-            QLabel(f"{self._l('Config file', '設定檔')}: {self.config_path}")
+            QLabel(f"{self._l('Settings source', '設定來源')}：{self.config_path}")
         )
 
-        model_group = QGroupBox(self._l("Model", "模型"))
+        model_group = QGroupBox(self._l("Inference Model", "推論模型"))
         model_form = QFormLayout(model_group)
         self.weights_edit = QLineEdit()
         weights_row = QHBoxLayout()
@@ -114,7 +151,7 @@ class ModelConfigDialog(QDialog):
         browse_weights_btn = QPushButton(self._l("Browse", "選擇"))
         browse_weights_btn.clicked.connect(self._browse_weights)
         weights_row.addWidget(browse_weights_btn)
-        model_form.addRow(self._l("Weights", "權重檔"), weights_row)
+        model_form.addRow(self._l("Model weights", "模型權重"), weights_row)
 
         self.device_combo = QComboBox()
         self.device_combo.addItems(["cpu", "cuda:0"])
@@ -123,8 +160,14 @@ class ModelConfigDialog(QDialog):
 
         self.conf_spin = self._ratio_spin()
         self.iou_spin = self._ratio_spin()
-        model_form.addRow(self._l("conf threshold", "conf 閾值"), self.conf_spin)
-        model_form.addRow(self._l("iou threshold", "iou 閾值"), self.iou_spin)
+        model_form.addRow(
+            self._l("Minimum confidence (conf)", "最低信心度（conf）"),
+            self.conf_spin,
+        )
+        model_form.addRow(
+            self._l("YOLO NMS IoU (same-class)", "YOLO NMS IoU（同類框）"),
+            self.iou_spin,
+        )
 
         imgsz_row = QHBoxLayout()
         self.imgsz_w_spin = self._size_spin()
@@ -132,14 +175,19 @@ class ModelConfigDialog(QDialog):
         imgsz_row.addWidget(self.imgsz_w_spin)
         imgsz_row.addWidget(QLabel("x"))
         imgsz_row.addWidget(self.imgsz_h_spin)
-        model_form.addRow("imgsz", imgsz_row)
+        model_form.addRow(self._l("Input size (imgsz)", "模型輸入尺寸（imgsz）"), imgsz_row)
 
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(0, 3600)
-        model_form.addRow(self._l("timeout seconds", "timeout 秒"), self.timeout_spin)
+        model_form.addRow(
+            self._l("Inference timeout (seconds)", "推論逾時時間（秒）"),
+            self.timeout_spin,
+        )
         content_layout.addWidget(model_group)
 
-        behavior_group = QGroupBox(self._l("Detection Behavior", "檢測行為"))
+        behavior_group = QGroupBox(
+            self._l("Inspection Modules & Verdict Rules", "檢測模組與判定規則")
+        )
         behavior_form = QFormLayout(behavior_group)
         self.enable_yolo_chk = QCheckBox(self._l("Enable YOLO", "啟用 YOLO"))
         self.enable_anomalib_chk = QCheckBox(self._l("Enable Anomalib", "啟用 Anomalib"))
@@ -186,13 +234,76 @@ class ModelConfigDialog(QDialog):
         behavior_form.addRow(self.count_check_strict_chk)
         content_layout.addWidget(behavior_group)
 
-        position_group = QGroupBox(self._l("Position Check", "位置檢測"))
+        duplicate_group = QGroupBox(
+            self._l("Cross-class Duplicate Handling", "跨類別重複框處理")
+        )
+        duplicate_form = QFormLayout(duplicate_group)
+        self.duplicate_filter_enabled_chk = QCheckBox(
+            self._l(
+                "Enable conservative duplicate-box handling",
+                "啟用保守型重複框處理",
+            )
+        )
+        duplicate_form.addRow(self.duplicate_filter_enabled_chk)
+
+        self.duplicate_filter_mode_combo = QComboBox()
+        self.duplicate_filter_mode_combo.addItem(
+            self._l("Observe only (no verdict change)", "僅觀察（不改判定）"),
+            "report_only",
+        )
+        self.duplicate_filter_mode_combo.addItem(
+            self._l("Suppress qualified duplicates", "消除符合條件的重複框"),
+            "suppress",
+        )
+        duplicate_form.addRow(
+            self._l("Mode", "模式"),
+            self.duplicate_filter_mode_combo,
+        )
+
+        self.duplicate_filter_iou_spin = self._ratio_spin()
+        self.duplicate_filter_center_spin = self._ratio_spin()
+        self.duplicate_filter_area_spin = self._ratio_spin()
+        duplicate_form.addRow(
+            self._l("Cross-class overlap IoU", "跨類別重疊 IoU"),
+            self.duplicate_filter_iou_spin,
+        )
+        duplicate_form.addRow(
+            self._l("Maximum center-distance ratio", "中心距離比例上限"),
+            self.duplicate_filter_center_spin,
+        )
+        duplicate_form.addRow(
+            self._l("Minimum area similarity", "面積相似度下限"),
+            self.duplicate_filter_area_spin,
+        )
+        duplicate_note = QLabel(
+            self._l(
+                "Suppression requires different YOLO classes, the same verified "
+                "color, both color checks passing, and position check disabled.",
+                "只有「YOLO 原類別不同、顏色複核相同、兩者顏色皆通過，且位置檢測停用」"
+                "時才會消除；原始框仍會寫入檢測紀錄。",
+            )
+        )
+        duplicate_note.setWordWrap(True)
+        duplicate_form.addRow(duplicate_note)
+        content_layout.addWidget(duplicate_group)
+
+        position_group = QGroupBox(
+            self._l("Position & Missing-Part Decisions", "位置與缺件判定")
+        )
         position_form = QFormLayout(position_group)
         self.position_check_chk = QCheckBox(self._l("Enable position check", "啟用位置檢測"))
         position_form.addRow(self.position_check_chk)
 
         self.position_mode_combo = QComboBox()
-        self.position_mode_combo.addItems(["center", "region", "iou"])
+        self.position_mode_combo.addItem(
+            self._l("Center offset", "中心點偏差"), "center"
+        )
+        self.position_mode_combo.addItem(
+            self._l("Allowed region", "允許區域"), "region"
+        )
+        self.position_mode_combo.addItem(
+            self._l("Box overlap (IoU)", "邊界框重疊率（IoU）"), "iou"
+        )
         position_form.addRow(self._l("Decision mode", "判定模式"), self.position_mode_combo)
 
         tolerance_row = QHBoxLayout()
@@ -202,7 +313,8 @@ class ModelConfigDialog(QDialog):
         self.position_tolerance_spin.setDecimals(3)
         tolerance_row.addWidget(self.position_tolerance_spin)
         self.position_unit_combo = QComboBox()
-        self.position_unit_combo.addItems(["percent", "pixel"])
+        self.position_unit_combo.addItem(self._l("Percent", "百分比"), "percent")
+        self.position_unit_combo.addItem(self._l("Pixels", "像素"), "pixel")
         tolerance_row.addWidget(self.position_unit_combo)
         position_form.addRow(self._l("Tolerance", "容許偏差"), tolerance_row)
 
@@ -217,7 +329,9 @@ class ModelConfigDialog(QDialog):
         position_form.addRow(self.missing_slot_chk)
         content_layout.addWidget(position_group)
 
-        output_group = QGroupBox(self._l("Output", "輸出"))
+        output_group = QGroupBox(
+            self._l("Results & Evidence Retention", "結果與證據保存")
+        )
         output_form = QFormLayout(output_group)
         self.output_dir_edit = QLineEdit()
         output_row = QHBoxLayout()
@@ -244,7 +358,7 @@ class ModelConfigDialog(QDialog):
             output_form.addRow(checkbox)
         content_layout.addWidget(output_group)
 
-        items_group = QGroupBox(self._l("Expected Items", "應檢項目"))
+        items_group = QGroupBox(self._l("Expected Components", "應檢元件清單"))
         items_layout = QVBoxLayout(items_group)
         self.expected_items_edit = QPlainTextEdit()
         self.expected_items_edit.setPlaceholderText(
@@ -259,11 +373,37 @@ class ModelConfigDialog(QDialog):
         layout.addWidget(scroll, stretch=1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Save).setText(self._l("Save Update", "儲存更新"))
+        buttons.button(QDialogButtonBox.Save).setText(
+            self._l(
+                "Apply to Active Inspection",
+                "套用至目前正式檢測",
+            )
+        )
         buttons.button(QDialogButtonBox.Cancel).setText(self._l("Cancel", "取消"))
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._confirm_active_update)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _confirm_active_update(self) -> None:
+        """Require explicit confirmation before changing production parameters."""
+        answer = QMessageBox.warning(
+            self,
+            self._l(
+                "Confirm Active Inspection Update",
+                "確認更新正式檢測參數",
+            ),
+            self._l(
+                "This changes the active inspection parameters directly. The next "
+                "inspection will use the new values. A backup will be created, but "
+                "this action does not run combination acceptance. Continue?",
+                "此操作會直接修改目前正式檢測參數，下一次檢測將使用新值。"
+                "系統會建立備份，但不會自動執行組合驗收。是否繼續？",
+            ),
+            QMessageBox.Save | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer == QMessageBox.Save:
+            self.accept()
 
     def _load_values(self) -> None:
         cfg = self._config
@@ -288,11 +428,15 @@ class ModelConfigDialog(QDialog):
 
         position_cfg = self._position_area_config()
         self.position_check_chk.setChecked(bool(position_cfg.get("enabled", False)))
-        self.position_mode_combo.setCurrentText(str(position_cfg.get("mode", "center") or "center"))
+        position_mode = str(position_cfg.get("mode", "center") or "center")
+        position_mode_index = self.position_mode_combo.findData(position_mode)
+        self.position_mode_combo.setCurrentIndex(max(0, position_mode_index))
         self.position_tolerance_spin.setValue(float(position_cfg.get("tolerance", 0.0) or 0.0))
-        self.position_unit_combo.setCurrentText(
-            str(position_cfg.get("tolerance_unit", "percent") or "percent")
+        position_unit = str(
+            position_cfg.get("tolerance_unit", "percent") or "percent"
         )
+        position_unit_index = self.position_unit_combo.findData(position_unit)
+        self.position_unit_combo.setCurrentIndex(max(0, position_unit_index))
         alignment_cfg = position_cfg.get("alignment", {})
         self.position_alignment_chk.setChecked(
             bool(alignment_cfg.get("enabled", True)) if isinstance(alignment_cfg, dict) else True
@@ -307,6 +451,28 @@ class ModelConfigDialog(QDialog):
         count_cfg = steps_cfg.get("count_check", {}) if isinstance(steps_cfg, dict) else {}
         self.count_check_strict_chk.setChecked(
             bool(count_cfg.get("strict", False)) if isinstance(count_cfg, dict) else False
+        )
+        duplicate_cfg = (
+            steps_cfg.get("cross_class_duplicate_filter", {})
+            if isinstance(steps_cfg, dict)
+            else {}
+        )
+        if not isinstance(duplicate_cfg, dict):
+            duplicate_cfg = {}
+        self.duplicate_filter_enabled_chk.setChecked(
+            bool(duplicate_cfg.get("enabled", False))
+        )
+        duplicate_mode = str(duplicate_cfg.get("mode", "report_only"))
+        mode_index = self.duplicate_filter_mode_combo.findData(duplicate_mode)
+        self.duplicate_filter_mode_combo.setCurrentIndex(max(0, mode_index))
+        self.duplicate_filter_iou_spin.setValue(
+            float(duplicate_cfg.get("iou_threshold", 0.90))
+        )
+        self.duplicate_filter_center_spin.setValue(
+            float(duplicate_cfg.get("center_distance_ratio_max", 0.10))
+        )
+        self.duplicate_filter_area_spin.setValue(
+            float(duplicate_cfg.get("area_similarity_min", 0.80))
         )
         self.fail_on_unexpected_chk.setChecked(bool(cfg.get("fail_on_unexpected", True)))
         self.save_original_chk.setChecked(bool(cfg.get("save_original", True)))

@@ -2,6 +2,7 @@ from core.services.decision_engine import (
     InspectionDecisionEngine,
     InspectionReason,
     InspectionStatus,
+    collect_fail_reasons,
 )
 
 
@@ -91,3 +92,62 @@ def test_decision_engine_respects_unexpected_fail_policy():
     assert strict_decision.reasons == [InspectionReason.UNEXPECTED_COMPONENT]
     assert lenient_decision.status == InspectionStatus.PASS
     assert lenient_decision.reasons == []
+
+
+def test_collect_fail_reasons_empty_for_pass():
+    assert collect_fail_reasons(
+        status="PASS",
+        decision={"status": "PASS", "reasons": []},
+        color_result={"is_ok": False},
+        detector="yolo",
+    ) == []
+
+
+def test_collect_fail_reasons_merges_decision_color_and_sequence():
+    reasons = collect_fail_reasons(
+        status="DETECTION_FAIL",
+        decision={"status": "FAIL", "reasons": ["MISSING", "MISSING"]},
+        color_result={"is_ok": False},
+        sequence_check={"is_ok": False, "reason": "order_mismatch"},
+        detector="yolo",
+    )
+
+    assert reasons == ["MISSING", "COLOR_MISMATCH", "SEQUENCE_MISMATCH"]
+
+
+def test_collect_fail_reasons_anomalib_fail_maps_to_anomaly_detected():
+    reasons = collect_fail_reasons(
+        status="DETECTION_FAIL",
+        detector="anomalib",
+        anomaly_score=0.87,
+    )
+
+    assert reasons == [InspectionReason.ANOMALY_DETECTED.value]
+
+
+def test_collect_fail_reasons_fusion_attributes_anomaly_only_without_other_signals():
+    unexplained = collect_fail_reasons(
+        status="DETECTION_FAIL",
+        detector="fusion",
+        anomaly_score=0.9,
+    )
+    explained = collect_fail_reasons(
+        status="DETECTION_FAIL",
+        decision={"status": "FAIL", "reasons": ["MISSING"]},
+        detector="fusion",
+        anomaly_score=0.9,
+    )
+
+    assert unexplained == [InspectionReason.ANOMALY_DETECTED.value]
+    assert explained == ["MISSING"]
+
+
+def test_collect_fail_reasons_inference_error_wins_over_anomaly():
+    reasons = collect_fail_reasons(
+        status="INFERENCE_ERROR",
+        detector="anomalib",
+        anomaly_score=None,
+        error_message="model load failed",
+    )
+
+    assert reasons == [InspectionReason.INFERENCE_ERROR.value]

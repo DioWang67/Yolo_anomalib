@@ -13,13 +13,19 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from app.gui.i18n import normalize_language, tr
-from core.services.results.customer_message import build_customer_message
+from core.services.results.customer_message import (
+    COLOR_FAILURE_LOW_CONFIDENCE,
+    COLOR_FAILURE_MISMATCH,
+    build_customer_message,
+    classify_color_check_failure,
+)
 from core.services.results.position_summary import (
     format_fixture_shift_hint,
     summarize_position_records,
@@ -27,6 +33,95 @@ from core.services.results.position_summary import (
 
 if TYPE_CHECKING:
     from core.types import DetectionResult
+
+
+class CameraStatusIndicator(QWidget):
+    """Persistent, text-backed camera state for operators."""
+
+    reconnect_requested = pyqtSignal()
+
+    _STYLES = {
+        "connecting": ("#fef3c7", "#92400e", "#fde68a"),
+        "reconnecting": ("#fef3c7", "#92400e", "#fde68a"),
+        "connected": ("#e0f2fe", "#075985", "#bae6fd"),
+        "ready": ("#dcfce7", "#166534", "#bbf7d0"),
+        "unavailable": ("#fee2e2", "#991b1b", "#fecaca"),
+        "lost": ("#fee2e2", "#991b1b", "#fecaca"),
+        "disconnected": ("#f1f5f9", "#475569", "#cbd5e1"),
+        "image_mode": ("#f1f5f9", "#475569", "#cbd5e1"),
+    }
+    _RECONNECT_STATES = frozenset({"unavailable", "lost", "disconnected"})
+
+    def __init__(self, language: str = "en", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._language = normalize_language(language)
+        self._state = "connecting"
+        self._reconnect_allowed = True
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(5)
+
+        self.state_label = QLabel(self)
+        self.state_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.state_label)
+
+        self.reconnect_button = QPushButton(self)
+        self.reconnect_button.setObjectName("cameraStatusReconnect")
+        self.reconnect_button.setStyleSheet(
+            "QPushButton#cameraStatusReconnect {"
+            "padding:2px 7px;border-radius:7px;font-size:9pt;"
+            "background:white;border:1px solid #f0a8a8;color:#991b1b;}"
+            "QPushButton#cameraStatusReconnect:hover {background:#fff1f1;}"
+            "QPushButton#cameraStatusReconnect:disabled {"
+            "background:#f1f5f9;color:#94a3b8;border-color:#cbd5e1;}"
+        )
+        self.reconnect_button.clicked.connect(self.reconnect_requested.emit)
+        layout.addWidget(self.reconnect_button)
+        self.set_state(self._state)
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+    def set_state(self, state: str) -> None:
+        """Update state atomically on the Qt GUI thread."""
+        normalized = str(state).strip().lower()
+        if normalized not in self._STYLES:
+            raise ValueError(f"Unsupported camera indicator state: {state}")
+        self._state = normalized
+        self._render()
+
+    def set_reconnect_allowed(self, allowed: bool) -> None:
+        self._reconnect_allowed = bool(allowed)
+        self._render()
+
+    def set_language(self, language: str) -> None:
+        self._language = normalize_language(language)
+        self._render()
+
+    def _render(self) -> None:
+        background, foreground, border = self._STYLES[self._state]
+        text = tr(self._language, f"camera_state_{self._state}")
+        self.state_label.setText(f"● {text}")
+        self.state_label.setStyleSheet(
+            f"background:{background};color:{foreground};"
+            f"border:1px solid {border};border-radius:9px;"
+            "padding:3px 8px;font-weight:600;font-size:9pt;"
+        )
+        self.state_label.setToolTip(
+            tr(self._language, f"camera_state_{self._state}_hint")
+        )
+        self.state_label.setAccessibleName(text)
+
+        reconnect_visible = self._state in self._RECONNECT_STATES
+        self.reconnect_button.setVisible(reconnect_visible)
+        self.reconnect_button.setEnabled(
+            reconnect_visible and self._reconnect_allowed
+        )
+        self.reconnect_button.setText(
+            tr(self._language, "camera_status_reconnect")
+        )
 
 
 class BigStatusLabel(QLabel):
@@ -104,6 +199,78 @@ class BigStatusLabel(QLabel):
                 }
                 """
             )
+
+
+class StorageStatusLabel(QLabel):
+    """Whether this inspection's record reached durable storage.
+
+    Deliberately separate from :class:`BigStatusLabel`. A failed write does not
+    make the inspection verdict wrong — the board really was PASS or NG — it
+    only means the evidence was not kept. Folding the two together would show
+    ``ERROR`` for a perfectly good inspection and read to the operator as
+    "the model failed", which is a different (and wrong) instruction.
+    """
+
+    #: state -> (i18n key for the value, background, text, border)
+    _STATES: dict[str, tuple[str, str, str, str]] = {
+        "pending": ("storage_state_pending", "#e5e7eb", "#374151", "#cbd5e1"),
+        "saved": ("storage_state_saved", "#e7f4ee", "#12643f", "#b7e0cb"),
+        "failed": ("storage_state_failed", "#fde8e6", "#8a1c12", "#f3b8b1"),
+    }
+
+    def __init__(self) -> None:
+        super().__init__("")
+        self.setWordWrap(True)
+        self.setFont(QFont("Microsoft JhengHei", 9))
+        self._language = "en"
+        self._state = "hidden"
+        self.hide()
+
+    def set_state(self, state: str, language: str | None = None) -> None:
+        """Show one of ``pending`` / ``saved`` / ``failed``; anything else hides.
+
+        ``hidden`` is the honest state for a run with no storage stage at all
+        (``persist=False``, or ``save_results`` disabled): claiming "saved"
+        there would be a lie, and claiming "failed" a false alarm.
+        """
+        if language is not None:
+            self._language = normalize_language(language)
+        self._state = state if state in self._STATES else "hidden"
+        self._render()
+
+    def set_language(self, language: str) -> None:
+        self._language = normalize_language(language)
+        self._render()
+
+    @property
+    def state(self) -> str:
+        """Current state, for tests and callers that need to re-render."""
+        return self._state
+
+    def _render(self) -> None:
+        if self._state == "hidden":
+            self.clear()
+            self.setToolTip("")
+            self.hide()
+            return
+
+        value_key, background, color, border = self._STATES[self._state]
+        text = (
+            f"{tr(self._language, 'storage_state_label')}: "
+            f"{tr(self._language, value_key)}"
+        )
+        if self._state == "failed":
+            text = f"{text}\n{tr(self._language, 'storage_failed_hint')}"
+            self.setToolTip(tr(self._language, "storage_failed_hint"))
+        else:
+            self.setToolTip("")
+        self.setText(text)
+        self.setAccessibleName(text)
+        self.setStyleSheet(
+            f"QLabel {{ background-color: {background}; color: {color}; "
+            f"border: 1px solid {border}; border-radius: 6px; padding: 6px 8px; }}"
+        )
+        self.show()
 
 
 class AutoPhaseBanner(QLabel):
@@ -282,14 +449,12 @@ class FailReasonLabel(QLabel):
         color_check = result.color_check or {}
         if color_check and not color_check.get("is_ok", True):
             bad = [
-                c.get("class_name", "?")
+                _color_check_failure_text(c, self._language)
                 for c in (color_check.get("items") or [])
                 if not c.get("is_ok", True)
             ]
             reasons.append(
-                f"{tr(self._language, 'color_error')}: {', '.join(str(i) for i in bad[:3])}"
-                if bad
-                else tr(self._language, "color_error")
+                "; ".join(str(i) for i in bad[:3]) if bad else tr(self._language, "color_error")
             )
 
         seq = result.sequence_check or {}
@@ -401,7 +566,6 @@ class OperatorGuidanceCard(QFrame):
             return
 
         missing = result.missing_items or []
-        over = result.over_items or []
         unexpected = result.unexpected_items or []
         if result.status == "PASS":
             self.show_message("PASS", "Continue production.", "success", [])
@@ -629,6 +793,9 @@ class ImageViewer(QLabel):
 
     def display_image(self, image: QImage | np.ndarray) -> None:
         """Display a QImage or BGR numpy array."""
+        # A live frame is also a new load request.  Cancel deferred disk loads
+        # from an older inspection before updating the pixmap.
+        self._load_token += 1
         try:
             if isinstance(image, QImage):
                 self.setPixmap(
@@ -739,6 +906,7 @@ class ResultDisplayWidget(QWidget):
         if isinstance(unexpected, (list, tuple)):
             lines.append(f"{tr(self._language, 'unexpected_count')}: {len(unexpected)}")
 
+        self._append_duplicate_filter_lines(lines, result)
         self._append_sequence_lines(lines, result)
         self._append_color_lines(lines, result)
         self._append_list_section(lines, "missing_list", missing)
@@ -807,18 +975,90 @@ class ResultDisplayWidget(QWidget):
         color_status = "PASS" if color_ok else "FAIL"
         lines.append(f"\n=== {tr(self._language, 'color_check')}: {color_status} ===")
         color_items = color_info.get("items") or []
-        for color_item in color_items:
-            item_status = "OK" if color_item.get("is_ok", True) else "NG"
-            cls_name = color_item.get("class_name", "?")
-            pred = color_item.get("best_color", "?")
+        effective_indices = {
+            int(item.metadata.get("source_index", position))
+            for position, item in enumerate(result.items or [])
+        }
+        visible_color_items = []
+        for position, color_item in enumerate(color_items):
+            try:
+                source_index = int(color_item.get("index", position))
+            except (TypeError, ValueError):
+                continue
+            if source_index in effective_indices:
+                visible_color_items.append(color_item)
+        for color_item in visible_color_items:
+            is_ok = bool(color_item.get("is_ok", True))
+            item_status = "OK" if is_ok else "NG"
+            if is_ok:
+                cls_name = _color_item_label(color_item, self._language)
+                pred = color_item.get("best_color") or tr(
+                    self._language, "unknown_color"
+                )
+                description = f"{cls_name} -> {pred}"
+            else:
+                # This detail panel keeps the raw diff/threshold numbers (they
+                # are debugging context); the description text itself shares
+                # the same mismatch-vs-low-confidence classification as the
+                # main operator guidance card so the two never read as if a
+                # different item or a different color had failed.
+                description = _color_check_failure_text(color_item, self._language)
             diff = color_item.get("diff", 0)
             threshold = color_item.get("threshold", 0)
             lines.append(
-                f"  {item_status} {cls_name} -> {pred} "
+                f"  {item_status} {description} "
                 f"(diff={diff:.2f}, thr={threshold:.2f})"
             )
-        if not color_items:
+        if not visible_color_items:
             lines.append(f"  ({tr(self._language, 'none')})")
+
+    def _append_duplicate_filter_lines(
+        self,
+        lines: list[str],
+        result: DetectionResult,
+    ) -> None:
+        metadata = result.metadata or {}
+        duplicate_filter = metadata.get("duplicate_filter")
+        if not isinstance(duplicate_filter, dict):
+            return
+        status = str(duplicate_filter.get("status") or "")
+        proposed = duplicate_filter.get("proposed_suppressions", []) or []
+        suppressions = duplicate_filter.get("suppressions", []) or []
+        if not proposed and not suppressions and not status.startswith("blocked_"):
+            return
+
+        title = "跨類別重複框" if self._language == "zh" else "Cross-class Duplicates"
+        lines.append(f"\n=== {title} ===")
+        if status == "suppressed":
+            summary = (
+                f"已消除 {len(suppressions)} 個重複框"
+                if self._language == "zh"
+                else f"Suppressed {len(suppressions)} duplicate box(es)"
+            )
+        elif status == "reported":
+            summary = (
+                f"觀察到 {len(proposed)} 個候選，未變更判定"
+                if self._language == "zh"
+                else f"Reported {len(proposed)} candidate(s); verdict unchanged"
+            )
+        else:
+            summary = (
+                f"未執行自動消除：{status}"
+                if self._language == "zh"
+                else f"Suppression not applied: {status}"
+            )
+        lines.append(summary)
+        for record in (suppressions or proposed)[:3]:
+            try:
+                lines.append(
+                    "  "
+                    f"#{int(record['suppressed_index'])} -> "
+                    f"#{int(record['kept_index'])}, "
+                    f"IoU={float(record.get('iou', 0.0)):.3f}, "
+                    f"color={record.get('verified_class', '-')}"
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
 
     def _append_list_section(self, lines: list[str], title_key: str, items: object) -> None:
         lines.append(f"\n=== {tr(self._language, title_key)} ===")
@@ -900,7 +1140,13 @@ class ResultDisplayWidget(QWidget):
             return
         lines.append(f"\n=== {tr(self._language, 'detection_details')} ===")
         for idx, item in enumerate(result.items[:5], start=1):
-            parts = [f"{idx}. {item.label}", f"conf={item.confidence:.3f}"]
+            source_index = item.metadata.get("source_index")
+            item_label = (
+                f"#{source_index} {item.label}"
+                if source_index is not None
+                else f"{idx}. {item.label}"
+            )
+            parts = [item_label, f"conf={item.confidence:.3f}"]
             pos_status = item.metadata.get("position_status")
             if pos_status:
                 parts.append(f"pos={pos_status}")
@@ -927,3 +1173,34 @@ def _alignment_issue_label(issue: str, language: str = "en") -> str:
     }
     lang = normalize_language(language)
     return labels.get(lang, labels["en"]).get(issue, issue)
+
+
+def _color_item_label(item: dict[str, object], language: str) -> str:
+    """Return a localized label for a serialized color-check item."""
+    label = item.get("class_name") or item.get("class")
+    if label:
+        return str(label)
+    key = "full_frame" if item.get("index") == -1 else "unknown_item"
+    return tr(normalize_language(language), key)
+
+
+def _color_check_failure_text(item: dict[str, object], language: str) -> str:
+    """Return a localized description of one failed color-check item.
+
+    Shares its classification with the main verdict message
+    (:func:`core.services.results.customer_message.classify_color_check_failure`)
+    so a color swap and a confidence shortfall are described the same way here
+    as in the primary operator guidance card, instead of this detail view
+    showing only the detected class the way the guidance card used to.
+    """
+    description = classify_color_check_failure(item)
+    lang = normalize_language(language)
+    if description.kind == COLOR_FAILURE_MISMATCH:
+        return tr(lang, "color_mismatch").format(
+            class_name=description.class_name, predicted=description.predicted_color
+        )
+    if description.kind == COLOR_FAILURE_LOW_CONFIDENCE:
+        return tr(lang, "color_low_confidence").format(
+            class_name=description.class_name
+        )
+    return _color_item_label(item, language)

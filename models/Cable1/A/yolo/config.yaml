@@ -1,4 +1,4 @@
-weights: models/Cable1/A/yolo/weights/best.onnx
+weights: models/Cable1/A/yolo/weights/Cable1_A_v1.0.6_20260727.onnx
 device: cpu
 conf_thres: 0.4
 iou_thres: 0.45
@@ -21,10 +21,21 @@ expected_items:
     - Black
 pipeline:
 - color_check
+- cross_class_duplicate_filter
 - count_check
 - sequence_check
 - save_results
 steps:
+  cross_class_duplicate_filter:
+    enabled: true
+    mode: report_only
+    iou_threshold: 0.9
+    center_distance_ratio_max: 0.1
+    area_similarity_min: 0.8
+    require_same_verified_class: true
+    require_color_check_pass: true
+    require_different_raw_class: true
+    require_position_disabled: true
   count_check:
     strict: true
   sequence_check:
@@ -39,22 +50,84 @@ steps:
 enable_color_check: true
 color_checker_type: stats
 color_model_path: models/Cable1/A/yolo/color_stats.json
-enable_anomalib: false
-color_score_threshold: 0.4
-fail_on_unexpected: true
-save_original: true
-save_processed: true
-save_annotated: true
-save_crops: true
-save_fail_only: false
 position_config:
   Cable1:
     A:
       enabled: false
-      tolerance: 0.0
-      tolerance_unit: percent
       mode: center
-      alignment:
-        enabled: false
-      missing_slot_check:
-        enabled: false
+      tolerance: 28.27
+      expected_boxes:
+        Red:
+          x1: 159
+          y1: 353
+          x2: 186
+          y2: 397
+          cx: 172.58
+          cy: 375.3
+          sigma_cx: 56.75
+          sigma_cy: 38.99
+          count: 97
+        Black#0:
+          x1: 270
+          y1: 331
+          x2: 294
+          y2: 378
+          cx: 282.0
+          cy: 354.65
+          sigma_cx: 31.99
+          sigma_cy: 19.01
+          count: 135
+        Black#1:
+          x1: 385
+          y1: 416
+          x2: 412
+          y2: 467
+          cx: 398.64
+          cy: 441.53
+          sigma_cx: 41.43
+          sigma_cy: 31.73
+          count: 59
+        Green:
+          x1: 191
+          y1: 353
+          x2: 219
+          y2: 396
+          cx: 205.01
+          cy: 374.39
+          sigma_cx: 57.82
+          sigma_cy: 40.58
+          count: 97
+        Orange:
+          x1: 224
+          y1: 354
+          x2: 250
+          y2: 400
+          cx: 237.31
+          cy: 377.01
+          sigma_cx: 58.37
+          sigma_cy: 42.44
+          count: 97
+        Yellow:
+          x1: 256
+          y1: 356
+          x2: 282
+          y2: 400
+          cx: 269.3
+          cy: 378.04
+          sigma_cx: 60.31
+          sigma_cy: 43.77
+          count: 97
+      imgsz: 640
+      tolerance_unit: percent
+save_original: true
+light_brightness: 0
+save_fail_only: false
+calibration:
+  target_luma: 58.0
+  tolerance: 2.0
+gain: '23.0'
+exposure_time: '74765.0000'
+save_annotated: true
+save_processed: true
+save_crops: true
+model_version: 1.0.6

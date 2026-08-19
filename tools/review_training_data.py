@@ -1,0 +1,42 @@
+"""Open the button-based inference case review window."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.gui.review_cases_dialog import run_review_dialog
+from core.station_data import resolve_result_root, resolve_review_manifest
+from core.workspace import load_workspace_paths
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Parse paths and launch the review UI."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--result-root", default=None)
+    parser.add_argument("--manifest", default=None)
+    parser.add_argument("--training-data")
+    parser.add_argument("--product")
+    parser.add_argument("--area")
+    args = parser.parse_args(argv)
+    training_data_dir = (
+        Path(args.training_data)
+        if args.training_data
+        else load_workspace_paths(Path(__file__).resolve().parents[1]).training_data
+    )
+    run_review_dialog(
+        result_root=resolve_result_root(args.result_root),
+        manifest_path=resolve_review_manifest(args.manifest),
+        training_data_dir=training_data_dir,
+        product=args.product,
+        area=args.area,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import colorsys
 import json
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -26,6 +27,9 @@ try:
     import numpy as np  # type: ignore
 except Exception:  # pragma: no cover
     np = None  # type: ignore
+
+
+logger = logging.getLogger(__name__)
 
 
 # -------------------- Data structures --------------------
@@ -208,7 +212,7 @@ def _l1(a: list[float], b: list[float]) -> float:
         a = [x / sa for x in a]
     if sb > 0:
         b = [x / sb for x in b]
-    return sum(abs(x - y) for x, y in zip(a, b))
+    return sum(abs(x - y) for x, y in zip(a, b, strict=False))
 
 
 class ColorQCEnhanced:
@@ -218,6 +222,19 @@ class ColorQCEnhanced:
         self.model = model
         # runtime per-color rules overrides: name(lower) -> rules dict
         self._color_rules_overrides: dict[str, dict[str, float | None]] = {}
+        # Immutable baseline for the only model field runtime code rewrites.
+        # Stored positionally as plain floats/None rather than by referencing the
+        # _ColorEntry objects, so a later ``entry.hist_thr = ...`` cannot write
+        # back into the snapshot. ``model.colors`` is never resized after load,
+        # so positions stay aligned.
+        self._baseline_hist_thr: tuple[float | None, ...] = tuple(
+            entry.hist_thr for entry in model.colors
+        )
+
+    @property
+    def supported_colors(self) -> tuple[str, ...]:
+        """Return the immutable color vocabulary exposed by this checker."""
+        return tuple(color.name for color in self.model.colors)
 
     @classmethod
     def from_json(cls, path: Any) -> ColorQCEnhanced:
@@ -233,7 +250,7 @@ class ColorQCEnhanced:
     ) -> ColorQCAdvancedResult:
         hist, metrics = _compute_hsv3d_hist(image_bgr, self.model.hist_bins)
 
-        allowed = set(c.lower() for c in allowed_colors) if allowed_colors else None
+        allowed = {c.lower() for c in allowed_colors} if allowed_colors else None
 
         best_name = ""
         best_diff = float("inf")
@@ -359,46 +376,152 @@ class ColorQCEnhanced:
         )
 
     # --- runtime overrides ---
-    def apply_threshold_overrides(self, overrides: dict[str, float]) -> None:
-        """Override per-color histogram thresholds from a mapping (case-insensitive)."""
-        if not overrides:
-            return
+    def apply_runtime_configuration(
+        self,
+        *,
+        color_thresholds: dict[str, float] | None = None,
+        color_rules: dict[str, dict[str, float | None]] | None = None,
+    ) -> None:
+        """Replace all runtime-tunable state with this invocation's configuration.
+
+        Colors omitted from ``color_thresholds`` return to the threshold carried
+        by the loaded model, and omitted rules are cleared, so configuration
+        belonging to a previously inspected product cannot survive into the next
+        one when the same checker instance is reused.
+
+        Both inputs are fully validated before any state changes, so a successful
+        call commits everything and a rejected one commits nothing. A rejected
+        call additionally resets to baseline, so the checker is never left
+        holding a half-applied or previous-product configuration.
+
+        Raises:
+            TypeError: If either input, or a per-color rule entry, is not a mapping.
+            ValueError: If a threshold or rule value cannot be coerced to float.
+        """
         try:
-            # map by lower-cased name
-            by_name = {c.name.lower(): c for c in self.model.colors}
-            for name, thr in overrides.items():
-                key = str(name).lower()
-                if key in by_name:
-                    try:
-                        by_name[key].hist_thr = float(thr)
-                    except Exception:
-                        continue
-        except Exception:
-            pass
+            thresholds = self._resolve_threshold_overrides(color_thresholds)
+            rules = self._resolve_color_rules(color_rules)
+        except (TypeError, ValueError):
+            self.reset_runtime_configuration()
+            raise
+
+        for entry, baseline in zip(
+            self.model.colors, self._baseline_hist_thr, strict=True
+        ):
+            entry.hist_thr = thresholds.get(entry.name.lower(), baseline)
+        self._color_rules_overrides = rules
+
+    def reset_runtime_configuration(self) -> None:
+        """Discard every runtime override and return to the model's own values."""
+        for entry, baseline in zip(
+            self.model.colors, self._baseline_hist_thr, strict=True
+        ):
+            entry.hist_thr = baseline
+        self._color_rules_overrides = {}
+
+    def _resolve_threshold_overrides(
+        self, overrides: dict[str, float] | None
+    ) -> dict[str, float]:
+        """Validate threshold overrides into a lower-cased mapping.
+
+        Colors absent from the loaded model are skipped with a warning: an
+        override set may legitimately span several models. A malformed value,
+        however, means the configured threshold cannot be honored and must not
+        be swallowed, or the caller would keep running against stale limits.
+        """
+        if not overrides:
+            return {}
+        if not isinstance(overrides, dict):
+            raise TypeError(
+                "color threshold overrides must be a mapping, got "
+                f"{type(overrides).__name__}"
+            )
+        known = {entry.name.lower() for entry in self.model.colors}
+        resolved: dict[str, float] = {}
+        for name, thr in overrides.items():
+            key = str(name).lower()
+            if key not in known:
+                logger.warning(
+                    "Color threshold override for %r ignored: not in loaded model",
+                    name,
+                )
+                continue
+            try:
+                resolved[key] = float(thr)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Invalid color threshold overrides: {name!r} -> {thr!r}"
+                ) from exc
+        return resolved
+
+    def _resolve_color_rules(
+        self, overrides: dict[str, dict[str, float | None]] | None
+    ) -> dict[str, dict[str, float | None]]:
+        """Validate per-color rule overrides into a lower-cased mapping."""
+        if not overrides:
+            return {}
+        if not isinstance(overrides, dict):
+            raise TypeError(
+                "color rules overrides must be a mapping, got "
+                f"{type(overrides).__name__}"
+            )
+        parsed: dict[str, dict[str, float | None]] = {}
+        for color_name, rules in overrides.items():
+            if not isinstance(rules, dict):
+                raise TypeError(
+                    f"Invalid color rule overrides: {color_name!r} must be a "
+                    f"mapping, got {type(rules).__name__}"
+                )
+            # accept only known keys
+            rule: dict[str, float | None] = {}
+            for key in ("s_p90_max", "s_p10_min", "v_p50_min", "v_p95_max"):
+                if key not in rules:
+                    continue
+                value = rules.get(key)
+                if value is None:
+                    rule[key] = None
+                    continue
+                try:
+                    rule[key] = float(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Invalid color rule overrides: {key!r} for "
+                        f"{color_name!r} -> {value!r}"
+                    ) from exc
+            if rule:
+                parsed[str(color_name).lower()] = rule
+        return parsed
+
+    def apply_threshold_overrides(self, overrides: dict[str, float]) -> None:
+        """Merge per-color histogram thresholds onto the *current* configuration.
+
+        Prefer :meth:`apply_runtime_configuration` when switching products: this
+        method deliberately keeps values already applied, so on its own it cannot
+        clear a previous product's configuration.
+
+        Raises:
+            TypeError: If ``overrides`` is not a mapping.
+            ValueError: If a threshold value cannot be coerced to float. No
+                override is applied in that case.
+        """
+        resolved = self._resolve_threshold_overrides(overrides)
+        by_name = {entry.name.lower(): entry for entry in self.model.colors}
+        for key, value in resolved.items():
+            by_name[key].hist_thr = value
 
     # apply_white_overrides removed (use apply_color_rules_overrides with key 'White')
 
     def apply_color_rules_overrides(
         self, overrides: dict[str, dict[str, float | None]]
     ) -> None:
-        """Set per-color rules overrides mapping. Keys are color names (case-insensitive)."""
-        try:
-            m: dict[str, dict[str, float | None]] = {}
-            for k, v in (overrides or {}).items():
-                if not isinstance(v, dict):
-                    continue
-                name = str(k).lower()
-                # accept only known keys
-                rule: dict[str, float | None] = {}
-                for key in ("s_p90_max", "s_p10_min", "v_p50_min", "v_p95_max"):
-                    if key in v:
-                        val = v.get(key)
-                        rule[key] = float(val) if val is not None else None
-                if rule:
-                    m[name] = rule
-            self._color_rules_overrides = m
-        except Exception:
-            pass
+        """Replace per-color rules overrides. Keys are color names (case-insensitive).
+
+        Raises:
+            TypeError: If ``overrides`` or any per-color entry is not a mapping.
+            ValueError: If a rule value cannot be coerced to float. The existing
+                override set is left untouched in that case.
+        """
+        self._color_rules_overrides = self._resolve_color_rules(overrides)
 
 
 __all__ = [

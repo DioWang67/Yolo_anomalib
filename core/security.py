@@ -6,7 +6,10 @@ and other security vulnerabilities related to file system access.
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+
+from core.path_utils import project_root
+from core.station_data import load_station_data_paths
 
 
 class SecurityError(Exception):
@@ -17,11 +20,11 @@ class SecurityError(Exception):
 
 class PathValidator:
     """Validate file paths to prevent directory traversal attacks.
-    
+
     This validator ensures that all file paths accessed by the application
     are within allowed root directories, preventing attackers from accessing
     sensitive files outside the intended scope.
-    
+
     Example:
         >>> validator = PathValidator(allowed_roots=[Path("/app/data")])
         >>> safe_path = validator.validate_path("/app/data/config.yaml")
@@ -31,7 +34,7 @@ class PathValidator:
 
     def __init__(self, allowed_roots: list[Path]) -> None:
         """Initialize the path validator.
-        
+
         Args:
             allowed_roots: List of root directories that are allowed to be accessed.
         """
@@ -52,7 +55,7 @@ class PathValidator:
         Raises:
             SecurityError: If path is outside allowed root directories
             FileNotFoundError: If must_exist=True and path doesn't exist
-            
+
         Example:
             >>> validator = PathValidator(allowed_roots=[Path("/app")])
             >>> # Safe path
@@ -84,14 +87,14 @@ class PathValidator:
     @staticmethod
     def _is_relative_to(path: Path, parent: Path) -> bool:
         """Check if path is relative to parent directory.
-        
+
         This is a compatibility shim for Python < 3.9 which doesn't have
         Path.is_relative_to() built-in.
-        
+
         Args:
             path: Path to check
             parent: Parent directory
-            
+
         Returns:
             True if path is under parent, False otherwise
         """
@@ -189,18 +192,53 @@ def resolve_output_dir(
     return ensure_subpath(candidate, root, must_exist=False)
 
 
+def resolve_result_output_dir(
+    value: str | Path | None,
+    *,
+    result_root: str | Path,
+) -> Path:
+    """Resolve a configured result path under one dedicated result root.
+
+    The historical ``Result`` prefix is treated as an alias for the configured
+    root. Other relative values become subdirectories of that root. Traversal
+    components are rejected even when normalization would land back inside it.
+    """
+    root = Path(result_root).expanduser().resolve()
+    raw = str(value or "").strip() or root.name
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        return ensure_subpath(candidate, root, must_exist=False)
+    # A Windows drive prefix has to be rejected on every host, not just on
+    # Windows. ``config.yaml`` travels between machines, so an ``output_dir`` of
+    # ``C:relative`` written on Windows reached POSIX as an ordinary relative
+    # name and silently created a directory literally called ``C:relative``
+    # instead of being refused. ``PureWindowsPath`` parses the prefix on any
+    # platform, unlike the host-flavoured ``candidate``.
+    if candidate.drive or candidate.root or PureWindowsPath(raw).drive:
+        raise SecurityError("Drive-relative Result output paths are not allowed")
+    if ".." in candidate.parts:
+        raise SecurityError("Result output path traversal is not allowed")
+    base = (
+        root.parent
+        if candidate.parts and candidate.parts[0].casefold() == root.name.casefold()
+        else root
+    )
+    return ensure_subpath(base / candidate, root, must_exist=False)
+
+
 # Global path validator instance
 # This can be imported and used throughout the application
-from core.path_utils import project_root
 PROJECT_ROOT = project_root()
+_STATION_PATHS = load_station_data_paths(PROJECT_ROOT)
 
 path_validator = PathValidator(
     allowed_roots=[
         PROJECT_ROOT,              # Config files at project root (config.yaml)
-        PROJECT_ROOT / "models",   # Model weights directory
-        PROJECT_ROOT / "Result",   # Output directory
+        _STATION_PATHS.root,        # Mutable station data and evidence
+        _STATION_PATHS.models,      # Model weights directory
+        _STATION_PATHS.results,     # Output directory
         PROJECT_ROOT / "Runtime",  # Runtime directory
         PROJECT_ROOT / "MvImport", # Camera imports
-        PROJECT_ROOT / "logs",     # Log files
+        _STATION_PATHS.logs,        # Log files
     ]
 )

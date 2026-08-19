@@ -1,27 +1,67 @@
 @echo off
-REM 指定 Miniconda 路徑（可用環境變數 YOLO11_CONDA / YOLO11_PYTHON 覆蓋）
-if "%YOLO11_CONDA%"=="" (set "CONDA_PATH=D:\miniconda") else (set "CONDA_PATH=%YOLO11_CONDA%")
-if "%YOLO11_PYTHON%"=="" (set "PYTHON_EXE=%CONDA_PATH%\envs\yolo_anomalib\python.exe") else (set "PYTHON_EXE=%YOLO11_PYTHON%")
+setlocal EnableExtensions
 
-REM 設定環境變數 PATH
-set PATH=%CONDA_PATH%;%CONDA_PATH%\Scripts;%CONDA_PATH%\Library\bin;%PATH%
+set "CHECK_MODE=0"
+if /I "%~1"=="--check" set "CHECK_MODE=1"
 
-REM 啟動 Conda 並激活環境
-call %CONDA_PATH%\Scripts\activate.bat
-call conda activate yolo_anomalib
+if defined YOLO11_CONDA (
+    set "CONDA_PATH=%YOLO11_CONDA%"
+) else (
+    set "CONDA_PATH=D:\miniconda"
+)
 
-REM 切換到本腳本所在目錄（不依賴 repo 在固定磁碟位置）
+if defined YOLO11_PYTHON (
+    set "PYTHON_EXE=%YOLO11_PYTHON%"
+) else (
+    set "PYTHON_EXE=%CONDA_PATH%\envs\yolo_anomalib\python.exe"
+)
+
 cd /d "%~dp0"
-
-REM 確認 Python 環境和 torch 模組
-if not exist "%PYTHON_EXE%" (
-    echo ERROR: Python environment not found: %PYTHON_EXE%
+if errorlevel 1 (
+    echo ERROR: Inference project directory was not found: %~dp0
     exit /b 1
 )
 
-"%PYTHON_EXE%" --version
-"%PYTHON_EXE%" -c "import torch; print(torch.__version__)"
+if not exist "%PYTHON_EXE%" (
+    echo ERROR: Python environment was not found: %PYTHON_EXE%
+    echo Set YOLO11_CONDA or YOLO11_PYTHON to a valid environment.
+    exit /b 1
+)
 
-REM 執行主控腳本並保持視窗開啟
+if not defined YOLO11_PYTHON (
+    if not exist "%CONDA_PATH%\Scripts\activate.bat" (
+        echo ERROR: Conda activation script was not found: %CONDA_PATH%
+        exit /b 1
+    )
+    call "%CONDA_PATH%\Scripts\activate.bat" yolo_anomalib
+    if errorlevel 1 (
+        echo ERROR: Conda environment activation failed: yolo_anomalib
+        exit /b 1
+    )
+)
+
+"%PYTHON_EXE%" tools\check_runtime_environment.py
+if errorlevel 1 (
+    echo ERROR: Python runtime environment check failed: %PYTHON_EXE%
+    exit /b 1
+)
+
+"%PYTHON_EXE%" GUI.py --check-onnxruntime
+if errorlevel 1 (
+    echo ERROR: ONNX Runtime check failed: %PYTHON_EXE%
+    exit /b 1
+)
+
+if "%CHECK_MODE%"=="1" (
+    echo Inference launcher OK
+    echo Python: %PYTHON_EXE%
+    exit /b 0
+)
+
 "%PYTHON_EXE%" GUI.py %*
-cmd /k
+set "APP_EXIT_CODE=%ERRORLEVEL%"
+if not "%APP_EXIT_CODE%"=="0" (
+    echo ERROR: Inference application exited with code %APP_EXIT_CODE%.
+    pause
+)
+exit /b %APP_EXIT_CODE%

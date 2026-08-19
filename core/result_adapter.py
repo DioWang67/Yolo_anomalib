@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """將不同推論後端的輸出格式化，供後續流程共用。"""
+
+from __future__ import annotations
 
 from typing import Any
 

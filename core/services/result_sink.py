@@ -21,6 +21,10 @@ class ResultSink:
         """Flush buffered writes (if any)."""
         raise NotImplementedError
 
+    def flush_async(self) -> None:  # pragma: no cover
+        """Schedule buffered writes without blocking the caller."""
+        raise NotImplementedError
+
 
 class ExcelImageResultSink(ResultSink):
     def __init__(
@@ -41,6 +45,9 @@ class ExcelImageResultSink(ResultSink):
 
     def flush(self) -> None:
         self._handler.flush()
+
+    def flush_async(self) -> None:
+        self._handler.flush_async()
 
     def close(self) -> None:
         self._handler.close()

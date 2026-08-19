@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from .image_queue import ImageWriteQueue
+from .image_queue import ImageWriteQueue, ImageWriteReceipt
 from .path_manager import SavePathBundle
 
 
@@ -21,6 +21,7 @@ def save_detection_crops(
     timestamp_text: str,
     params: list[int],
     limit: int | None = None,
+    receipts: list[ImageWriteReceipt] | None = None,
 ) -> list[str]:
     """Persist detection crops and return their paths."""
     cropped_paths: list[str] = []
@@ -37,7 +38,9 @@ def save_detection_crops(
             f"{timestamp_text}_{det['class']}_{idx}.png"
         )
         crop_path = os.path.join(bundle.cropped_dir, crop_name)
-        queue.enqueue(crop_path, cropped_img, params)
+        receipt = queue.enqueue(crop_path, cropped_img, params)
+        if receipts is not None:
+            receipts.append(receipt)
         cropped_paths.append(crop_path)
     return cropped_paths
 
@@ -55,6 +58,7 @@ def save_failure_crops(
     detections: list[dict[str, Any]] | None = None,
     slot_mismatches: list[dict[str, Any]] | None = None,
     limit: int | None = None,
+    receipts: list[ImageWriteReceipt] | None = None,
 ) -> list[str]:
     """Persist NG evidence crops with stable reason-based filenames.
 
@@ -95,7 +99,9 @@ def save_failure_crops(
             f"{timestamp_text}_NG_{request['reason']}_{request['name']}_{index}.png"
         )
         crop_path = os.path.join(bundle.cropped_dir, crop_name)
-        queue.enqueue(crop_path, crop, params)
+        receipt = queue.enqueue(crop_path, crop, params)
+        if receipts is not None:
+            receipts.append(receipt)
         paths.append(crop_path)
     return paths
 

@@ -15,12 +15,11 @@ import time
 import numpy as np
 import pytest
 
-from core.queues import OverwriteQueue
-from core.exceptions import ModelInferenceError
-from core.types import DetectionTask
 from core.async_pipeline import AsyncPipelineManager
+from core.exceptions import ModelInferenceError
+from core.queues import OverwriteQueue
+from core.types import DetectionTask
 from core.workers import AcquisitionWorker, BaseWorker, InferenceWorker, StorageWorker
-
 
 # =====================================================================
 # Helpers & Fixtures
@@ -43,16 +42,27 @@ class FakeCamera:
 class FakeResultSink:
     def __init__(self):
         self.flush_calls = 0
+        self.flush_async_calls = 0
 
     def flush(self):
         self.flush_calls += 1
 
+    def flush_async(self):
+        self.flush_async_calls += 1
+
 
 class PipelineSystem:
-    def __init__(self, status: str = "PASS", *, delay: float = 0.0):
+    def __init__(
+        self,
+        status: str = "PASS",
+        *,
+        delay: float = 0.0,
+        finalized_status: str | None = None,
+    ):
         self.config = object()
         self.result_sink = FakeResultSink()
         self.status = status
+        self.finalized_status = finalized_status or status
         self.delay = delay
         self.inference_calls = 0
         self.saved_statuses: list[str] = []
@@ -69,6 +79,10 @@ class PipelineSystem:
             "missing_items": [],
             "processed_image": np.zeros((4, 4, 3), dtype=np.uint8),
         }
+
+    def finalize_detection(self, ctx, *_args, **_kwargs):
+        ctx.status = self.finalized_status
+        ctx.result["status"] = ctx.status
 
     def persist_detection(self, ctx, *_args, **_kwargs):
         ctx.result["status"] = ctx.status
@@ -351,6 +365,70 @@ class TestAcquisitionWorker:
 # =====================================================================
 
 class TestAsyncPipelineManager:
+    def test_verdict_callback_does_not_wait_for_persistence(self):
+        """Manual UI feedback must precede slow durable storage."""
+
+        class SlowStorageSystem(PipelineSystem):
+            def __init__(self):
+                super().__init__(status="PASS")
+                self.storage_entered = threading.Event()
+                self.release_storage = threading.Event()
+
+            def persist_detection(self, ctx, logger):
+                self.storage_entered.set()
+                self.release_storage.wait(timeout=3.0)
+                super().persist_detection(ctx, logger)
+
+        manager = AsyncPipelineManager()
+        system = SlowStorageSystem()
+        inferred: list[DetectionTask] = []
+        processed: list[DetectionTask] = []
+        manager.start(
+            camera=FakeCamera(),
+            detection_system=system,
+            product="P",
+            area="A",
+            mode="single",
+            on_task_inferred=inferred.append,
+            on_task_processed=processed.append,
+        )
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline and not inferred:
+            time.sleep(0.01)
+
+        assert len(inferred) == 1
+        assert system.storage_entered.wait(timeout=1.0)
+        assert processed == []
+
+        system.release_storage.set()
+        deadline = time.time() + 2.0
+        while time.time() < deadline and not processed:
+            time.sleep(0.01)
+        manager.stop(timeout=1.0)
+        assert len(processed) == 1
+
+    def test_verdict_callback_receives_post_processed_status(self):
+        """The UI must never see a raw verdict that later changes in storage."""
+        manager = AsyncPipelineManager()
+        system = PipelineSystem(status="PASS", finalized_status="DETECTION_FAIL")
+        inferred: list[DetectionTask] = []
+        manager.start(
+            camera=FakeCamera(),
+            detection_system=system,
+            product="P",
+            area="A",
+            mode="single",
+            on_task_inferred=inferred.append,
+        )
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline and not inferred:
+            time.sleep(0.01)
+        manager.stop(timeout=1.0)
+
+        assert inferred[0].result["status"] == "DETECTION_FAIL"
+
     def test_stop_returns_when_inference_backend_is_blocked(self):
         """stop() must not wait forever for a backend stuck in one inference call."""
 
@@ -387,6 +465,14 @@ class TestAsyncPipelineManager:
         manager.stop(timeout=0.2)
         elapsed = time.perf_counter() - started
 
+        assert manager.running is True
+        with pytest.raises(RuntimeError, match="still stopping"):
+            manager.start(
+                camera=FakeCamera(),
+                detection_system=system,
+                product="P",
+                area="A",
+            )
         system.release.set()
         time.sleep(0.2)
         assert elapsed < 1.0
@@ -615,6 +701,8 @@ class TestStorageWorker:
         assert worker.saved_count == 1
         assert inf_q.qsize() == 0
         assert io_q.empty()
+        assert system.result_sink.flush_async_calls == 1
+        assert system.result_sink.flush_calls == 0
 
 
 # =====================================================================

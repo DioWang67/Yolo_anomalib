@@ -110,6 +110,55 @@ def test_custom_step_registration_and_autosave_append():
         unregister_step("dummy")
 
 
-@pytest.mark.parametrize("name", ["color_check", "save_results", "position_check"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "color_check",
+        "save_results",
+        "position_check",
+        "cross_class_duplicate_filter",
+    ],
+)
 def test_available_steps_contains_defaults(name):
     assert name in available_steps()
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        ["cross_class_duplicate_filter", "save_results"],
+        ["cross_class_duplicate_filter", "color_check", "save_results"],
+        ["color_check", "count_check", "cross_class_duplicate_filter", "save_results"],
+    ],
+)
+def test_duplicate_filter_rejects_unsafe_pipeline_order(steps):
+    env = _make_env(enable_color=True)
+    with pytest.raises(ValueError, match="cross_class_duplicate_filter"):
+        build_pipeline(steps, env, {})
+
+
+@pytest.mark.parametrize(
+    "repeated_step",
+    [
+        "color_check",
+        "position_check",
+        "cross_class_duplicate_filter",
+        "count_check",
+        "sequence_check",
+        "save_results",
+    ],
+)
+def test_pipeline_rejects_repeated_critical_orchestration_steps(repeated_step):
+    env = _make_env(enable_color=True)
+    steps = [
+        "color_check",
+        "position_check",
+        "cross_class_duplicate_filter",
+        "count_check",
+        "sequence_check",
+        "save_results",
+    ]
+    steps.insert(steps.index(repeated_step), repeated_step)
+
+    with pytest.raises(ValueError, match="must not be repeated"):
+        build_pipeline(steps, env, {})

@@ -53,11 +53,11 @@ class AutoTriggerConfig:
     enabled: bool = True
     # ROI as [x, y, w, h]; all-zero means full frame
     roi: list = field(default_factory=lambda: [0, 0, 0, 0])
-    frame_buffer_size: int = 15
+    frame_buffer_size: int = 8
     # How many consecutive product-present frames before advancing
-    appear_frames: int = 5
+    appear_frames: int = 3
     # How many consecutive stable frames required before trigger
-    stable_frames: int = 12
+    stable_frames: int = 6
     # How many consecutive product-absent frames before resetting
     remove_frames: int = 8
     # absdiff mean threshold: lower = stricter motion requirement
@@ -195,7 +195,7 @@ def draw_debug_overlay(
     frame: np.ndarray,
     info: DebugInfo,
     roi: list[int],
-    config: "AutoTriggerConfig | None" = None,
+    config: AutoTriggerConfig | None = None,
 ) -> np.ndarray:
     """Draw state-machine debug info onto a copy of frame.
 
@@ -308,7 +308,6 @@ class AutoTriggerStateMachine:
             store_frame: Full-res frame to keep in the trigger buffer. When None,
                 ``frame`` itself is stored (original behaviour).
         """
-        self._frame_buffer.append((store_frame if store_frame is not None else frame).copy())
         roi_crop = self._extract_roi(frame)
 
         product_present, contour_area = detect_product_presence(
@@ -316,6 +315,20 @@ class AutoTriggerStateMachine:
         )
         self._last_product_present = product_present
         self._last_contour_area = contour_area
+
+        # Full-resolution copies are expensive. Keep candidates only while a
+        # product is being evaluated for a trigger; empty frames and frames
+        # captured while an inspection/result is pending can never be chosen.
+        if product_present and self._state in {
+            TriggerState.WAIT_EMPTY,
+            TriggerState.PRODUCT_APPEAR,
+            TriggerState.WAIT_STABLE,
+            TriggerState.CAPTURE_LOCK,
+        }:
+            if self._state == TriggerState.WAIT_EMPTY and self._appear_count == 0:
+                self._frame_buffer.clear()
+            candidate = store_frame if store_frame is not None else frame
+            self._frame_buffer.append(candidate.copy())
 
         sharpness = compute_sharpness(roi_crop)
         motion = (

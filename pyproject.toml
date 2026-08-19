@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yolo11-inference"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Industrial vision inspection system integrating YOLO object detection and Anomalib anomaly detection"
 readme = "README.md"
-requires-python = ">=3.10"
-license = {text = "Proprietary"}
+requires-python = ">=3.10,<3.12"
+license = "LicenseRef-Proprietary"
 authors = [
     {name = "DioWang", email = "a0983743448@gmail.com"}
 ]
@@ -20,7 +20,6 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Image Recognition",
 ]
@@ -74,14 +73,23 @@ dev = [
     "pytest==8.3.3",
     "pytest-cov>=4.0.0",
     "pytest-qt>=4.2.0",
+    "pytest-timeout>=2.4.0",
+    "PyQt5==5.15.11",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+    "types-requests==2.32.4.20260107",
     "build>=0.10.0",
     "twine>=4.0.0",
 ]
 
 [project.scripts]
 yolo11-inference = "main:main"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.dynamic]
+version = {attr = "core._version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -96,7 +104,6 @@ python_functions = ["test_*"]
 addopts = [
     "--verbose",
     "--strict-markers",
-    "--ignore=core/performance_test.py",
 ]
 markers = [
     "gui: GUI smoke tests that require PyQt5 (offscreen)",
@@ -141,7 +148,20 @@ ignore = [
 "tests/*" = ["B011"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
+# ``app`` is a PEP 420 namespace package (no ``app/__init__.py``) while
+# ``app/acceptance`` is a regular one. Walking up from
+# ``app/acceptance/window.py``, mypy stops at the missing ``app/__init__.py``
+# and names the module ``acceptance.window``; the code imports it as
+# ``app.acceptance.window``, so the same file arrives under two names and mypy
+# aborts before building the graph. Anchoring package bases at the repo root
+# makes the name mypy derives from the path match the one the imports use,
+# without adding an ``__init__.py`` that would turn ``app`` into a regular
+# package and change how it is discovered at runtime and by PyInstaller.
+# CI already passes --explicit-package-bases for its own mypy step; this keeps
+# a plain ``mypy app`` working the same way locally.
+mypy_path = "."
+explicit_package_bases = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
@@ -172,10 +192,10 @@ omit = [
     "*/tests/*",
     "*/test_*.py",
     "*/__pycache__/*",
-    "*/performance_test.py",
 ]
 
 [tool.coverage.report]
+fail_under = 80
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",

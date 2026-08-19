@@ -40,7 +40,7 @@ def build_excel_row(
         error_parts.append(str(error_message))
     if missing_items:
         error_parts.append(f"缺失項目: {', '.join(missing_items)}")
-    
+
     if sequence_check and not sequence_check.get("is_ok", True):
         reason = sequence_check.get("reason", "")
         if reason == "length_mismatch":

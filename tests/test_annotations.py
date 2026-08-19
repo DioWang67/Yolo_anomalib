@@ -58,7 +58,56 @@ def test_annotate_yolo_frame_uses_position_status_color_for_detection_box():
 
     annotate_yolo_frame(FakeImageUtils(), frame, detections, None, "FAIL")
 
-    assert tuple(frame[100, 100]) == (0, 140, 255)
+    assert tuple(frame[130, 100]) == (0, 140, 255)
+
+
+def test_annotate_yolo_frame_hides_position_debug_overlay_when_position_is_correct():
+    frame = np.zeros((220, 220, 3), dtype=np.uint8)
+    detections = [
+        {
+            "bbox": [140, 144, 170, 174],
+            "class": "part_a",
+            "class_id": 0,
+            "confidence": 0.98,
+            "position_status": "CORRECT",
+            "position_error": 80.0,
+            "position_expected_center": {"cx": 195.0, "cy": 195.0},
+            "position_expected_box": {
+                "x1": 185.0,
+                "y1": 185.0,
+                "x2": 205.0,
+                "y2": 205.0,
+            },
+        }
+    ]
+
+    annotate_yolo_frame(FakeImageUtils(), frame, detections, None, "PASS")
+
+    assert tuple(frame[185, 185]) == (0, 0, 0)
+
+
+def test_annotate_yolo_frame_omits_position_summary_when_check_is_disabled(
+    monkeypatch,
+):
+    frame = np.zeros((220, 220, 3), dtype=np.uint8)
+    detections = [
+        {
+            "bbox": [140, 144, 170, 174],
+            "class": "part_a",
+            "class_id": 0,
+            "confidence": 0.98,
+        }
+    ]
+    captured_lines = []
+
+    monkeypatch.setattr(
+        "core.services.results.annotations._draw_info_panel",
+        lambda _frame, lines, origin: captured_lines.extend(lines),
+    )
+
+    annotate_yolo_frame(FakeImageUtils(), frame, detections, None, "PASS")
+
+    assert not any(text.startswith("Pos:") for text, _ in captured_lines)
 
 
 def test_annotate_yolo_frame_draws_missing_expected_box_without_detection():
@@ -154,3 +203,136 @@ def test_annotate_yolo_frame_prefers_missing_locations_over_expected_boxes():
 
     assert tuple(frame[50, 50]) == (0, 0, 255)
     assert tuple(frame[110, 110]) == (0, 0, 0)
+
+
+def test_annotate_yolo_frame_uses_source_indices_after_duplicate_suppression(
+    monkeypatch,
+):
+    frame = np.zeros((220, 220, 3), dtype=np.uint8)
+    effective = [
+        {
+            "bbox": [100, 100, 130, 145],
+            "class": "Orange",
+            "verified_class": "Orange",
+            "source_index": 5,
+        }
+    ]
+    raw = [
+        {
+            "bbox": [100, 100, 130, 145],
+            "class": "Orange",
+            "verified_class": "Orange",
+            "source_index": 5,
+        },
+        {
+            "bbox": [100, 100, 130, 146],
+            "class": "Red",
+            "verified_class": "Orange",
+            "source_index": 6,
+        },
+    ]
+    color_result = {
+        "is_ok": True,
+        "items": [
+            {
+                "index": 5,
+                "class_name": "Orange",
+                "best_color": "Orange",
+                "diff": 0.54,
+                "threshold": 0.75,
+                "is_ok": True,
+            },
+            {
+                "index": 6,
+                "class_name": "Red",
+                "best_color": "Orange",
+                "diff": 0.54,
+                "threshold": 0.75,
+                "is_ok": True,
+            },
+        ],
+    }
+    duplicate_filter = {
+        "status": "suppressed",
+        "suppressions": [
+            {
+                "kept_index": 5,
+                "suppressed_index": 6,
+                "verified_class": "Orange",
+                "iou": 0.977,
+            }
+        ],
+        "proposed_suppressions": [],
+    }
+    captured_lines = []
+    monkeypatch.setattr(
+        "core.services.results.annotations._draw_info_panel",
+        lambda _frame, lines, origin: captured_lines.extend(lines),
+    )
+
+    annotate_yolo_frame(
+        FakeImageUtils(),
+        frame,
+        effective,
+        color_result,
+        "PASS",
+        duplicate_filter=duplicate_filter,
+        raw_detections=raw,
+    )
+
+    text = "\n".join(line for line, _ in captured_lines)
+    assert "DUP removed: #6 -> #5" in text
+    assert "#5 Orange -> Orange" in text
+    assert "#6 Red -> Orange" not in text
+    assert np.any(
+        (frame[:, :, 0] > 100)
+        & (frame[:, :, 1] < 80)
+        & (frame[:, :, 2] > 100)
+    )
+
+
+def test_annotate_yolo_frame_shows_color_failure_for_black_classified_as_orange(
+    monkeypatch,
+):
+    frame = np.zeros((220, 220, 3), dtype=np.uint8)
+    detections = [
+        {
+            "bbox": [100, 100, 130, 150],
+            "class": "Black",
+            "verified_class": "Black",
+            "source_index": 5,
+        }
+    ]
+    color_result = {
+        "is_ok": False,
+        "items": [
+            {
+                "index": 5,
+                "class_name": "Black",
+                "best_color": "Orange",
+                "diff": 0.60,
+                "threshold": 0.75,
+                "is_ok": False,
+            }
+        ],
+    }
+    captured_lines = []
+    monkeypatch.setattr(
+        "core.services.results.annotations._draw_info_panel",
+        lambda _frame, lines, origin: captured_lines.extend(lines),
+    )
+
+    annotate_yolo_frame(
+        FakeImageUtils(),
+        frame,
+        detections,
+        color_result,
+        "DETECTION_FAIL",
+    )
+
+    text = "\n".join(line for line, _ in captured_lines)
+    assert "Color: FAIL" in text
+    # Names both the detected class and the predicted color (a color swap),
+    # not just "Black" alone, so this overlay matches the operator guidance
+    # card's "顏色不符: Black → Orange" classification.
+    assert "#5 Black -> Orange (mismatch) (d=0.60/0.75) NG" in text

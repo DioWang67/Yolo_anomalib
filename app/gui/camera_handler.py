@@ -16,6 +16,36 @@ class CameraHandlerMixin:
         text = tr(getattr(self, "current_language", "en"), key)
         return text.format(**kwargs) if kwargs else text
 
+    def _set_camera_status(self, state: str) -> None:
+        indicator = getattr(self, "camera_status_indicator", None)
+        if indicator is not None:
+            indicator.set_state(state)
+
+    def _sync_camera_status(
+        self,
+        *,
+        camera_connected: bool,
+        running: bool,
+    ) -> None:
+        """Reconcile durable UI state without downgrading a verified frame."""
+        indicator = getattr(self, "camera_status_indicator", None)
+        if indicator is None:
+            return
+        indicator.set_reconnect_allowed(not running)
+        state = indicator.state
+        if camera_connected:
+            if state in {
+                "connecting",
+                "reconnecting",
+                "unavailable",
+                "lost",
+                "disconnected",
+            }:
+                indicator.set_state("connected")
+            return
+        if state in {"connected", "ready"}:
+            indicator.set_state("unavailable")
+
     def update_camera_controls(self) -> None:
         """Sync camera-related widgets with the current connection state."""
         try:
@@ -38,6 +68,9 @@ class CameraHandlerMixin:
                     self.use_camera_chk.setChecked(False)
                     self.use_camera_chk.blockSignals(False)
                 self.use_camera_chk.setEnabled(camera_connected and not running)
+            auto_mode_chk = getattr(self, "auto_mode_chk", None)
+            if auto_mode_chk is not None and not auto_mode_chk.isChecked():
+                auto_mode_chk.setEnabled(camera_connected and not running)
             # Enable image-file controls when not in camera mode, regardless of
             # whether a camera is physically connected.  Previously this branch
             # only ran when the camera was disconnected, leaving pick_image_btn
@@ -53,6 +86,10 @@ class CameraHandlerMixin:
                     self.clear_image_btn.setEnabled(
                         bool(getattr(self, "selected_image_path", None))
                     )
+            self._sync_camera_status(
+                camera_connected=camera_connected,
+                running=running,
+            )
         except Exception:
             pass
 
@@ -69,10 +106,12 @@ class CameraHandlerMixin:
             self.init_system()
             if not self.controller.has_system():
                 return
+        self._set_camera_status("reconnecting")
         self.log_message(self._t("camera_reconnecting"))
         try:
             success = self.controller.reconnect_camera()
         except Exception as exc:
+            self._set_camera_status("unavailable")
             self.log_message(self._t("camera_reconnect_failed_log", error=exc))
             QMessageBox.critical(
                 self,
@@ -81,6 +120,7 @@ class CameraHandlerMixin:
             )
         else:
             if success:
+                self._set_camera_status("connected")
                 self.log_message(self._t("camera_reconnect_success_log"))
                 QMessageBox.information(
                     self,
@@ -93,6 +133,7 @@ class CameraHandlerMixin:
                     self.use_camera_chk.blockSignals(False)
                     self.on_use_camera_toggled(True)
             else:
+                self._set_camera_status("unavailable")
                 self.log_message(self._t("camera_reconnect_failed_log", error=""))
                 QMessageBox.critical(
                     self,
@@ -119,8 +160,10 @@ class CameraHandlerMixin:
             )
             return
         self.log_message(self._t("camera_disconnecting"))
+        disconnect_succeeded = False
         try:
             self.controller.disconnect_camera()
+            disconnect_succeeded = True
             self.log_message(self._t("camera_disconnected_log"))
             QMessageBox.information(
                 self,
@@ -134,11 +177,13 @@ class CameraHandlerMixin:
                 self._t("camera_error_title"),
                 self._t("camera_disconnect_failed", error=exc),
             )
-        if getattr(self, "use_camera_chk", None):
+        if disconnect_succeeded and getattr(self, "use_camera_chk", None):
             self.use_camera_chk.blockSignals(True)
             self.use_camera_chk.setChecked(False)
             self.use_camera_chk.blockSignals(False)
             self.on_use_camera_toggled(False)
+        if disconnect_succeeded:
+            self._set_camera_status("disconnected")
         self._camera_check_ts = 0
         self.update_camera_controls()
 
@@ -172,7 +217,11 @@ class CameraHandlerMixin:
                     self.clear_image_btn.setEnabled(False)
                 if getattr(self, "image_path_label", None):
                     self.image_path_label.setText(self._t("camera_input"))
+                indicator = getattr(self, "camera_status_indicator", None)
+                if indicator is None or indicator.state != "ready":
+                    self._set_camera_status("connected")
             else:
+                self._set_camera_status("image_mode")
                 if getattr(self, "pick_image_btn", None):
                     self.pick_image_btn.setEnabled(True)
                 if getattr(self, "clear_image_btn", None):
@@ -180,6 +229,8 @@ class CameraHandlerMixin:
                 if not self.selected_image_path and getattr(self, "image_path_label", None):
                     self.image_path_label.setText(self._t("select_image_or_camera"))
         except Exception:
+            if checked:
+                self._set_camera_status("unavailable")
             pass
         finally:
             try:
@@ -195,6 +246,7 @@ class CameraHandlerMixin:
             self._shutdown_in_progress = True
         except Exception:
             pass
+        self._set_camera_status("lost")
         self.log_message(self._t("camera_lost_log"))
         self.stats_timer.stop()
         self._shutdown_worker = self.controller.build_shutdown_worker()

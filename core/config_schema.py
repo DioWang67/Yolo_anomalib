@@ -47,7 +47,7 @@ def _normalize_sequence(value: Any, *, expect_len: int | None = None) -> Any:
             if any(item <= 0 for item in items):
                 raise ValueError("imgsz values must be positive")
             return items
-        return [v for v in value]
+        return list(value)
     raise ValueError("expected list/tuple")
 
 
@@ -65,7 +65,7 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
 
     class GlobalConfigSchema(BaseModel):
         weights: str
-        device: str | None = "cpu"
+        device: str | None = "auto"
         conf_thres: float | None = Field(default=0.25, ge=0.0, le=1.0)
         iou_thres: float | None = Field(default=0.45, ge=0.0, le=1.0)
         imgsz: list[int] | None = Field(default_factory=lambda: [640, 640])
@@ -77,11 +77,17 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         width: int | None = Field(default=3072, gt=0)
         height: int | None = Field(default=2048, gt=0)
         MV_CC_GetImageBuffer_nMsec: int | None = Field(default=10000, ge=0)
+        light_brightness: int | None = Field(default=None, ge=0, le=100)
+        calibration: dict[str, Any] | None = None
         camera_lost_threshold: int | None = Field(default=5, ge=1)
         camera_reconnect_attempts: int | None = Field(default=0, ge=0)
         camera_reconnect_backoff: float | None = Field(default=2.0, ge=0.0)
         current_product: str | None = None
         current_area: str | None = None
+        machine_id: str | None = None
+        station_id: str | None = None
+        work_order: str | None = None
+        camera_id: str | None = None
         expected_items: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
         enable_yolo: bool | None = True
         enable_anomalib: bool | None = False
@@ -91,6 +97,7 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         color_rules_overrides: dict[str, dict[str, float | None]] | None = None
         color_checker_type: str | None = "color_qc"
         color_score_threshold: float | None = None
+        color_decision_tuning: dict[str, float] | None = None
         color_fail_closed: bool | None = True
         output_dir: str | None = "Result"
         anomalib_config: dict[str, Any] | None = None
@@ -99,7 +106,8 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
             default_factory=dict
         )
         max_cache_size: int | None = Field(default=3, ge=0)
-        buffer_limit: int | None = Field(default=10, ge=1)
+        buffer_limit: int | None = Field(default=10, ge=1, le=32)
+        storage_queue_maxsize: int | None = Field(default=8, ge=1, le=32)
         flush_interval: float | None = Field(default=None, gt=0)
         pipeline: list[str] | None = None
         steps: dict[str, Any] = Field(default_factory=dict)
@@ -111,9 +119,40 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         save_annotated: bool | None = True
         save_crops: bool | None = True
         save_fail_only: bool | None = False
+        inspection_backup_interval_hours: int | None = Field(
+            default=24, ge=1, le=168
+        )
+        inspection_retention_cleanup_enabled: bool | None = False
+        inspection_pass_image_days: int | None = Field(default=30, ge=1)
+        inspection_fail_preprocessed_days: int | None = Field(default=90, ge=1)
+        inspection_fail_all_image_days: int | None = Field(default=180, ge=1)
+        inspection_sync_enabled: bool | None = False
+        inspection_sync_endpoint: str | None = Field(default="", max_length=2048)
+        inspection_sync_api_token_env: str | None = Field(
+            default="YOLO11_INSPECTION_SYNC_TOKEN",
+            min_length=1,
+            max_length=128,
+        )
+        inspection_sync_timeout_seconds: float | None = Field(
+            default=10.0, gt=0, le=120
+        )
+        inspection_sync_interval_seconds: float | None = Field(
+            default=30.0, gt=0, le=3600
+        )
+        inspection_sync_batch_size: int | None = Field(
+            default=20, ge=1, le=500
+        )
+        inspection_sync_max_attempts: int | None = Field(
+            default=12, ge=1, le=100
+        )
+        inspection_sync_allow_insecure_http: bool | None = False
         jpeg_quality: int | None = Field(default=95, ge=1, le=100)
         png_compression: int | None = Field(default=3, ge=0, le=9)
         max_crops_per_frame: int | None = Field(default=None, ge=0)
+        image_queue_maxsize: int | None = Field(default=8, ge=0, le=32)
+        image_queue_max_mb: int | None = Field(default=256, ge=0, le=2048)
+        image_write_timeout_seconds: float | None = Field(default=30.0, gt=0)
+        min_free_disk_mb: int | None = Field(default=1024, ge=0)
         fail_on_unexpected: bool | None = True
 
         if _VALIDATOR_MODE == "v2":
@@ -166,12 +205,17 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         height: int | None = Field(default=None, gt=0)
         MV_CC_GetImageBuffer_nMsec: int | None = Field(default=None, ge=0)
         output_dir: str | None = None
+        machine_id: str | None = None
+        station_id: str | None = None
+        work_order: str | None = None
+        camera_id: str | None = None
         enable_yolo: bool | None = None
         enable_anomalib: bool | None = None
         enable_color_check: bool | None = None
         color_model_path: str | None = None
         color_checker_type: str | None = None
         color_score_threshold: float | None = None
+        color_decision_tuning: dict[str, float] | None = None
         color_fail_closed: bool | None = None
         expected_items: dict[str, dict[str, list[str]]] | None = None
         position_config: dict[str, dict[str, dict[str, Any]]] | None = None
@@ -191,7 +235,12 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         png_compression: int | None = Field(default=None, ge=0, le=9)
         max_crops_per_frame: int | None = Field(default=None, ge=0)
         fail_on_unexpected: bool | None = None
-        buffer_limit: int | None = Field(default=None, ge=1)
+        buffer_limit: int | None = Field(default=None, ge=1, le=32)
+        storage_queue_maxsize: int | None = Field(default=None, ge=1, le=32)
+        image_queue_maxsize: int | None = Field(default=None, ge=0, le=32)
+        image_queue_max_mb: int | None = Field(default=None, ge=0, le=2048)
+        image_write_timeout_seconds: float | None = Field(default=None, gt=0)
+        min_free_disk_mb: int | None = Field(default=None, ge=0)
         flush_interval: float | None = Field(default=None, gt=0)
         max_cache_size: int | None = Field(default=None, ge=0)
 

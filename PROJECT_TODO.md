@@ -41,6 +41,11 @@ This list tracks the path from YOLO inference tooling toward a production-ready 
 - [x] Add pilot acceptance record template for golden board, known NG, and dry-run signoff.
 - [x] Add pilot acceptance summary tool for readiness and review-manifest evidence.
 - [x] Add short operator command wrapper for pilot readiness, review collection, and summary.
+- [x] Establish SQLite as the searchable inspection source of truth.
+- [x] Add GUI inspection history, filtered Excel export and sync status.
+- [x] Add verified database backup/restore, retention dry-run and preflight.
+- [x] Add local-first company synchronization outbox and administration.
+- [x] Publish role-based operator and engineering manuals.
 
 ## Current Production Status
 
@@ -63,5 +68,8 @@ This list tracks the path from YOLO inference tooling toward a production-ready 
 
 - What is the canonical PCBA product/area naming convention?
 - Which components require ROI-level second-stage inspection?
-- Which output format is the production source of truth: JSON, CSV, Excel, or database?
 - What is the acceptable false fail / escape rate for the first pilot line?
+
+Resolved on 2026-07-29: `Result/inspection_records.sqlite3` is the searchable
+inspection and review source of truth. Images and JSON remain immutable
+evidence; Excel is a filtered reporting snapshot and is not written back.

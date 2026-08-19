@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Post-process the PyInstaller output folder."""
+
+from __future__ import annotations
 
 import shutil
 import sys

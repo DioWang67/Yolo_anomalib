@@ -1,9 +1,10 @@
 """互動式命令列介面，可在無 GUI 環境下執行檢測。"""
 
 import os
-from pathlib import Path
 
 from core.path_utils import project_root
+from core.station_data import load_station_data_paths
+
 PROJECT_ROOT = project_root()
 
 
@@ -12,7 +13,7 @@ def run_cli(system) -> None:
     logger = system.logger
     logger.logger.info("檢測系統已啟動，等待使用者輸入...")
 
-    models_base = os.path.join(PROJECT_ROOT, "models")
+    models_base = str(load_station_data_paths(PROJECT_ROOT).models)
     if not os.path.isdir(models_base):
         logger.logger.error(f"找不到 models 目錄: {models_base}")
         return
@@ -28,7 +29,12 @@ def run_cli(system) -> None:
 
     print(f"可用機種: {', '.join(available_products)}")
     while True:
-        product = input("請輸入要檢測的機種 (輸入 'quit' 離開): ").strip()
+        try:
+            product = input("請輸入要檢測的機種 (輸入 'quit' 離開): ").strip()
+        except KeyboardInterrupt:
+            print("\n中止，正在關閉...")
+            system.shutdown()
+            return
         if product.lower() == "quit":
             logger.logger.info("離開檢測系統")
             system.shutdown()
@@ -47,7 +53,12 @@ def run_cli(system) -> None:
 
     while True:
         print(f"可用區域: {', '.join(available_areas)}")
-        cmd = input("請輸入檢測指令 (格式: area,inference_type 或 quit): ").strip()
+        try:
+            cmd = input("請輸入檢測指令 (格式: area,inference_type 或 quit): ").strip()
+        except KeyboardInterrupt:
+            print("\n中止，正在關閉...")
+            system.shutdown()
+            break
         if cmd.lower() == "quit":
             logger.logger.info("離開檢測系統")
             system.shutdown()

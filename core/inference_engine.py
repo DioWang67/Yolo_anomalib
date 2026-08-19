@@ -1,7 +1,10 @@
 from importlib import import_module
 from typing import Any
 
+import numpy as np
+
 from core.base_model import BaseInferenceModel
+from core.config import DetectionConfig
 from core.exceptions import (
     BackendInitializationError,
     BackendNotAvailableError,
@@ -10,6 +13,7 @@ from core.exceptions import (
     ModelInitializationError,
     ResourceExhaustionError,
 )
+from core.logging_config import DetectionLogger
 from core.yolo_inference_model import YOLOInferenceModel
 
 # Anomalib is lazy-loaded on first use: importing it eagerly pulls the entire
@@ -18,11 +22,6 @@ from core.yolo_inference_model import YOLOInferenceModel
 # tests (``@patch("core.inference_engine.AnomalibInferenceModel")``) and is
 # populated on demand in ``_init_backend``.
 AnomalibInferenceModel = None  # type: ignore[assignment]
-import numpy as np
-
-from core.config import DetectionConfig
-from core.logging_config import DetectionLogger
-
 
 CUSTOM_BACKEND_PREFIX = "core.backends."
 

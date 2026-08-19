@@ -24,6 +24,7 @@ env.bak/
 htmlcov/
 .tox/
 .nox/
+.test-tmp/
 
 # ===================== 專案特定 =====================
 # 敏感設定檔（請改用 config.example.yaml 當範本）
@@ -99,6 +100,14 @@ dist/
 
 # 測試報告（可隨時重新生成）
 reports/
+acceptance_reports/
+
+# Station-local acceptance truth and immutable color artifacts. These contain
+# production images, reviewer identities, and machine-specific evidence.
+/acceptance/
+/.color_baselines/
+/.color_profiles/
+/.color_revisions/
 
 # 模型備份
 models_backup/
@@ -110,6 +119,10 @@ models_backup/
 # Local model bundles/backups and generated PyInstaller specs.
 *.zip
 *.spec
+# Exception: this spec is the hand-maintained, path-independent build source of
+# truth (resolves paths via SPECPATH), tracked on purpose. build_exe.bat builds
+# from it rather than regenerating it.
+!yolo11_inference.spec
 build_log.txt
 *.bak.*
 models/*_backup/
@@ -117,6 +130,7 @@ models/*_backup/
 # Local ONNX Runtime/PyInstaller smoke-test workspaces.
 build_ort_smoke*/
 dist_ort_smoke*/
+data/.ultralytics/
 
 # Local model training/review artifacts.
 models/**/config.yaml.bak
@@ -124,3 +138,18 @@ models/**/args.yaml
 models/**/results.csv
 readiness_report_*.json
 review_manifest.*
+
+# Operator review and processing runtime state. These records stay local and
+# are exported through the audited package/report flows when needed.
+.processing_runs/
+.inspection_releases/
+.review_repairs/
+.review_manifest_*_filter.json
+/review_manifest_*.csv
+
+# Deployment and rollback metadata is paired with ignored model binaries and
+# belongs to the station artifact store, not source control.
+models/**/deployment_manifest.yaml
+models/**/activation_history.yaml
+models/**/versions/
+models/**/weights/*.manifest.yaml

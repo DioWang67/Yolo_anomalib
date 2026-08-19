@@ -1,12 +1,12 @@
 # detector.py
 from typing import Any
 
-import cv2
 import numpy as np
 from ultralytics import YOLO
 from ultralytics.utils.plotting import Annotator, colors
 
 from .utils import ImageUtils
+from .visualization import draw_detection_overlay
 
 
 class YOLODetector:
@@ -66,7 +66,9 @@ class YOLODetector:
                     clss = boxes.cls.detach().cpu().numpy().astype(int)
                     items = [
                         (coords, float(conf), int(cid))
-                        for coords, conf, cid in zip(xyxy, confs, clss)
+                        for coords, conf, cid in zip(
+                            xyxy, confs, clss, strict=True
+                        )
                     ]
                 else:
                     for box in boxes:
@@ -106,15 +108,14 @@ class YOLODetector:
                     detected_items.add(cname)
                     det_counter[cname] += 1
 
-            # Draw annotations on processed image
+            # Keep dense connector layouts readable by separating compact box
+            # indices from the full class/confidence legend.
             result_frame = processed_image.copy()
-            for det in detections:
-                x1, y1, x2, y2 = det["bbox"]
-                color = self.colors(det["class_id"], True)
-                cv2.rectangle(result_frame, (x1, y1), (x2, y2), color, 2)
-                label = f"{det['class']}: {det['confidence']:.2f}"
-                self.image_utils.draw_label(
-                    result_frame, label, (x1, y1 - 10), color)
+            draw_detection_overlay(
+                result_frame,
+                detections,
+                lambda det: self.colors(det["class_id"], True),
+            )
 
             # Enforce counts (treat expected_items as multiset)
             exp_items = [str(x).strip() for x in (expected_items or [])]
@@ -125,35 +126,18 @@ class YOLODetector:
                 if have < need:
                     missing_items.extend([name] * (need - have))
             return result_frame, detections, missing_items
-        except Exception as e:
-            raise RuntimeError(f"處理檢測結果失敗: {str(e)}")
+        except Exception as exc:
+            raise RuntimeError(f"處理檢測結果失敗: {exc}") from exc
 
     def draw_results(
         self, frame: np.ndarray, status: str, detections: list[dict]
     ) -> np.ndarray:
         result_frame = frame.copy()
-        for det in detections:
-            x1, y1, x2, y2 = det["bbox"]
-            label = f"{det['class']} {det['confidence']:.2f}"
-            color = self.colors(det["class_id"], True)
-            cv2.rectangle(result_frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(
-                result_frame,
-                label,
-                (x1, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.9,
-                color,
-                2,
-            )
-        color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
-        cv2.putText(
+        status_color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
+        draw_detection_overlay(
             result_frame,
-            f"Status: {status}",
-            (230, 230),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            color,
-            2,
+            detections,
+            lambda det: self.colors(det["class_id"], True),
+            heading=(f"Status: {status}", status_color),
         )
         return result_frame

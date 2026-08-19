@@ -1,4 +1,5 @@
 import sys
+import threading
 import types
 from unittest.mock import Mock
 
@@ -25,8 +26,8 @@ sys.modules.setdefault("ultralytics", fake_ultralytics)
 sys.modules.setdefault("ultralytics.utils", fake_ultralytics_utils)
 sys.modules.setdefault("ultralytics.utils.plotting", fake_ultralytics_plotting)
 
-from core.detection_system import DetectionSystem
-from core.exceptions import BackendInitializationError
+from core.detection_system import DetectionSystem  # noqa: E402
+from core.exceptions import BackendInitializationError  # noqa: E402
 
 
 def test_start_pipeline_aborts_before_acquisition_when_preflight_fails(monkeypatch):
@@ -34,6 +35,7 @@ def test_start_pipeline_aborts_before_acquisition_when_preflight_fails(monkeypat
     ds.camera = object()
     ds.config = Mock(weights="broken.onnx")
     ds._pipeline = Mock()
+    ds._inference_lock = threading.RLock()
 
     monkeypatch.setattr(
         ds,

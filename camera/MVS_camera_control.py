@@ -1,3 +1,8 @@
+# Keep the Hikrobot native binding ahead of project imports; changing this
+# loader order can break DLL initialization on Windows.
+# ruff: noqa: I001
+
+from ctypes import POINTER, cast
 import logging
 import os
 import time
@@ -6,7 +11,23 @@ import cv2
 import numpy as np
 
 import MvImport.MvCameraControl_class as _mvs_binding
-from MvImport.MvCameraControl_class import *
+from MvImport.CameraParams_const import (
+    MV_ACCESS_Exclusive,
+    MV_GIGE_DEVICE,
+    MV_USB_DEVICE,
+)
+from MvImport.CameraParams_header import (
+    MV_CC_DEVICE_INFO,
+    MV_CC_DEVICE_INFO_LIST,
+    MV_FRAME_OUT,
+    MV_TRIGGER_MODE_OFF,
+    MVCC_ENUMVALUE,
+    MVCC_FLOATVALUE,
+    MVCC_INTVALUE,
+)
+from MvImport.MvCameraControl_class import MvCamera
+from MvImport.MvErrorDefine_const import MV_E_NODATA
+from MvImport.PixelType_header import PixelType_Gvsp_BayerRG8
 
 from core.exceptions import CameraConnectionError
 
@@ -153,7 +174,7 @@ class MVSCamera:
         )
         return True
 
-    def get_frame(self):
+    def get_frame(self, timeout_ms: int | None = None):
         try:
             self.frame_count += 1
             current_time = time.time()
@@ -164,13 +185,17 @@ class MVSCamera:
                 self.frame_count = 0
                 self.start_time = current_time
 
-            frame = self._get_frame_internal()
+            frame = (
+                self._get_frame_internal()
+                if timeout_ms is None
+                else self._get_frame_internal(timeout_ms=timeout_ms)
+            )
             if frame is not None:
                 # NOTE: the frame is consumed by inference and color checks.
                 # Never draw overlays (FPS text, status, etc.) on it here —
                 # display decoration belongs to the preview layer, on a copy.
-                # Validated on 2026-06-08 PCBA1 field images via
-                # tools/validate_overlay_impact.py (26/26 outcomes unchanged).
+                # Validated on 2026-06-08 PCBA1 field images; see
+                # docs/archive/validation/FPS_OVERLAY_AB_VALIDATION.md.
                 if self.save_image:
                     try:
                         timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -195,12 +220,20 @@ class MVSCamera:
             _camera_logger.error("獲取影像時發生錯誤: %s", e, exc_info=True)
             return None
 
-    def _get_frame_internal(self):
+    def _get_frame_internal(self, timeout_ms: int | None = None):
         try:
             stOutFrame = MV_FRAME_OUT()
+            capture_timeout_ms = max(
+                0,
+                int(
+                    self.config.MV_CC_GetImageBuffer_nMsec
+                    if timeout_ms is None
+                    else timeout_ms
+                ),
+            )
 
             ret = self.cam.MV_CC_GetImageBuffer(
-                stOutFrame, self.config.MV_CC_GetImageBuffer_nMsec
+                stOutFrame, capture_timeout_ms
             )
             if ret == 0:
                 try:
@@ -242,7 +275,7 @@ class MVSCamera:
                         "No image data received from camera buffer "
                         "(ret[0x%x], timeout=%dms).",
                         ret,
-                        self.config.MV_CC_GetImageBuffer_nMsec,
+                        capture_timeout_ms,
                     )
                     return None
                 _camera_logger.error("獲取影像緩衝區失敗! ret[0x%x]", ret)

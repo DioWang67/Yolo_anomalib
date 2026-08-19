@@ -17,7 +17,8 @@ import logging
 import queue
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from core.queues import OverwriteQueue
 from core.types import DetectionTask
@@ -46,12 +47,13 @@ class AsyncPipelineManager:
         self._lock = threading.Lock()
         self._active: bool = False
 
-        self._inference_queue: Optional[OverwriteQueue[DetectionTask]] = None
-        self._io_queue: Optional[queue.Queue[DetectionTask]] = None
-        self._acq_worker: Optional[AcquisitionWorker] = None
-        self._inf_worker: Optional[InferenceWorker] = None
-        self._sto_worker: Optional[StorageWorker] = None
+        self._inference_queue: OverwriteQueue[DetectionTask] | None = None
+        self._io_queue: queue.Queue[DetectionTask] | None = None
+        self._acq_worker: AcquisitionWorker | None = None
+        self._inf_worker: InferenceWorker | None = None
+        self._sto_worker: StorageWorker | None = None
         self._stop_event = threading.Event()
+        self._last_stats = self._empty_counter_snapshot()
 
     # ------------------------------------------------------------------
     # Public API
@@ -69,7 +71,7 @@ class AsyncPipelineManager:
         Uses a non-blocking lock attempt so the UI thread is never frozen
         while ``stop()`` holds ``_lock`` during a worker.join().
         """
-        if not self._active or self._stop_event.is_set():
+        if not self._active:
             return False
         # Thread.is_alive() is inherently thread-safe — no lock needed for the check.
         if not self._any_worker_alive():
@@ -100,12 +102,14 @@ class AsyncPipelineManager:
         product: str,
         area: str,
         inference_type: str = "yolo",
-        buffer_limit: int = 10,
+        buffer_limit: int | None = 10,
+        storage_queue_limit: int | None = 8,
         capture_interval: float = 0.0,
         mode: str = "continuous",
-        on_task_captured: Optional[Callable[[DetectionTask], None]] = None,
-        on_task_processed: Optional[Callable[[DetectionTask], None]] = None,
-        on_camera_lost: Optional[Callable[[], None]] = None,
+        on_task_captured: Callable[[DetectionTask], None] | None = None,
+        on_task_inferred: Callable[[DetectionTask], None] | None = None,
+        on_task_processed: Callable[[DetectionTask], None] | None = None,
+        on_camera_lost: Callable[[], None] | None = None,
         camera_lost_threshold: int = 5,
         camera_reconnect_attempts: int = 0,
         camera_reconnect_backoff: float = 2.0,
@@ -125,6 +129,7 @@ class AsyncPipelineManager:
             mode: ``single`` captures and stores one terminal result, while
                 ``continuous`` runs until stopped manually.
             on_task_captured: Optional GUI callback per captured frame.
+            on_task_inferred: Optional GUI callback as soon as inference completes.
             on_task_processed: Optional GUI callback per stored result.
             on_camera_lost: Optional callback when camera disconnects
                 (consecutive capture failures exceed threshold).
@@ -139,25 +144,33 @@ class AsyncPipelineManager:
             RuntimeError: If the pipeline is already running.
         """
         with self._lock:
-            if (
-                self._active
-                and self._stop_event.is_set()
-                and not self._any_worker_alive()
-            ):
+            if self._active and not self._any_worker_alive():
                 self._clear_worker_refs_locked()
 
             if self._active:
-                raise RuntimeError("Pipeline is already running")
+                state = "stopping" if self._stop_event.is_set() else "running"
+                raise RuntimeError(f"Pipeline is still {state}")
 
             run_mode = str(mode or "continuous").lower()
             if run_mode not in {"single", "continuous"}:
                 raise ValueError(f"Unsupported pipeline mode: {mode}")
 
             self._stop_event.clear()
-            self._inference_queue = OverwriteQueue(
-                maxlen=buffer_limit, name="inference_queue"
+            self._last_stats = self._empty_counter_snapshot()
+            safe_buffer_limit = max(
+                1, min(int(buffer_limit if buffer_limit is not None else 10), 32)
             )
-            self._io_queue = queue.Queue(maxsize=50)
+            safe_storage_limit = max(
+                1,
+                min(
+                    int(storage_queue_limit if storage_queue_limit is not None else 8),
+                    32,
+                ),
+            )
+            self._inference_queue = OverwriteQueue(
+                maxlen=safe_buffer_limit, name="inference_queue"
+            )
+            self._io_queue = queue.Queue(maxsize=safe_storage_limit)
 
             self._acq_worker = AcquisitionWorker(
                 camera=camera,
@@ -178,6 +191,7 @@ class AsyncPipelineManager:
                 in_queue=self._inference_queue,
                 out_queue=self._io_queue,
                 detection_system=detection_system,
+                on_task_inferred=on_task_inferred,
                 stop_event=self._stop_event,
             )
             self._sto_worker = StorageWorker(
@@ -197,7 +211,12 @@ class AsyncPipelineManager:
 
             logger.info(
                 "Pipeline started: %s/%s/%s (mode=%s, buffer=%d, interval=%.3fs)",
-                product, area, inference_type, run_mode, buffer_limit, capture_interval,
+                product,
+                area,
+                inference_type,
+                run_mode,
+                safe_buffer_limit,
+                capture_interval,
             )
 
     def stop(self, timeout: float = 10.0) -> None:
@@ -229,21 +248,24 @@ class AsyncPipelineManager:
                 if worker.is_alive():
                     logger.warning(
                         "Worker %s still running after %.1fs stop budget; "
-                        "detaching so UI can recover",
+                        "keeping ownership and blocking restart",
                         worker.name,
                         timeout,
                     )
 
             stats = self.stats()
+            workers_alive = self._any_worker_alive()
             logger.info(
-                "Pipeline stopped — captured: %d, dropped: %d, saved: %d",
+                "Pipeline stop pass finished — captured: %d, dropped: %d, "
+                "saved: %d, workers_alive=%s",
                 stats.get("frames_captured", 0),
                 stats.get("frames_dropped", 0),
                 stats.get("tasks_saved", 0),
+                workers_alive,
             )
 
-            self._active = False
-            self._clear_worker_refs_locked()
+            if not workers_alive:
+                self._clear_worker_refs_locked()
 
     def _any_worker_alive(self) -> bool:
         """Return whether any managed worker thread is still alive."""
@@ -254,6 +276,7 @@ class AsyncPipelineManager:
 
     def _clear_worker_refs_locked(self) -> None:
         """Clear worker and queue references while the manager lock is held."""
+        self._last_stats = self._counter_snapshot()
         self._active = False
         self._acq_worker = None
         self._inf_worker = None
@@ -307,22 +330,34 @@ class AsyncPipelineManager:
                 except ValueError:
                     logger.debug("IO queue task_done mismatch during stop", exc_info=True)
 
-    def stats(self) -> dict[str, Any]:
-        """Return a snapshot of pipeline counters for monitoring."""
+    @staticmethod
+    def _empty_counter_snapshot() -> dict[str, int]:
+        """Return zeroed counters for a pipeline that has not started."""
         return {
-            "pipeline_running": self._active,
+            "frames_captured": 0,
+            "frames_dropped": 0,
+            "inference_queue_size": 0,
+            "io_queue_size": 0,
+            "tasks_saved": 0,
+            "tasks_dropped": 0,
+        }
+
+    def _counter_snapshot(self) -> dict[str, int]:
+        """Read worker counters without changing lifecycle state."""
+        return {
             "frames_captured": (
                 self._acq_worker.frame_count if self._acq_worker else 0
             ),
             "frames_dropped": (
                 self._inference_queue.dropped_count
-                if self._inference_queue else 0
+                if self._inference_queue is not None else 0
             ),
             "inference_queue_size": (
-                self._inference_queue.qsize() if self._inference_queue else 0
+                self._inference_queue.qsize()
+                if self._inference_queue is not None else 0
             ),
             "io_queue_size": (
-                self._io_queue.qsize() if self._io_queue else 0
+                self._io_queue.qsize() if self._io_queue is not None else 0
             ),
             "tasks_saved": (
                 self._sto_worker.saved_count if self._sto_worker else 0
@@ -331,3 +366,16 @@ class AsyncPipelineManager:
                 self._inf_worker.dropped_count if self._inf_worker else 0
             ),
         }
+
+    def stats(self) -> dict[str, Any]:
+        """Return live counters or the final snapshot after natural completion."""
+        pipeline_running = self.running
+        if (
+            self._acq_worker is None
+            and self._inf_worker is None
+            and self._sto_worker is None
+        ):
+            counters = dict(self._last_stats)
+        else:
+            counters = self._counter_snapshot()
+        return {"pipeline_running": pipeline_running, **counters}

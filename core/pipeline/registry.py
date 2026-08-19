@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
@@ -8,6 +9,7 @@ from core.config import DetectionConfig
 from core.pipeline.steps import (
     ColorCheckStep,
     CountCheckStep,
+    CrossClassDuplicateFilterStep,
     PositionCheckStep,
     SaveResultsStep,
     SequenceCheckStep,
@@ -69,14 +71,17 @@ def build_pipeline(
     step_names: Iterable[str], env: PipelineEnv, step_options: dict[str, dict]
 ) -> list[Step]:
     """Create step instances for the provided names in order."""
+    normalized_names = [
+        str(raw_name).strip().lower() for raw_name in step_names
+    ]
+    validate_duplicate_filter_order(normalized_names)
     steps: list[Step] = []
     seen_save = False
-    for raw_name in step_names:
-        key = str(raw_name).strip().lower()
+    for key in normalized_names:
         try:
             step = create_step(key, env, step_options.get(key, {}))
         except KeyError:
-            env.logger.warning(f"Unknown pipeline step: {raw_name}")
+            env.logger.warning(f"Unknown pipeline step: {key}")
             continue
         if step is None:
             env.logger.debug(f"Pipeline step '{key}' skipped by factory")
@@ -93,6 +98,49 @@ def build_pipeline(
             )
             steps.append(extra)
     return steps
+
+
+def validate_duplicate_filter_order(step_names: Iterable[str]) -> None:
+    """Reject pipeline orders that cannot safely run duplicate filtering."""
+
+    normalized_names = [
+        str(raw_name).strip().lower() for raw_name in step_names
+    ]
+    orchestration_steps = (
+        "color_check",
+        "position_check",
+        "cross_class_duplicate_filter",
+        "count_check",
+        "sequence_check",
+        "save_results",
+    )
+    counts = Counter(normalized_names)
+    repeated_steps = [
+        name for name in orchestration_steps if counts[name] > 1
+    ]
+    if repeated_steps:
+        raise ValueError(
+            "critical pipeline steps must not be repeated: "
+            + ", ".join(repeated_steps)
+        )
+    duplicate_name = "cross_class_duplicate_filter"
+    if duplicate_name not in normalized_names:
+        return
+    duplicate_index = normalized_names.index(duplicate_name)
+    if "color_check" not in normalized_names:
+        raise ValueError(
+            "cross_class_duplicate_filter requires color_check in the pipeline"
+        )
+    if normalized_names.index("color_check") > duplicate_index:
+        raise ValueError(
+            "cross_class_duplicate_filter must run after color_check"
+        )
+    downstream = ("count_check", "sequence_check", "save_results")
+    for name in downstream:
+        if name in normalized_names and normalized_names.index(name) < duplicate_index:
+            raise ValueError(
+                f"cross_class_duplicate_filter must run before {name}"
+            )
 
 
 def default_pipeline(env: PipelineEnv) -> list[str]:
@@ -138,6 +186,14 @@ def _count_step_factory(env: PipelineEnv, options: dict) -> Step | None:
     )
 
 
+def _cross_class_duplicate_filter_factory(
+    env: PipelineEnv, options: dict
+) -> Step | None:
+    if not options.get("enabled", True):
+        return None
+    return CrossClassDuplicateFilterStep(env.logger, options=options)
+
+
 def _sequence_step_factory(env: PipelineEnv, options: dict) -> Step | None:
     return SequenceCheckStep(
         env.logger, product=env.product, area=env.area, options=options
@@ -148,4 +204,8 @@ register_step("color_check", _color_step_factory)
 register_step("save_results", _save_step_factory)
 register_step("position_check", _position_step_factory)
 register_step("count_check", _count_step_factory)
+register_step(
+    "cross_class_duplicate_filter",
+    _cross_class_duplicate_filter_factory,
+)
 register_step("sequence_check", _sequence_step_factory)

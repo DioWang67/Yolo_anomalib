@@ -1,18 +1,21 @@
-from __future__ import annotations
-
 """Stats-based color checker derived from the improved color_verifier script."""
 
+from __future__ import annotations
+
 import json
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
 
 from core.color_qc_enhanced import ColorQCAdvancedResult
 
-# Default sampling thresholds
+# Default sampling thresholds. These are only fallbacks: per-product values
+# belong in the model config.yaml under ``color_decision_tuning`` (loaded via
+# ColorOverrideLoader) so threshold changes never require a code release.
 DEFAULT_SAT_THRESHOLD = 20.0
 BLACK_S_THRESHOLD = 50.0
 BLACK_V_THRESHOLD = 80.0
@@ -32,6 +35,52 @@ COLOR_CONF_THRESHOLDS = {
     "red": 0.25,
     "green": 0.30,
 }
+
+
+@dataclass(frozen=True)
+class ColorDecisionTuning:
+    """Per-product decision knobs for StatsColorChecker.
+
+    Every field defaults to the historical module constant, so an absent or
+    partial ``color_decision_tuning`` config section keeps behavior identical.
+    """
+
+    sat_threshold: float = DEFAULT_SAT_THRESHOLD
+    black_s_threshold: float = BLACK_S_THRESHOLD
+    black_v_threshold: float = BLACK_V_THRESHOLD
+    black_min_coverage: float = BLACK_MIN_COVERAGE
+    yellow_h_min: float = YELLOW_H_RANGE[0]
+    yellow_h_max: float = YELLOW_H_RANGE[1]
+    yellow_s_min: float = YELLOW_S_MIN
+    yellow_v_min: float = YELLOW_V_MIN
+    orange_red_tie_margin: float = ORANGE_RED_TIE_MARGIN
+    center_margin_ratio: float = CENTER_MARGIN_RATIO
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> ColorDecisionTuning:
+        """Build tuning from a config mapping, ignoring unknown keys.
+
+        Args:
+            data: ``color_decision_tuning`` mapping from config, or None.
+
+        Returns:
+            Tuning with provided values coerced to float; defaults elsewhere.
+
+        Raises:
+            ValueError: If a provided value cannot be coerced to float.
+        """
+        if not data:
+            return cls()
+        known = {field.name for field in fields(cls)}
+        kwargs = {
+            key: float(value)
+            for key, value in data.items()
+            if key in known and value is not None
+        }
+        return cls(**kwargs)
+
+
+_DEFAULT_TUNING = ColorDecisionTuning()
 
 
 @dataclass
@@ -80,21 +129,47 @@ def _load_color_ranges(
         lab_min = np.asarray(stats["lab_min"], dtype=np.float32) - lab_margin_vec
         lab_max = np.asarray(stats["lab_max"], dtype=np.float32) + lab_margin_vec
 
-        def _opt_array(key: str) -> np.ndarray | None:
-            if key not in stats:
-                return None
-            return np.asarray(stats[key], dtype=np.float32)
-
         ranges[color_name.lower()] = _ColorRange(
             name=color_name,
             hsv_min=hsv_min,
             hsv_max=hsv_max,
             lab_min=lab_min,
             lab_max=lab_max,
-            hsv_mean=_opt_array("hsv_mean"),
-            lab_mean=_opt_array("lab_mean"),
+            hsv_mean=_optional_stat_array(stats, "hsv_mean"),
+            lab_mean=_optional_stat_array(stats, "lab_mean"),
         )
     return ranges
+
+
+def stats_color_model_load_failure(stats_path: str | Path) -> str:
+    """Return why this file cannot back a stats color checker, or ``""`` if it can.
+
+    Deliberately implemented by running the real loader rather than by
+    re-listing the keys it needs: a separate schema check is free to drift from
+    the loader, and then a model would pass validation and still fail at
+    inference. Callers use this to decide whether to *offer* a color model at
+    all, which is the difference between a greyed-out row explaining itself and
+    a whole acceptance combination of ERROR results.
+    """
+
+    try:
+        _load_color_ranges(Path(stats_path))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return f"顏色模型無法讀取：{exc}"
+    except (KeyError, TypeError, ValueError) as exc:
+        missing = exc.args[0] if isinstance(exc, KeyError) and exc.args else ""
+        return (
+            f"顏色模型缺少必要統計量 {missing}"
+            if missing
+            else f"顏色模型格式無效：{exc}"
+        )
+    return ""
+
+
+def _optional_stat_array(stats: Mapping[str, object], key: str) -> np.ndarray | None:
+    if key not in stats:
+        return None
+    return np.asarray(stats[key], dtype=np.float32)
 
 
 def _circular_hue_distance(h1: float, h2: float) -> float:
@@ -107,6 +182,7 @@ def _improved_match_ratio(
     lab_vals: np.ndarray,
     color_range: _ColorRange,
     color_name: str,
+    tuning: ColorDecisionTuning = _DEFAULT_TUNING,
 ) -> float:
     if hsv_vals.size == 0 or lab_vals.size == 0:
         return 0.0
@@ -126,7 +202,12 @@ def _improved_match_ratio(
             & (v_vals >= max(color_range.hsv_min[2], 100))
         )
     elif color_name == "yellow":
-        h_mask = (h_vals >= 20) & (h_vals <= 35) & (s_vals >= 80) & (v_vals >= 150)
+        h_mask = (
+            (h_vals >= tuning.yellow_h_min)
+            & (h_vals <= tuning.yellow_h_max)
+            & (s_vals >= tuning.yellow_s_min)
+            & (v_vals >= tuning.yellow_v_min)
+        )
     elif color_name == "green":
         h_mask = (
             (h_vals >= 70)
@@ -136,7 +217,9 @@ def _improved_match_ratio(
             & (v_vals <= 100)
         )
     elif color_name == "black":
-        h_mask = (s_vals < BLACK_S_THRESHOLD) & (v_vals < BLACK_V_THRESHOLD)
+        h_mask = (s_vals < tuning.black_s_threshold) & (
+            v_vals < tuning.black_v_threshold
+        )
     else:
         h_mask = (
             (h_vals >= color_range.hsv_min[0])
@@ -200,11 +283,17 @@ def _separate_orange_red(
     orange_score: float,
     red_score: float,
 ) -> tuple[str, float, dict]:
-    """Ported tie-break logic from color_verifier.py."""
+    """Resolve Orange versus Red without inflating their absolute score.
+
+    The tie-breaker may transfer the pair's existing best score to its chosen
+    winner, but it must never create confidence that can overtake an unrelated
+    color such as Black or Yellow.
+    """
+    pair_score = max(orange_score, red_score)
     if len(hsv_vals) == 0:
         return (
             "red" if red_score >= orange_score else "orange",
-            max(red_score, orange_score),
+            pair_score,
             {},
         )
 
@@ -254,21 +343,20 @@ def _separate_orange_red(
 
     if hue_vote == lab_vote and hue_vote != "unclear":
         predicted = hue_vote
-        confidence = max(orange_score, red_score) * 1.3
     elif hue_vote != "unclear":
         predicted = hue_vote
-        confidence = (orange_score if hue_vote == "orange" else red_score) * 1.1
     elif lab_vote != "unclear":
         predicted = lab_vote
-        confidence = (orange_score if lab_vote == "orange" else red_score) * 1.1
     else:
         predicted = "orange" if orange_score > red_score else "red"
-        confidence = max(orange_score, red_score) * 0.9
 
-    return predicted, float(confidence), debug
+    return predicted, float(pair_score), debug
 
 
-def _is_black_image(hsv_img: np.ndarray) -> tuple[bool, float]:
+def _is_black_image(
+    hsv_img: np.ndarray,
+    tuning: ColorDecisionTuning = _DEFAULT_TUNING,
+) -> tuple[bool, float]:
     h, w = hsv_img.shape[:2]
     margin_y = int(h * 0.15)
     margin_x = int(w * 0.15)
@@ -281,19 +369,24 @@ def _is_black_image(hsv_img: np.ndarray) -> tuple[bool, float]:
     median_s = float(np.median(center_region[:, :, 1]))
     median_v = float(np.median(center_region[:, :, 2]))
 
-    black_mask = (center_region[:, :, 1] < BLACK_S_THRESHOLD) & (
-        center_region[:, :, 2] < BLACK_V_THRESHOLD
+    black_s = tuning.black_s_threshold
+    black_v = tuning.black_v_threshold
+    black_mask = (center_region[:, :, 1] < black_s) & (
+        center_region[:, :, 2] < black_v
     )
     black_coverage = float(np.count_nonzero(black_mask)) / max(black_mask.size, 1)
     is_black = (
-        (mean_s < BLACK_S_THRESHOLD and mean_v < BLACK_V_THRESHOLD)
-        or (median_s < BLACK_S_THRESHOLD * 0.8 and median_v < BLACK_V_THRESHOLD * 0.8)
-        or (black_coverage > BLACK_MIN_COVERAGE)
+        (mean_s < black_s and mean_v < black_v)
+        or (median_s < black_s * 0.8 and median_v < black_v * 0.8)
+        or (black_coverage > tuning.black_min_coverage)
     )
     return is_black, (black_coverage if is_black else 0.0)
 
 
-def _detect_yellow_special(hsv_img: np.ndarray) -> tuple[bool, float]:
+def _detect_yellow_special(
+    hsv_img: np.ndarray,
+    tuning: ColorDecisionTuning = _DEFAULT_TUNING,
+) -> tuple[bool, float]:
     h, w = hsv_img.shape[:2]
     margin = int(min(h, w) * 0.15)
     center = hsv_img[margin : h - margin, margin : w - margin]
@@ -305,10 +398,10 @@ def _detect_yellow_special(hsv_img: np.ndarray) -> tuple[bool, float]:
     v_vals = center[:, :, 2]
 
     yellow_mask = (
-        (h_vals >= YELLOW_H_RANGE[0])
-        & (h_vals <= YELLOW_H_RANGE[1])
-        & (s_vals >= YELLOW_S_MIN)
-        & (v_vals >= YELLOW_V_MIN)
+        (h_vals >= tuning.yellow_h_min)
+        & (h_vals <= tuning.yellow_h_max)
+        & (s_vals >= tuning.yellow_s_min)
+        & (v_vals >= tuning.yellow_v_min)
     )
     yellow_ratio = float(np.count_nonzero(yellow_mask)) / max(yellow_mask.size, 1)
     orange_like_mask = (h_vals < 20) & (h_vals > 5) & (s_vals > 100)
@@ -327,16 +420,35 @@ class StatsColorChecker:
         *,
         default_threshold: float = DEFAULT_RATIO_THRESHOLD,
         color_thresholds: dict[str, float] | None = None,
+        tuning: ColorDecisionTuning | None = None,
     ) -> None:
         if not color_ranges:
             raise ValueError("color_ranges must not be empty")
         self._ranges = color_ranges
-        self._default_threshold = default_threshold or DEFAULT_RATIO_THRESHOLD
-        base_thresholds = {**COLOR_CONF_THRESHOLDS}
-        if color_thresholds:
-            for name, val in color_thresholds.items():
-                base_thresholds[name.lower()] = float(val)
-        self._color_thresholds = base_thresholds
+        self._tuning = tuning or _DEFAULT_TUNING
+
+        # Immutable baseline: the effective configuration this checker returns to
+        # whenever a caller applies a runtime configuration that omits a key. It
+        # is a private copy, so instance-level tuning can never write back into
+        # the module constant shared by every other checker.
+        self._baseline_default_threshold = DEFAULT_RATIO_THRESHOLD
+        self._baseline_color_thresholds: dict[str, float] = dict(COLOR_CONF_THRESHOLDS)
+
+        self._default_threshold = self._baseline_default_threshold
+        self._color_thresholds = dict(self._baseline_color_thresholds)
+        # Constructor arguments are runtime configuration, not baseline, so they
+        # go through the same validate-then-commit path as any later update.
+        self.apply_runtime_configuration(
+            # ``or None`` preserves the historical constructor contract where a
+            # falsy threshold means "unset" and falls back to the baseline.
+            default_threshold=default_threshold or None,
+            color_thresholds=color_thresholds,
+        )
+
+    @property
+    def supported_colors(self) -> tuple[str, ...]:
+        """Return the immutable color vocabulary exposed by this checker."""
+        return tuple(color_range.name for color_range in self._ranges.values())
 
     @classmethod
     def from_json(
@@ -347,6 +459,7 @@ class StatsColorChecker:
         color_thresholds: dict[str, float] | None = None,
         hsv_margin: Sequence[float] | float | None = None,
         lab_margin: Sequence[float] | float | None = None,
+        tuning: ColorDecisionTuning | None = None,
     ) -> StatsColorChecker:
         stats_path = Path(stats_path)
         ranges = _load_color_ranges(
@@ -356,6 +469,7 @@ class StatsColorChecker:
             ranges,
             default_threshold=default_threshold,
             color_thresholds=color_thresholds,
+            tuning=tuning,
         )
 
     def check(
@@ -372,13 +486,13 @@ class StatsColorChecker:
         hsv_img = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
         lab_img = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
 
-        is_black, black_conf = _is_black_image(hsv_img)
+        is_black, black_conf = _is_black_image(hsv_img, self._tuning)
         if is_black and "black" in ranges:
             score_map = dict.fromkeys(ranges, 0.0)
             score_map["black"] = black_conf
             return self._result_from_scores(score_map, debug={"shortcut": "black"})
 
-        is_yellow, yellow_conf = _detect_yellow_special(hsv_img)
+        is_yellow, yellow_conf = _detect_yellow_special(hsv_img, self._tuning)
         if is_yellow and "yellow" in ranges:
             score_map = dict.fromkeys(ranges, 0.0)
             score_map["yellow"] = yellow_conf
@@ -386,7 +500,7 @@ class StatsColorChecker:
 
         center_hsv = self._center_crop(hsv_img)
         center_lab = self._center_crop(lab_img)
-        sat_mask = center_hsv[:, :, 1] >= DEFAULT_SAT_THRESHOLD
+        sat_mask = center_hsv[:, :, 1] >= self._tuning.sat_threshold
         valid_hsv = center_hsv[sat_mask].reshape(-1, 3)
         valid_lab = center_lab[sat_mask].reshape(-1, 3)
         if len(valid_hsv) == 0 or len(valid_lab) == 0:
@@ -395,14 +509,16 @@ class StatsColorChecker:
             return self._result_from_scores(score_map, debug={"no_pixels": True})
 
         scores = {
-            name: _improved_match_ratio(valid_hsv, valid_lab, color_range, name)
+            name: _improved_match_ratio(
+                valid_hsv, valid_lab, color_range, name, self._tuning
+            )
             for name, color_range in ranges.items()
         }
         # Tie-break for Orange vs Red
         if "orange" in scores and "red" in scores:
             o_score = scores["orange"]
             r_score = scores["red"]
-            if abs(o_score - r_score) < ORANGE_RED_TIE_MARGIN:
+            if abs(o_score - r_score) < self._tuning.orange_red_tie_margin:
                 winner, new_conf, tie_debug = _separate_orange_red(
                     valid_hsv, valid_lab, o_score, r_score
                 )
@@ -451,22 +567,109 @@ class StatsColorChecker:
             metrics=metrics,
         )
 
+    def apply_runtime_configuration(
+        self,
+        *,
+        default_threshold: float | None = None,
+        # Values arrive straight from product config and are validated here, so
+        # they are deliberately untyped rather than assumed to be floats.
+        color_thresholds: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Replace all runtime-tunable state with this invocation's configuration.
+
+        Any key not supplied returns to the immutable baseline, so configuration
+        belonging to a previously inspected product cannot survive into the next
+        one when the same checker instance is reused.
+
+        Every value is validated before any state changes, so a successful call
+        commits the whole configuration and a rejected one commits none of it.
+        A rejected call additionally resets to baseline, so the checker is never
+        left holding a half-applied or previous-product configuration.
+
+        Args:
+            default_threshold: Fallback threshold for colors without an explicit
+                one; ``None`` restores the baseline.
+            color_thresholds: Per-color thresholds, matched case-insensitively;
+                colors omitted here return to the baseline.
+
+        Raises:
+            TypeError: If ``color_thresholds`` is not a mapping.
+            ValueError: If any value cannot be coerced to float.
+        """
+        try:
+            resolved_default = self._baseline_default_threshold
+            if default_threshold is not None:
+                try:
+                    resolved_default = float(default_threshold)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Invalid default color threshold: {default_threshold!r}"
+                    ) from exc
+
+            resolved = dict(self._baseline_color_thresholds)
+            if color_thresholds:
+                if not isinstance(color_thresholds, Mapping):
+                    raise TypeError(
+                        "color threshold overrides must be a mapping, got "
+                        f"{type(color_thresholds).__name__}"
+                    )
+                for name, value in color_thresholds.items():
+                    try:
+                        resolved[str(name).lower()] = float(value)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            f"Invalid color threshold overrides: {name!r} -> {value!r}"
+                        ) from exc
+        except (TypeError, ValueError):
+            self.reset_runtime_configuration()
+            raise
+
+        self._default_threshold = resolved_default
+        self._color_thresholds = resolved
+
+    def reset_runtime_configuration(self) -> None:
+        """Discard every runtime override and return to the immutable baseline."""
+        self._default_threshold = self._baseline_default_threshold
+        self._color_thresholds = dict(self._baseline_color_thresholds)
+
     def apply_threshold_overrides(self, overrides: dict[str, float] | None) -> None:
+        """Merge per-color threshold overrides onto the *current* configuration.
+
+        Prefer :meth:`apply_runtime_configuration` when switching products: this
+        method deliberately keeps values already applied, so on its own it cannot
+        clear a previous product's configuration.
+
+        Raises:
+            ValueError: If any value cannot be coerced to float. Nothing is
+                applied in that case, so a rejected batch cannot leave the
+                checker half-configured.
+        """
         if not overrides:
             return
+        coerced: dict[str, float] = {}
         for name, value in overrides.items():
             try:
-                self._color_thresholds[str(name).lower()] = float(value)
-            except Exception:
-                continue
+                coerced[str(name).lower()] = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Invalid color threshold overrides: {name!r} -> {value!r}"
+                ) from exc
+        self._color_thresholds.update(coerced)
 
     def set_default_threshold(self, threshold: float | None) -> None:
+        """Set the fallback threshold used by colors without an explicit one.
+
+        Raises:
+            ValueError: If the threshold cannot be coerced to float.
+        """
         if threshold is None:
             return
         try:
             self._default_threshold = float(threshold)
-        except Exception:
-            pass
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid default color threshold: {threshold!r}"
+            ) from exc
 
     def _filter_ranges(
         self, allowed_colors: Iterable[str] | None
@@ -482,10 +685,9 @@ class StatsColorChecker:
                 selected[key] = self._ranges[key]
         return selected
 
-    @staticmethod
-    def _center_crop(img: np.ndarray) -> np.ndarray:
+    def _center_crop(self, img: np.ndarray) -> np.ndarray:
         h, w = img.shape[:2]
-        margin = int(min(h, w) * CENTER_MARGIN_RATIO)
+        margin = int(min(h, w) * self._tuning.center_margin_ratio)
         if margin <= 0 or margin * 2 >= h or margin * 2 >= w:
             return img
         cropped = img[margin : h - margin, margin : w - margin]

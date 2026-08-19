@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Context object passed between pipeline steps during a detection run."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any

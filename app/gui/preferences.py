@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from PyQt5.QtCore import QByteArray, QSettings
 
+from app.gui.i18n import DEFAULT_LANGUAGE, normalize_language
+
 
 class PreferencesManager:
     """Wrapper around QSettings for persisting GUI preferences."""
@@ -36,22 +38,47 @@ class PreferencesManager:
     def restore_show_detection_boxes(self) -> bool:
         """Return whether result images should show detection boxes."""
         value = self._settings.value("show_detection_boxes", True)
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().lower() not in {"0", "false", "no", "off"}
+        return self._as_bool(value, default=True)
 
     def save_show_detection_boxes(self, enabled: bool) -> None:
         """Persist the result-image detection box visibility preference."""
         self._settings.setValue("show_detection_boxes", bool(enabled))
 
+    def restore_show_original_tab(self) -> bool:
+        """Return whether the original-image tab should be visible."""
+        value = self._settings.value("show_original_tab", True)
+        return self._as_bool(value, default=True)
+
+    def save_show_original_tab(self, enabled: bool) -> None:
+        """Persist the original-image tab visibility preference."""
+        self._settings.setValue("show_original_tab", bool(enabled))
+
+    def restore_show_processed_tab(self) -> bool:
+        """Return whether the processed-image tab should be visible."""
+        value = self._settings.value("show_processed_tab", True)
+        return self._as_bool(value, default=True)
+
+    def save_show_processed_tab(self, enabled: bool) -> None:
+        """Persist the processed-image tab visibility preference."""
+        self._settings.setValue("show_processed_tab", bool(enabled))
+
+    @staticmethod
+    def _as_bool(value: object, *, default: bool) -> bool:
+        """Normalize QSettings values that may be returned as strings."""
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
     def restore_language(self) -> str:
         """Return the persisted GUI language code."""
-        value = str(self._settings.value("language", "en"))
-        return value if value in {"en", "zh"} else "en"
+        value = self._settings.value("language", DEFAULT_LANGUAGE)
+        return normalize_language(value)
 
     def save_language(self, language: str) -> None:
         """Persist the GUI language code."""
-        self._settings.setValue("language", language if language in {"en", "zh"} else "en")
+        self._settings.setValue("language", normalize_language(language))
 
     def restore_light_port(self) -> str:
         """Return the last serial port used for the LED light ('' if none)."""

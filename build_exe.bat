@@ -17,6 +17,9 @@ REM --- 自動偵測腳本所在目錄（不依賴 cwd）---
 pushd "%~dp0"
 set "SOURCE_PATH=%CD%"
 popd
+set "YOLO_CONFIG_DIR=%SOURCE_PATH%\data\.ultralytics"
+set "YOLO_AUTOINSTALL=false"
+if not exist "%YOLO_CONFIG_DIR%" mkdir "%YOLO_CONFIG_DIR%"
 
 REM --- Python 環境設定（可透過 YOLO11_PYTHON 環境變數覆蓋）---
 set "DEFAULT_PYTHON=D:\miniconda\envs\yolo_anomalib\python.exe"
@@ -30,7 +33,8 @@ REM --- 驗證 Python 存在 ---
 if not exist "%ENV_PYTHON%" (
     echo [ERROR] 找不到 Python: %ENV_PYTHON%
     echo 請修改腳本中的 DEFAULT_PYTHON，或設定環境變數 YOLO11_PYTHON。
-    pause & exit /b 1
+    if not defined CI pause
+    exit /b 1
 )
 
 echo [INFO] 使用 Python: %ENV_PYTHON%
@@ -42,19 +46,20 @@ REM --- 確認 PyInstaller 已安裝 ---
 "%ENV_PYTHON%" -c "import PyInstaller" 2>nul
 if errorlevel 1 (
     echo [ERROR] PyInstaller 未安裝，請執行: pip install pyinstaller
-    pause & exit /b 1
+    if not defined CI pause
+    exit /b 1
 )
 
 REM --- 輸出設定 ---
 set "BUILD_NAME=yolo11_inference"
 set "OUTPUT_PATH=%SOURCE_PATH%\dist"
 set "WORK_PATH=%SOURCE_PATH%\build"
-set "SPEC_PATH=%SOURCE_PATH%"
-set "TIMM_DATA_ARG="
-if exist "%SOURCE_PATH%\timm_cache" (
-    set "TIMM_DATA_ARG=--add-data ""%SOURCE_PATH%\timm_cache;timm_cache"""
-) else (
-    echo [WARNING] timm_cache not found; skipping bundled Patchcore backbone cache.
+set "SPEC_FILE=%SOURCE_PATH%\yolo11_inference.spec"
+
+if not exist "%SPEC_FILE%" (
+    echo [ERROR] 找不到打包規格檔: %SPEC_FILE%
+    if not defined CI pause
+    exit /b 1
 )
 
 REM --- 清理上次輸出 ---
@@ -66,92 +71,24 @@ echo [INFO] 開始打包，這需要幾分鐘...
 echo.
 
 REM ==========================================================================
-REM  PyInstaller 打包指令
-REM  --onedir   : 輸出為資料夾（比 onefile 啟動快，DLL 相容性更好）
-REM  --console  : 保留主控台視窗（方便看 log，可改 --noconsole 隱藏）
-REM  注意: core/, app/, camera/ 不加 --add-data，PyInstaller 會透過 import
-REM        分析自動處理；只有非 Python 資源才需要 --add-data
+REM  PyInstaller 打包指令（單一真相來源：yolo11_inference.spec）
+REM  所有設定（onedir/console/noupx、hidden-import、collect-*、copy-metadata、
+REM  資料檔 Runtime/MvImport/timm_cache）都定義在 spec 內，並以 SPECPATH 相對解析，
+REM  換機器/換路徑都不會爆。此處只負責輸出位置與覆寫。
+REM  注意: 從 spec 打包時，PyInstaller 會忽略 --name/--add-data/--hidden-import
+REM        等選項；要改打包內容請編輯 yolo11_inference.spec。
 REM ==========================================================================
-REM --- 執行期需要的資料檔（非 Python 程式碼）、隱藏 import、子模組收集與 metadata 保留 ---
-REM --- 注意：在 ^ 續行的指令區塊中不可插入 REM 註解，否則可能導致參數被截斷或解析失敗 ---
-REM --- --noupx: 不壓縮原生 DLL。UPX 會在每次啟動時解壓 torch/MKL/Qt 等巨型 DLL，
-REM     拖慢啟動數秒，且可能損壞 torch/onnxruntime/Qt 原生 DLL 導致隨機崩潰。 ---
 "%ENV_PYTHON%" -m PyInstaller ^
   --noconfirm ^
-  --onedir ^
-  --console ^
-  --noupx ^
-  --name "%BUILD_NAME%" ^
   --distpath "%OUTPUT_PATH%" ^
   --workpath "%WORK_PATH%" ^
-  --specpath "%SPEC_PATH%" ^
-  ^
-  --add-data "%SOURCE_PATH%\Runtime;Runtime" ^
-  --add-data "%SOURCE_PATH%\MvImport;MvImport" ^
-  %TIMM_DATA_ARG% ^
-  ^
-  --hidden-import torch ^
-  --hidden-import torch.nn.functional ^
-  --hidden-import torchvision ^
-  --hidden-import cv2 ^
-  --hidden-import numpy ^
-  --hidden-import scipy ^
-  --hidden-import scipy.special._ufuncs ^
-  --hidden-import PIL ^
-  --hidden-import kornia ^
-  --hidden-import anomalib ^
-  --hidden-import lightning ^
-  --hidden-import ultralytics ^
-  --hidden-import onnx ^
-  --hidden-import onnxruntime ^
-  --hidden-import onnxruntime.capi.onnxruntime_pybind11_state ^
-  --hidden-import pandas ^
-  --hidden-import openpyxl ^
-  --hidden-import openpyxl.cell._writer ^
-  --hidden-import yaml ^
-  --hidden-import pydantic ^
-  --hidden-import tqdm ^
-  --hidden-import timm ^
-  --hidden-import einops ^
-  --hidden-import FrEIA ^
-  --hidden-import imgaug ^
-  --hidden-import PyQt5 ^
-  --hidden-import PyQt5.sip ^
-  --hidden-import PyQt5.QtCore ^
-  --hidden-import PyQt5.QtGui ^
-  --hidden-import PyQt5.QtWidgets ^
-  --hidden-import pkg_resources ^
-  --hidden-import importlib.metadata ^
-  --hidden-import jsonargparse ^
-  ^
-  --collect-submodules anomalib ^
-  --collect-submodules anomalib.models ^
-  --collect-submodules ultralytics ^
-  --collect-submodules lightning ^
-  --collect-submodules timm ^
-  --collect-submodules PyQt5 ^
-  --collect-all kornia ^
-  --collect-all jsonargparse ^
-  --collect-data anomalib ^
-  --collect-data open_clip ^
-  --collect-data ultralytics ^
-  --exclude-module tkinter ^
-  --exclude-module _tkinter ^
-  --exclude-module PIL._tkinter_finder ^
-  ^
-  --copy-metadata torch ^
-  --copy-metadata ultralytics ^
-  --copy-metadata onnx ^
-  --copy-metadata onnxruntime ^
-  --copy-metadata anomalib ^
-  --copy-metadata lightning ^
-  ^
-  "%SOURCE_PATH%\GUI.py"
+  "%SPEC_FILE%"
 
 if not exist "%OUTPUT_PATH%\%BUILD_NAME%\%BUILD_NAME%.exe" (
     echo.
     echo [ERROR] 打包失敗！請檢查上方錯誤訊息。
-    pause & exit /b 1
+    if not defined CI pause
+    exit /b 1
 )
 
 echo.
@@ -159,14 +96,29 @@ echo [INFO] Running build postprocess...
 "%ENV_PYTHON%" "%SOURCE_PATH%\tools\postprocess_build.py" "%SOURCE_PATH%" "%OUTPUT_PATH%\%BUILD_NAME%"
 if errorlevel 1 (
     echo [ERROR] Build postprocess failed.
-    pause & exit /b 1
+    if not defined CI pause
+    exit /b 1
 )
 
 copy /Y "%SOURCE_PATH%\tools\diagnostics\diagnose_camera.bat" "%OUTPUT_PATH%\%BUILD_NAME%\diagnose_camera.bat" >nul
+echo [INFO] Copying operator and engineering documentation...
+copy /Y "%SOURCE_PATH%\README.md" "%OUTPUT_PATH%\%BUILD_NAME%\README.md" >nul
+if errorlevel 1 (
+    echo [ERROR] README copy failed.
+    if not defined CI pause
+    exit /b 1
+)
+xcopy /E /I /Y "%SOURCE_PATH%\docs" "%OUTPUT_PATH%\%BUILD_NAME%\docs" >nul
+if errorlevel 1 (
+    echo [ERROR] Documentation copy failed.
+    if not defined CI pause
+    exit /b 1
+)
 "%ENV_PYTHON%" "%SOURCE_PATH%\tools\packaging\write_runtime_manifest.py" "%OUTPUT_PATH%\%BUILD_NAME%" --output "%OUTPUT_PATH%\%BUILD_NAME%\runtime_manifest_20260528.txt"
 if errorlevel 1 (
     echo [ERROR] Runtime manifest generation failed.
-    pause & exit /b 1
+    if not defined CI pause
+    exit /b 1
 )
 
 echo.
@@ -176,7 +128,9 @@ echo.
 REM --- 執行驗證腳本 ---
 "%ENV_PYTHON%" "%SOURCE_PATH%\verify_build.py" "%OUTPUT_PATH%\%BUILD_NAME%"
 if errorlevel 1 (
-    echo [WARNING] 驗證有問題，請確認上方報告。
+    echo [ERROR] 打包驗證失敗，禁止交付此版本。
+    if not defined CI pause
+    exit /b 1
 ) else (
     echo [OK] 驗證通過。
 )
@@ -185,5 +139,5 @@ echo.
 echo 輸出目錄: %OUTPUT_PATH%\%BUILD_NAME%
 echo 執行程式: %OUTPUT_PATH%\%BUILD_NAME%\%BUILD_NAME%.exe
 echo.
-pause
+if not defined CI pause
 endlocal

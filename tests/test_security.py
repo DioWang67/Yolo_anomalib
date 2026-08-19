@@ -10,6 +10,7 @@ from core.security import (
     SecurityError,
     ensure_subpath,
     resolve_output_dir,
+    resolve_result_output_dir,
     safe_segment,
 )
 
@@ -208,6 +209,35 @@ class TestSharedSecurityApi:
 
         assert resolved == (root / "Result").resolve()
 
+    def test_result_output_alias_resolves_to_dedicated_root(self, tmp_path):
+        result_root = tmp_path / "Result"
+
+        assert resolve_result_output_dir(
+            "Result",
+            result_root=result_root,
+        ) == result_root.resolve()
+        assert resolve_result_output_dir(
+            "exports",
+            result_root=result_root,
+        ) == (result_root / "exports").resolve()
+
+    @pytest.mark.parametrize(
+        "value",
+        ("../Result", "Result/../../outside", "C:relative"),
+    )
+    def test_result_output_rejects_traversal(self, tmp_path, value):
+        with pytest.raises(SecurityError, match="not allowed"):
+            resolve_result_output_dir(value, result_root=tmp_path / "Result")
+
+    def test_result_output_rejects_absolute_path_outside_root(self, tmp_path):
+        result_root = tmp_path / "Result"
+
+        with pytest.raises(SecurityError):
+            resolve_result_output_dir(
+                tmp_path / "outside",
+                result_root=result_root,
+            )
+
 
 class TestGlobalPathValidator:
     """Test the global path_validator instance."""
@@ -238,9 +268,16 @@ class TestGlobalPathValidator:
 
     def test_global_validator_blocks_external_paths(self):
         """Test that paths completely outside the project are blocked."""
-        from core.security import path_validator
+        from core.security import PROJECT_ROOT, path_validator
 
-        external_path = Path("C:/Users/Public/evil.txt")
+        # Build the "outside" path from the filesystem anchor so it is genuinely
+        # absolute on every host. A literal "C:/Users/Public/evil.txt" is
+        # absolute only on Windows; on POSIX it is a *relative* name that
+        # resolves inside the project root, so the validator correctly allowed it
+        # and this test failed for the wrong reason.
+        external_path = (
+            Path(Path(PROJECT_ROOT).anchor) / "definitely-outside-the-project" / "evil.txt"
+        )
         with pytest.raises(SecurityError):
             path_validator.validate_path(external_path)
 

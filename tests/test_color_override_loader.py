@@ -3,7 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 import core.services.color_override_loader as color_override_loader
+from core.services.color_checker import ColorCheckerService
 from core.services.color_override_loader import ColorOverrideLoader
 
 
@@ -14,7 +17,7 @@ def test_color_override_loader_returns_global_fallback_when_file_is_missing(tmp_
     )
     loader = ColorOverrideLoader(tmp_path)
 
-    overrides, rules = loader.load(config, "LED", "A", "yolo", MagicMock())
+    overrides, rules, tuning = loader.load(config, "LED", "A", "yolo", MagicMock())
 
     assert overrides == {"global": 0.8}
     assert rules == {"global": {"mode": "rgb"}}
@@ -39,7 +42,7 @@ color_rules_overrides:
     )
     loader = ColorOverrideLoader(tmp_path)
 
-    overrides, rules = loader.load(config, "LED", "A", "yolo", MagicMock())
+    overrides, rules, tuning = loader.load(config, "LED", "A", "yolo", MagicMock())
 
     assert overrides == {"red": 0.91}
     assert rules == {"red": {"min_area": 3}}
@@ -56,7 +59,7 @@ def test_color_override_loader_uses_fallback_for_non_mapping_config(tmp_path):
     )
     loader = ColorOverrideLoader(tmp_path)
 
-    overrides, rules = loader.load(config, "LED", "A", "yolo", logger)
+    overrides, rules, tuning = loader.load(config, "LED", "A", "yolo", logger)
 
     assert overrides == {"global": 0.8}
     assert rules is None
@@ -78,8 +81,71 @@ def test_color_override_loader_uses_fallback_when_pyyaml_is_missing(tmp_path, mo
     loader = ColorOverrideLoader(tmp_path)
     monkeypatch.setattr(color_override_loader, "_import_yaml", lambda: None)
 
-    overrides, rules = loader.load(config, "LED", "A", "yolo", logger)
+    overrides, rules, tuning = loader.load(config, "LED", "A", "yolo", logger)
 
     assert overrides == {"global": 0.8}
     assert rules == {"global": {"mode": "rgb"}}
     logger.warning.assert_called_once()
+
+def test_color_override_loader_reads_decision_tuning(tmp_path):
+    cfg_dir = tmp_path / "Cable1" / "A" / "yolo"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "config.yaml").write_text(
+        """
+color_decision_tuning:
+  yellow_h_min: 18
+  black_s_threshold: 55
+""",
+        encoding="utf-8",
+    )
+    config = SimpleNamespace(
+        color_threshold_overrides=None,
+        color_rules_overrides=None,
+        color_decision_tuning={"yellow_h_min": 25},
+    )
+    loader = ColorOverrideLoader(tmp_path)
+
+    overrides, rules, tuning = loader.load(config, "Cable1", "A", "yolo", MagicMock())
+
+    assert tuning == {"yellow_h_min": 18, "black_s_threshold": 55}
+
+    # Cached path returns the same values
+    overrides, rules, tuning = loader.load(config, "Cable1", "A", "yolo", MagicMock())
+    assert tuning == {"yellow_h_min": 18, "black_s_threshold": 55}
+
+
+def test_color_override_loader_falls_back_to_global_decision_tuning(tmp_path):
+    config = SimpleNamespace(
+        color_threshold_overrides=None,
+        color_rules_overrides=None,
+        color_decision_tuning={"yellow_h_min": 25},
+    )
+    loader = ColorOverrideLoader(tmp_path)
+
+    overrides, rules, tuning = loader.load(config, "LED", "A", "yolo", MagicMock())
+
+    assert tuning == {"yellow_h_min": 25}
+
+
+def test_color_checker_rejects_an_active_override_that_cannot_be_applied():
+    service = ColorCheckerService()
+    service._checker = MagicMock()
+    service._checker.apply_runtime_configuration.side_effect = ValueError(
+        "invalid threshold"
+    )
+    service._model_path = "color-model.json"
+    service._checker_type = "stats"
+
+    with pytest.raises(RuntimeError, match="active color configuration"):
+        service.ensure_loaded(
+            "color-model.json",
+            overrides={"red": 0.4},
+            checker_type="stats",
+        )
+
+    # The rejected configuration is the one this invocation supplied, not a
+    # merge with whatever the previously inspected product left behind.
+    service._checker.apply_runtime_configuration.assert_called_once_with(
+        default_threshold=None,
+        color_thresholds={"red": 0.4},
+    )

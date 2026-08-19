@@ -6,7 +6,7 @@ from core.config import DetectionConfig
 
 
 def test_yolo_and_anomalib_end_to_end(monkeypatch, tmp_path):
-    base_dir = tmp_path / "results"
+    base_dir = tmp_path / "Result"
     base_dir.mkdir()
 
     class StubEngine:
@@ -46,7 +46,7 @@ def test_yolo_and_anomalib_end_to_end(monkeypatch, tmp_path):
     stub_engine = StubEngine()
 
     class StubModelManager:
-        def __init__(self, logger, max_cache_size):
+        def __init__(self, logger, max_cache_size, **_kwargs):
             self.calls = []
 
         def switch(self, base_config, product, area, inference_type):
@@ -83,6 +83,9 @@ def test_yolo_and_anomalib_end_to_end(monkeypatch, tmp_path):
             }
 
         def flush(self):
+            self.flush_calls += 1
+
+        def flush_async(self):
             self.flush_calls += 1
 
         def close(self):

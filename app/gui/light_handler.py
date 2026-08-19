@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -20,6 +20,9 @@ from core.services.light_controller import (
     available_ports,
     serial_backend_available,
 )
+from core.services.model_config_editor import load_model_config
+
+LIGHT_KEEPALIVE_INTERVAL_MS = 30_000
 
 
 def _percent_to_value(percent: int, max_value: int) -> int:
@@ -185,8 +188,10 @@ class LightHandlerMixin:
         try:
             controller.set_brightness(value)
         except LightControlError as exc:
+            self._stop_light_keepalive()
             self._report_light_error(exc)
             return
+        self._start_light_keepalive(value)
         self.log_message(self._t("light_status_on", percent=percent))
         self.statusBar().showMessage(self._t("light_status_on", percent=percent), 3000)
 
@@ -197,8 +202,10 @@ class LightHandlerMixin:
         try:
             controller.turn_off()
         except LightControlError as exc:
+            self._stop_light_keepalive()
             self._report_light_error(exc)
             return
+        self._stop_light_keepalive()
         self.log_message(self._t("light_status_off"))
         self.statusBar().showMessage(self._t("light_status_off"), 3000)
 
@@ -222,7 +229,130 @@ class LightHandlerMixin:
 
         final_percent = dialog.value()
         self.preferences.save_light_brightness(final_percent)
+        final_value = _percent_to_value(final_percent, controller.max_value)
+        if final_value > 0:
+            self._start_light_keepalive(final_value)
+        else:
+            self._stop_light_keepalive()
         self.log_message(self._t("light_brightness_set", percent=final_percent))
+
+    def _apply_model_light_brightness(
+        self, product: str, area: str, inference_type: str
+    ) -> None:
+        """Apply the selected model's saved LED brightness, if configured.
+
+        Args:
+            product: Selected product name.
+            area: Selected area/station name.
+            inference_type: Selected inference backend. Fusion uses the YOLO
+                model config for shared camera/light calibration.
+
+        The method is intentionally best-effort: a missing COM port should not
+        crash inspection startup, but stale keepalive state must never override
+        a model-calibrated 0% brightness.
+        """
+        percent = self._read_model_light_brightness(product, area, inference_type)
+        if percent is None:
+            return
+
+        controller = self._open_light_controller_if_available()
+        if controller is None:
+            if percent <= 0:
+                self._stop_light_keepalive()
+            return
+
+        value = _percent_to_value(percent, controller.max_value)
+        try:
+            controller.set_brightness(value)
+        except LightControlError as exc:
+            self._stop_light_keepalive()
+            self.log_message(self._t("light_send_failed", error=exc))
+            return
+
+        if value > 0:
+            self._start_light_keepalive(value)
+        else:
+            self._stop_light_keepalive()
+
+    def _read_model_light_brightness(
+        self, product: str, area: str, inference_type: str
+    ) -> int | None:
+        """Return model-configured LED brightness percent, or None if absent."""
+        model_type = "yolo" if inference_type.lower() == "fusion" else inference_type
+        try:
+            config_path = self._active_release_model_config(
+                product, area, inference_type, model_type
+            )
+            if config_path is None:
+                config_path = self._catalog.config_path(product, area, model_type)
+            config = load_model_config(config_path)
+        except Exception as exc:  # noqa: BLE001 - config parse/open errors are non-fatal here.
+            self.log_message(self._t("model_config_save_error", error=exc))
+            return None
+
+        raw_percent = config.get("light_brightness")
+        if raw_percent is None:
+            return None
+        try:
+            percent = int(raw_percent)
+        except (TypeError, ValueError):
+            self.log_message(
+                self._t("light_send_failed", error="invalid light_brightness")
+            )
+            return None
+        if not 0 <= percent <= 100:
+            self.log_message(
+                self._t("light_send_failed", error="light_brightness out of range")
+            )
+            return None
+        return percent
+
+    def _active_release_model_config(
+        self,
+        product: str,
+        area: str,
+        inference_type: str,
+        model_type: str,
+    ):
+        """Resolve lighting from the same immutable release as inference."""
+        project_root = getattr(self, "_project_root", None)
+        if project_root is None:
+            return None
+        from core.services.inspection_release_models import (
+            InspectionScope,
+            template_for_inference_type,
+        )
+        from core.services.inspection_release_store import InspectionReleaseStore
+        from core.station_data import load_station_data_paths
+
+        template = template_for_inference_type(inference_type)
+        scope = InspectionScope(product, area, template.template_id)
+        store = InspectionReleaseStore(
+            load_station_data_paths(project_root).inspection_releases
+        )
+        pointer = store.active_pointer(scope)
+        if pointer is None:
+            return None
+        release = store.load(scope, str(pointer.get("release_id") or ""))
+        return release.model_config_overrides().get(model_type)
+
+    def _open_light_controller_if_available(self) -> LightController | None:
+        """Return an open light controller without prompting the operator."""
+        controller = getattr(self, "_light_controller", None)
+        if controller is not None and controller.is_open:
+            return controller
+
+        saved_port = self.preferences.restore_light_port()
+        if not saved_port:
+            return None
+
+        controller = self._ensure_light_controller()
+        try:
+            controller.open(saved_port)
+        except LightControlError as exc:
+            self.log_message(self._t("light_port_open_failed", port=saved_port, error=exc))
+            return None
+        return controller
 
     def populate_light_port_menu(self, menu) -> None:
         """Rebuild the dynamic 'Port' submenu with currently available ports."""
@@ -270,8 +400,44 @@ class LightHandlerMixin:
             self._t("light_send_failed", error=exc),
         )
 
+    def _start_light_keepalive(self, brightness_value: int) -> None:
+        """Keep controllers with idle watchdogs alive while the light is on."""
+        if brightness_value <= 0:
+            self._stop_light_keepalive()
+            return
+        self._light_keepalive_value = brightness_value
+        timer = getattr(self, "_light_keepalive_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setInterval(LIGHT_KEEPALIVE_INTERVAL_MS)
+            timer.timeout.connect(self._send_light_keepalive)
+            self._light_keepalive_timer = timer
+        if not timer.isActive():
+            timer.start()
+
+    def _stop_light_keepalive(self) -> None:
+        """Stop periodic light refresh commands."""
+        timer = getattr(self, "_light_keepalive_timer", None)
+        if timer is not None:
+            timer.stop()
+        self._light_keepalive_value = 0
+
+    def _send_light_keepalive(self) -> None:
+        """Refresh the current brightness without showing modal errors."""
+        value = int(getattr(self, "_light_keepalive_value", 0) or 0)
+        if value <= 0:
+            self._stop_light_keepalive()
+            return
+        controller = self._ensure_light_controller()
+        try:
+            controller.set_brightness(value)
+        except LightControlError as exc:
+            self._stop_light_keepalive()
+            self.log_message(self._t("light_send_failed", error=exc))
+
     def shutdown_light(self) -> None:
         """Close the serial port during application shutdown (best effort)."""
+        self._stop_light_keepalive()
         controller = getattr(self, "_light_controller", None)
         if controller is not None:
             controller.close()

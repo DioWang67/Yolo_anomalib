@@ -53,7 +53,8 @@ This file records durable project context for future coding sessions. Keep it co
   - annotated image
   - crop images for failed components
   - JSON result
-  - CSV summary
+  - SQLite inspection/review index
+  - filtered Excel reporting snapshot
   - model version
   - config snapshot
   - decision reason codes
@@ -110,6 +111,13 @@ Record meaningful decisions with date, reason, and trade-off.
 | 2026-05-18 | Treat PCBA1 A/B as controlled-pilot candidates, not unattended production-ready configs | Readiness gate has no blocking FAIL, but position tolerance and missing-slot warnings remain | Pilot can proceed only with documented warning acceptance and physical validation |
 | 2026-05-18 | Add pilot acceptance summary as a filesystem tool | Keeps pilot signoff traceable on offline inspection machines | It summarizes evidence but does not replace physical golden/NG validation |
 | 2026-05-18 | Add `pcba.bat` and `tools/pcba_pilot.py` as the operator entrypoint | Avoids requiring operators to memorize long Python commands | Keeps commands simple but still requires review labels and real inspection evidence |
+| 2026-07-29 | Use SQLite as the searchable production record; keep files as immutable evidence and Excel as an export snapshot | Supports indexed history, review audit, backup and future server synchronization without duplicating image BLOBs | Requires database backup/restore operations in addition to file retention |
+| 2026-07-29 | Require an explicit per-job position-retraining choice and separate post-Gate activation choice | Prevents position calibration from running or becoming active when it was not intended | Operators must make the decision for every job; it is deliberately not remembered |
+| 2026-07-29 | Use role-based operator and engineering manuals as the current workflow source | Keeps daily actions separate from risky configuration and recovery work | Some critical safety steps are intentionally repeated across the two manuals |
+| 2026-07-31 | Treat YOLO, Anomalib and Stats Color as versioned components of one atomic inspection release | Prevents independently switched components from creating an untested production combination | Engineers must create and validate a new complete combination for each component change |
+| 2026-07-31 | Keep acceptance truth independent from all training datasets | Preserves an unbiased regression set and allows repeated model comparison without re-labelling | Acceptance evidence requires separate backup and cannot be used to increase training volume |
+| 2026-07-31 | Report color escape as UNKNOWN when no confirmed color NG exists | A zero would falsely claim defect coverage that was never measured | Such candidates require limited trial or explicit risk acceptance |
+| 2026-08-03 | Create a target-scoped folder before selecting images for each retraining batch | Keeps draft selection, review, annotation, and resulting job data physically separated and resumable | Adds a folder-selection step before review and forbids renaming or reusing a batch folder |
 
 ## Known Issues / Risks
 
@@ -124,6 +132,7 @@ Record meaningful decisions with date, reason, and trade-off.
 - PCBA1 A uses `mode: iou` and `tolerance: 1.06`; readiness check interprets this as effective minimum IoU `0.0106`, which is too loose unless explicitly justified by measured line data.
 - PCBA1 B uses `tolerance: 10.27` with `tolerance_unit: percent`; this is wide for production position validation and must be verified against fixture variation.
 - PCBA1 A/B still need golden board repeatability, known NG validation, and dry-run review before unattended production use.
+- Cable1/A has 250 confirmed acceptance images, but no confirmed true color NG; its color escape rate remains unknown even when FP/FN results improve.
 
 ## Validation Checklist
 

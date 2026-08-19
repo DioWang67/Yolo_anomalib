@@ -1,6 +1,6 @@
 
-import pytest
 import numpy as np
+import pytest
 
 # Ensure app is importable
 # sys.path.append(os.getcwd())
@@ -155,7 +155,7 @@ def test_gui_smoke(monkeypatch, tmp_path):
 
 
 @pytest.mark.gui
-def test_single_shot_stop_resets_ui_without_pipeline_shutdown(monkeypatch, tmp_path):
+def test_single_shot_stop_waits_for_backend_before_reset(monkeypatch, tmp_path):
     _ = pytest.importorskip(
         "PyQt5.QtWidgets", reason="PyQt5 is required for GUI smoke test"
     )
@@ -195,10 +195,17 @@ def test_single_shot_stop_resets_ui_without_pipeline_shutdown(monkeypatch, tmp_p
     window.stop_detection()
     app.processEvents()
 
+    assert window._single_shot_running is True
+    assert window.start_btn.isEnabled() is False
+    assert window._shutdown_in_progress is True
+    assert window.controller._system.stop_pipeline_calls == 0
+
+    window.controller.bridge.single_shot_finished.emit(0)
+    app.processEvents()
+
     assert window._single_shot_running is False
     assert window.start_btn.isEnabled() is True
     assert window.stop_btn.isEnabled() is False
-    assert window.controller._system.stop_pipeline_calls == 0
 
     window.close()
     app.processEvents()
@@ -316,6 +323,7 @@ def test_detection_worker_cancel_prevents_late_pipeline_start(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 
     import threading
+
     from PyQt5.QtWidgets import QApplication
 
     from app.gui.workers import DetectionWorker
@@ -378,9 +386,11 @@ def test_pipeline_bridge_rejects_stale_run_callbacks(monkeypatch):
     bridge = PipelineBridge()
     images = []
     results = []
+    stored = []
     camera_lost = []
     bridge.image_ready.connect(images.append)
     bridge.result_ready.connect(results.append)
+    bridge.storage_completed.connect(stored.append)
     bridge.camera_disconnected.connect(lambda: camera_lost.append(True))
 
     task = DetectionTask(
@@ -395,24 +405,30 @@ def test_pipeline_bridge_rejects_stale_run_callbacks(monkeypatch):
 
     bridge.begin_run(1)
     bridge.on_task_captured(task, run_id=1)
+    bridge.on_task_inferred(task, run_id=1)
     bridge.on_task_processed(task, run_id=1)
     bridge.on_camera_lost(run_id=1)
     assert len(images) == 1
     assert len(results) == 1
+    assert len(stored) == 1
     assert len(camera_lost) == 1
 
     bridge.begin_run(2)
     bridge.on_task_captured(task, run_id=1)
+    bridge.on_task_inferred(task, run_id=1)
     bridge.on_task_processed(task, run_id=1)
     bridge.on_camera_lost(run_id=1)
     assert len(images) == 1
     assert len(results) == 1
+    assert len(stored) == 1
     assert len(camera_lost) == 1
 
     bridge.end_run(2)
     bridge.on_task_captured(task, run_id=2)
+    bridge.on_task_inferred(task, run_id=2)
     bridge.on_task_processed(task, run_id=2)
     bridge.on_camera_lost(run_id=2)
     assert len(images) == 1
     assert len(results) == 1
+    assert len(stored) == 1
     assert len(camera_lost) == 1

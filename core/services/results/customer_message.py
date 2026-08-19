@@ -8,6 +8,69 @@ from .position_summary import format_fixture_shift_hint, summarize_position_reco
 if TYPE_CHECKING:
     from core.types import DetectionResult
 
+# ``ColorFailureDescription.kind`` values. A failed color-check item can mean
+# two very different things that look identical if only a color name is
+# shown: the detected class was swapped for a different color (MISMATCH), or
+# the predicted color agrees with the detected class but its own score missed
+# its own threshold (LOW_CONFIDENCE). Every UI surface that reports color
+# check failures (main verdict message, detail panel, annotated image
+# overlay) classifies through this shared logic so the two are never
+# conflated or described inconsistently across surfaces.
+COLOR_FAILURE_MISMATCH = "mismatch"
+COLOR_FAILURE_LOW_CONFIDENCE = "low_confidence"
+COLOR_FAILURE_UNIDENTIFIED = "unidentified"
+
+
+@dataclass(frozen=True)
+class ColorFailureDescription:
+    """Structured classification of why one color-check item failed.
+
+    Carries the raw class/predicted-color pair rather than pre-formatted
+    text, so each UI layer can render its own localized or ASCII-safe wording
+    (an annotated image overlay cannot render non-Latin glyphs) while still
+    sharing the same underlying semantic distinction.
+    """
+
+    kind: str
+    class_name: str | None
+    predicted_color: str | None
+
+
+def classify_color_check_failure(item: dict[str, Any]) -> ColorFailureDescription:
+    """Classify one failed color-check item's failure mode.
+
+    Args:
+        item: A serialized ``ColorCheckItemResult`` (``class_name``/``class``,
+            ``best_color``).
+
+    Returns:
+        ``COLOR_FAILURE_UNIDENTIFIED`` when there is no detector class to
+        compare against (e.g. a legacy full-frame check with no detections);
+        ``COLOR_FAILURE_MISMATCH`` when the predicted color differs from the
+        detected class; otherwise ``COLOR_FAILURE_LOW_CONFIDENCE``.
+    """
+    class_name = item.get("class_name") or item.get("class")
+    if not class_name:
+        return ColorFailureDescription(
+            kind=COLOR_FAILURE_UNIDENTIFIED,
+            class_name=None,
+            predicted_color=_clean_str(item.get("best_color")),
+        )
+    label = str(class_name).strip()
+    predicted = _clean_str(item.get("best_color"))
+    if predicted and predicted.casefold() != label.casefold():
+        return ColorFailureDescription(
+            kind=COLOR_FAILURE_MISMATCH, class_name=label, predicted_color=predicted
+        )
+    return ColorFailureDescription(
+        kind=COLOR_FAILURE_LOW_CONFIDENCE, class_name=label, predicted_color=predicted
+    )
+
+
+def _clean_str(value: object) -> str | None:
+    text = str(value).strip() if value else ""
+    return text or None
+
 
 @dataclass(frozen=True)
 class CustomerMessage:
@@ -19,7 +82,7 @@ class CustomerMessage:
     details: list[str]
 
 
-def build_customer_message(result: "DetectionResult") -> CustomerMessage:
+def build_customer_message(result: DetectionResult) -> CustomerMessage:
     """Return a concise operator-facing message for the current result."""
     status = str(result.status or "").upper()
     slot_check = _get_slot_check(result)
@@ -27,6 +90,7 @@ def build_customer_message(result: "DetectionResult") -> CustomerMessage:
     decision_reasons = _get_decision_reasons(result)
     alignment_quality = _get_alignment_quality(result)
     recovered_items = _slot_check_recovered_items(slot_check)
+    duplicate_filter = _get_duplicate_filter(result)
     position_summary = summarize_position_records(
         [{"label": item.label, **item.metadata} for item in (result.items or [])]
     )
@@ -38,6 +102,9 @@ def build_customer_message(result: "DetectionResult") -> CustomerMessage:
         ]
         if recovered_items:
             details.append(f"槽位複核補回: {', '.join(_limit_items(recovered_items))}")
+        suppressed_count = int(duplicate_filter.get("suppressed_count", 0) or 0)
+        if suppressed_count:
+            details.append(f"已排除 {suppressed_count} 個高重疊重複框")
         return CustomerMessage(
             headline="檢測通過" if not recovered_items else "檢測通過（已做槽位複核）",
             action=(
@@ -100,10 +167,23 @@ def build_customer_message(result: "DetectionResult") -> CustomerMessage:
             details=_nonempty([fixture_hint]),
         )
 
+    if (
+        duplicate_filter.get("status") == "reported"
+        and int(duplicate_filter.get("would_suppress_count", 0) or 0) > 0
+    ):
+        return CustomerMessage(
+            headline="疑似模型重複框",
+            action="請查看標註圖並重新檢測；若持續出現請通知工程人員",
+            severity="warning",
+            details=[
+                "目前為僅觀察模式，尚未自動消除，也不代表實物真的多一件"
+            ],
+        )
+
     color_check = result.color_check or {}
     if color_check and not color_check.get("is_ok", True):
         bad = [
-            str(item.get("class_name") or "?")
+            _describe_color_check_failure(item)
             for item in (color_check.get("items") or [])
             if not item.get("is_ok", True)
         ]
@@ -111,7 +191,7 @@ def build_customer_message(result: "DetectionResult") -> CustomerMessage:
             headline="顏色檢查異常",
             action="請確認來料或顏色設定後再檢測",
             severity="danger",
-            details=_nonempty([f"異常項目: {', '.join(_limit_items(bad))}" if bad else None]),
+            details=_nonempty(["; ".join(_limit_items(bad)) if bad else None]),
         )
 
     sequence_check = result.sequence_check or {}
@@ -155,6 +235,39 @@ def _limit_items(items: list[str], limit: int = 3) -> list[str]:
     return [str(item) for item in items[:limit]]
 
 
+def _get_duplicate_filter(result: DetectionResult) -> dict[str, Any]:
+    metadata = result.metadata or {}
+    value = metadata.get("duplicate_filter")
+    return value if isinstance(value, dict) else {}
+
+
+def _color_item_label(item: dict[str, Any]) -> str:
+    """Return a meaningful Chinese label for one color-check item."""
+    label = item.get("class_name") or item.get("class")
+    if label:
+        return str(label)
+    if item.get("index") == -1:
+        return "未偵測到元件（全畫面檢查）"
+    return "未知項目"
+
+
+def _describe_color_check_failure(item: dict[str, Any]) -> str:
+    """Return an operator-facing Chinese description of one failed item.
+
+    Names both the detected class and the predicted color for a mismatch
+    (``顏色不符: Red → Orange``) instead of the detected class alone, and uses
+    distinct wording when they agree but the score still missed its own
+    threshold (``Red 顏色信心不足``) so the two failure modes are never
+    displayed as if they were the same thing.
+    """
+    description = classify_color_check_failure(item)
+    if description.kind == COLOR_FAILURE_MISMATCH:
+        return f"顏色不符: {description.class_name} → {description.predicted_color}"
+    if description.kind == COLOR_FAILURE_LOW_CONFIDENCE:
+        return f"{description.class_name} 顏色信心不足"
+    return _color_item_label(item)
+
+
 def _nonempty(values: list[str | None]) -> list[str]:
     return [value for value in values if value]
 
@@ -163,19 +276,19 @@ def _maybe_fixture_detail(position_summary: Any) -> str | None:
     return format_fixture_shift_hint(position_summary)
 
 
-def _get_slot_check(result: "DetectionResult") -> dict[str, Any] | None:
+def _get_slot_check(result: DetectionResult) -> dict[str, Any] | None:
     metadata = getattr(result, "metadata", {}) or {}
     slot_check = metadata.get("slot_check")
     return slot_check if isinstance(slot_check, dict) else None
 
 
-def _get_slot_mismatches(result: "DetectionResult") -> list[dict[str, Any]]:
+def _get_slot_mismatches(result: DetectionResult) -> list[dict[str, Any]]:
     metadata = getattr(result, "metadata", {}) or {}
     values = metadata.get("slot_mismatches") or []
     return [value for value in values if isinstance(value, dict)]
 
 
-def _get_decision_reasons(result: "DetectionResult") -> list[str]:
+def _get_decision_reasons(result: DetectionResult) -> list[str]:
     metadata = getattr(result, "metadata", {}) or {}
     decision = metadata.get("decision")
     if not isinstance(decision, dict):
@@ -184,7 +297,7 @@ def _get_decision_reasons(result: "DetectionResult") -> list[str]:
     return [str(reason) for reason in reasons if str(reason).strip()]
 
 
-def _get_alignment_quality(result: "DetectionResult") -> dict[str, Any] | None:
+def _get_alignment_quality(result: DetectionResult) -> dict[str, Any] | None:
     metadata = getattr(result, "metadata", {}) or {}
     value = metadata.get("alignment_quality")
     return value if isinstance(value, dict) else None

@@ -1,8 +1,20 @@
 # yolo11_inference
 
-工業視覺檢測系統，整合 YOLO 物件偵測與 Anomalib 異常檢測，支援多產品/多站別的品質檢測流程。
+工業視覺檢測系統，整合 YOLO 物件偵測、位置／顏色規則、檢測紀錄、
+人工複核、安全補訓與版本化部署。
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+請依角色從下列文件開始：
+
+- 產線操作者／班組長：[AI 檢測系統操作手冊](docs/manuals/OPERATOR_MANUAL.md)
+- 設備、製程、AI、軟體與 IT：[工程維運手冊](docs/manuals/ENGINEERING_MANUAL.md)
+- 不確定該看哪份文件：[文件總索引](docs/DOCUMENTATION_INDEX.md)
+
+目前補訓入口在主 GUI 的`工程設定 > 模型補訓`，需要 PIN 且開始前必須
+停止檢測。位置檢測補訓是每筆工作明確勾選的選項，不會沿用上次設定。
+推論、回訓與安全部署閉環見
+[`Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md`](../Yolo11_auto_train/docs/SEAMLESS_WORKFLOW.md)。
+
+[![Python 3.10/3.11](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)](https://www.python.org/downloads/)
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 
 ## 主要功能
@@ -12,8 +24,11 @@
 - ⚡ **Fusion 融合檢測**: YOLO 與 Anomalib 聯合推理，支援特徵熱圖與結果雙重疊加 (GUI 限定功能)
 - 📷 **工業相機整合**: 支援海康威視 MVS SDK
 - 🎨 **LED 顏色檢測**: 統計式顏色驗證
+- 🧭 **顏色誤殺閉環**: 顏色專用覆核、校正資料分流及具名批准門檻發布（見 [操作說明](docs/model_lifecycle/COLOR_REVIEW_CALIBRATION.md)）
+- 🧪 **模型組合驗收**: 獨立人工真值、YOLO × 顏色矩陣、完整組合發布與原子回滾（見 [驗收與發布](docs/model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md)）
 - 🖥️ **雙介面支援**: CLI 命令列 + PyQt5 GUI
-- 📊 **結果管理**: Excel 報表輸出、影像標註保存
+- 📊 **結果管理**: SQLite 檢測索引、GUI 查詢、篩選式 Excel 報表與證據影像
+- 🔁 **公司同步**: 本機優先 outbox、離線重試、冪等 revision 同步
 - 🔄 **多產品支援**: 靈活的產品/區域/類型配置體系
 - 🚀 **非同步管線 (NEW)**: Producer-Consumer 三階段管線，解耦取像/推論/I/O，適用於高 FPS 產線
 
@@ -56,7 +71,15 @@ yolo11_inference/
 │               └── config.yaml
 ├── Result/                     # 輸出結果
 ├── docs/                       # 文檔
-│   └── TECH_GUIDE.md                  # 技術深度指南 (~1300 行)
+│   ├── DOCUMENTATION_INDEX.md         # 文件入口索引
+│   ├── manuals/                       # 操作者與工程主手冊
+│   ├── operations/                    # 部署、回滾、診斷與上線 SOP
+│   ├── data/                          # 資料庫與公司同步
+│   ├── model_lifecycle/               # 模型與顏色驗收
+│   ├── architecture/                  # 架構、安全與技術參考
+│   ├── pilot/                         # 受控試產文件
+│   ├── records/                       # 追加式工程紀錄
+│   └── archive/                       # 歷史資料
 ├── config.yaml                 # 全域配置
 ├── config.example.yaml         # 配置範本
 ├── requirements.txt            # 核心依賴
@@ -69,7 +92,7 @@ yolo11_inference/
 
 ### 前置需求
 
-- Python 3.10 或更高版本
+- Python 3.10 或 3.11
 - CUDA 12.1+ (若使用 GPU)
 - 海康威視相機 SDK (若使用實體相機)
 
@@ -170,8 +193,14 @@ python GUI.py
 
 結果將保存到 `Result/` 目錄（或 `config.yaml` 中指定的 `output_dir`）：
 
-- 標註影像：`Result/<timestamp>_annotated.jpg`
-- Excel 報表：`Result/detection_results.xlsx`
+- 原始、處理後、標註、crop、heatmap 與結果快照（依設定與模型類型產生）；
+- 可查詢索引：`Result/inspection_records.sqlite3`；
+- 一致性備份：`Result/database_backups/`；
+- Excel：從 GUI `檢測紀錄 > 匯出 Excel`，依目前產品、工位、狀態與日期
+  篩選輸出摘要、明細與異常統計。
+
+操作方式見 [操作者手冊](docs/manuals/OPERATOR_MANUAL.md#7-檢測紀錄)，資料結構與
+恢復方式見 [資料庫文件](docs/data/INSPECTION_DATABASE.md)。
 
 ## 測試
 
@@ -188,6 +217,40 @@ pytest tests/test_yolo_inference_model.py -v
 # 產生覆蓋率報告
 pytest --cov=core --cov=app --cov-report=html
 ```
+
+### Windows 低磁碟空間：調整 pytest 暫存位置
+
+部分測試會走完整的結果保存流程，而 `ResultHandler` 在目標磁碟可用空間低於
+`min_free_disk_mb`（預設 1024 MiB）時會拒絕寫入。pytest 的 `tmp_path` 預設放在系統
+暫存目錄，因此當 **C 槽接近滿載** 時，這些測試會因為環境而失敗，而不是因為程式碼有問題
+（典型訊息：`ResultPersistenceError: Insufficient result disk space`）。
+
+可用 `YOLO11_TEST_TMP` 把「這一次測試」的暫存目錄移到其他磁碟：
+
+```powershell
+$env:YOLO11_TEST_TMP = "D:\yolo11_test_tmp"   # 換成你機器上有空間的路徑
+.\scripts\test.ps1 -q
+```
+
+`scripts\test.ps1` 的所有參數都會原樣傳給 pytest：
+
+```powershell
+.\scripts\test.ps1 tests/test_pipeline_finalize_status.py -v
+```
+
+未設定 `YOLO11_TEST_TMP` 時，維持系統預設暫存目錄，行為與直接執行 `pytest` 相同。
+
+需要理解的幾點：
+
+- 這**只**影響測試暫存位置。production 的 `Result/` 輸出路徑不受影響。
+- production 的 `min_free_disk_mb = 1024` **不會被調低**。磁碟空間檢查照常執行，只是改成
+  對一個真的有空間的磁碟做檢查。
+- 路徑僅為範例，`D:` 不是強制值，也沒有寫死在任何程式碼或設定檔中。
+- 只影響該次測試 process，不會修改 Windows 使用者/系統環境變數，也不會動到登錄檔。
+- 為什麼用 `TEMP`/`TMP` 而不是 `pytest --basetemp`：`tests/conftest.py` 會把
+  `tempfile.gettempdir()` 加進安全路徑白名單。只改 `--basetemp` 會讓測試檔案落在所有
+  允許的根目錄之外，把磁碟空間錯誤換成 `SecurityError`。改暫存目錄本身才能讓 pytest、
+  `tempfile` 與白名單三者一致。
 
 ## 開發
 
@@ -214,10 +277,24 @@ build_exe.bat
 ```
 封裝完成後，可執行檔會放置在 `dist\yolo11_inference` 目錄下。
 您只需將該目錄複製到目標機台，執行裡面的 `yolo11_inference.exe` 即可啟動檢測系統。
+
+打包後的 `yolo11_inference.exe` 入口來自 `GUI.py`，因此部署診斷參數
+`--check-hikrobot-runtime`、`--check-camera-grab` 是封裝版 exe / `GUI.py`
+支援的參數，不是 `python main.py` 的 CLI 參數。
+
 Hikrobot 相機 DLL（`Runtime/`）已隨包附帶，目標機台**不需要**另行安裝 MVS；
-可用 `yolo11_inference.exe --check-hikrobot-runtime` 與 `--check-camera-grab`
-做部署後預檢。請確保：
+可用以下命令做部署後預檢：
+
+```powershell
+.\yolo11_inference.exe --check-hikrobot-runtime
+.\yolo11_inference.exe --check-camera-grab
+```
+
+請確保：
 - 模型路徑與設定檔維持與打包時的相對路徑關係。
+
+完整現場部署流程請看 `docs/operations/WINDOWS_DEPLOYMENT_SOP.md`；
+release / rollback 流程請看 `docs/operations/RELEASE_ROLLBACK_SOP.md`。
 
 ## 配置說明
 
@@ -298,6 +375,13 @@ Notes:
 
 `position_validator` 用於檢查偵測物件的中心位置是否符合預期範圍。
 
+位置補訓不是每次 YOLO 補訓的固定步驟。送出工作時必須明確勾選
+`啟用位置檢測補訓`；若還要在 Gate 通過後開啟現場檢測，再明確勾選
+`位置驗證通過後啟用現場位置檢測`。兩個選擇都不會記住到下一筆工作。
+
+Golden manifest 只接受人工確認的位置誤殺 OK，或只含
+`POSITION_SHIFT` 的確認 NG。缺件、顏色或混合原因不能充當位置樣本。
+
 ### 配置範例
 
 ```yaml
@@ -320,7 +404,9 @@ LED:
 3. 與預期位置比對，檢查是否在容差範圍內
 4. 輸出驗證報告 (JSON)
 
-詳細說明請參考 `docs/TECH_GUIDE.md`。
+操作判斷見 [操作者手冊的位置補訓章節](docs/manuals/OPERATOR_MANUAL.md#10-送出補訓與位置檢測)；
+工程 Gate 與故障處理見
+[工程維運手冊](docs/manuals/ENGINEERING_MANUAL.md#8-位置檢測補訓)。
 
 ## 從 Yolo11_auto_train 部署模型
 
@@ -331,7 +417,9 @@ LED:
 picture-tool-pipeline --config configs/<product>.yaml --tasks deploy
 ```
 
-或手動複製：
+正式站點請使用 `deploy` 任務或 GUI 通過 Gate 後的版本化部署。以下手動方式
+只供隔離的開發環境檢查檔案結構，不可用於生產發布，因為它沒有驗證
+checksum、ONNX/PT 等價性，也沒有建立可成對回滾的 deployment manifest：
 
 ```bash
 mkdir -p models/<product>/<area>/yolo
@@ -342,18 +430,36 @@ cp runs/detect/<name>/detection_config.yaml     models/<product>/<area>/yolo/con
 cp runs/detect/<name>/auto_position_config.yaml models/<product>/<area>/yolo/position_config.yaml
 ```
 
-完整的訓練→部署流程說明請參考 `Yolo11_auto_train/docs/INTEGRATION_GUIDE.md`。
+完整的訓練→部署流程說明請參考
+[`Yolo11_auto_train/docs/INTEGRATION_GUIDE.md`](../Yolo11_auto_train/docs/INTEGRATION_GUIDE.md)
+及 [工程維運手冊](docs/manuals/ENGINEERING_MANUAL.md#7-補訓閉環)。
 
 ---
 
 ## 文檔
 
-- 📖 [技術深度指南](docs/TECH_GUIDE.md) - ~1300 行從 JR 到 SR 的完整教學
-- 🏗️ [模組架構說明](docs/MODULE_ARCHITECTURE.md) - 軟體設計與互動流程
-- 🏷️ [模型版本管理指南](docs/MODEL_VERSION_GUIDE.md) - Git LFS + 語義化版本命名
-- 🔒 [安全指南](docs/SECURITY.md) - 路徑驗證與安全最佳實踐
-- 📝 配置範本：`config.example.yaml`
-- 🧪 測試範例：`tests/` 目錄
+建議從 [文件入口索引](docs/DOCUMENTATION_INDEX.md) 開始。常用文件：
+
+| 類別 | 文件 |
+|------|------|
+| 操作者／班組長 | [AI 檢測系統操作手冊](docs/manuals/OPERATOR_MANUAL.md) |
+| 工程／IT | [工程維運手冊](docs/manuals/ENGINEERING_MANUAL.md) |
+| 技術總覽 | [技術深度指南](docs/architecture/TECH_GUIDE.md) |
+| 模組責任 | [模組架構說明](docs/architecture/MODULE_ARCHITECTURE.md) |
+| Windows 現場部署 | [Windows Deployment SOP](docs/operations/WINDOWS_DEPLOYMENT_SOP.md) |
+| 發版與回滾 | [Release and Rollback SOP](docs/operations/RELEASE_ROLLBACK_SOP.md) |
+| PCBA pilot 與命令 | [PCBA 受控試產指南](docs/pilot/PCBA_PILOT_GUIDE.md) |
+| 上線檢查 | [Production Go-Live Checklist](docs/operations/PRODUCTION_GO_LIVE_CHECKLIST.md) |
+| 相機診斷 | [Camera Runtime Diagnostics](docs/operations/CAMERA_RUNTIME_DIAGNOSTICS.md) |
+| 模型版本 | [Model Version Management Guide](docs/model_lifecycle/MODEL_VERSION_GUIDE.md) |
+| 模型組合驗收 | [模型組合驗收與發布](docs/model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md) |
+| 檢測資料庫 | [Inspection Database](docs/data/INSPECTION_DATABASE.md) |
+| 公司同步 | [Company Server Sync](docs/data/COMPANY_SERVER_SYNC.md) |
+| 安全 | [Security Guide](docs/architecture/SECURITY.md) |
+
+目前 PCBA 文件支援 controlled pilot；若要 unattended production，仍需完成
+golden board、known NG、dry run review、readiness WARN 接受/修正與 rollback
+記錄。
 
 ## 常見問題
 
@@ -381,7 +487,7 @@ python main.py --product <new_product> --area <area> --type yolo
 3. **非同步管線**: 使用 `start_pipeline()` 解耦取像與推論（見下方說明）
 4. **TensorRT**: 匯出模型為 TensorRT 引擎（進階）
 
-詳見 `docs/TECH_GUIDE.md` 第 8 節「效能工程手冊」。
+詳見 `docs/architecture/TECH_GUIDE.md` 第 8 節「效能工程手冊」。
 
 ## 非同步管線 (Producer-Consumer Pipeline)
 
@@ -481,16 +587,16 @@ except SecurityError as e:
 
 ### 依賴安全
 
-- 固定版本依賴（342 行 `requirements.txt`）
-- 定期安全掃描與更新
-- 使用 `pip-compile` 確保可重現構建
+- 依賴變更須經受控環境回歸測試
+- 發布前對實際安裝環境執行弱點掃描
+- 發布 bundle 與 runtime manifest 一起保存，供追溯與回滾
 
 ### 更多資訊
 
 詳細安全指南請參考：
-- **[docs/SECURITY.md](docs/SECURITY.md)** - 完整安全指南
+- **[docs/architecture/SECURITY.md](docs/architecture/SECURITY.md)** - 安全設計與操作界線
 - **[CHANGELOG.md](CHANGELOG.md)** - 安全相關變更記錄
-- **測試**: `tests/test_security.py` (12/13 測試通過)
+- **測試**: `D:\miniconda\envs\yolo_anomalib\python.exe -m pytest tests\test_security.py -q`
 
 
 
@@ -566,10 +672,10 @@ configs. This GUI/runtime project should only consume and measure those
 artifacts:
 
 ```powershell
-cd D:\Git\robotlearning\Yolo11_auto_train
+cd D:\Git\robotlearning\yolo11_workspace\Yolo11_auto_train
 picture-tool-pipeline --config configs\<product>.yaml --tasks yolo_train,deploy
 
-cd D:\Git\robotlearning\yolo11_inference
+cd D:\Git\robotlearning\yolo11_workspace\yolo11_inference
 python tools\runtime_benchmark.py `
   --backend yolo `
   --model models\Cable1\A\yolo\weights\best.pt `
@@ -578,6 +684,6 @@ python tools\runtime_benchmark.py `
   --runs 50
 ```
 
-See `docs/FIRMWARE_RUNTIME_PLAN.md` for the benchmark matrix and acceptance
+See `docs/architecture/FIRMWARE_RUNTIME_PLAN.md` for the benchmark matrix and acceptance
 criteria. Anomalib should remain a training/validation framework until an
 exported runtime is proven equivalent to the current Lightning baseline.

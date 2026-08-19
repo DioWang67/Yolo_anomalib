@@ -6,13 +6,19 @@ Usage:
 """
 from __future__ import annotations
 
-import sys
 import subprocess
+import sys
 from pathlib import Path
-
 
 REQUIRED_FILES = [
     "yolo11_inference.exe",
+]
+
+REQUIRED_RELEASE_DOCS = [
+    "README.md",
+    "docs/manuals/OPERATOR_MANUAL.md",
+    "docs/manuals/ENGINEERING_MANUAL.md",
+    "docs/DOCUMENTATION_INDEX.md",
 ]
 
 REQUIRED_DIRS = [
@@ -77,6 +83,16 @@ def check_dir(dist: Path) -> bool:
             print(f"  ✓  {f}  ({size_kb:,} KB)")
         else:
             print(f"  ✗  {f}  ← 缺少！")
+            passed = False
+
+    print("\n[交付文件]")
+    for relative_path in REQUIRED_RELEASE_DOCS:
+        path = dist / relative_path
+        if path.is_file() and path.stat().st_size > 0:
+            size_kb = max(1, path.stat().st_size // 1024)
+            print(f"  ✓  {relative_path}  ({size_kb:,} KB)")
+        else:
+            print(f"  ✗  {relative_path}  ← 缺少！")
             passed = False
 
     # --- 必要目錄 ---

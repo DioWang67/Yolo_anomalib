@@ -7,7 +7,7 @@ outputs without needing an older working build.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 def build_runtime_manifest(bundle_root: Path) -> list[str]:
@@ -38,7 +38,13 @@ def build_runtime_manifest(bundle_root: Path) -> list[str]:
         if path.is_file() and path.suffix.lower() in {".dll", ".cti"}
     )
     for path in runtime_files:
-        relative_path = path.relative_to(bundle_root)
+        # The manifest describes a Windows PyInstaller bundle, and the
+        # [Environment] section below is unconditionally Windows-style. Rendering
+        # these entries with the *host's* separator made the same bundle produce
+        # different text on Windows and Linux, so the "stable baseline" could not
+        # be compared across the machines that generate it. PureWindowsPath is
+        # instantiable on every platform, unlike WindowsPath.
+        relative_path = PureWindowsPath(path.relative_to(bundle_root))
         lines.append(f"{relative_path} | {path.stat().st_size} bytes")
 
     lines.extend(

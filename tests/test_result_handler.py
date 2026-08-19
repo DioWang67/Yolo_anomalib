@@ -1,6 +1,7 @@
-import os
 import json
+import os
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -9,6 +10,7 @@ import pytest
 
 from core.exceptions import ResultImageWriteError
 from core.security import SecurityError
+from core.services.inspection_repository import InspectionRepository
 from core.services.results import handler as rh
 from core.services.results.handler import ResultHandler
 
@@ -199,19 +201,35 @@ def test_save_results_yolo_success_and_flush(tmp_result_dir):
     assert out["model_info"] == {"weights": "ckpt.pt", "model_version": "1.0.0"}
     assert out["inference_time"] == 0.123
     assert os.path.exists(out["config_snapshot_path"])
-    with open(out["config_snapshot_path"], "r", encoding="utf-8") as handle:
+    with open(out["config_snapshot_path"], encoding="utf-8") as handle:
         snapshot = json.load(handle)
     assert snapshot["product"] == "P"
     assert snapshot["area"] == "A"
     assert snapshot["decision"] == {"status": "PASS", "reasons": []}
     assert snapshot["model_info"]["model_version"] == "1.0.0"
     assert snapshot["inference_time"] == 0.123
+    indexed = InspectionRepository(
+        Path(tmp_result_dir) / "inspection_records.sqlite3"
+    ).query(
+        "SELECT product, station, model_version FROM inspections "
+        "WHERE snapshot_path=?",
+        (str(Path(out["config_snapshot_path"]).resolve()),),
+    )
+    assert indexed == [
+        {"product": "P", "station": "A", "model_version": "1.0.0"}
+    ]
     assert snapshot["config"]["buffer_limit"] == 1
     for key in ("original_path", "preprocessed_path", "annotated_path"):
         assert os.path.exists(out[key])
     assert len(out["cropped_paths"]) == 1 and os.path.exists(
         out["cropped_paths"][0])
 
+    # save_results confirms the image receipts synchronously but hands the
+    # derived Excel row to a background flush, so a row is not readable the
+    # moment it returns. test_buffer_and_manual_flush asserts exactly that.
+    # Synchronise on the documented boundary instead of racing the daemon
+    # thread, which is what made this read flake on CI.
+    h.flush()
     df = pd.read_excel(h.excel_path, engine="openpyxl")
     result_col = h.columns[5]
     confidence_col = h.columns[6]
@@ -226,6 +244,78 @@ def test_save_results_yolo_success_and_flush(tmp_result_dir):
     assert (df[color_status_col] == "PASS").any()
     diff_values = df[color_diff_col].dropna().tolist()
     assert any(abs(float(str(v)) - 0.10) < 1e-6 for v in diff_values)
+
+
+def test_save_results_fail_snapshot_contains_traceability_record(tmp_result_dir):
+    h = ResultHandler(
+        DummyConfig(buffer_limit=1), base_dir=tmp_result_dir, logger=DummyLogger()
+    )
+
+    detections = [
+        {
+            "bbox": [5, 6, 20, 22],
+            "class": "wire",
+            "class_id": np.int64(2),
+            "confidence": np.float32(0.91),
+            "verified_class": "green",
+        }
+    ]
+    out = h.save_results(
+        frame=_mk_img(),
+        detections=detections,
+        status="DETECTION_FAIL",
+        detector="yolo",
+        missing_items=["red"],
+        processed_image=_mk_img(),
+        product="P",
+        area="A",
+        anomaly_score=None,
+        heatmap_path=None,
+        ckpt_path="ckpt.pt",
+        color_result={"is_ok": False, "items": [{"diff": 9.9}]},
+        sequence_check={"is_ok": False, "reason": "order_mismatch"},
+        decision={"status": "FAIL", "reasons": ["MISSING"]},
+        model_info={"weights": "ckpt.pt", "model_version": "1.0.0"},
+        inference_time=0.2,
+        duplicate_filter={
+            "status": "suppressed",
+            "suppressed_count": 1,
+            "suppressions": [{"kept_index": 0, "suppressed_index": 1}],
+        },
+        raw_detections=[
+            *detections,
+            {
+                "bbox": [5, 6, 20, 23],
+                "class": "other",
+                "confidence": 0.51,
+            },
+        ],
+    )
+
+    with open(out["config_snapshot_path"], encoding="utf-8") as handle:
+        snapshot = json.load(handle)
+
+    assert snapshot["schema_version"] == 2
+    assert snapshot["fail_reasons"] == [
+        "MISSING",
+        "COLOR_MISMATCH",
+        "SEQUENCE_MISMATCH",
+    ]
+    assert snapshot["missing_items"] == ["red"]
+    assert snapshot["detections"][0]["class"] == "wire"
+    assert snapshot["detections"][0]["bbox"] == [5, 6, 20, 22]
+    assert snapshot["detections"][0]["confidence"] == pytest.approx(0.91, abs=1e-4)
+    assert len(snapshot["raw_detections"]) == 2
+    assert snapshot["raw_detections"][1]["class"] == "other"
+    assert snapshot["duplicate_filter"]["status"] == "suppressed"
+    assert snapshot["color_result"]["is_ok"] is False
+    assert snapshot["sequence_check"]["reason"] == "order_mismatch"
+    assert snapshot["artifacts"]["annotated_path"] == out["annotated_path"]
+    assert snapshot["artifacts"]["original_path"] == out["original_path"]
+    assert isinstance(snapshot["config_hash"], str)
+    assert len(snapshot["config_hash"]) == 12
+
+    h.close()
 
 
 def test_save_results_anomalib_with_existing_heatmap(tmp_result_dir, tmp_path):
@@ -283,6 +373,9 @@ def test_error_message_when_fail_and_missing_items(tmp_result_dir):
         ckpt_path=None,
     )
     assert out["status"] == "SUCCESS"
+    # The Excel row is flushed in the background; see the note in
+    # test_save_results_yolo_success_and_flush.
+    h.flush()
     df = pd.read_excel(h.excel_path, engine="openpyxl")
     row = df.iloc[-1]
     error_col = h.columns[10]
@@ -578,7 +671,7 @@ def test_buffer_and_manual_flush(tmp_result_dir):
     )
     frame = _mk_img()
     processed = _mk_img()[:, :, ::-1]
-    for i in range(2):
+    for _i in range(2):
         h.save_results(frame, [], "PASS", "yolo", [],
                        processed, product="P", area="A")
     # 撠 flush ??Excel ?府?蝛?

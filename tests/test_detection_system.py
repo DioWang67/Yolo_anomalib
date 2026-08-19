@@ -8,6 +8,7 @@ pollute other test files.
 
 import os
 import sys
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -113,6 +114,8 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         self.system.run_inference = MagicMock(
             return_value={"status": "PASS", "detections": []}
         )
+        self.system.finalize_detection = MagicMock()
+        self.system.persist_detection = MagicMock()
 
         self.system.start_pipeline("LED", "A", "yolo")
         self.assertTrue(self.system.pipeline_running)
@@ -123,7 +126,19 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         self.assertIsNotNone(mgr._sto_worker)
         self.assertTrue(mgr._acq_worker.is_alive())
 
-        self.system.stop_pipeline(timeout=1.0)
+        # ``stop()`` is a *bounded* stop by design: it keeps ownership and warns
+        # rather than blocking forever when a worker misses its budget, and
+        # ``running`` then auto-resets once the worker actually finishes. The
+        # acquisition worker here spins on a mock camera with no capture
+        # interval, so under coverage instrumentation on a shared runner it can
+        # still be inside a loop when the budget expires — this assertion raced
+        # that and flaked on CI while passing locally and on the uninstrumented
+        # jobs. Poll the documented end state instead of sampling it once; a
+        # pipeline that genuinely fails to stop still fails this test.
+        self.system.stop_pipeline(timeout=10.0)
+        deadline = time.monotonic() + 10.0
+        while self.system.pipeline_running and time.monotonic() < deadline:
+            time.sleep(0.05)
         self.assertFalse(self.system.pipeline_running)
 
     def test_shutdown_cleanup(self):
@@ -184,6 +199,7 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         self.system.color_override_loader.load.return_value = (
             {"red": 0.91},
             {"red": {"min_area": 3}},
+            {"yellow_h_min": 18},
         )
         self.system.color_service = MagicMock()
         run_logger = MagicMock()
@@ -203,7 +219,112 @@ class TestDetectionSystemIntegration(unittest.TestCase):
             rules_overrides={"red": {"min_area": 3}},
             checker_type="color_qc",
             default_threshold=0.7,
+            decision_tuning={"yellow_h_min": 18},
         )
+
+    def test_apply_camera_settings_pushes_exposure_and_gain_once(self):
+        """Per-model exposure/gain applied on change, skipped when unchanged."""
+        self.system.camera = MagicMock()
+        self.system.camera.is_initialized = True
+        self.system.config.exposure_time = "51170.0000"
+        self.system.config.gain = "23.0"
+
+        self.system._apply_camera_settings_from_config()
+        self.system.camera.set_exposure.assert_called_once_with(51170.0)
+        self.system.camera.set_gain.assert_called_once_with(23.0)
+
+        # Same values again -> no redundant hardware calls (hot-path guard)
+        self.system._apply_camera_settings_from_config()
+        self.system.camera.set_exposure.assert_called_once()
+        self.system.camera.set_gain.assert_called_once()
+
+        # Changed exposure -> re-applied
+        self.system.config.exposure_time = "42000.0000"
+        self.system._apply_camera_settings_from_config()
+        self.assertEqual(self.system.camera.set_exposure.call_count, 2)
+
+    def test_prepare_auto_inspection_settles_camera_before_preview_frames(self):
+        """Auto preview must start only after per-model camera settings are ready."""
+        self.system.load_model_configs = MagicMock()
+        self.system._validate_runtime_for_current_model = MagicMock()
+        self.system._prepare_resources = MagicMock()
+        self.system._ensure_camera_settings_ready_for_capture = MagicMock()
+
+        self.system.prepare_auto_inspection("Cable1", "A", "yolo")
+
+        self.system.load_model_configs.assert_called_once_with("Cable1", "A", "yolo")
+        self.system._validate_runtime_for_current_model.assert_called_once()
+        self.system._prepare_resources.assert_called_once()
+        self.assertFalse(self.system._prepare_resources.call_args.kwargs["load_model_config"])
+        self.system._ensure_camera_settings_ready_for_capture.assert_called_once()
+
+    def test_apply_camera_settings_noop_when_camera_uninitialized(self):
+        self.system.camera = MagicMock()
+        self.system.camera.is_initialized = False
+        self.system.config.exposure_time = "1000"
+        self.system.config.gain = "1.0"
+
+        self.system._apply_camera_settings_from_config()
+        self.system.camera.set_exposure.assert_not_called()
+        self.system.camera.set_gain.assert_not_called()
+
+    def test_apply_camera_settings_retries_after_hardware_rejection(self):
+        """A transient hardware rejection is retried before acquisition starts."""
+        self.system.camera = MagicMock()
+        self.system.camera.is_initialized = True
+        self.system.camera.set_exposure.side_effect = [False, True]
+        self.system.camera.set_gain.return_value = True
+        self.system.config.exposure_time = "22380.0000"
+        self.system.config.gain = "23.0"
+
+        with patch("core.detection_system.time.sleep"):
+            self.system._apply_camera_settings_from_config()
+
+        self.assertEqual(self.system.camera.set_exposure.call_count, 2)
+        self.assertEqual(self.system.camera.set_gain.call_count, 2)
+        self.assertEqual(
+            self.system._applied_camera_settings,
+            ("22380.0000", "23.0"),
+        )
+
+    def test_camera_settings_discard_stale_frames_before_first_inspection(self):
+        """Frames queued before a model exposure update must not reach inference."""
+        self.system.camera = MagicMock()
+        self.system.camera.is_initialized = True
+        self.system.camera.set_exposure.return_value = True
+        self.system.camera.set_gain.return_value = True
+        self.system.camera.clear_image_buffer.return_value = True
+        self.system.config.exposure_time = "22380.0000"
+        self.system.config.gain = "23.0"
+
+        with patch("core.detection_system.time.sleep"):
+            self.system._ensure_camera_settings_ready_for_capture()
+
+        self.system.camera.set_exposure.assert_called_once_with(22380.0)
+        self.system.camera.set_gain.assert_called_once_with(23.0)
+        self.system.camera.clear_image_buffer.assert_called_once()
+        self.system.camera.capture_frame.assert_not_called()
+        self.assertFalse(self.system._camera_settings_need_settle)
+
+    def test_camera_settings_continue_when_transition_frames_are_unavailable(self):
+        """An empty transition buffer must not abort an otherwise retryable inspection."""
+        self.system.camera = MagicMock()
+        self.system.camera.is_initialized = True
+        self.system.camera.set_exposure.return_value = True
+        self.system.camera.set_gain.return_value = True
+        self.system.camera.clear_image_buffer.return_value = False
+        self.system.camera.capture_frame.return_value = None
+        self.system.config.exposure_time = "22380.0000"
+        self.system.config.gain = "23.0"
+
+        with patch("core.detection_system.time.sleep"):
+            self.system._ensure_camera_settings_ready_for_capture()
+
+        self.assertEqual(
+            self.system.camera.capture_frame.call_count,
+            self.system._CAMERA_SETTINGS_SETTLE_FRAMES,
+        )
+        self.assertFalse(self.system._camera_settings_need_settle)
 
     def test_resolve_output_dir_rejects_project_escape(self):
         from core.security import SecurityError

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from ._version import __version__
 from .color_qc_enhanced import ColorQCEnhanced
 
 logger = logging.getLogger(__name__)
@@ -28,5 +29,4 @@ def __getattr__(name: str):
     return AnomalibInferenceModel
 
 
-__all__: list[str] = ["ColorQCEnhanced", "AnomalibInferenceModel"]
-__version__ = "0.1.0"
+__all__: list[str] = ["ColorQCEnhanced", "AnomalibInferenceModel", "__version__"]

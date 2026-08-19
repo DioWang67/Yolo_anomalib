@@ -17,6 +17,7 @@ class CameraController:
         self.logger = DetectionLogger()
         self.camera = None
         self.is_initialized = False
+        self.is_healthy = False
 
     def initialize(self) -> bool:
         try:
@@ -27,18 +28,23 @@ class CameraController:
             if not self.camera.connect_to_camera():
                 raise CameraConnectionError("無法連接到相機：設備佔用或通訊異常")
             self.is_initialized = True
+            self.is_healthy = True
             self.logger.logger.info("相機初始化成功")
             return True
         except Exception as e:
             self.logger.logger.error(f"相機初始化失敗: {str(e)}")
             raise
 
-    def capture_frame(self) -> np.ndarray | None:
+    def capture_frame(self, timeout_ms: int | None = None) -> np.ndarray | None:
         if not self.is_initialized:
             raise HardwareError("相機未初始化，請先呼叫 initialize()")
         try:
             self.logger.logger.debug("正在拍攝圖像...")
-            frame = self.camera.get_frame()
+            frame = (
+                self.camera.get_frame()
+                if timeout_ms is None
+                else self.camera.get_frame(timeout_ms=timeout_ms)
+            )
             if frame is None:
                 self.logger.logger.warning("獲取到空幀")
                 return None
@@ -59,10 +65,43 @@ class CameraController:
                 self.logger.logger.warning("獲取到無效圖像")
                 return None
             self.logger.logger.debug(f"成功獲取圖像，尺寸: {frame.shape}")
+            self.is_healthy = True
             return frame
         except Exception as e:
             self.logger.logger.error(f"拍攝失敗: {str(e)}")
             return None
+
+    def mark_unhealthy(self) -> None:
+        """Mark the open SDK session unusable until a successful reconnect."""
+        self.is_healthy = False
+
+    def clear_image_buffer(self) -> bool:
+        """Best-effort clear of frames queued in the camera SDK.
+
+        This is used after changing exposure or gain so a later inspection is
+        less likely to consume a frame captured with the previous settings.
+        It deliberately does not reconnect or stop grabbing: an SDK buffer
+        clear is safe to skip when a camera/SDK revision does not support it.
+        """
+        if not self.is_initialized or self.camera is None:
+            return False
+
+        sdk_camera = getattr(self.camera, "cam", None)
+        clear_buffer = getattr(sdk_camera, "MV_CC_ClearImageBuffer", None)
+        if not callable(clear_buffer):
+            self.logger.logger.warning("Camera SDK does not support image-buffer clearing")
+            return False
+
+        try:
+            result = clear_buffer()
+        except Exception as exc:
+            self.logger.logger.warning("Unable to clear camera image buffer: %s", exc)
+            return False
+
+        if result != 0:
+            self.logger.logger.warning("Camera image-buffer clear failed: code=%s", result)
+            return False
+        return True
 
     def capture_multiple_frames(self, count: int = 3) -> np.ndarray | None:
         if not self.is_initialized:
@@ -70,7 +109,7 @@ class CameraController:
         try:
             self.logger.logger.debug(f"正在拍攝 {count} 幀圖像...")
             frames = []
-            for i in range(count):
+            for _i in range(count):
                 frame = self.capture_frame()
                 if frame is not None:
                     frames.append(frame)
@@ -113,24 +152,58 @@ class CameraController:
             return {"status": "錯誤", "error": str(e)}
 
     def set_exposure(self, exposure_time: float) -> bool:
-        if not self.is_initialized:
+        if not self.is_initialized or self.camera is None:
             return False
         try:
-            self.logger.logger.info(f"設置曝光時間: {exposure_time}")
-            return True
+            ok = bool(self.camera.set_exposure_time(float(exposure_time)))
+            if ok:
+                self.logger.logger.info(f"設置曝光時間: {exposure_time}")
+            return ok
         except Exception as e:
             self.logger.logger.error(f"設置曝光時間失敗: {str(e)}")
             return False
 
+    def get_exposure(self) -> float | None:
+        """Return the camera's current exposure time, or None if unavailable."""
+        if not self.is_initialized or self.camera is None:
+            return None
+        try:
+            return self.camera.get_exposure_time()
+        except Exception as e:
+            self.logger.logger.error(f"獲取曝光時間失敗: {str(e)}")
+            return None
+
+    def get_exposure_range(self) -> dict | None:
+        """Return ``{current, min, max}`` for exposure, or None if unavailable."""
+        if not self.is_initialized or self.camera is None:
+            return None
+        try:
+            return self.camera.get_parameter_range("ExposureTime")
+        except Exception as e:
+            self.logger.logger.error(f"獲取曝光範圍失敗: {str(e)}")
+            return None
+
     def set_gain(self, gain: float) -> bool:
-        if not self.is_initialized:
+        if not self.is_initialized or self.camera is None:
             return False
         try:
-            self.logger.logger.info(f"設置增益: {gain}")
-            return True
+            ok = bool(self.camera.set_gain(float(gain)))
+            if ok:
+                self.logger.logger.info(f"設置增益: {gain}")
+            return ok
         except Exception as e:
             self.logger.logger.error(f"設置增益失敗: {str(e)}")
             return False
+
+    def get_gain(self) -> float | None:
+        """Return the camera's current gain, or None if unavailable."""
+        if not self.is_initialized or self.camera is None:
+            return None
+        try:
+            return self.camera.get_gain()
+        except Exception as e:
+            self.logger.logger.error(f"獲取增益失敗: {str(e)}")
+            return None
 
     def test_camera(self) -> bool:
         if not self.is_initialized:
@@ -175,6 +248,7 @@ class CameraController:
         camera = self.camera
         self.camera = None
         self.is_initialized = False
+        self.is_healthy = False
         try:
             if camera:
                 self.logger.logger.info("正在關閉相機...")

@@ -1,8 +1,9 @@
-from __future__ import annotations
-
 """負責載入並驗證偵測流程與後端設定的配置管理器。"""
 
+from __future__ import annotations
+
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -12,13 +13,16 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-def _default_device() -> str:
-    """Return 'cuda:0' when a CUDA GPU is available, else 'cpu'."""
-    try:
-        import torch
-        return "cuda:0" if torch.cuda.is_available() else "cpu"
-    except (ImportError, RuntimeError, OSError):
-        return "cpu"
+def resolve_position_check_enabled(
+    position_config: Mapping[str, Any],
+    product: str,
+    area: str,
+) -> bool:
+    """Resolve a scoped position flag with the production runtime semantics."""
+
+    scope = position_config.get(product, {}).get(area, {})
+    return bool(scope.get("enabled", False))
+
 
 try:  # pragma: no cover - runtime optional depending on pydantic version
     from pydantic import ValidationError as _ValidationError  # type: ignore
@@ -114,7 +118,7 @@ class DetectionConfig:
     """Unified configuration registry for the detection system.
 
     This dataclass holds global defaults (from config.yaml) and per-model
-    overrides. It governs model parameters (weights, conf_thres), hardware 
+    overrides. It governs model parameters (weights, conf_thres), hardware
     settings (device, camera exposure), and pipeline behavior (position check).
 
     Attributes:
@@ -131,13 +135,20 @@ class DetectionConfig:
     """
 
     weights: str
-    device: str = field(default_factory=_default_device)
+    # Resolve "auto" only when the inference runtime is initialized. Config
+    # construction is used by GUI and validation paths and must not import
+    # heavyweight native ML libraries such as Torch.
+    device: str = "auto"
     conf_thres: float = 0.25
     iou_thres: float = 0.45
     imgsz: tuple[int, int] = (640, 640)
     timeout: int = 2
     exposure_time: str = "1000"
     gain: str = "1.0"
+    # LED brightness percent (0..100) recorded with the model; applied on load.
+    light_brightness: int | None = None
+    # Brightness auto-calibration target: {target_luma, tolerance, roi}.
+    calibration: dict[str, Any] | None = None
     width: int = 3072
     height: int = 2048
     MV_CC_GetImageBuffer_nMsec: int = 10000
@@ -148,6 +159,10 @@ class DetectionConfig:
     camera_reconnect_backoff: float = 2.0
     current_product: str | None = None
     current_area: str | None = None
+    machine_id: str | None = None
+    station_id: str | None = None
+    work_order: str | None = None
+    camera_id: str | None = None
     expected_items: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     enable_yolo: bool = True
     enable_anomalib: bool = False
@@ -159,6 +174,9 @@ class DetectionConfig:
     color_rules_overrides: dict[str, dict[str, float | None]] | None = None
     color_checker_type: str = "color_qc"
     color_score_threshold: float | None = None
+    # Global fallback for StatsColorChecker decision knobs; per-model
+    # config.yaml ``color_decision_tuning`` takes precedence.
+    color_decision_tuning: dict[str, float] | None = None
     color_fail_closed: bool = True
     output_dir: str = "Result"
     anomalib_config: dict[str, Any] | None = None
@@ -166,6 +184,24 @@ class DetectionConfig:
     position_config: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     max_cache_size: int = 3
     buffer_limit: int = 10
+    storage_queue_maxsize: int = 8
+    image_queue_maxsize: int = 8
+    image_queue_max_mb: int = 256
+    image_write_timeout_seconds: float = 30.0
+    min_free_disk_mb: int = 1024
+    inspection_backup_interval_hours: int = 24
+    inspection_retention_cleanup_enabled: bool = False
+    inspection_pass_image_days: int = 30
+    inspection_fail_preprocessed_days: int = 90
+    inspection_fail_all_image_days: int = 180
+    inspection_sync_enabled: bool = False
+    inspection_sync_endpoint: str = ""
+    inspection_sync_api_token_env: str = "YOLO11_INSPECTION_SYNC_TOKEN"
+    inspection_sync_timeout_seconds: float = 10.0
+    inspection_sync_interval_seconds: float = 30.0
+    inspection_sync_batch_size: int = 20
+    inspection_sync_max_attempts: int = 12
+    inspection_sync_allow_insecure_http: bool = False
     flush_interval: float | None = None
     pipeline: list[str] | None = None
     steps: dict[str, Any] = field(default_factory=dict)
@@ -272,7 +308,7 @@ class DetectionConfig:
 
         kwargs: dict[str, Any] = {
             "weights": str(weights),
-            "device": normalized.get("device") or _default_device(),
+            "device": normalized.get("device") or "auto",
             "conf_thres": float(normalized.get("conf_thres", 0.25)),
             "iou_thres": float(normalized.get("iou_thres", 0.45)),
             "imgsz": _coerce_imgsz(normalized.get("imgsz"), default=(640, 640))
@@ -280,6 +316,8 @@ class DetectionConfig:
             "timeout": int(normalized.get("timeout", 2)),
             "exposure_time": str(normalized.get("exposure_time", "1000")),
             "gain": str(normalized.get("gain", "1.0")),
+            "light_brightness": normalized.get("light_brightness"),
+            "calibration": normalized.get("calibration"),
             "width": int(normalized.get("width", 3072)),
             "height": int(normalized.get("height", 2048)),
             "MV_CC_GetImageBuffer_nMsec": int(
@@ -307,6 +345,7 @@ class DetectionConfig:
                 normalized.get("color_checker_type") or "color_qc"
             ),
             "color_score_threshold": normalized.get("color_score_threshold"),
+            "color_decision_tuning": normalized.get("color_decision_tuning"),
             "color_fail_closed": bool(normalized.get("color_fail_closed", True)),
             "output_dir": str(normalized.get("output_dir", "Result")),
             "anomalib_config": normalized.get("anomalib_config"),
@@ -314,6 +353,58 @@ class DetectionConfig:
             "position_config": dict(normalized.get("position_config", {})),
             "max_cache_size": int(normalized.get("max_cache_size", 3)),
             "buffer_limit": int(normalized.get("buffer_limit", 10)),
+            "storage_queue_maxsize": int(
+                normalized.get("storage_queue_maxsize", 8)
+            ),
+            "image_queue_maxsize": int(normalized.get("image_queue_maxsize", 8)),
+            "image_queue_max_mb": int(normalized.get("image_queue_max_mb", 256)),
+            "image_write_timeout_seconds": float(
+                normalized.get("image_write_timeout_seconds", 30.0)
+            ),
+            "min_free_disk_mb": int(normalized.get("min_free_disk_mb", 1024)),
+            "inspection_backup_interval_hours": int(
+                normalized.get("inspection_backup_interval_hours", 24)
+            ),
+            "inspection_retention_cleanup_enabled": bool(
+                normalized.get("inspection_retention_cleanup_enabled", False)
+            ),
+            "inspection_pass_image_days": int(
+                normalized.get("inspection_pass_image_days", 30)
+            ),
+            "inspection_fail_preprocessed_days": int(
+                normalized.get("inspection_fail_preprocessed_days", 90)
+            ),
+            "inspection_fail_all_image_days": int(
+                normalized.get("inspection_fail_all_image_days", 180)
+            ),
+            "inspection_sync_enabled": bool(
+                normalized.get("inspection_sync_enabled", False)
+            ),
+            "inspection_sync_endpoint": str(
+                normalized.get("inspection_sync_endpoint", "") or ""
+            ),
+            "inspection_sync_api_token_env": str(
+                normalized.get(
+                    "inspection_sync_api_token_env",
+                    "YOLO11_INSPECTION_SYNC_TOKEN",
+                )
+                or ""
+            ),
+            "inspection_sync_timeout_seconds": float(
+                normalized.get("inspection_sync_timeout_seconds", 10.0)
+            ),
+            "inspection_sync_interval_seconds": float(
+                normalized.get("inspection_sync_interval_seconds", 30.0)
+            ),
+            "inspection_sync_batch_size": int(
+                normalized.get("inspection_sync_batch_size", 20)
+            ),
+            "inspection_sync_max_attempts": int(
+                normalized.get("inspection_sync_max_attempts", 12)
+            ),
+            "inspection_sync_allow_insecure_http": bool(
+                normalized.get("inspection_sync_allow_insecure_http", False)
+            ),
             "flush_interval": normalized.get("flush_interval"),
             "pipeline": pipeline_value,
             "steps": dict(normalized.get("steps", {})),
@@ -403,8 +494,7 @@ class DetectionConfig:
         Returns:
             bool: True if 'enabled' is True in the position config.
         """
-        cfg = self.get_position_config(product, area)
-        return bool(cfg.get("enabled", False))
+        return resolve_position_check_enabled(self.position_config, product, area)
 
     def get_tolerance_ratio(self, product: str, area: str) -> float:
         """Retrieves the tolerance ratio for position validation.

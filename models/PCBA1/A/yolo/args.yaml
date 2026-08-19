@@ -1,7 +1,7 @@
 task: detect
 mode: train
-model: D:\Git\robotlearning\Yolo11_auto_train\models\yolo11n.pt
-data: D:\Git\robotlearning\Yolo11_auto_train\data\PCBA1\split\data.yaml
+model: D:\Git\robotlearning\yolo11_workspace\Yolo11_auto_train\models\yolo11n.pt
+data: D:\Git\robotlearning\yolo11_workspace\Yolo11_auto_train\data\PCBA1\split\data.yaml
 epochs: 80
 time: null
 patience: 100
@@ -103,4 +103,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: botsort.yaml
-save_dir: D:\Git\robotlearning\Yolo11_auto_train\runs\PCBA1\train
+save_dir: D:\Git\robotlearning\yolo11_workspace\Yolo11_auto_train\runs\PCBA1\train

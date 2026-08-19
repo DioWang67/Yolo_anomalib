@@ -126,3 +126,39 @@ def test_customer_message_reports_board_alignment_failure():
     assert "治具" in message.action
     assert message.severity == "danger"
     assert any("整板偏移超出範圍" in detail for detail in message.details)
+
+
+def test_customer_message_pass_discloses_suppressed_duplicate():
+    result = DetectionResult(
+        status="PASS",
+        items=[DetectionItem("Orange", 0.66, (0, 0, 10, 10))],
+        metadata={
+            "duplicate_filter": {
+                "status": "suppressed",
+                "suppressed_count": 1,
+            }
+        },
+    )
+
+    message = build_customer_message(result)
+
+    assert message.headline == "檢測通過"
+    assert any("重複框" in detail for detail in message.details)
+
+
+def test_customer_message_report_only_candidate_does_not_claim_physical_extra():
+    result = DetectionResult(
+        status="DETECTION_FAIL",
+        sequence_check={"is_ok": False, "reason": "length_mismatch"},
+        metadata={
+            "duplicate_filter": {
+                "status": "reported",
+                "would_suppress_count": 1,
+            }
+        },
+    )
+
+    message = build_customer_message(result)
+
+    assert message.headline == "疑似模型重複框"
+    assert "不代表實物真的多一件" in message.details[0]
