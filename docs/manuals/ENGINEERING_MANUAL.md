@@ -229,8 +229,9 @@ python tools/audit_cross_class_duplicates.py ..\Result\20260729\Cable1\A `
 `Result` 樹外。snapshot/config/結構錯誤或 runtime 不可執行的 policy 會回傳非零。
 需要 stdout 程式讀取時再加`--json`。停用或回滾時，在模型設定取消啟用；Pipeline 會
 同步移除`cross_class_duplicate_filter`，已保存的 raw detections 不受影響。
-Cable1/A 1.0.6 的現行設定與版本設定快照都包含相同 policy，避免切換版本後
-遺失本次修正。
+Cable1/A 1.0.6 的現行設定保留相同門檻，但 production checkout 固定為
+`report_only`。歷史版本快照若仍為 `suppress`，未完成 500 次、完整班次與
+具名批准前不得切換啟用。
 
 ### 5.5 自動觸發校正
 

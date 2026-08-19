@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version.
 
 ### Fixed
+- Release activation, rollback history, and retention cleanup now use
+  recoverable commit points so database, audit, and filesystem failures cannot
+  leave an active blocked release or silently orphan inspection evidence.
+- Pilot, preflight, and duplicate-audit evidence now fails closed on wrong
+  scope, incomplete inputs, stale configuration, unsafe output paths, and
+  runtime policy mismatches.
+- Pytest now isolates workspace discovery from live station data and rejects
+  environment changes that redirect tests into production paths.
 - The acceptance window kept one full-resolution annotated preview per inferred
   sample and never released any of them, so running a batch of a few hundred
   station images accumulated several GB of QPixmap and the process died with no
@@ -411,8 +419,7 @@ If you're upgrading from an early development version:
 
 ## Roadmap
 
-### Planned for v0.2.0
-- [ ] Remove CI `continue-on-error` flags (after fixing all linting/type errors)
+### Unscheduled
 - [ ] TensorRT INT8 quantization support
 - [ ] Docker deployment guide and Dockerfile
 - [ ] REST API service mode

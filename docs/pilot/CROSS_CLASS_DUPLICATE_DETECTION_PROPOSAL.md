@@ -4,7 +4,7 @@
 適用範圍：`Cable1 / A / YOLO 1.0.6`
 建立日期：2026-07-29
 變更類型：推論後處理、結果可視化、品質 Gate
-目前執行設定：`Cable1/A 1.0.6` 已啟用 `suppress`；未修改 YOLO NMS
+目前執行設定：`Cable1/A 1.0.6` 維持 `report_only`；未修改 YOLO NMS
 `iou_thres=0.45`，也未修改線序。位置檢測啟用時會 fail-closed 停止自動消除。
 
 ## 1. 審核摘要
@@ -28,7 +28,7 @@ YOLO 1.0.6 會在同一個實體端子上輸出兩個座標幾乎相同、但原
 
 1. 只把高度重疊、中心與尺寸皆近似、且顏色校驗後類別相同的框列為候選；
 2. 支援`report_only`觀察，不改判定；
-3. Cable1/A 經 2026-07-29 歷史紀錄離線重播後，以`suppress`進行受控 Pilot；
+3. Cable1/A 經 2026-07-29 歷史紀錄離線重播後，維持`report_only`收集受控 Pilot 證據；
 4. 保留原始框、有效框與被抑制框，不能破壞追溯證據；
 5. 結果圖與詳細結果必須指出重複框編號、位置及 IoU。
 
@@ -234,8 +234,9 @@ cross_class_duplicate_filter:
 7. 兩框皆有有效 bbox、confidence 與類別；
 8. 沒有證據顯示兩者屬於不同實體槽位。
 
-目前門檻已寫入 Cable1/A 1.0.6 現行 config 與其版本設定快照；其他產品／
-工位預設不啟用。
+目前門檻已寫入 Cable1/A 1.0.6 現行 config；production checkout 固定為
+`report_only`。歷史版本快照若仍記錄 `suppress`，只視為 Pilot 候選，未完成
+500 次、完整班次與具名批准前不得啟用；其他產品／工位預設不啟用。
 條件不完整時保留全部框，交由 strict count 判 NG，採 fail-closed。
 
 ### 6.3 群組與保留規則
@@ -491,7 +492,7 @@ filter_policy_version
 
 請逐項勾選或修改：
 
-- [x] 已實作`report_only`與`suppress`，Cable1/A 目前採受控 suppress Pilot。
+- [x] 已實作`report_only`與`suppress`，Cable1/A 目前維持 report-only；完成 500 次與完整班次 Gate 後才可切換。
 - [x] 首版僅在`Cable1/A 1.0.6`現行設定啟用。
 - [x] 初始 IoU 候選門檻為`0.90`。
 - [x] 中心距離與面積相似度必須同時通過。
