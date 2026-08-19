@@ -182,17 +182,9 @@ def build_customer_message(result: DetectionResult) -> CustomerMessage:
 
     color_check = result.color_check or {}
     if color_check and not color_check.get("is_ok", True):
-        # A box the duplicate filter removed is no longer part of the board, so
-        # its color failure is not something an operator can act on: it reports
-        # the detector's error, not the product's condition. The detail panel and
-        # the annotated overlay already drop these; this card has to agree or the
-        # three surfaces describe different failures for one inspection.
-        suppressed = _suppressed_source_indices(result)
         bad = [
             _describe_color_check_failure(item)
-            for position, item in enumerate(color_check.get("items") or [])
-            if not item.get("is_ok", True)
-            and _color_item_source_index(item, position) not in suppressed
+            for item in reportable_color_failures(result)
         ]
         return CustomerMessage(
             headline="顏色檢查異常",
@@ -248,7 +240,37 @@ def _get_duplicate_filter(result: DetectionResult) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _suppressed_source_indices(result: DetectionResult) -> set[int]:
+def reportable_color_failures(result: DetectionResult) -> list[dict[str, Any]]:
+    """Return the failed color items that describe the board as inspected.
+
+    A box the duplicate filter removed is no longer part of the board, so its
+    color failure is not something an operator can act on: it reports the
+    detector's error, not the product's condition. Every cross-class duplicate
+    produces one such failure by construction -- two boxes over one object carry
+    two different classes and the measured color can only match one -- so any
+    surface that lists failures per box has to drop them or it will name a box
+    the operator cannot find in the image.
+
+    This lives here, beside ``classify_color_check_failure``, because the same
+    filtering was needed independently by the operator card, the detail panel,
+    the annotated overlay, and the one-line fail-reason banner. The first three
+    each grew their own copy; the banner was missed and kept reporting a removed
+    box after the others had stopped. Any new surface should call this rather
+    than re-deriving it.
+    """
+    color_check = getattr(result, "color_check", None) or {}
+    suppressed = suppressed_source_indices(result)
+    failures: list[dict[str, Any]] = []
+    for position, item in enumerate(color_check.get("items") or []):
+        if not isinstance(item, dict) or item.get("is_ok", True):
+            continue
+        if _color_item_source_index(item, position) in suppressed:
+            continue
+        failures.append(item)
+    return failures
+
+
+def suppressed_source_indices(result: DetectionResult) -> set[int]:
     """Return the source indices of boxes the duplicate filter removed.
 
     Reads ``suppressions`` rather than inferring removal from a box's absence

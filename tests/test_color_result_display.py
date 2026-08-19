@@ -7,7 +7,10 @@ pytest.importorskip("PyQt5", reason="PyQt5 is required for GUI display helpers")
 from app.gui.widgets import _color_check_failure_text, _color_item_label
 from core.models import ColorCheckItemResult
 from core.services.results.annotations import _color_item_overlay_text
-from core.services.results.customer_message import build_customer_message
+from core.services.results.customer_message import (
+    build_customer_message,
+    reportable_color_failures,
+)
 from core.types import DetectionResult
 
 
@@ -234,6 +237,37 @@ def test_customer_message_keeps_full_frame_failure_when_boxes_were_suppressed():
     message = build_customer_message(result)
 
     assert message.details == ["未偵測到元件（全畫面檢查）"]
+
+
+def suppressed_duplicate_result() -> DetectionResult:
+    """Shared with the GUI banner test so both surfaces assert one scenario."""
+    return DetectionResult(
+        status="DETECTION_FAIL",
+        color_check=_duplicate_incident_color_check(),
+        sequence_check={"is_ok": False, "reason": "order_mismatch"},
+        metadata={
+            "duplicate_filter": {
+                "status": "suppressed",
+                "suppressions": [{"suppressed_index": 5, "kept_index": 6}],
+            }
+        },
+    )
+
+
+def test_every_surface_reports_the_same_color_failures():
+    """One inspection must not be described differently by two surfaces.
+
+    The operator card and the fail-reason banner each format the failures
+    themselves; only the choice of *which* failures is shared. This pins that
+    choice so a fourth surface cannot drift again.
+    """
+    result = suppressed_duplicate_result()
+    items = reportable_color_failures(result)
+
+    assert [item["index"] for item in items] == [4]
+    card = build_customer_message(result).details
+    banner_parts = [_color_check_failure_text(item, "zh") for item in items]
+    assert card == ["; ".join(banner_parts)]
 
 
 def test_classify_color_check_failure_is_case_insensitive():

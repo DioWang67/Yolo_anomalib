@@ -25,6 +25,7 @@ from core.services.results.customer_message import (
     COLOR_FAILURE_MISMATCH,
     build_customer_message,
     classify_color_check_failure,
+    reportable_color_failures,
 )
 from core.services.results.position_summary import (
     format_fixture_shift_hint,
@@ -448,10 +449,12 @@ class FailReasonLabel(QLabel):
 
         color_check = result.color_check or {}
         if color_check and not color_check.get("is_ok", True):
+            # Shares the card's definition of which failures belong to the board,
+            # so this banner cannot name a box the duplicate filter removed and
+            # the operator cannot find in the image.
             bad = [
                 _color_check_failure_text(c, self._language)
-                for c in (color_check.get("items") or [])
-                if not c.get("is_ok", True)
+                for c in reportable_color_failures(result)
             ]
             reasons.append(
                 "; ".join(str(i) for i in bad[:3]) if bad else tr(self._language, "color_error")
