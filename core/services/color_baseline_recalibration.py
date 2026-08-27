@@ -33,6 +33,87 @@ ALGORITHM_VERSION = "stats-robust-v2"
 OUTLIER_FILTER_ALGORITHM = "per-color-sample-lab-mad-v1"
 DEFAULT_COLORS = ("Black", "Green", "Orange", "Red", "Yellow")
 
+#: Widest hue distribution (circular p10..p90, in OpenCV hue degrees) a single
+#: color's evidence may show before a human is asked to look at it.
+#:
+#: Chosen from the stored baselines rather than guessed. The one approved
+#: candidate spans 1.6 (Red), 2.3 (Orange), 7.5 (Green) and 9.6 (Yellow); every
+#: candidate whose crops demonstrably picked up neighbouring wires spans 34 to
+#: 89. Anything in between separates the two populations, and 30 leaves room
+#: for a legitimately larger sample to be wider than the small approved one.
+MAXIMUM_HUE_SPREAD = 30.0
+
+#: Below this mean saturation a color has no meaningful hue, so its spread says
+#: nothing. Black measures 21-29 across every stored baseline and would
+#: otherwise raise the flag on every rebuild, which teaches reviewers to ignore
+#: it.
+ACHROMATIC_SATURATION = 40.0
+
+#: A color's evidence is spread too widely across the hue circle to be one
+#: color. Reported for human review; never an automatic rejection.
+HUE_SPREAD_REVIEW_REASON = "HUE_SPREAD_LIMIT_EXCEEDED"
+
+#: Least of the approved baseline's saturation a proposal must retain before a
+#: human is asked to look. Guards the blind spot in the spread check: hue
+#: spread is meaningless below ``ACHROMATIC_SATURATION``, so evidence polluted
+#: badly enough to wash a color out to grey would slip past it. In the stored
+#: baselines exactly that happened -- one candidate's Red, Orange, Yellow and
+#: Green all measure a mean saturation of 33-38 against an approved Red of 201,
+#: and the four became statistically indistinguishable from each other.
+MINIMUM_CHROMA_RETENTION = 0.5
+
+#: A color that the approved baseline says is chromatic has washed out. Like
+#: the spread reason, this asks for review rather than rejecting.
+CHROMA_COLLAPSE_REVIEW_REASON = "CHROMA_COLLAPSE"
+
+
+def _mean_saturation(stats: Mapping[str, Any]) -> float | None:
+    try:
+        return float(stats["hsv_mean"][1])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+
+
+def _chroma_retention(
+    base_stats: Mapping[str, Any], candidate_stats: Mapping[str, Any]
+) -> float | None:
+    """Fraction of the approved baseline's saturation a proposal still has.
+
+    None when the approved baseline is itself achromatic -- Black has no
+    saturation to lose, so the ratio would be noise.
+    """
+    base = _mean_saturation(base_stats)
+    candidate = _mean_saturation(candidate_stats)
+    if base is None or candidate is None or base < ACHROMATIC_SATURATION:
+        return None
+    return float(candidate / base) if base > 0 else None
+
+
+def _hue_spread(stats: Mapping[str, Any]) -> float | None:
+    """Circular width of a color's hue distribution, or None if undefined.
+
+    Measured between the recorded 10th and 90th hue percentiles, so a handful
+    of stray pixels cannot widen it, and measured *circularly*, so genuinely
+    red evidence sitting either side of the 0/179 seam reads as narrow rather
+    than as spanning the whole circle.
+
+    This complements the drift check rather than duplicating it. Drift asks how
+    far the new center moved from the approved one, and misses pollution that
+    happens to leave the center in place: in the stored evidence, one Green
+    proposal drifted only 13.7 -- inside the 18.0 limit -- while its hue ran
+    from 5 to 173.
+    """
+    try:
+        low = float(stats["hsv_p10"][0])
+        high = float(stats["hsv_p90"][0])
+        saturation = float(stats["hsv_mean"][1])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+    if saturation < ACHROMATIC_SATURATION:
+        return None
+    delta = (high - low) % 180.0
+    return float(min(delta, 180.0 - delta))
+
 
 class ColorBaselineError(ValueError):
     """Raised when baseline evidence or an immutable candidate is invalid."""
@@ -83,6 +164,16 @@ class ColorBaselineColorReport:
     rejected_proposal_hue_drift: float | None = None
     rejected_proposal_lab_drift: float | None = None
     rejection_reasons: tuple[str, ...] = ()
+    #: Circular width of this color's hue evidence, or None when hue carries no
+    #: meaning for it.
+    hue_spread: float | None = None
+    #: Saturation retained relative to the approved baseline, or None when that
+    #: baseline is achromatic.
+    chroma_retention: float | None = None
+    #: Why this color needs a human to look at it. Distinct from
+    #: ``rejection_reasons``: nothing was rejected, the evidence just does not
+    #: look like a single color.
+    review_reasons: tuple[str, ...] = ()
 
     @property
     def previous_accuracy(self) -> float | None:
@@ -105,8 +196,12 @@ class ColorBaselineColorReport:
             "candidate_accuracy": self.candidate_accuracy,
             "hue_drift": self.hue_drift,
             "lab_drift": self.lab_drift,
+            "hue_spread": self.hue_spread,
+            "chroma_retention": self.chroma_retention,
             "note": self.note,
         }
+        if self.review_reasons:
+            payload["review_reasons"] = list(self.review_reasons)
         if self.rejection_reasons:
             payload["rejected_proposal"] = {
                 "holdout_correct": self.rejected_proposal_holdout_correct,
@@ -224,6 +319,8 @@ class StatsColorBaselineRebuilder:
         minimum_holdout_crops: int = 5,
         holdout_fraction: float = 0.2,
         maximum_hue_drift: float = 18.0,
+        maximum_hue_spread: float = MAXIMUM_HUE_SPREAD,
+        minimum_chroma_retention: float = MINIMUM_CHROMA_RETENTION,
         maximum_lab_drift: float = 35.0,
         maximum_accuracy_regression: float = 0.02,
         outlier_z_score_threshold: float = 6.0,
@@ -249,6 +346,8 @@ class StatsColorBaselineRebuilder:
         self.minimum_holdout_crops = minimum_holdout_crops
         self.holdout_fraction = holdout_fraction
         self.maximum_hue_drift = maximum_hue_drift
+        self.maximum_hue_spread = maximum_hue_spread
+        self.minimum_chroma_retention = minimum_chroma_retention
         self.maximum_lab_drift = maximum_lab_drift
         self.maximum_accuracy_regression = maximum_accuracy_regression
         self.outlier_z_score_threshold = outlier_z_score_threshold
@@ -451,6 +550,7 @@ class StatsColorBaselineRebuilder:
 
         color_reports: list[ColorBaselineColorReport] = []
         incomplete = False
+        review_required = False
         for color in canonical_colors:
             training, holdout = split_by_color[color]
             state, note = preliminary_states[color]
@@ -464,6 +564,25 @@ class StatsColorBaselineRebuilder:
                 base_summary[color],
                 candidate_summary[color],
             )
+            # Spread is judged on the statistics that will actually ship for
+            # this color, so a proposal already preserved by the drift check is
+            # measured on the preserved baseline rather than on the discarded
+            # proposal.
+            spread = _hue_spread(candidate_summary[color])
+            retention = _chroma_retention(
+                base_summary[color], candidate_summary[color]
+            )
+            reasons: list[str] = []
+            if spread is not None and spread > self.maximum_hue_spread:
+                reasons.append(HUE_SPREAD_REVIEW_REASON)
+            if (
+                retention is not None
+                and retention < self.minimum_chroma_retention
+            ):
+                reasons.append(CHROMA_COLLAPSE_REVIEW_REASON)
+            review_reasons = tuple(reasons)
+            if review_reasons:
+                review_required = True
             color_reports.append(
                 ColorBaselineColorReport(
                     color=color,
@@ -488,13 +607,26 @@ class StatsColorBaselineRebuilder:
                     rejection_reasons=(
                         rejected.reasons if rejected is not None else ()
                     ),
+                    hue_spread=spread,
+                    chroma_retention=retention,
+                    review_reasons=review_reasons,
                 )
             )
 
         model_payload["recalibration"]["preserved_by_safety"] = sorted(
             rejected_proposals
         )
-        status = "INCOMPLETE" if incomplete else "READY"
+        # A wide spread never rejects a rebuild on its own -- the threshold is
+        # calibrated on a handful of baselines, and wrongly blocking a good one
+        # is a production problem too. It routes the candidate to the human
+        # gate instead, which is the control that has actually been catching
+        # these.
+        if incomplete:
+            status = "INCOMPLETE"
+        elif review_required:
+            status = "REVIEW_REQUIRED"
+        else:
+            status = "READY"
         report_payload = {
             "schema_version": COLOR_BASELINE_SCHEMA_VERSION,
             "algorithm": ALGORITHM_VERSION,
@@ -505,10 +637,15 @@ class StatsColorBaselineRebuilder:
             "statistical_outlier_filter": outlier_filter.to_dict(),
             "safety_limits": {
                 "maximum_hue_drift": self.maximum_hue_drift,
+                "maximum_hue_spread": self.maximum_hue_spread,
+                "minimum_chroma_retention": self.minimum_chroma_retention,
                 "maximum_lab_drift": self.maximum_lab_drift,
                 "maximum_accuracy_regression": self.maximum_accuracy_regression,
             },
             "preserved_by_safety": sorted(rejected_proposals),
+            "review_required_colors": sorted(
+                item.color for item in color_reports if item.review_reasons
+            ),
             "color_reports": [item.to_dict() for item in color_reports],
             "limitations": [
                 "資料只取人工確認為 OK 的元件裁切；不代表已有真實顏色缺陷 NG。",

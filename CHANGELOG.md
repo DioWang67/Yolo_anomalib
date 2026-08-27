@@ -27,6 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version.
 
 ### Fixed
+- A rebuilt color baseline whose evidence does not look like a single color
+  now asks for human review instead of arriving marked READY. The existing
+  safety check measures *drift* -- how far the new center moved from the
+  approved one -- and misses pollution that leaves the center in place: in the
+  stored evidence one Green proposal drifted 13.7, inside the 18.0 limit,
+  while its hue ran from 5 to 173. Two complementary measurements are now
+  recorded per color and reported in `report.json`: `hue_spread`, the circular
+  width of the hue evidence, and `chroma_retention`, the saturation kept
+  relative to the approved baseline. Either one out of range sets the
+  candidate to REVIEW_REQUIRED, which the rebuild dialog already renders as
+  「需人工檢查」. Neither ever rejects a rebuild on its own: the thresholds are
+  calibrated on ten stored baselines, and wrongly blocking a good rebuild is a
+  production problem too. Applied retrospectively they flag all eight
+  problematic stored candidates and leave the one approved baseline untouched.
 - A color baseline is no longer built out of background pixels. When fewer
   than `sample_size` pixels in a crop matched the kind of pixel the color is
   made of, `_sample_color_pixels()` discarded its mask and sampled *every*

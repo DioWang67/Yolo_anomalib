@@ -467,3 +467,94 @@ def test_statistics_fail_closed_when_no_crop_carries_color_evidence():
 
     with pytest.raises(ColorBaselineError):
         rebuilder._calculate_stats(evidence)
+
+
+def _two_tone_crop(color: str, spread: int) -> np.ndarray:
+    """A crop whose hue sits ``spread`` either side of the color's own hue.
+
+    The circular mean stays on the color, so the drift check sees nothing
+    moving, while the distribution is far too wide to be one color.
+    """
+    h, s, v = HSV_BY_COLOR[color]
+    hsv = np.full((32, 32, 3), (h, s, v), np.uint8)
+    hsv[:16, :, 0] = (h - spread) % 180
+    hsv[16:, :, 0] = (h + spread) % 180
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+
+def _washed_out_crop(color: str) -> np.ndarray:
+    h, _s, v = HSV_BY_COLOR[color]
+    hsv = np.full((32, 32, 3), (h, 30, v), np.uint8)
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+
+def test_hue_spread_is_measured_on_the_circle():
+    """Red evidence either side of the 0/179 seam is narrow, not circle-wide."""
+    seam_red = {"hsv_p10": [2.0, 200.0, 150.0], "hsv_p90": [178.0, 200.0, 150.0],
+                "hsv_mean": [0.0, 200.0, 150.0]}
+    assert recalibration._hue_spread(seam_red) == pytest.approx(4.0)
+
+    polluted = {"hsv_p10": [4.0, 150.0, 150.0], "hsv_p90": [90.0, 150.0, 150.0],
+                "hsv_mean": [40.0, 150.0, 150.0]}
+    assert recalibration._hue_spread(polluted) == pytest.approx(86.0)
+
+
+def test_hue_spread_is_undefined_for_an_achromatic_color():
+    """Black has no hue, so its spread must not raise a flag on every rebuild."""
+    black = {"hsv_p10": [0.0, 20.0, 30.0], "hsv_p90": [170.0, 25.0, 40.0],
+             "hsv_mean": [90.0, 22.0, 35.0]}
+    assert recalibration._hue_spread(black) is None
+
+
+def test_chroma_retention_is_undefined_when_the_baseline_is_achromatic():
+    black = {"hsv_mean": [90.0, 22.0, 35.0]}
+    assert recalibration._chroma_retention(black, {"hsv_mean": [90.0, 5.0, 35.0]}) is None
+
+    red = {"hsv_mean": [2.0, 200.0, 190.0]}
+    assert recalibration._chroma_retention(
+        red, {"hsv_mean": [2.0, 50.0, 190.0]}
+    ) == pytest.approx(0.25)
+
+
+def test_widely_spread_evidence_asks_for_review_without_rejecting(tmp_path: Path) -> None:
+    """Drift alone misses pollution that leaves the center in place.
+
+    In the stored evidence one Green proposal drifted 13.7 -- inside the 18.0
+    limit -- while its hue ran from 5 to 173.
+    """
+    evidence = tuple(
+        ColorCropEvidence(
+            sample_id=item.sample_id,
+            color=item.color,
+            image_bgr=(
+                _two_tone_crop("Green", 25) if item.color == "Green" else item.image_bgr
+            ),
+            source_sha256=item.source_sha256,
+        )
+        for item in _evidence()
+    )
+
+    build = StatsColorBaselineRebuilder().build(
+        base_model_path=_base_model(tmp_path),
+        evidence=evidence,
+    )
+
+    green = next(item for item in build.color_reports if item.color == "Green")
+    assert green.hue_spread is not None and green.hue_spread > 30.0
+    assert recalibration.HUE_SPREAD_REVIEW_REASON in green.review_reasons
+    # Asking for review must not double as a rejection.
+    assert not green.rejection_reasons
+    assert build.status == "REVIEW_REQUIRED"
+    assert build.report_payload["review_required_colors"] == ["Green"]
+
+
+def test_a_clean_rebuild_is_not_flagged_for_review(tmp_path: Path) -> None:
+    """The guard against the check firing on good evidence."""
+    build = StatsColorBaselineRebuilder().build(
+        base_model_path=_base_model(tmp_path),
+        evidence=_evidence(),
+    )
+
+    assert build.status == "READY"
+    assert build.report_payload["review_required_colors"] == []
+    assert all(not item.review_reasons for item in build.color_reports)
