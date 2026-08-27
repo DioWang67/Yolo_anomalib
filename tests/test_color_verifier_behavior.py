@@ -36,7 +36,6 @@ def test_low_saturation_fallback_never_fabricates_black_prediction():
     )
 
     assert ratios == {"Black": 0.0, "White": 0.0}
-    assert color_verifier._initial_prediction(ratios) == ("Unknown", 0.0)
     assert debug["low_saturation_fallback"] is True
     assert debug["valid_pixel_count"] == 0
     assert all(not np.any(mask) for mask in masks.values())
@@ -69,26 +68,6 @@ def test_saturation_threshold_is_applied_to_evaluation():
     assert rejected == {"Blue": 0.0}
     assert rejected_debug["low_saturation_fallback"] is True
     assert not np.any(rejected_masks["Blue"])
-
-
-def test_orange_red_separator_clamps_boosted_confidence():
-    hsv_vals = np.full((20, 3), (10.0, 200.0, 200.0), dtype=np.float32)
-    lab_vals = np.full((20, 3), (150.0, 100.0, 120.0), dtype=np.float32)
-
-    predicted, confidence, _ = color_verifier.separate_orange_red_improved(
-        hsv_vals,
-        lab_vals,
-        orange_score=0.95,
-        red_score=0.90,
-    )
-
-    assert predicted == "Orange"
-    assert confidence == 1.0
-
-
-def test_global_confidence_threshold_can_only_tighten_color_threshold():
-    assert color_verifier._confidence_threshold_for("Yellow", 0.50) == 0.50
-    assert color_verifier._confidence_threshold_for("Black", 0.20) == 0.45
 
 
 def test_hsv_mask_uses_trained_range_instead_of_hardcoded_red_saturation():
@@ -189,30 +168,6 @@ def test_general_path_mask_contains_only_pixels_matching_hsv_and_lab():
     assert np.count_nonzero(masks["Blue"]) == 63
     assert not masks["Blue"][5, 5]
     assert not np.any(masks["Blue"][[0, -1], :])
-
-
-def test_green_correction_ignores_low_saturation_hue_noise():
-    hsv_img = np.full((10, 10, 3), (80.0, 0.0, 120.0), dtype=np.float32)
-    context = color_verifier.DecisionContext(
-        ratios={"Red": 0.4, "Green": 0.3},
-        debug_info={},
-        hsv_img=hsv_img,
-        lab_img=np.zeros_like(hsv_img),
-        edge_margin=0.0,
-        sat_threshold=20.0,
-    )
-
-    result = color_verifier._rule_green_correction("Red", 0.4, context)
-
-    assert result is None
-    assert "green_correction" not in context.debug_info
-
-
-def test_shortcut_rules_are_not_reapplied_after_evaluation():
-    assert [rule.__name__ for rule in color_verifier._COLOR_RULES] == [
-        "_rule_orange_red_tiebreak",
-        "_rule_green_correction",
-    ]
 
 
 def test_verify_directory_rejects_unknown_keyword_instead_of_ignoring_it(tmp_path):
@@ -362,3 +317,11 @@ def test_visualize_debug_warns_when_optional_backend_is_unavailable(monkeypatch,
 
     assert "Debug visualization unavailable" in caplog.text
     assert not (tmp_path / "debug.png").exists()
+
+
+# The Orange/Red tie-break, the Green correction, the rule-reapplication guard
+# and the threshold-tightening rule used to be tested here against this file's
+# own decision chain. That chain is gone -- the verdict is the runtime's now --
+# so those properties are covered where they live: the tie-break in
+# tests/test_stats_color_checker_unit.py, and the tool's agreement with the
+# runtime in tests/test_color_verifier_delegation.py.

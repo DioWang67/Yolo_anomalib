@@ -36,6 +36,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version.
 
 ### Fixed
+- `tools/color_verifier.py` now reports the verdict the line actually reaches.
+  It calls `StatsColorChecker` -- the same object the inspection pipeline uses
+  -- instead of carrying its own scoring. The two had drifted into different
+  policies and agreed on only 8 of the 15 shared conformance cases: a plain
+  bright red came back `Unknown`, and a red region catching an orange edge came
+  back `Orange` with high confidence. The envelope check it used to decide with
+  survives as its own reported signal, `envelope_ratios` and `envelope_match`,
+  so "does this sit inside the baseline's recorded range?" is answered beside
+  the runtime's verdict rather than in place of it. The parallel decision chain
+  -- `_initial_prediction`, `_apply_color_rules` and the Orange/Red and Green
+  rules -- is deleted rather than left unreachable, since an idle second
+  opinion is how the two drifted apart. `--edge-margin`, `--sat-threshold` and
+  `--min-valid-pixels` now shape only the envelope report;
+  `--ratio-threshold` still shapes the verdict, as the runtime's default
+  threshold.
 - A color's baseline is now sampled from the crop's dominant hue rather than
   from every saturated pixel in it. A detection box drawn around one wire
   routinely catches part of the next, and the sampler fed those neighbours

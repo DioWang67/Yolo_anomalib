@@ -1,28 +1,28 @@
 ﻿"""Standalone LED color verification CLI.
 
-WARNING -- this tool does not answer "what does the line decide?".
+The verdict this reports is the production runtime's. It calls
+``core.stats_color_checker.StatsColorChecker`` -- the same object the
+inspection pipeline uses -- so asking this tool why a part came back Red gives
+the answer the line actually reached.
 
-It applies a stricter, envelope-based policy than the production runtime in
-``core/stats_color_checker.py``: every color is matched against the recorded
-``hsv_min``/``hsv_max`` box, and a region whose match ratio falls below
-``MIN_HSV_MATCH_RATIO`` scores zero outright. The runtime instead uses
-hand-tuned, open-ended gates for red, orange and green -- red checks a lower
-bound on V and no upper bound at all.
+It used to carry its own scoring instead, and the two had drifted into
+different policies: this file matched every color against the recorded
+``hsv_min``/``hsv_max`` envelope and zeroed anything under
+``MIN_HSV_MATCH_RATIO``, while the runtime uses hand-tuned, open-ended gates
+for red, orange and green. Measured on the shared conformance cases the two
+agreed on 8 of 15. A plain bright red whose V sat just past the baseline's
+recorded 99th percentile came back ``Unknown``; a red region catching an
+orange edge came back ``Orange`` with high confidence. For a tool named
+"verifier" that is a trap, however defensible the policy is in isolation.
 
-The two therefore disagree on ordinary inputs. Measured against the shared
-conformance cases, this tool agrees with the runtime on 8 of 15: it reports
-``Unknown`` for a plain bright red whose V sits just past the baseline's
-recorded 99th percentile, and reports ``Orange`` with high confidence for a
-red region that catches an orange edge.
-
-Neither policy is wrong in itself -- a strict envelope check is a reasonable
-thing to want from a calibration tool -- but the name invites the other
-reading. Use it to ask whether evidence falls inside a baseline's recorded
-envelope. Do not use it to explain or predict a production verdict; run the
-runtime checker for that.
-
-See tests/test_color_verifier_divergence.py, which pins this difference so it
-stays a documented choice rather than a discovery.
+The envelope check was worth keeping, so it is still computed and reported --
+per color, as ``envelope_ratios``, and for the chosen color as
+``envelope_match``. It now answers its own question ("does this evidence sit
+inside the baseline's recorded range?") beside the runtime's, instead of
+quietly standing in for it. ``--edge-margin``, ``--sat-threshold`` and
+``--min-valid-pixels`` shape that report; they no longer shape the verdict,
+which the runtime owns. ``--ratio-threshold`` still does, as the runtime's
+default threshold for colors carrying no explicit one.
 """
 from __future__ import annotations
 
@@ -30,12 +30,14 @@ import argparse
 import csv
 import json
 import logging
-from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+from core.stats_color_checker import StatsColorChecker
 
 SUPPORTED_FORMATS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
 
@@ -113,7 +115,6 @@ class ColorDecision:
         return result
 
 
-@dataclass
 class DecisionContext:
     ratios: dict[str, float]
     debug_info: dict[str, object]
@@ -121,9 +122,6 @@ class DecisionContext:
     lab_img: np.ndarray
     edge_margin: float
     sat_threshold: float
-
-
-DecisionRule = Callable[[str, float, "DecisionContext"], tuple[str, float] | None]
 
 
 class VerificationReportWriteError(OSError):
@@ -177,7 +175,8 @@ def _expand_center_mask(
 
 
 def _clamp_confidence(value: float) -> float:
-    return float(np.clip(value, 0.0, 1.0))
+    """Keep an envelope score inside 0..1."""
+    return float(min(1.0, max(0.0, value)))
 
 
 def _hsv_color_mask(
@@ -290,76 +289,6 @@ def improved_match_ratio(
     final_score = _clamp_confidence(final_score)
     debug["final_score"] = final_score
     return final_score, debug
-
-def separate_orange_red_improved(
-    hsv_vals: np.ndarray,
-    lab_vals: np.ndarray,
-    orange_score: float,
-    red_score: float
-) -> tuple[str, float, dict]:
-    """改進的 Orange vs Red 分離"""
-    if len(hsv_vals) == 0:
-        return (
-            "Red" if red_score >= orange_score else "Orange",
-            _clamp_confidence(max(red_score, orange_score)),
-            {},
-        )
-
-    debug = {}
-    hue_vals = hsv_vals[:, 0]
-
-    # 色相分布
-    orange_core = np.sum((hue_vals >= 8) & (hue_vals <= 16))
-    red_core = np.sum((hue_vals <= 5) | (hue_vals >= 175))
-
-    orange_hue_ratio = orange_core / len(hue_vals)
-    red_hue_ratio = red_core / len(hue_vals)
-
-    debug["orange_hue_ratio"] = float(orange_hue_ratio)
-    debug["red_hue_ratio"] = float(red_hue_ratio)
-
-    # LAB a*/b* 分析
-    mean_a = float(np.mean(lab_vals[:, 1]))
-    mean_b = float(np.mean(lab_vals[:, 2]))
-    ab_ratio = mean_b / max(mean_a, 1.0)
-
-    debug["mean_a"] = mean_a
-    debug["mean_b"] = mean_b
-    debug["ab_ratio"] = float(ab_ratio)
-
-    # 判斷邏輯
-    if ab_ratio > 1.05:
-        lab_vote = "Orange"
-    elif ab_ratio < 0.90:
-        lab_vote = "Red"
-    else:
-        lab_vote = "Unclear"
-
-    hue_vote = "Orange" if orange_hue_ratio > red_hue_ratio * 1.2 else \
-               "Red" if red_hue_ratio > orange_hue_ratio * 1.2 else "Unclear"
-
-    debug["lab_vote"] = lab_vote
-    debug["hue_vote"] = hue_vote
-
-    # 最終決策
-    if hue_vote == lab_vote and hue_vote != "Unclear":
-        predicted = hue_vote
-        confidence = max(orange_score, red_score) * 1.3
-    elif hue_vote != "Unclear":
-        predicted = hue_vote
-        confidence = (orange_score if hue_vote == "Orange" else red_score) * 1.1
-    elif lab_vote != "Unclear":
-        predicted = lab_vote
-        confidence = (orange_score if lab_vote == "Orange" else red_score) * 1.1
-    else:
-        predicted = "Orange" if orange_score > red_score else "Red"
-        confidence = max(orange_score, red_score) * 0.9
-
-    debug["decision"] = predicted
-    return predicted, _clamp_confidence(confidence), debug
-
-
-# ============= 主要評估函數 (整合改進邏輯) =============
 
 def _evaluate_image_improved(
     hsv_img: np.ndarray,
@@ -526,115 +455,18 @@ def _detect_yellow_special(
     full_mask = _expand_center_mask(yellow_mask, hsv_img.shape, edge_margin)
     return is_yellow, yellow_ratio, full_mask
 
-def _initial_prediction(ratios: dict[str, float]) -> tuple[str, float]:
-    if not ratios:
-        raise ValueError("No ratios provided for prediction.")
-    predicted_color, confidence = max(ratios.items(), key=lambda item: item[1])
-    if confidence <= 0.0:
-        return "Unknown", 0.0
-    return predicted_color, confidence
-
-
-def _apply_color_rules(
-    predicted_color: str,
-    confidence: float,
-    context: DecisionContext,
-) -> tuple[str, float]:
-    for rule in _COLOR_RULES:
-        result = rule(predicted_color, confidence, context)
-        if result is not None:
-            predicted_color, confidence = result
-    return predicted_color, _clamp_confidence(confidence)
-
-
-def _rule_orange_red_tiebreak(
-    predicted_color: str,
-    confidence: float,
-    context: DecisionContext,
-) -> tuple[str, float] | None:
-    ratios = context.ratios
-    if (
-        "Orange" not in ratios
-        or "Red" not in ratios
-        or predicted_color not in {"Orange", "Red"}
-        or abs(ratios["Orange"] - ratios["Red"]) >= ORANGE_RED_TIE_MARGIN
-    ):
-        return None
-
-    center_hsv = _crop_center(context.hsv_img, context.edge_margin)
-    center_lab = _crop_center(context.lab_img, context.edge_margin)
-
-    if center_hsv.size == 0 or center_lab.size == 0:
-        return None
-
-    flat_hsv = center_hsv.reshape(-1, 3)
-    flat_lab = center_lab.reshape(-1, 3)
-
-    if flat_hsv.size == 0 or flat_lab.size == 0:
-        return None
-
-    sat_mask = flat_hsv[:, 1] >= context.sat_threshold
-    valid_hsv = flat_hsv[sat_mask]
-    valid_lab = flat_lab[sat_mask]
-
-    if len(valid_hsv) == 0 or len(valid_lab) == 0:
-        return None
-
-    new_color, new_conf, sep_debug = separate_orange_red_improved(
-        valid_hsv, valid_lab, ratios["Orange"], ratios["Red"]
-    )
-    context.debug_info["orange_red_separated"] = True
-    context.debug_info["separation_details"] = sep_debug
-    return new_color, new_conf
-
-
-def _rule_green_correction(
-    predicted_color: str,
-    confidence: float,
-    context: DecisionContext,
-) -> tuple[str, float] | None:
-    if predicted_color != "Red" or "Green" not in context.ratios:
-        return None
-
-    center_hsv = _crop_center(context.hsv_img, context.edge_margin)
-    if center_hsv.size == 0:
-        return None
-
-    h_vals = center_hsv[:, :, 0]
-    s_vals = center_hsv[:, :, 1]
-    total_pixels = h_vals.size
-    if total_pixels == 0:
-        return None
-
-    green_pixels = np.sum(
-        (h_vals >= 70)
-        & (h_vals <= 100)
-        & (s_vals >= context.sat_threshold)
-    )
-    green_ratio = green_pixels / total_pixels
-
-    if green_ratio > GREEN_DOMINANCE_RATIO:
-        context.debug_info["green_correction"] = True
-        return "Green", green_ratio
-    return None
-
-
-_COLOR_RULES: list[DecisionRule] = [
-    _rule_orange_red_tiebreak,
-    _rule_green_correction,
-]
+# The decision chain that used to live here -- _initial_prediction,
+# _apply_color_rules and the Orange/Red and Green rules -- is gone. The verdict
+# is the runtime's now (see verify_directory), and keeping an unreachable
+# second opinion beside it is how the two drifted apart in the first place.
+# The envelope scoring above stays: it answers its own question and is reported
+# as envelope_ratios / envelope_match.
 
 
 def _validate_confidence_threshold(default_threshold: float) -> None:
     if not np.isfinite(default_threshold) or not 0.0 <= default_threshold <= 1.0:
         raise ValueError("ratio_threshold must be in the range [0.0, 1.0].")
 
-
-def _confidence_threshold_for(color: str, default_threshold: float) -> float:
-    _validate_confidence_threshold(default_threshold)
-    return max(default_threshold, COLOR_CONF_THRESHOLDS.get(color, default_threshold))
-
-# ============= 載入與驗證函數 =============
 
 def _margin_vector(margin: Sequence[float] | float) -> np.ndarray:
     if isinstance(margin, Sequence) and not isinstance(margin, (str, bytes)):
@@ -795,6 +627,12 @@ def verify_directory(
         raise FileNotFoundError(input_dir)
 
     ranges = load_color_ranges(color_stats.resolve(), hsv_margin, lab_margin)
+    # The verdict is the line's, so it comes from the object the line uses.
+    # ``ratio_threshold`` is the runtime's fallback for colors carrying no
+    # explicit threshold of their own, which is exactly what this CLI flag has
+    # always meant.
+    checker = StatsColorChecker.from_json(color_stats.resolve())
+    checker.apply_runtime_configuration(default_threshold=ratio_threshold)
     expected_lookup = _load_expected_map(expected_map)
 
     debug_root: Path | None = None
@@ -826,7 +664,7 @@ def verify_directory(
         hsv_img = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
         lab_img = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
 
-        ratios, masks, debug_info = _evaluate_image_improved(
+        envelope_ratios, masks, debug_info = _evaluate_image_improved(
             hsv_img,
             lab_img,
             ranges,
@@ -835,20 +673,35 @@ def verify_directory(
             min_valid_pixels=min_valid_pixels,
         )
 
-        predicted_color, confidence = _initial_prediction(ratios)
-        context = DecisionContext(
-            ratios=ratios,
-            debug_info=debug_info,
-            hsv_img=hsv_img,
-            lab_img=lab_img,
-            edge_margin=edge_margin,
-            sat_threshold=sat_threshold,
+        verdict = checker.check(image)
+        # When the runtime measured nothing, the color it names is explicitly
+        # arbitrary -- it fails closed and the name is whichever entry came
+        # first. Reporting that name to an operator would invent a finding, so
+        # the absence is shown as such. The decision is unchanged either way.
+        has_evidence = bool(verdict.metrics.get("has_evidence", True))
+        predicted_color = (verdict.best_color or "Unknown") if has_evidence else "Unknown"
+        ratios = {name: float(score) for name, score in verdict.scores}
+        confidence = float(verdict.metrics.get("score", 0.0)) if has_evidence else 0.0
+        # The envelope check is reported beside the verdict rather than
+        # standing in for it: "does this sit inside the recorded range?" is a
+        # different question from "what does the line decide?", and conflating
+        # them is what made this tool answer Unknown for plain red.
+        debug_info["envelope_ratios"] = envelope_ratios
+        debug_info["envelope_match"] = float(
+            envelope_ratios.get(predicted_color, 0.0)
         )
-        predicted_color, confidence = _apply_color_rules(predicted_color, confidence, context)
+        debug_info["runtime_accepted"] = bool(verdict.is_ok)
+        debug_info["runtime_threshold"] = float(
+            verdict.metrics.get("threshold", ratio_threshold)
+        )
 
         expected = _resolve_expected_color(image_path, expected_lookup, ranges.keys(), infer_expected_from_name)
-        base_threshold = _confidence_threshold_for(predicted_color, ratio_threshold)
-        if confidence < base_threshold:
+        # Acceptance is the runtime's too. Keeping this file's own
+        # max(per-color, default) rule would have left the tool naming the same
+        # color as the line while disagreeing about whether the line accepts
+        # it, which is the confusing half of the divergence rather than the
+        # whole of it.
+        if not verdict.is_ok:
             status = "low_confidence"
             counters["low_confidence"] += 1
         elif expected is None:
