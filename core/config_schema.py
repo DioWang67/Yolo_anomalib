@@ -99,6 +99,7 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         color_score_threshold: float | None = None
         color_decision_tuning: dict[str, float] | None = None
         color_roi_policy: dict[str, float | int] | None = None
+        color_baseline_algorithm_enforcement: str | None = None
         color_fail_closed: bool | None = True
         output_dir: str | None = "Result"
         anomalib_config: dict[str, Any] | None = None
@@ -218,6 +219,7 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         color_score_threshold: float | None = None
         color_decision_tuning: dict[str, float] | None = None
         color_roi_policy: dict[str, float | int] | None = None
+        color_baseline_algorithm_enforcement: str | None = None
         color_fail_closed: bool | None = None
         expected_items: dict[str, dict[str, list[str]]] | None = None
         position_config: dict[str, dict[str, dict[str, Any]]] | None = None

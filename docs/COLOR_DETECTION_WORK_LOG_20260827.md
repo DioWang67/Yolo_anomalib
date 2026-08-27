@@ -204,3 +204,80 @@ v4 修好 `ACC-24DAF6D4E8EF`，沒有新增誤殺或漏放。剩餘三個 OK fal
 ### 唯一尚需人工完成
 
 候選仍未寫入 `station_data`。請由有權限的簽核人從 GUI 執行重建／審查，填寫真實身分與原因；GUI 會套用相同 ROI policy 與 v4 安全門檻。不得用 headless 腳本建立無歸屬的正式候選。
+
+## 九、關聯程式盤點（`stats-robust-v2` → `v4` 的下游影響）
+
+起因是驗收畫面出現「無法使用：演算法 stats-robust-v2（目前為 stats-robust-v4）」。
+驗收並沒有被鎖死 —— Cable1/A 當時仍有 6 個可選變體 —— 但沿著這條線盤點，發現
+版本閘門只擋了三扇門裡的一扇。
+
+### 9.1 最嚴重的一項：線上配對的 Black 寬鬆了約 2 倍
+
+| 來源 | Black `coverage_mean` | count | provenance |
+|---|---:|---:|---|
+| 已部署 `models/Cable1/A/yolo` | 0.370 | 6 | 無 `recalibration` 區塊 |
+| v2 候選 `e5097c9a` | 0.370（原封繼承） | 6 | stats-robust-v2 |
+| v4 scratch 候選 | 0.744 | 336 | stats-robust-v4 |
+
+v4 的 Black 是 `score = raw_ratio / coverage_mean`，其中 `raw_ratio` 在**內縮 20%
+之後**的 ROI 上量測，而 0.370 是**內縮之前**的寬框上量的（框內約半數是背景，因此
+恰好差約一倍）。通過條件為 `raw_ratio >= threshold × coverage_mean`：
+
+- 現行配對：0.45 × 0.370 = 0.167 → 框內只要 16.7% 像素落在 Black 包絡就通過
+- v4 應有：0.45 × 0.744 = 0.335
+
+方向是**漏放**，而 250 張驗收測不出來：77 張 NG 有 68 張是 `SEQUENCE_MISMATCH`，
+幾乎沒有考驗顏色漏放。`coverage_mean` 只被 Black 規則使用，其他四色不受影響。
+
+因此「GUI 簽核」不是最後的形式手續，而是 v4 程式上線的**前置條件**。
+
+### 9.2 三扇門，原本只鎖了一扇
+
+- 候選：有檢查（`discover_color_variants`）。
+- 顏色方案 profile：**沒有檢查**。`75a77b2a` 是從被排除的 v2 候選 `83c8b909` 打包
+  的，`a8af98dc` 來自 v2 `860aed5f`；兩者的 `color_model.json` 裡就寫著
+  `recalibration.algorithm = "stats-robust-v2"`，provenance 從未遺失，是閘門沒去讀。
+  兩者五色 `coverage_mean` 齊全，所以不會 fail-closed，而是安靜給出看起來正常的
+  錯誤結論。
+- 發布：**沒有檢查**。builder 只認 schema 1/2 並核對 sha256。磁碟上 14 份驗收報告
+  全在 v2 時代寫成；最新那份（2026-08-14）比較的三欄正是上述三個 v2 產物。也就是
+  說在修好之前，仍可拿該報告把 v2 基準發布並啟用。
+
+`docs/model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md` 早已寫著「`INCOMPATIBLE`：
+舊演算法…不再供選擇」。文件先寫了程式沒做到的事。
+
+### 9.3 已修
+
+1. 新增 `core/color_baseline_contract.py`：版本常數與「讀取 artifact 自己記錄的
+   演算法」只有一份。它刻意位於重建器之下 —— 重建器匯入檢查器，所以版本不能住在
+   重建器裡，否則執行期得匯入整個重建服務才能知道自己要求什麼。
+2. 三處閘門一律改為呼叫同一個判定函式，不再各自比較自己匯入的常數。第一版我只換了
+   理由字串、判定仍讀舊常數，測試立刻抓到兩者不一致 —— 正是要消滅的漂移。
+3. profile 依 artifact 自己的記錄檢查；未記錄者與舊版分開報告，因為補救方式不同。
+4. 發布拒絕不相容基準，判定順序為「報告記錄優先、artifact 備援」。
+5. 驗收報告的每個顏色變體開始記錄 `algorithm`，舊報告沒有此欄位，讀為「無法確認」。
+6. 新增站點設定 `color_baseline_algorithm_enforcement`（`warn` 預設 / `strict`）。
+   無法辨識的值解讀為 `strict`。
+7. 重建視窗顯示 `review_reasons`（先前只寫進 report.json），量測值放在 tooltip。
+
+### 9.4 確認不需跟進
+
+- 已部署基準五色 `coverage_mean` 齊全，Black v4 不會 fail-closed。
+- `unmeasurable_roi` 下游唯一消費者是 `core/pipeline/steps.py`，以「狀態不等於
+  `evaluated` 就不重算」處理，fail-closed 正確。
+- `color_roi_policy` 消費者齊全，訓練端 deploy 也已列入 `STATION_LOCAL_FIELDS`。
+- `tools/color_calibration_packages.py` 的 `picture-tool-threshold-v1` 是門檻修訂
+  的軸，與基準演算法無關。
+
+### 9.5 尚未處理（補訓路徑）
+
+訓練端 `picture_tool/color/color_inspection.py` 產出的 `quality/color/stats.json`
+**有** `coverage_mean`，但它是 SAM 遮罩面積比（`mask_nonzero / mask.size`），與站點
+重建的「內縮 ROI 中通過取樣遮罩的比例」不是同一個量，且訓練端沒有 `ColorRoiPolicy`
+概念。`bundle.py` 會把它打包成 `color_stats.json`，而 `DEPLOYMENT_OWNED_FIELDS`
+擁有 `color_model_path`，因此補訓部署可以換掉線上顏色基準。
+
+該檔案沒有 provenance，所以在 `strict` 之下會被拒絕載入 —— 這是正確的 fail-closed，
+但也意味著**補訓之後站點必須重跑一次顏色基準重建**。刻意不在訓練端補寫
+`recalibration.algorithm`：那會是謊稱它與站點重建同一套幾何。是否要讓訓練端 deploy
+在替換 `color_model_path` 時直接拒絕或警告，留待決定。

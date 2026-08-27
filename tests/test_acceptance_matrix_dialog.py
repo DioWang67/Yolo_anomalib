@@ -13,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt5.QtWidgets import QApplication
 
 from app.acceptance.matrix_dialog import AcceptanceMatrixDialog
-from core.services import acceptance_matrix
+from core import color_baseline_contract
 from core.services.acceptance_matrix import (
     AcceptanceMatrixCombinationResult,
     AcceptanceMatrixResult,
@@ -120,7 +120,9 @@ def test_dialog_shows_incompatible_color_baseline_without_letting_it_run(
             ),
         ),
     )
-    monkeypatch.setattr(acceptance_matrix, "ALGORITHM_VERSION", "stats-robust-v99")
+    monkeypatch.setattr(
+        color_baseline_contract, "BASELINE_ALGORITHM_VERSION", "stats-robust-v99"
+    )
 
     dialog = _build_dialog(tmp_path, app)
 

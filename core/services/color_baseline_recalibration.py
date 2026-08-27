@@ -23,6 +23,7 @@ from uuid import uuid4
 import cv2
 import numpy as np
 
+from core.color_baseline_contract import BASELINE_ALGORITHM_VERSION
 from core.services.inspection_release_store import sha256_file
 from core.services.slot_roi import ColorRoiPolicy, extract_bbox_roi
 from core.stats_color_checker import StatsColorChecker, circular_hue_mean
@@ -30,7 +31,11 @@ from core.stats_color_checker import StatsColorChecker, circular_hue_mean
 logger = logging.getLogger(__name__)
 
 COLOR_BASELINE_SCHEMA_VERSION = 1
-ALGORITHM_VERSION = "stats-robust-v4"
+#: The rebuilder's name for the shared baseline contract version. It stays
+#: exported from here because the rebuilder is what stamps it into an
+#: artifact, but the value belongs to the contract so the runtime can require
+#: it without importing this service.
+ALGORITHM_VERSION = BASELINE_ALGORITHM_VERSION
 OUTLIER_FILTER_ALGORITHM = "per-color-sample-lab-mad-v1"
 DEFAULT_COLORS = ("Black", "Green", "Orange", "Red", "Yellow")
 

@@ -255,6 +255,7 @@ class ModelManager:
             "expected_items", "position_config", "anomalib_config",
             "color_threshold_overrides", "color_rules_overrides",
             "color_decision_tuning", "color_roi_policy",
+            "color_baseline_algorithm_enforcement",
             "backends", "pipeline", "defect_coverage",
         ]
         for field in _OPTIONAL_FIELDS:

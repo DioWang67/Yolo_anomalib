@@ -8,8 +8,8 @@ from pathlib import Path
 
 import yaml
 
+from core.color_baseline_contract import baseline_compatibility_failure
 from core.services.color_baseline_recalibration import (
-    ALGORITHM_VERSION,
     ColorBaselineCandidateStore,
 )
 from core.services.color_profile_store import ColorProfileStore
@@ -208,7 +208,7 @@ class InspectionComponentCatalog:
                     created_at=candidate.created_at,
                     integrity=(
                         "INCOMPATIBLE"
-                        if candidate.algorithm != ALGORITHM_VERSION
+                        if baseline_compatibility_failure(candidate.algorithm)
                         else ("VERIFIED" if candidate.status == "READY" else "WARNING")
                     ),
                     source_path=candidate.color_model_path,

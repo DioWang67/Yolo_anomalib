@@ -29,6 +29,11 @@ from uuid import uuid4
 
 import yaml
 
+from core.color_baseline_contract import (
+    baseline_compatibility_failure,
+    color_model_algorithm,
+    color_model_compatibility_failure,
+)
 from core.services.acceptance_artifacts import (
     AcceptanceArtifactBundle,
     AcceptanceArtifactError,
@@ -38,10 +43,7 @@ from core.services.acceptance_artifacts import (
     resolve_configured_model_weight,
     verify_acceptance_artifact_bundle,
 )
-from core.services.color_baseline_recalibration import (
-    ALGORITHM_VERSION,
-    ColorBaselineCandidateStore,
-)
+from core.services.color_baseline_recalibration import ColorBaselineCandidateStore
 from core.services.color_profile_store import ColorProfileStore
 from core.services.inspection_release_models import (
     InspectionRelease,
@@ -387,7 +389,8 @@ def discover_color_variants(
             area=area,
             model_type=model_type,
         ):
-            if candidate.algorithm != ALGORITHM_VERSION:
+            incompatible = baseline_compatibility_failure(candidate.algorithm)
+            if incompatible:
                 # In scope, but built by a superseded algorithm. Reported rather
                 # than dropped: the operator created this candidate and nothing
                 # visibly happened to it, so an unexplained absence invites
@@ -395,10 +398,7 @@ def discover_color_variants(
                 exclusions.append(
                     ColorVariantExclusion(
                         label=f"完整顏色基準 / {candidate.display_version}",
-                        reason=(
-                            f"演算法 {candidate.algorithm}（目前為 {ALGORITHM_VERSION}）："
-                            "裁切座標空間不同，納入比較會得到錯誤結論"
-                        ),
+                        reason=incompatible,
                     )
                 )
                 continue
@@ -440,6 +440,22 @@ def discover_color_variants(
                 profile_label = (
                     f"完整顏色方案 / {profile.display_version}（{profile.summary}）"
                 )
+                # Gated on the same contract as a candidate, and for the same
+                # reason: packaging a baseline copies its statistics, not the
+                # geometry they were measured on. Read from the artifact rather
+                # than from the package manifest, which never recorded an
+                # algorithm -- otherwise this door could only ever agree with
+                # the candidate door by accident.
+                incompatible = color_model_compatibility_failure(
+                    profile.color_model_path
+                )
+                if incompatible:
+                    exclusions.append(
+                        ColorVariantExclusion(
+                            label=profile_label, reason=incompatible
+                        )
+                    )
+                    continue
                 load_failure = _color_model_load_failure(profile.color_model_path)
                 if load_failure:
                     # A stored package whose model cannot load is worse than a
@@ -1223,6 +1239,15 @@ def _color_variant_mapping(
         "include_active_revisions": variant.include_active_revisions,
         "color_model_path": (str(variant.color_model_path) if variant.color_model_path is not None else ""),
         "color_model_sha256": variant.color_model_sha256,
+        # Recorded so a stored report can still be judged once the rebuild
+        # algorithm moves on, without needing the artifact to survive on disk.
+        # A report written before this field existed simply has no entry, which
+        # reads as "cannot be established" rather than as "compatible".
+        "algorithm": (
+            color_model_algorithm(variant.color_model_path) or ""
+            if variant.color_model_path is not None
+            else ""
+        ),
     }
 
 

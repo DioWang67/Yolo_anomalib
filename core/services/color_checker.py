@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from core.color_baseline_contract import color_model_compatibility_failure
 from core.color_qc_enhanced import ColorQCEnhanced
 from core.models import ColorCheckItemResult, ColorCheckResult
 from core.services.slot_roi import ColorRoiPolicy, extract_bbox_roi
@@ -25,6 +26,15 @@ COLOR_CHECK_NO_DETECTIONS_STATUS = "no_detections"
 #: could not be measured. Distinct from ``evaluated``, which promises every ROI
 #: was actually compared against the loaded model.
 COLOR_CHECK_UNMEASURABLE_ROI_STATUS = "unmeasurable_roi"
+
+#: Log the mismatch and keep running. The default, because a station whose
+#: deployed baseline predates the current algorithm must not be stopped by a
+#: code update alone -- it needs a rebuilt baseline first, and until then the
+#: mismatch is a recorded fact rather than a silent one.
+ALGORITHM_ENFORCEMENT_WARN = "warn"
+#: Refuse to load a baseline that cannot be shown to match the current
+#: algorithm. Set once a baseline rebuilt by that algorithm is deployed.
+ALGORITHM_ENFORCEMENT_STRICT = "strict"
 
 #: Reported for an item whose ROI could not be cropped. The measurement never
 #: happened, so it must not read as a small distance.
@@ -107,6 +117,30 @@ def _normalize_candidates(candidates: Iterable[str] | None) -> tuple[str, ...]:
         return ()
 
 
+def _resolve_algorithm_enforcement(value: object) -> str:
+    """Normalize the configured enforcement mode.
+
+    An unrecognized value resolves to ``strict`` rather than to the permissive
+    default: the key is absent unless somebody set it, so anyone who wrote a
+    value here was turning enforcement on, and honouring a typo as "warn" would
+    silently grant the opposite of what the station config asked for.
+    """
+    if value is None:
+        return ALGORITHM_ENFORCEMENT_WARN
+    mode = str(value).strip().casefold()
+    if mode in {ALGORITHM_ENFORCEMENT_WARN, ALGORITHM_ENFORCEMENT_STRICT}:
+        return mode
+    logger.warning(
+        "Unknown color_baseline_algorithm_enforcement %r; enforcing %r. "
+        "Accepted values are %r and %r.",
+        value,
+        ALGORITHM_ENFORCEMENT_STRICT,
+        ALGORITHM_ENFORCEMENT_WARN,
+        ALGORITHM_ENFORCEMENT_STRICT,
+    )
+    return ALGORITHM_ENFORCEMENT_STRICT
+
+
 def _supported_candidates(
     candidates: Iterable[object],
     supported_colors: frozenset[str],
@@ -134,6 +168,7 @@ class ColorCheckerService:
         self._checker_type: str = "color_qc"
         self._decision_tuning: dict[str, Any] | None = None
         self._roi_policy = ColorRoiPolicy()
+        self._algorithm_enforcement: str = ALGORITHM_ENFORCEMENT_WARN
 
     def ensure_loaded(
         self,
@@ -144,12 +179,14 @@ class ColorCheckerService:
         default_threshold: float | None = None,
         decision_tuning: dict[str, Any] | None = None,
         roi_policy: dict[str, Any] | None = None,
+        algorithm_enforcement: str | None = None,
     ) -> None:
         """Load/Reload the color model if needed and apply overrides if provided."""
         try:
             resolved_roi_policy = ColorRoiPolicy.from_mapping(roi_policy)
         except (TypeError, ValueError) as exc:
             raise RuntimeError(f"Invalid color ROI policy: {exc}") from exc
+        enforcement = _resolve_algorithm_enforcement(algorithm_enforcement)
         checker_type = (checker_type or "color_qc").lower()
         if checker_type == "led_qc":
             checker_type = "color_qc"  # backward compatibility alias
@@ -158,6 +195,10 @@ class ColorCheckerService:
             or self._model_path != model_path
             or self._checker_type != checker_type
             or (checker_type == "stats" and self._decision_tuning != decision_tuning)
+            # A tightened mode must re-examine a baseline that was already
+            # loaded under the permissive one, or turning enforcement on would
+            # do nothing until the next unrelated reload.
+            or (checker_type == "stats" and self._algorithm_enforcement != enforcement)
         )
         if need_reload and checker_type == "stats":
             try:
@@ -188,6 +229,31 @@ class ColorCheckerService:
                 raise RuntimeError(
                     f"Failed to load StatsColorChecker from {model_path}: {e}"
                 ) from e
+            # Checked here rather than inside the loader because it is not a
+            # format problem: the file parses, and every number in it is
+            # well-formed. What cannot be established is whether those numbers
+            # were measured on the crop geometry this code measures, and a
+            # mismatch shifts every score instead of failing.
+            incompatible = color_model_compatibility_failure(model_path)
+            self._algorithm_enforcement = enforcement
+            if incompatible:
+                if enforcement == ALGORITHM_ENFORCEMENT_STRICT:
+                    self._checker = None
+                    self._model_path = None
+                    self._decision_tuning = None
+                    raise RuntimeError(
+                        f"拒絕載入顏色基準 {model_path}：{incompatible}"
+                    )
+                logger.warning(
+                    "Color baseline provenance is not current for %s: %s. Scores "
+                    "are being compared against statistics measured on another "
+                    "crop geometry. Deploy a baseline rebuilt by the current "
+                    "algorithm, then set color_baseline_algorithm_enforcement "
+                    "to %r.",
+                    model_path,
+                    incompatible,
+                    ALGORITHM_ENFORCEMENT_STRICT,
+                )
         elif need_reload:
             try:
                 self._checker = ColorQCEnhanced.from_json(model_path)

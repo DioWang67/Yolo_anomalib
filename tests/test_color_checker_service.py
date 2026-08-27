@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from core.color_baseline_contract import BASELINE_ALGORITHM_VERSION
 from core.color_qc_enhanced import ColorQCEnhanced
 from core.services.color_checker import (
     COLOR_CHECK_EVALUATED_STATUS,
@@ -919,3 +920,92 @@ def test_color_qc_rejects_a_malformed_global_threshold_without_partial_state(tmp
 
     assert service._checker.model.default_hist_thr == pytest.approx(0.25)
     assert service._checker.model.colors[0].hist_thr == pytest.approx(0.2)
+
+
+def _stats_model(path, *, algorithm):
+    """Write a loadable stats model that either records its algorithm or does not."""
+    payload = {
+        "summary": {
+            "black": {
+                "hsv_min": [0, 0, 0],
+                "hsv_max": [180, 50, 50],
+                "lab_min": [0, 120, 120],
+                "lab_max": [50, 135, 135],
+                "hsv_mean": [90, 25, 25],
+                "coverage_mean": 0.8,
+            }
+        }
+    }
+    if algorithm is not None:
+        payload["recalibration"] = {"algorithm": algorithm}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return str(path)
+
+
+def test_a_baseline_of_unknown_provenance_loads_but_is_recorded(tmp_path, caplog):
+    """The default must not be able to stop a line on a code update alone.
+
+    A station whose deployed baseline predates the current algorithm needs a
+    rebuilt baseline before enforcement can be turned on, so until then the
+    mismatch is carried as a recorded fact rather than a silent one -- silence
+    is what let a Black score be normalized by a coverage figure measured on a
+    wider crop, roughly doubling it, with nothing anywhere saying so.
+    """
+    path = _stats_model(tmp_path / "stats.json", algorithm=None)
+    service = ColorCheckerService()
+
+    with caplog.at_level("WARNING"):
+        service.ensure_loaded(path, checker_type="stats")
+
+    assert service._checker is not None
+    assert any("provenance" in record.getMessage() for record in caplog.records)
+
+
+def test_strict_refuses_a_baseline_it_cannot_vouch_for(tmp_path):
+    path = _stats_model(tmp_path / "stats.json", algorithm="stats-robust-v2")
+    service = ColorCheckerService()
+
+    with pytest.raises(RuntimeError) as excinfo:
+        service.ensure_loaded(path, checker_type="stats", algorithm_enforcement="strict")
+
+    assert "stats-robust-v2" in str(excinfo.value)
+    # Refusing must not leave the rejected model installed: the caller handles
+    # the error and carries on, and a checker left in place would go on scoring.
+    assert service._checker is None
+    assert service._model_path is None
+
+
+def test_strict_accepts_a_baseline_built_by_the_current_algorithm(tmp_path):
+    path = _stats_model(tmp_path / "stats.json", algorithm=BASELINE_ALGORITHM_VERSION)
+    service = ColorCheckerService()
+
+    service.ensure_loaded(path, checker_type="stats", algorithm_enforcement="strict")
+
+    assert service._checker is not None
+
+
+def test_tightening_enforcement_re_examines_an_already_loaded_baseline(tmp_path):
+    """Otherwise turning enforcement on does nothing until an unrelated reload.
+
+    The service caches by model path, so a baseline admitted under ``warn``
+    would keep serving indefinitely after the station config asked for
+    ``strict`` -- the setting would appear to be applied and would not be.
+    """
+    path = _stats_model(tmp_path / "stats.json", algorithm="stats-robust-v2")
+    service = ColorCheckerService()
+    service.ensure_loaded(path, checker_type="stats")
+    assert service._checker is not None
+
+    with pytest.raises(RuntimeError):
+        service.ensure_loaded(path, checker_type="stats", algorithm_enforcement="strict")
+
+
+def test_an_unreadable_enforcement_value_enforces_rather_than_relaxes(tmp_path):
+    """The key is absent unless somebody set it, so a typo meant "turn it on"."""
+    path = _stats_model(tmp_path / "stats.json", algorithm="stats-robust-v2")
+    service = ColorCheckerService()
+
+    with pytest.raises(RuntimeError):
+        service.ensure_loaded(
+            path, checker_type="stats", algorithm_enforcement="STRICTT"
+        )

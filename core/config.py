@@ -180,6 +180,11 @@ class DetectionConfig:
     # Shared by runtime measurement and baseline rebuilding. Ratios trim each
     # side of a detector bbox before any color-specific center sampling.
     color_roi_policy: dict[str, float | int] | None = None
+    # ``warn`` records a baseline built by a superseded algorithm and keeps
+    # running; ``strict`` refuses to load one. Left at ``warn`` until a
+    # baseline rebuilt by the current algorithm is deployed, because a code
+    # update alone must not be able to stop a line.
+    color_baseline_algorithm_enforcement: str | None = None
     color_fail_closed: bool = True
     output_dir: str = "Result"
     anomalib_config: dict[str, Any] | None = None
@@ -350,6 +355,7 @@ class DetectionConfig:
             "color_score_threshold": normalized.get("color_score_threshold"),
             "color_decision_tuning": normalized.get("color_decision_tuning"),
             "color_roi_policy": normalized.get("color_roi_policy"),
+            "color_baseline_algorithm_enforcement": normalized.get("color_baseline_algorithm_enforcement"),
             "color_fail_closed": bool(normalized.get("color_fail_closed", True)),
             "output_dir": str(normalized.get("output_dir", "Result")),
             "anomalib_config": normalized.get("anomalib_config"),

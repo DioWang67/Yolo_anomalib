@@ -220,6 +220,9 @@ class TestDetectionSystemIntegration(unittest.TestCase):
             checker_type="color_qc",
             default_threshold=0.7,
             decision_tuning={"yellow_h_min": 18},
+            algorithm_enforcement=(
+                self.system.config.color_baseline_algorithm_enforcement
+            ),
         )
 
     def test_apply_camera_settings_pushes_exposure_and_gain_once(self):

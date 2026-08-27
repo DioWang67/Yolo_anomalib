@@ -747,6 +747,9 @@ class DetectionSystem:
                     checker_type=checker_type,
                     default_threshold=default_threshold,
                     decision_tuning=decision_tuning,
+                    algorithm_enforcement=getattr(
+                        self.config, "color_baseline_algorithm_enforcement", None
+                    ),
                     **roi_arguments,
                 )
                 revision_ids = self.color_override_loader.last_active_revision_ids

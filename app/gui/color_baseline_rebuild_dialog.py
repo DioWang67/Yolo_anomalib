@@ -32,6 +32,10 @@ from core.services.color_baseline_evidence import (
     ColorBaselineEvidenceProvider,
 )
 from core.services.color_baseline_recalibration import (
+    ABSOLUTE_HOLDOUT_ACCURACY_REASON,
+    CHROMA_COLLAPSE_REVIEW_REASON,
+    DOMINANT_FRACTION_REVIEW_REASON,
+    HUE_SPREAD_REVIEW_REASON,
     ColorBaselineCancelled,
     ColorBaselineCandidateStore,
     ColorBaselineError,
@@ -404,6 +408,7 @@ class ColorBaselineRebuildDialog(QDialog):
         self.next_step_label.setVisible(True)
         self.result_table.setRowCount(len(color_reports))
         for row, report in enumerate(color_reports):
+            explanation, explanation_tooltip = _review_explanation(report)
             values = (
                 report.color,
                 _state_label(report.state),
@@ -412,14 +417,14 @@ class ColorBaselineRebuildDialog(QDialog):
                 str(report.holdout_crops),
                 _percent(report.previous_accuracy),
                 _percent(report.candidate_accuracy),
-                report.note or "統計已重建",
+                explanation,
             )
+            last_column = len(values) - 1
             for column, value in enumerate(values):
-                self.result_table.setItem(
-                    row,
-                    column,
-                    QTableWidgetItem(value),
-                )
+                item = QTableWidgetItem(value)
+                if column == last_column:
+                    item.setToolTip(explanation_tooltip)
+                self.result_table.setItem(row, column, item)
         self.cancel_button.setText("關閉")
         self.start_button.setText("重建完成")
         self.candidate_created.emit(candidate)
@@ -469,6 +474,43 @@ def _resolve_color_model(project_root: Path, config_path: Path) -> Path:
         if resolved.is_file() and not resolved.is_symlink():
             return resolved
     raise ColorBaselineError(f"找不到舊顏色基準：{raw_value}")
+
+
+#: The rebuilder reports why a human was asked to look at a color as a machine
+#: code. Translated here rather than at the source because these strings exist
+#: only to be read on screen, and the report keeps the codes for later analysis.
+_REVIEW_REASON_LABELS = {
+    HUE_SPREAD_REVIEW_REASON: "色相分布過寬，可能混入其他顏色",
+    CHROMA_COLLAPSE_REVIEW_REASON: "彩度明顯低於舊基準，可能取到反光或陰影",
+    DOMINANT_FRACTION_REVIEW_REASON: "主色比例偏低，偵測框可能框到鄰線",
+    ABSOLUTE_HOLDOUT_ACCURACY_REASON: "保留驗證正確率未達最低標準",
+}
+
+
+def _review_explanation(report) -> tuple[str, str]:
+    """Return the explanation cell's text and its tooltip for one color.
+
+    ``review_reasons`` is the whole reason a candidate comes back as
+    ``REVIEW_REQUIRED``, so leaving it in the report file asked the operator to
+    make a judgement while withholding what the judgement is about. It stays
+    distinct from ``note``, which says what the rebuild did to the statistics
+    rather than what looks wrong with the evidence.
+    """
+    note = report.note or "統計已重建"
+    labels = [
+        _REVIEW_REASON_LABELS.get(reason, reason) for reason in report.review_reasons
+    ]
+    text = "；".join([note, *labels]) if labels else note
+    measured = [
+        f"{name} {value:.3f}"
+        for name, value in (
+            ("色相分布", report.hue_spread),
+            ("彩度保留", report.chroma_retention),
+            ("主色比例", report.dominant_fraction),
+        )
+        if value is not None
+    ]
+    return text, ("\n".join([text, "、".join(measured)]) if measured else text)
 
 
 def _resolve_color_roi_policy(config_path: Path) -> ColorRoiPolicy:

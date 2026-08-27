@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
-from core.services import acceptance_matrix
+from core import color_baseline_contract
 from core.services.acceptance_matrix import (
     AcceptanceColorVariant,
     AcceptanceMatrixError,
@@ -546,7 +546,16 @@ def test_color_discovery_lists_embedded_active_and_exact_revision(
     color_model = tmp_path / "models" / "Cable1" / "A" / "yolo" / "color_stats.json"
     color_model.parent.mkdir(parents=True)
     color_model.write_text(
-        json.dumps(_LOADABLE_STATS_PAYLOAD),
+        json.dumps(
+            {
+                **_LOADABLE_STATS_PAYLOAD,
+                # A package is offered only when its statistics record the crop
+                # geometry they were measured on, exactly as a candidate is.
+                "recalibration": {
+                    "algorithm": color_baseline_contract.BASELINE_ALGORITHM_VERSION
+                },
+            }
+        ),
         encoding="utf-8",
     )
     config = color_model.with_name("config.yaml")
@@ -579,6 +588,104 @@ def test_color_discovery_lists_embedded_active_and_exact_revision(
     )
     assert profile_variant.color_model_path == profile.color_model_path
     assert profile_variant.revision_overrides == profile.revision_overrides
+
+
+def test_profile_from_a_superseded_baseline_is_excluded_like_its_source(
+    tmp_path: Path,
+) -> None:
+    """Packaging must not launder a baseline past the compatibility gate.
+
+    Only candidates were checked, so a package built from an excluded candidate
+    stayed selectable while its own source was withheld -- and because packaging
+    copies the statistics rather than the geometry they were measured on, the
+    comparison would have looked entirely healthy while being wrong.
+    """
+    revisions_root = tmp_path / ".color_revisions"
+    color_model = tmp_path / "models" / "Cable1" / "A" / "yolo" / "color_stats.json"
+    color_model.parent.mkdir(parents=True)
+    color_model.write_text(
+        json.dumps(
+            {
+                **_LOADABLE_STATS_PAYLOAD,
+                "recalibration": {"algorithm": "stats-robust-v2"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = color_model.with_name("config.yaml")
+    config.write_text(
+        "enable_color_check: true\n"
+        "color_checker_type: stats\n"
+        f"color_model_path: {color_model.as_posix()}\n",
+        encoding="utf-8",
+    )
+    profile = ColorProfileStore(tmp_path / ".color_profiles").create(
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        model_config_path=config,
+        project_root=tmp_path,
+        revisions=(),
+    )
+    assert profile is not None
+
+    discovery = discover_color_variants(
+        revisions_root,
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        profiles_root=tmp_path / ".color_profiles",
+    )
+
+    assert [variant.variant_id for variant in discovery.variants] == ["color-embedded"]
+    assert discovery.stored_color_models == ()
+    assert len(discovery.exclusions) == 1
+    reason = discovery.exclusions[0].reason
+    assert "stats-robust-v2" in reason
+    assert color_baseline_contract.BASELINE_ALGORITHM_VERSION in reason
+
+
+def test_a_profile_without_provenance_is_not_assumed_compatible(
+    tmp_path: Path,
+) -> None:
+    """Silence is not a claim of compatibility.
+
+    The package manifest never recorded an algorithm, so a profile whose model
+    also records none cannot be shown to match the current geometry. Offering it
+    would make the gate depend on whoever happened to write the artifact.
+    """
+    color_model = tmp_path / "models" / "Cable1" / "A" / "yolo" / "color_stats.json"
+    color_model.parent.mkdir(parents=True)
+    color_model.write_text(json.dumps(_LOADABLE_STATS_PAYLOAD), encoding="utf-8")
+    config = color_model.with_name("config.yaml")
+    config.write_text(
+        "enable_color_check: true\n"
+        "color_checker_type: stats\n"
+        f"color_model_path: {color_model.as_posix()}\n",
+        encoding="utf-8",
+    )
+    assert (
+        ColorProfileStore(tmp_path / ".color_profiles").create(
+            product="Cable1",
+            area="A",
+            model_type="yolo",
+            model_config_path=config,
+            project_root=tmp_path,
+            revisions=(),
+        )
+        is not None
+    )
+
+    discovery = discover_color_variants(
+        tmp_path / ".color_revisions",
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        profiles_root=tmp_path / ".color_profiles",
+    )
+
+    assert discovery.stored_color_models == ()
+    assert len(discovery.exclusions) == 1
 
 
 def test_color_discovery_ignores_revision_store_infrastructure_directories(
@@ -688,7 +795,9 @@ def test_incompatible_baseline_is_reported_as_an_exclusion_not_dropped(
     baseline that is not actually missing.
     """
     candidate = _commit_baseline_candidate(tmp_path / ".color_baselines")
-    monkeypatch.setattr(acceptance_matrix, "ALGORITHM_VERSION", "stats-robust-v99")
+    monkeypatch.setattr(
+        color_baseline_contract, "BASELINE_ALGORITHM_VERSION", "stats-robust-v99"
+    )
 
     discovery = discover_color_variants(
         tmp_path / ".color_revisions",

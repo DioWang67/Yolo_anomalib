@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from core.color_baseline_contract import BASELINE_ALGORITHM_VERSION
 from core.services.color_profile_store import ColorProfileStore
 from core.services.inspection_release_builder import build_draft_release
 from core.services.inspection_release_models import (
@@ -51,7 +52,11 @@ def _fixture(tmp_path: Path):
                         "Red",
                         "Yellow",
                     )
-                }
+                },
+                # Publication refuses a baseline whose crop geometry cannot be
+                # established, so a fixture standing in for a publishable one
+                # has to record what built it.
+                "recalibration": {"algorithm": BASELINE_ALGORITHM_VERSION},
             }
         ),
         encoding="utf-8",

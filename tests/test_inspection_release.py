@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 
 import core.services.inspection_release_store as release_store_module
+from core.color_baseline_contract import BASELINE_ALGORITHM_VERSION
 from core.services.acceptance_artifacts import build_acceptance_artifact_bundle
 from core.services.inspection_release_builder import (
     build_draft_release,
@@ -898,7 +899,14 @@ def test_builder_binds_exact_full_color_baseline_from_matrix(tmp_path):
     candidate_path = tmp_path / ".color_baselines" / "candidate" / "color_stats.json"
     candidate_path.parent.mkdir(parents=True)
     candidate_path.write_text(
-        json.dumps({"summary": {"Black": {"count": 120}}}),
+        json.dumps(
+            {
+                "summary": {"Black": {"count": 120}},
+                # Publication reads the artifact's own record when the report
+                # predates carrying one, so a real candidate has to have it.
+                "recalibration": {"algorithm": BASELINE_ALGORITHM_VERSION},
+            }
+        ),
         encoding="utf-8",
     )
     candidate_sha = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
@@ -988,6 +996,158 @@ def test_builder_binds_exact_full_color_baseline_from_matrix(tmp_path):
     assert Path(release.components[1].artifact_path).read_bytes() == (
         candidate_path.read_bytes()
     )
+
+
+def _stale_baseline_report(tmp_path, *, artifact_algorithm, recorded_algorithm):
+    """Build the smallest matrix report that reaches the publication gate."""
+    models_root = tmp_path / "models"
+    model_path, model_sha = _write(models_root / "model.onnx", b"model")
+    embedded_path = models_root / "embedded-color.json"
+    embedded_path.write_text(
+        json.dumps({"summary": {"Black": {"count": 6}}}), encoding="utf-8"
+    )
+    config_path = models_root / "v1.config.yaml"
+    config_path.write_text(
+        "weights: model.onnx\n"
+        "enable_color_check: true\n"
+        "color_checker_type: stats\n"
+        f"color_model_path: {embedded_path.as_posix()}\n",
+        encoding="utf-8",
+    )
+    config_sha = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    candidate_path = tmp_path / ".color_baselines" / "candidate" / "color_stats.json"
+    candidate_path.parent.mkdir(parents=True)
+    payload = {"summary": {"Black": {"count": 120}}}
+    if artifact_algorithm is not None:
+        payload["recalibration"] = {"algorithm": artifact_algorithm}
+    candidate_path.write_text(json.dumps(payload), encoding="utf-8")
+    candidate_sha = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+    global_config = tmp_path / "config.yaml"
+    global_config.write_text("device: cpu\n", encoding="utf-8")
+    artifact_bundle = build_acceptance_artifact_bundle(
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        version="1.0.6",
+        global_config_path=global_config,
+        model_config_path=config_path,
+        models_root=models_root,
+        model_weight_path=model_path,
+        color_model_path=candidate_path,
+        color_model_is_override=True,
+        include_active_color_revisions=False,
+    )
+    color_variant = {
+        "variant_id": "color-base-candidate",
+        "label": "完整顏色基準 / candidate",
+        "revision_overrides": {},
+        "include_active_revisions": False,
+        "color_model_path": str(candidate_path),
+        "color_model_sha256": candidate_sha,
+    }
+    if recorded_algorithm is not None:
+        color_variant["algorithm"] = recorded_algorithm
+    report = {
+        "schema_version": 2,
+        "run_id": "matrix-stale",
+        "product": "Cable1",
+        "area": "A",
+        "inference_type": "yolo",
+        "sample_count": 250,
+        "model_variants": [
+            {
+                "variant_id": "model-1",
+                "models_root": str(models_root),
+                "config_path": str(config_path),
+                "weight_path": model_path,
+                "identity": {
+                    "version": "1.0.6",
+                    "sha256": model_sha,
+                    "runtime_config_sha256": config_sha,
+                },
+            }
+        ],
+        "color_variants": [color_variant],
+        "combinations": [
+            {
+                "combination_id": "combo-stale",
+                "model_variant_id": "model-1",
+                "color_variant_id": "color-base-candidate",
+                "artifact_bundle": artifact_bundle.report_payload(),
+                "metrics": {"errors": 0, "tp": 120, "fp": 0, "fn": 0, "tn": 130},
+                "color_metrics": {"errors": 0, "fn": 0, "escape_rate": None},
+            }
+        ],
+    }
+    report_path = tmp_path / "report-stale.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return report_path
+
+
+def test_builder_refuses_a_baseline_from_a_superseded_algorithm(tmp_path):
+    """Publication is the only door that reaches the line, and it was open.
+
+    The acceptance picker can withhold a baseline from a future comparison, but
+    every report already on disk was written before the current algorithm and
+    still names the artifacts it compared. Nothing stopped one of those from
+    being published, which would pair statistics measured on one crop geometry
+    with a runtime that measures another.
+    """
+    report_path = _stale_baseline_report(
+        tmp_path, artifact_algorithm="stats-robust-v2", recorded_algorithm=None
+    )
+
+    with pytest.raises(InspectionReleaseError) as excinfo:
+        build_release_from_matrix(
+            report_path,
+            combination_id="combo-stale",
+            display_version="inspection-v1.0.3",
+            operator="tester",
+            reason="stale baseline",
+        )
+
+    assert "stats-robust-v2" in str(excinfo.value)
+
+
+def test_builder_prefers_what_the_report_recorded_over_the_artifact(tmp_path):
+    """The evidence is the run, not the file as it stands today.
+
+    An artifact can be rebuilt in place after acceptance ran. What the report
+    recorded is what was actually measured, so a current-looking file must not
+    launder a combination that was compared against a superseded baseline.
+    """
+    report_path = _stale_baseline_report(
+        tmp_path,
+        artifact_algorithm=BASELINE_ALGORITHM_VERSION,
+        recorded_algorithm="stats-robust-v2",
+    )
+
+    with pytest.raises(InspectionReleaseError) as excinfo:
+        build_release_from_matrix(
+            report_path,
+            combination_id="combo-stale",
+            display_version="inspection-v1.0.3",
+            operator="tester",
+            reason="stale evidence",
+        )
+
+    assert "stats-robust-v2" in str(excinfo.value)
+
+
+def test_builder_refuses_a_baseline_that_records_no_algorithm(tmp_path):
+    """Neither the report nor the artifact claims anything, so nothing is proven."""
+    report_path = _stale_baseline_report(
+        tmp_path, artifact_algorithm=None, recorded_algorithm=None
+    )
+
+    with pytest.raises(InspectionReleaseError):
+        build_release_from_matrix(
+            report_path,
+            combination_id="combo-stale",
+            display_version="inspection-v1.0.3",
+            operator="tester",
+            reason="unrecorded baseline",
+        )
 
 
 def test_builder_rejects_combination_whose_samples_all_errored(tmp_path):

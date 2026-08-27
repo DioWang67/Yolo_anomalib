@@ -8,6 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- One place decides whether a stored color baseline may be trusted:
+  `core/color_baseline_contract.py` owns the current algorithm version and the
+  single reader of the algorithm an artifact records for itself. A baseline is
+  not a free-standing table of numbers -- `coverage_mean` and the sampled
+  envelopes only mean anything against the crop geometry they were measured on
+  -- and pairing statistics from one geometry with a runtime that measures
+  another does not fail loudly, it shifts every score. Three parties now consult
+  the same function instead of each comparing its own imported constant.
+- The station setting `color_baseline_algorithm_enforcement` decides what the
+  runtime does with a baseline whose algorithm cannot be shown to be current:
+  `warn` (the default) records it and carries on, `strict` refuses to load it.
+  The default is permissive on purpose -- a code update alone must not be able
+  to stop a line that needs a rebuilt baseline first -- so it is meant to be set
+  to `strict` once such a baseline is deployed. An unrecognized value resolves
+  to `strict`, because the key is absent unless somebody set it and honouring a
+  typo as `warn` would grant the opposite of what the config asked for.
+
+### Fixed
+- The compatibility gate covered one of the three doors into "compare or publish
+  a color baseline". Baseline candidates were checked; color profile packages and
+  release publication were not. A package built from an excluded candidate stayed
+  selectable while its own source was withheld -- packaging copies the statistics
+  but not the geometry behind them -- and because such a package still carries
+  every required statistic, it would not have failed closed: it would have
+  produced a healthy-looking, wrong comparison. Publication was worse, being the
+  only door that reaches the line: the builder authenticated schema and sha256
+  and never looked at the algorithm, so any acceptance report written before the
+  current algorithm could still publish the baseline it had compared. Both are
+  now gated, publication preferring what the report recorded over the artifact as
+  it stands today, since an artifact can be rebuilt in place after acceptance ran.
+- Acceptance reports record the algorithm behind each stored color model, so a
+  report stays judgeable once the rebuild algorithm moves on. Reports written
+  before this field simply have no entry, which reads as "cannot be established"
+  rather than as compatible.
+- The rebuild dialog shows why a color needs a human look. Hue spread, chroma
+  collapse, a low dominant fraction and a holdout floor miss were recorded as
+  machine codes in the report file only, so `REVIEW_REQUIRED` asked the operator
+  for a judgement while withholding what the judgement was about. The measured
+  values go to the tooltip so a row stays scannable.
 - Cross-implementation conformance tests between the runtime color checker and
   the training-pipeline color gate. The two are separate code bases judging the
   same product, so a decision rule that moves on one side and not the other lets

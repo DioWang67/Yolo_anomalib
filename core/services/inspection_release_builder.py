@@ -12,6 +12,10 @@ from uuid import uuid4
 
 import yaml
 
+from core.color_baseline_contract import (
+    baseline_compatibility_failure,
+    color_model_algorithm,
+)
 from core.services.color_profile_store import (
     ColorProfilePackage,
     ColorProfileStore,
@@ -109,6 +113,9 @@ def build_release_from_matrix(
                 )
             color_model_path = str(bundle_color.get("path") or "")
             color_model_sha256 = str(bundle_color.get("sha256") or "")
+    _reject_incompatible_color_baseline(
+        color_model_path, recorded_algorithm=str(color.get("algorithm") or "")
+    )
     project_root = Path(str(model.get("models_root") or "")).expanduser().resolve().parent
     data_paths = load_station_data_paths(project_root)
     profile = _profile_from_matrix(
@@ -223,6 +230,10 @@ def build_validated_release_from_matrix(
             effective_color["color_model_sha256"] = str(
                 bundle_color.get("sha256") or ""
             )
+    _reject_incompatible_color_baseline(
+        effective_color.get("color_model_path"),
+        recorded_algorithm=str(effective_color.get("algorithm") or ""),
+    )
     _verify_matrix_model_matches_draft(draft, model)
     _verify_matrix_color_matches_draft(draft, effective_color)
     sample_count = int(payload.get("sample_count") or 0)
@@ -291,6 +302,7 @@ def build_draft_release(
     if color_revision is not None and color_profile is not None:
         raise InspectionReleaseError("不能同時使用舊式單色修訂與完整顏色方案。")
     if color_profile is not None:
+        _reject_incompatible_color_baseline(color_profile.color_model_path)
         components.append(_profile_component(color_profile))
     elif color_revision is not None:
         revision_scope = color_revision.scope
@@ -360,6 +372,39 @@ def build_draft_release(
         reason=reason,
         validation=evidence,
     )
+
+
+def _reject_incompatible_color_baseline(
+    color_model_path: str | Path | None,
+    *,
+    recorded_algorithm: str | None = None,
+) -> None:
+    """Refuse to publish statistics measured on a superseded crop geometry.
+
+    Publication is the last door, and the only one that reaches the line. The
+    acceptance picker can withhold a baseline from a *future* comparison, but a
+    report written before the current algorithm still names artifacts whose
+    statistics came from another crop geometry, and nothing else stopped such a
+    report from being published.
+
+    ``recorded_algorithm`` -- what the evidence itself claims -- is preferred so
+    a report stays judgeable after its artifact is gone; the artifact is the
+    fallback so reports predating that record are judged rather than waved
+    through. A combination carrying no stored color model publishes whatever
+    baseline ships inside the model bundle, which is the runtime loader's
+    business rather than this function's.
+    """
+    if not color_model_path:
+        return
+    claimed = (recorded_algorithm or "").strip() or color_model_algorithm(
+        color_model_path
+    )
+    incompatible = baseline_compatibility_failure(claimed)
+    if incompatible:
+        raise InspectionReleaseError(
+            f"顏色基準無法發布：{incompatible}。"
+            "請以現行演算法重新執行顏色基準重建，並重跑驗收矩陣後再發布。"
+        )
 
 
 def _find(items: Any, key: str, value: str) -> Mapping[str, Any]:

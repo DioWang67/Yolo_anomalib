@@ -269,6 +269,14 @@ def test_rebuild_dialog_presents_progress_evidence_outliers_and_completion(
             previous_accuracy=None,
             candidate_accuracy=0.95,
             note="",
+            # Stands in for the real report, whose accuracy fields are computed
+            # properties. Kept in step with it: the explanation cell reads the
+            # review fields too, and a stub missing them fails as an
+            # AttributeError from inside the dialog rather than as a clear test.
+            hue_spread=None,
+            chroma_retention=None,
+            dominant_fraction=None,
+            review_reasons=(),
         ),
     )
     created: list[object] = []
@@ -358,3 +366,71 @@ def test_color_model_resolution_hash_and_display_helpers(tmp_path: Path) -> None
     assert rebuild_dialog._percent(0.5) == "50.0%"
     assert rebuild_dialog._state_label("PRESERVED_INSUFFICIENT") == "證據不足，沿用舊值"
     assert rebuild_dialog._state_label("custom") == "custom"
+
+
+def test_review_reasons_reach_the_operator_not_just_the_report_file() -> None:
+    """``REVIEW_REQUIRED`` asks for a judgement; the reasons say what about.
+
+    The rebuilder records why a color needs a human look -- hue spread, chroma
+    collapse, a low dominant fraction, a holdout floor miss -- as machine codes
+    in the report JSON. Leaving them there asked the operator to decide while
+    withholding the evidence, and the codes themselves are not readable on a
+    shop floor. The measured values go to the tooltip rather than the cell so a
+    row stays scannable.
+    """
+    from core.services.color_baseline_recalibration import (
+        CHROMA_COLLAPSE_REVIEW_REASON,
+        DOMINANT_FRACTION_REVIEW_REASON,
+        ColorBaselineColorReport,
+    )
+
+    report = ColorBaselineColorReport(
+        color="Black",
+        state="REBUILT",
+        total_crops=336,
+        training_crops=268,
+        holdout_crops=68,
+        previous_holdout_correct=60,
+        candidate_holdout_correct=68,
+        hue_drift=None,
+        lab_drift=1.2,
+        note="統計已重建",
+        chroma_retention=0.42,
+        dominant_fraction=0.55,
+        review_reasons=(
+            CHROMA_COLLAPSE_REVIEW_REASON,
+            DOMINANT_FRACTION_REVIEW_REASON,
+        ),
+    )
+
+    text, tooltip = rebuild_dialog._review_explanation(report)
+
+    assert "統計已重建" in text
+    for code in (CHROMA_COLLAPSE_REVIEW_REASON, DOMINANT_FRACTION_REVIEW_REASON):
+        assert code not in text
+    assert text.count("；") == 2
+    assert "0.420" in tooltip and "0.550" in tooltip
+    assert tooltip.startswith(text)
+
+
+def test_an_unflagged_color_keeps_its_plain_note() -> None:
+    """No reasons means nothing to decide, so the cell must not grow noise."""
+    from core.services.color_baseline_recalibration import ColorBaselineColorReport
+
+    report = ColorBaselineColorReport(
+        color="Red",
+        state="PRESERVED",
+        total_crops=168,
+        training_crops=134,
+        holdout_crops=34,
+        previous_holdout_correct=34,
+        candidate_holdout_correct=34,
+        hue_drift=0.4,
+        lab_drift=0.9,
+        note="",
+    )
+
+    text, tooltip = rebuild_dialog._review_explanation(report)
+
+    assert text == "統計已重建"
+    assert tooltip == text
