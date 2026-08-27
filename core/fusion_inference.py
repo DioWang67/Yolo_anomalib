@@ -235,8 +235,20 @@ class FusionInferenceRunner:
         if fallback_frame is None:
             fallback_frame = ano_res.get("result_frame")
         merged["result_frame"] = result_frame if result_frame is not None else fallback_frame
+        # ``processed_image`` is the clean image detections were measured on --
+        # the color checker crops its ROIs from it, and the result sink uses it
+        # as the base it draws annotations onto. Pointing it at ``result_frame``
+        # handed both the *annotated* overlay drawn over the anomalib heatmap,
+        # so color was measured from heatmap pseudo-color plus the box borders,
+        # and the saved annotation ended up drawn twice. The overlay stays
+        # available to the GUI as ``result_frame``, and the heatmap as
+        # ``heatmap_path``.
         merged["processed_image"] = (
-            merged["result_frame"] if merged["result_frame"] is not None else frame
+            yolo_res.get("processed_image")
+            if isinstance(yolo_res.get("processed_image"), np.ndarray)
+            else ano_res.get("processed_image")
+            if isinstance(ano_res.get("processed_image"), np.ndarray)
+            else frame
         )
         return merged
 

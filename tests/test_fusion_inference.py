@@ -196,3 +196,42 @@ def test_merge_defaults_is_anomaly_to_false_when_backend_omits_it():
     )
 
     assert merged["is_anomaly"] is False
+
+
+def test_merge_keeps_processed_image_free_of_annotations():
+    """``processed_image`` is the clean measurement source.
+
+    It used to be pointed at ``result_frame`` -- the YOLO overlay drawn onto
+    the anomalib heatmap -- so the color checker cropped its ROIs out of
+    heatmap pseudo-color and box borders, and the result sink annotated an
+    already-annotated frame.
+    """
+    clean = np.full((8, 8, 3), 7, dtype=np.uint8)
+    overlay = np.full((8, 8, 3), 200, dtype=np.uint8)
+
+    merged = _merge(
+        {
+            "status": "PASS", "detections": [], "missing_items": [],
+            "unexpected_items": [], "processed_image": clean,
+            "result_frame": overlay,
+        },
+        {
+            "status": "PASS", "detections": [], "missing_items": [],
+            "unexpected_items": [], "result_frame": overlay,
+        },
+    )
+
+    assert np.array_equal(merged["processed_image"], clean)
+    assert merged["result_frame"] is not None
+
+
+def test_merge_falls_back_to_the_frame_when_no_clean_image_exists():
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    merged = FusionInferenceRunner._merge_results(
+        frame,
+        {"status": "PASS", "detections": [], "missing_items": [], "unexpected_items": []},
+        {"status": "PASS", "detections": [], "missing_items": [], "unexpected_items": []},
+        MagicMock(),
+    )
+
+    assert np.array_equal(merged["processed_image"], frame)
