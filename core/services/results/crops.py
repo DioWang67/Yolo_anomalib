@@ -6,6 +6,8 @@ from typing import Any
 
 import numpy as np
 
+from core.services.slot_roi import extract_bbox_roi
+
 from .image_queue import ImageWriteQueue, ImageWriteReceipt
 from .path_manager import SavePathBundle
 
@@ -28,11 +30,11 @@ def save_detection_crops(
     for idx, det in enumerate(detections):
         if limit is not None and idx >= limit:
             break
-        x1, y1, x2, y2 = det["bbox"]
-        x1, y1 = max(0, x1), max(0, y1)
-        x2 = min(crop_source.shape[1], x2)
-        y2 = min(crop_source.shape[0], y2)
-        cropped_img = crop_source[y1:y2, x1:x2]
+        cropped_img = extract_bbox_roi(crop_source, det.get("bbox"))
+        if cropped_img is None:
+            # A degenerate or out-of-frame box has nothing to save. Writing the
+            # empty array would fail deep inside the image queue instead.
+            continue
         crop_name = (
             f"{bundle.detector_prefix}_{product}_{area}_"
             f"{timestamp_text}_{det['class']}_{idx}.png"
@@ -154,18 +156,7 @@ def _build_failure_crop_requests(
 
 
 def _extract_crop(image: np.ndarray, bbox: Any) -> np.ndarray | None:
-    try:
-        x1, y1, x2, y2 = (int(round(float(v))) for v in bbox[:4])
-    except (TypeError, ValueError):
-        return None
-    height, width = image.shape[:2]
-    x1 = max(0, min(width - 1, x1))
-    y1 = max(0, min(height - 1, y1))
-    x2 = max(0, min(width, x2))
-    y2 = max(0, min(height, y2))
-    if x2 <= x1 or y2 <= y1:
-        return None
-    return image[y1:y2, x1:x2]
+    return extract_bbox_roi(image, bbox)
 
 
 def _valid_bbox(bbox: Any) -> bool:

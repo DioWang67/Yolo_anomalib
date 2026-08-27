@@ -28,6 +28,23 @@ GREEN_DOMINANCE_RATIO = 0.3
 CENTER_MARGIN_RATIO = 0.15
 DEFAULT_RATIO_THRESHOLD = 0.35
 
+# Hue/S/V gates for the colors that cannot be expressed as a plain box in the
+# stats summary: red wraps the 0/179 seam, and orange/green need tighter gates
+# than their recorded percentile range. These were hard-coded in the matcher
+# and therefore carried one product's calibration in module code; they are
+# constants only so that an absent ``color_decision_tuning`` section keeps the
+# historical behavior exactly.
+RED_H_LOW_MAX = 10
+RED_H_HIGH_MIN = 170
+RED_S_MIN = 130
+RED_V_MIN = 80
+ORANGE_H_RANGE = (5, 20)
+ORANGE_S_MIN = 130
+ORANGE_V_MIN = 100
+GREEN_H_RANGE = (70, 100)
+GREEN_S_MIN = 75
+GREEN_V_RANGE = (30, 100)
+
 COLOR_CONF_THRESHOLDS = {
     "black": 0.45,
     "yellow": 0.20,
@@ -55,6 +72,19 @@ class ColorDecisionTuning:
     yellow_v_min: float = YELLOW_V_MIN
     orange_red_tie_margin: float = ORANGE_RED_TIE_MARGIN
     center_margin_ratio: float = CENTER_MARGIN_RATIO
+    red_h_low_max: float = RED_H_LOW_MAX
+    red_h_high_min: float = RED_H_HIGH_MIN
+    red_s_min: float = RED_S_MIN
+    red_v_min: float = RED_V_MIN
+    orange_h_min: float = ORANGE_H_RANGE[0]
+    orange_h_max: float = ORANGE_H_RANGE[1]
+    orange_s_min: float = ORANGE_S_MIN
+    orange_v_min: float = ORANGE_V_MIN
+    green_h_min: float = GREEN_H_RANGE[0]
+    green_h_max: float = GREEN_H_RANGE[1]
+    green_s_min: float = GREEN_S_MIN
+    green_v_min: float = GREEN_V_RANGE[0]
+    green_v_max: float = GREEN_V_RANGE[1]
 
     @classmethod
     def from_dict(cls, data: dict | None) -> ColorDecisionTuning:
@@ -124,10 +154,10 @@ def _load_color_ranges(
     ranges: dict[str, _ColorRange] = {}
     for color, stats in summary.items():
         color_name = str(color)
-        hsv_min = np.asarray(stats["hsv_min"], dtype=np.float32) - hsv_margin_vec
-        hsv_max = np.asarray(stats["hsv_max"], dtype=np.float32) + hsv_margin_vec
-        lab_min = np.asarray(stats["lab_min"], dtype=np.float32) - lab_margin_vec
-        lab_max = np.asarray(stats["lab_max"], dtype=np.float32) + lab_margin_vec
+        hsv_min = _required_stat_array(stats, "hsv_min", color_name) - hsv_margin_vec
+        hsv_max = _required_stat_array(stats, "hsv_max", color_name) + hsv_margin_vec
+        lab_min = _required_stat_array(stats, "lab_min", color_name) - lab_margin_vec
+        lab_max = _required_stat_array(stats, "lab_max", color_name) + lab_margin_vec
 
         ranges[color_name.lower()] = _ColorRange(
             name=color_name,
@@ -166,15 +196,74 @@ def stats_color_model_load_failure(stats_path: str | Path) -> str:
     return ""
 
 
+def _required_stat_array(
+    stats: Mapping[str, object], key: str, color_name: str
+) -> np.ndarray:
+    """Read a mandatory 3-channel statistic, rejecting a malformed one here.
+
+    Without the shape check a two-element array loaded fine and only failed
+    later as an IndexError from inside the matcher, where it reads as an
+    inference crash rather than a bad model file.
+    """
+    if key not in stats:
+        raise KeyError(key)
+    array = np.asarray(stats[key], dtype=np.float32).ravel()
+    if array.size != 3:
+        raise ValueError(
+            f"{color_name}.{key} must contain 3 channel values, got {array.size}"
+        )
+    return array
+
+
 def _optional_stat_array(stats: Mapping[str, object], key: str) -> np.ndarray | None:
     if key not in stats:
         return None
-    return np.asarray(stats[key], dtype=np.float32)
+    array = np.asarray(stats[key], dtype=np.float32).ravel()
+    return array if array.size == 3 else None
 
 
 def _circular_hue_distance(h1: float, h2: float) -> float:
     diff = abs(h1 - h2)
     return min(diff, 180 - diff)
+
+
+def circular_hue_mean(hue_values: np.ndarray) -> float:
+    """Mean hue on the OpenCV 0..179 circle.
+
+    A plain arithmetic mean breaks at the 0/179 seam: red pixels at 3 and 178
+    average to ~90, which is green, so the resulting score handed genuine red
+    parts to whichever color sits near hue 90. Every consumer compares this
+    value through :func:`_circular_hue_distance`, so the mean has to be
+    circular too. Hue is expanded to a full turn, averaged as unit vectors,
+    then mapped back.
+    """
+    values = np.asarray(hue_values, dtype=np.float64).ravel()
+    if values.size == 0:
+        return 0.0
+    angles = values * (np.pi / 90.0)
+    mean_angle = np.arctan2(
+        float(np.mean(np.sin(angles))), float(np.mean(np.cos(angles)))
+    )
+    return float(np.mod(mean_angle * (90.0 / np.pi), 180.0))
+
+
+def _hue_in_range(h_vals: np.ndarray, hue_min: float, hue_max: float) -> np.ndarray:
+    """Hue membership test that survives the 0/179 seam.
+
+    A margin can push a recorded range past either end of the circle, and a
+    color calibrated around hue 0 (pink, magenta) records a range that wraps by
+    construction. Both read as ``hue_min > hue_max`` once normalized, which the
+    plain ``>= min and <= max`` test answered with "never matches".
+    """
+    lo = float(hue_min)
+    hi = float(hue_max)
+    if hi - lo >= 180.0:
+        return np.ones(h_vals.shape, dtype=bool)
+    lo %= 180.0
+    hi %= 180.0
+    if lo <= hi:
+        return (h_vals >= lo) & (h_vals <= hi)
+    return (h_vals >= lo) | (h_vals <= hi)
 
 
 def _improved_match_ratio(
@@ -192,14 +281,16 @@ def _improved_match_ratio(
     v_vals = hsv_vals[:, 2]
 
     if color_name == "red":
-        h_mask = ((h_vals <= 10) | (h_vals >= 170)) & (
-            (s_vals >= max(color_range.hsv_min[1], 130))
-            & (v_vals >= max(color_range.hsv_min[2], 80))
+        h_mask = (
+            (h_vals <= tuning.red_h_low_max) | (h_vals >= tuning.red_h_high_min)
+        ) & (
+            (s_vals >= max(color_range.hsv_min[1], tuning.red_s_min))
+            & (v_vals >= max(color_range.hsv_min[2], tuning.red_v_min))
         )
     elif color_name == "orange":
-        h_mask = ((h_vals >= 5) & (h_vals <= 20)) & (
-            (s_vals >= max(color_range.hsv_min[1], 130))
-            & (v_vals >= max(color_range.hsv_min[2], 100))
+        h_mask = ((h_vals >= tuning.orange_h_min) & (h_vals <= tuning.orange_h_max)) & (
+            (s_vals >= max(color_range.hsv_min[1], tuning.orange_s_min))
+            & (v_vals >= max(color_range.hsv_min[2], tuning.orange_v_min))
         )
     elif color_name == "yellow":
         h_mask = (
@@ -210,11 +301,11 @@ def _improved_match_ratio(
         )
     elif color_name == "green":
         h_mask = (
-            (h_vals >= 70)
-            & (h_vals <= 100)
-            & (s_vals >= 75)
-            & (v_vals >= 30)
-            & (v_vals <= 100)
+            (h_vals >= tuning.green_h_min)
+            & (h_vals <= tuning.green_h_max)
+            & (s_vals >= tuning.green_s_min)
+            & (v_vals >= tuning.green_v_min)
+            & (v_vals <= tuning.green_v_max)
         )
     elif color_name == "black":
         h_mask = (s_vals < tuning.black_s_threshold) & (
@@ -222,8 +313,7 @@ def _improved_match_ratio(
         )
     else:
         h_mask = (
-            (h_vals >= color_range.hsv_min[0])
-            & (h_vals <= color_range.hsv_max[0])
+            _hue_in_range(h_vals, color_range.hsv_min[0], color_range.hsv_max[0])
             & (s_vals >= color_range.hsv_min[1])
             & (s_vals <= color_range.hsv_max[1])
             & (v_vals >= color_range.hsv_min[2])
@@ -242,14 +332,14 @@ def _improved_match_ratio(
     )
     lab_ratio = float(np.count_nonzero(lab_mask)) / len(lab_vals)
 
-    mean_h = float(np.mean(h_vals))
-    hue_similarity = 1.0
+    mean_h = circular_hue_mean(h_vals)
+    hue_similarity: float | None = None
     if color_range.hsv_mean is not None:
         expected_h = float(color_range.hsv_mean[0])
         hue_dist = _circular_hue_distance(mean_h, expected_h)
-        hue_similarity = np.exp(-hue_dist / 15.0)
+        hue_similarity = float(np.exp(-hue_dist / 15.0))
 
-    lab_chroma_similarity = 1.0
+    lab_chroma_similarity: float | None = None
     if color_range.lab_mean is not None and color_name in {"orange", "red"}:
         mean_a = float(np.mean(lab_vals[:, 1]))
         mean_b = float(np.mean(lab_vals[:, 2]))
@@ -258,7 +348,7 @@ def _improved_match_ratio(
         lab_chroma_dist = np.sqrt(
             (mean_a - expected_a) ** 2 + (mean_b - expected_b) ** 2
         )
-        lab_chroma_similarity = np.exp(-lab_chroma_dist / 20.0)
+        lab_chroma_similarity = float(np.exp(-lab_chroma_dist / 20.0))
 
     if color_name in {"orange", "red"}:
         weights = (0.35, 0.25, 0.25, 0.15)
@@ -269,12 +359,24 @@ def _improved_match_ratio(
     else:
         weights = (0.5, 0.3, 0.2, 0.0)
 
-    return (
-        hsv_ratio * weights[0]
-        + lab_ratio * weights[1]
-        + hue_similarity * weights[2]
-        + lab_chroma_similarity * weights[3]
-    )
+    # A similarity term with no baseline behind it used to default to 1.0 and
+    # still collect its full weight, so a color with incomplete stats scored up
+    # to 0.3 higher than one with complete stats -- exactly the wrong way
+    # round. Drop absent terms and renormalize instead. This is a no-op when
+    # every statistic is present, because each weight tuple already sums to 1.
+    terms: list[tuple[float, float]] = [
+        (hsv_ratio, weights[0]),
+        (lab_ratio, weights[1]),
+    ]
+    if hue_similarity is not None:
+        terms.append((hue_similarity, weights[2]))
+    if lab_chroma_similarity is not None:
+        terms.append((lab_chroma_similarity, weights[3]))
+
+    total_weight = sum(weight for _, weight in terms)
+    if total_weight <= 0.0:
+        return 0.0
+    return sum(value * weight for value, weight in terms) / total_weight
 
 
 def _separate_orange_red(
@@ -353,16 +455,34 @@ def _separate_orange_red(
     return predicted, float(pair_score), debug
 
 
+def _center_crop_array(img: np.ndarray, margin_ratio: float) -> np.ndarray:
+    """Crop a centered region, falling back to the full image when it cannot.
+
+    Shared so the black shortcut, the yellow shortcut and the main scoring path
+    all judge the *same* pixels. They previously used three different crops --
+    per-axis 15%, ``min(h, w)`` at a hard-coded 15%, and the tuned ratio -- so
+    the three decisions could legitimately disagree about an elongated ROI.
+    """
+    h, w = img.shape[:2]
+    margin = int(min(h, w) * margin_ratio)
+    if margin <= 0 or margin * 2 >= h or margin * 2 >= w:
+        return img
+    cropped = img[margin : h - margin, margin : w - margin]
+    return cropped if cropped.size else img
+
+
+def _rule_margin(value: float, limit: float) -> float:
+    """How far below ``limit`` a measurement sits, on a 0..1 scale."""
+    if limit <= 0:
+        return 0.0
+    return float(min(1.0, max(0.0, 1.0 - value / limit)))
+
+
 def _is_black_image(
     hsv_img: np.ndarray,
     tuning: ColorDecisionTuning = _DEFAULT_TUNING,
 ) -> tuple[bool, float]:
-    h, w = hsv_img.shape[:2]
-    margin_y = int(h * 0.15)
-    margin_x = int(w * 0.15)
-    center_region = hsv_img[margin_y : h - margin_y, margin_x : w - margin_x]
-    if center_region.size == 0:
-        center_region = hsv_img
+    center_region = _center_crop_array(hsv_img, tuning.center_margin_ratio)
 
     mean_s = float(np.mean(center_region[:, :, 1]))
     mean_v = float(np.mean(center_region[:, :, 2]))
@@ -375,23 +495,33 @@ def _is_black_image(
         center_region[:, :, 2] < black_v
     )
     black_coverage = float(np.count_nonzero(black_mask)) / max(black_mask.size, 1)
-    is_black = (
-        (mean_s < black_s and mean_v < black_v)
-        or (median_s < black_s * 0.8 and median_v < black_v * 0.8)
-        or (black_coverage > tuning.black_min_coverage)
-    )
-    return is_black, (black_coverage if is_black else 0.0)
+
+    # Confidence has to describe the rule that actually fired. Reporting
+    # coverage unconditionally meant a decision reached by the mean or median
+    # rule was scored by an unrelated number, which could then fail black's own
+    # threshold -- "it is black, and black is NG" in the same result.
+    evidence = [0.0]
+    if mean_s < black_s and mean_v < black_v:
+        evidence.append(min(_rule_margin(mean_s, black_s), _rule_margin(mean_v, black_v)))
+    if median_s < black_s * 0.8 and median_v < black_v * 0.8:
+        evidence.append(
+            min(
+                _rule_margin(median_s, black_s * 0.8),
+                _rule_margin(median_v, black_v * 0.8),
+            )
+        )
+    if black_coverage > tuning.black_min_coverage:
+        evidence.append(black_coverage)
+
+    is_black = len(evidence) > 1
+    return is_black, (max(evidence) if is_black else 0.0)
 
 
 def _detect_yellow_special(
     hsv_img: np.ndarray,
     tuning: ColorDecisionTuning = _DEFAULT_TUNING,
 ) -> tuple[bool, float]:
-    h, w = hsv_img.shape[:2]
-    margin = int(min(h, w) * 0.15)
-    center = hsv_img[margin : h - margin, margin : w - margin]
-    if center.size == 0:
-        center = hsv_img
+    center = _center_crop_array(hsv_img, tuning.center_margin_ratio)
 
     h_vals = center[:, :, 0]
     s_vals = center[:, :, 1]
@@ -504,9 +634,19 @@ class StatsColorChecker:
         valid_hsv = center_hsv[sat_mask].reshape(-1, 3)
         valid_lab = center_lab[sat_mask].reshape(-1, 3)
         if len(valid_hsv) == 0 or len(valid_lab) == 0:
-            score_map = dict.fromkeys(ranges, 0.0)
-            score_map.setdefault("black", 0.7)
-            return self._result_from_scores(score_map, debug={"no_pixels": True})
+            # Nothing cleared the saturation gate, so no color was measured.
+            # This branch used to answer with a hard-coded ``black: 0.7`` --
+            # a score chosen to clear black's threshold, invented for a ROI
+            # carrying no evidence, and written past the allowed vocabulary
+            # (a caller restricted to Red got a passing Black back). Worse,
+            # the pipeline reads a passing measurement as grounds to overwrite
+            # the detector's class. Report the absence instead: a verdict with
+            # no evidence behind it fails closed.
+            return self._result_from_scores(
+                dict.fromkeys(ranges, 0.0),
+                debug={"no_pixels": True},
+                has_evidence=False,
+            )
 
         scores = {
             name: _improved_match_ratio(
@@ -534,7 +674,20 @@ class StatsColorChecker:
         self,
         score_map: dict[str, float],
         debug: dict[str, object],
+        *,
+        has_evidence: bool = True,
     ) -> ColorQCAdvancedResult:
+        """Assemble a result, refusing to pass when nothing was measured.
+
+        Args:
+            score_map: Per-color confidence, keyed by the lower-cased name.
+            debug: Opaque diagnostic payload carried into ``metrics``.
+            has_evidence: False when the ROI yielded no measurable pixels. The
+                verdict is then forced closed rather than left to the
+                threshold comparison, because a product may legitimately
+                configure a threshold of 0 and ``0.0 >= 0.0`` would otherwise
+                pass every unmeasurable ROI.
+        """
         best_name, best_score = ("", 0.0)
         for name, score in score_map.items():
             if best_name == "" or score > best_score:
@@ -548,18 +701,21 @@ class StatsColorChecker:
         threshold = self._color_thresholds.get(
             best_name.lower(), self._default_threshold
         )
-        is_ok = best_score >= threshold
+        is_ok = has_evidence and best_score >= threshold
         metrics = {
             "score": float(best_score),
             "threshold": float(threshold),
+            "has_evidence": bool(has_evidence),
             "ratios": score_map,
             "debug": debug,
         }
         ordered_scores = sorted(score_map.items(), key=lambda kv: kv[1], reverse=True)
+        # Name the color that was actually scored. Substituting an arbitrary
+        # first entry when the key is unknown reported one color's name against
+        # another color's score.
+        scored_range = self._ranges.get(best_name)
         return ColorQCAdvancedResult(
-            best_color=self._ranges.get(
-                best_name, self._ranges[next(iter(self._ranges))]
-            ).name,
+            best_color=scored_range.name if scored_range is not None else best_name,
             diff=float(max(0.0, 1.0 - best_score)),
             threshold=float(max(0.0, 1.0 - threshold)),
             is_ok=is_ok,
@@ -686,9 +842,4 @@ class StatsColorChecker:
         return selected
 
     def _center_crop(self, img: np.ndarray) -> np.ndarray:
-        h, w = img.shape[:2]
-        margin = int(min(h, w) * self._tuning.center_margin_ratio)
-        if margin <= 0 or margin * 2 >= h or margin * 2 >= w:
-            return img
-        cropped = img[margin : h - margin, margin : w - margin]
-        return cropped if cropped.size else img
+        return _center_crop_array(img, self._tuning.center_margin_ratio)

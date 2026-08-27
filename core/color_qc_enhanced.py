@@ -48,6 +48,11 @@ class _ColorEntry:
     name: str
     avg_color_hist: list[float]
     hist_thr: float | None = None
+    #: ``avg_color_hist`` as a normalized float32 vector, built once at load.
+    #: Rebuilding it per comparison meant every frame paid for
+    #: (detections x colors) conversions of a 1728-element list on the
+    #: inspection critical path.
+    hist_vector: Any = None
 
 
 @dataclass
@@ -76,6 +81,7 @@ class _Model:
                     name=name,
                     avg_color_hist=list(avg_hist),
                     hist_thr=float(hist_thr) if hist_thr is not None else None,
+                    hist_vector=_as_normalized_vector(avg_hist),
                 )
             )
 
@@ -89,9 +95,18 @@ class _Model:
         )
 
 
+def _as_normalized_vector(values: Any) -> Any:
+    """Return ``values`` as an L1-normalized float32 vector, or None w/o numpy."""
+    if np is None:
+        return None
+    vector = np.asarray(values, dtype=np.float32)
+    total = float(vector.sum())
+    return vector / total if total > 0 else vector
+
+
 def _compute_hsv3d_hist(
     image_bgr, bins: tuple[int, int, int]
-) -> tuple[list[float], dict[str, float]]:
+) -> tuple[Any, dict[str, float]]:
     """Compute normalized HSV 3D histogram on pixels with V>30.
 
     Returns (hist, metrics) where metrics includes S p90 and V p50 for optional white checks.
@@ -106,6 +121,8 @@ def _compute_hsv3d_hist(
             img = image_bgr
             if not isinstance(img, np.ndarray):
                 img = np.array(image_bgr, dtype=np.uint8)  # type: ignore
+            if img.size == 0:
+                raise ValueError("empty image region")
             hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
             mask = hsv[:, :, 2] > 30
             if mask.any():
@@ -128,7 +145,9 @@ def _compute_hsv3d_hist(
                 hist = np.bincount(idx, minlength=hb * sb * vb).astype(np.float32)
                 if hist.sum() > 0:
                     hist /= hist.sum()
-                return hist.tolist(), {
+                # Returned as an array: the only consumer is ``_l1``, which
+                # would otherwise convert it straight back.
+                return hist, {
                     "s_p90": s_p90,
                     "s_p10": s_p10,
                     "v_p50": v_p50,
@@ -136,14 +155,23 @@ def _compute_hsv3d_hist(
                 }
             else:
                 total_bins = hb * sb * vb
-                return [0.0] * total_bins, {
+                return np.zeros(total_bins, dtype=np.float32), {
                     "s_p90": 0.0,
                     "s_p10": 0.0,
                     "v_p50": 0.0,
                     "v_p95": 0.0,
                 }
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - cv2 raises its own error type
+            # The pure-Python path below exists for environments without cv2,
+            # not as a silent shock absorber for runtime failures: it is ~11x
+            # slower per ROI and blows the inspection latency budget outright.
+            # Anything reaching here is reported so it can be fixed rather than
+            # quietly paid for on every frame.
+            logger.warning(
+                "HSV histogram fell back to the pure-Python path (%s: %s)",
+                type(exc).__name__,
+                exc,
+            )
 
     # Python fallback (slower)
     pixels: list[tuple[float, float, float]] = []
@@ -195,10 +223,10 @@ def _compute_hsv3d_hist(
     }
 
 
-def _l1(a: list[float], b: list[float]) -> float:
+def _l1(a: Any, b: Any) -> float:
     if np is not None:
-        aa = np.asarray(a, dtype=np.float32)
-        bb = np.asarray(b, dtype=np.float32)
+        aa = a if isinstance(a, np.ndarray) else np.asarray(a, dtype=np.float32)
+        bb = b if isinstance(b, np.ndarray) else np.asarray(b, dtype=np.float32)
         sa = aa.sum()
         sb = bb.sum()
         if sa > 0:
@@ -230,6 +258,8 @@ class ColorQCEnhanced:
         self._baseline_hist_thr: tuple[float | None, ...] = tuple(
             entry.hist_thr for entry in model.colors
         )
+        # The model-wide fallback distance, snapshot for the same reason.
+        self._baseline_default_hist_thr: float = float(model.default_hist_thr)
 
     @property
     def supported_colors(self) -> tuple[str, ...]:
@@ -259,7 +289,10 @@ class ColorQCEnhanced:
         for c in self.model.colors:
             if allowed and c.name.lower() not in allowed:
                 continue
-            d = _l1(hist, c.avg_color_hist)
+            d = _l1(
+                hist,
+                c.hist_vector if c.hist_vector is not None else c.avg_color_hist,
+            )
             scores.append((c.name, float(d)))
             if d < best_diff:
                 best_diff = float(d)
@@ -379,6 +412,7 @@ class ColorQCEnhanced:
     def apply_runtime_configuration(
         self,
         *,
+        default_threshold: float | None = None,
         color_thresholds: dict[str, float] | None = None,
         color_rules: dict[str, dict[str, float | None]] | None = None,
     ) -> None:
@@ -394,17 +428,30 @@ class ColorQCEnhanced:
         call additionally resets to baseline, so the checker is never left
         holding a half-applied or previous-product configuration.
 
+        Args:
+            default_threshold: Fallback histogram distance for colors carrying
+                no explicit ``hist_thr``; ``None`` restores the model's own
+                value. Accepted so that a published ``global`` color revision
+                reaches this checker: it used to be dropped on the floor, which
+                made an activated revision silently inert for every product on
+                the ``color_qc`` checker.
+            color_thresholds: Per-color histogram distances, case-insensitive.
+            color_rules: Per-color S/V percentile rules, case-insensitive.
+
         Raises:
-            TypeError: If either input, or a per-color rule entry, is not a mapping.
+            TypeError: If either mapping input, or a per-color rule entry, is
+                not a mapping.
             ValueError: If a threshold or rule value cannot be coerced to float.
         """
         try:
+            resolved_default = self._resolve_default_threshold(default_threshold)
             thresholds = self._resolve_threshold_overrides(color_thresholds)
             rules = self._resolve_color_rules(color_rules)
         except (TypeError, ValueError):
             self.reset_runtime_configuration()
             raise
 
+        self.model.default_hist_thr = resolved_default
         for entry, baseline in zip(
             self.model.colors, self._baseline_hist_thr, strict=True
         ):
@@ -413,11 +460,23 @@ class ColorQCEnhanced:
 
     def reset_runtime_configuration(self) -> None:
         """Discard every runtime override and return to the model's own values."""
+        self.model.default_hist_thr = self._baseline_default_hist_thr
         for entry, baseline in zip(
             self.model.colors, self._baseline_hist_thr, strict=True
         ):
             entry.hist_thr = baseline
         self._color_rules_overrides = {}
+
+    def _resolve_default_threshold(self, threshold: float | None) -> float:
+        """Validate the model-wide fallback distance, or fall back to baseline."""
+        if threshold is None:
+            return self._baseline_default_hist_thr
+        try:
+            return float(threshold)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid default color threshold: {threshold!r}"
+            ) from exc
 
     def _resolve_threshold_overrides(
         self, overrides: dict[str, float] | None

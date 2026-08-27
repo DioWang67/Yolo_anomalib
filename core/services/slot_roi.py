@@ -69,3 +69,56 @@ def extract_slot_rois(
             )
         )
     return rois
+
+
+def clamp_bbox(
+    bbox: Any,
+    *,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int] | None:
+    """Clamp an ``xyxy`` box into an image, or return None if nothing is left.
+
+    Callers crop measurement ROIs with this, so a box that survives is
+    guaranteed to yield a non-empty array. Returning None rather than an empty
+    slice is deliberate: an empty ROI reaches OpenCV as an assertion failure,
+    which surfaces as a whole-frame ERROR (or, in the async pipeline, a line
+    stop) for what is really a single unusable detection.
+    """
+    if not isinstance(bbox, (list, tuple, np.ndarray)) or len(bbox) < 4:
+        return None
+    try:
+        x1, y1, x2, y2 = (int(round(float(value))) for value in tuple(bbox)[:4])
+    except (TypeError, ValueError):
+        return None
+    x1 = max(0, min(width, x1))
+    y1 = max(0, min(height, y1))
+    x2 = max(0, min(width, x2))
+    y2 = max(0, min(height, y2))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return x1, y1, x2, y2
+
+
+def extract_bbox_roi(
+    image: np.ndarray | None,
+    bbox: Any,
+    *,
+    min_size: int = 1,
+) -> np.ndarray | None:
+    """Crop ``bbox`` out of ``image``, or return None when it is unusable.
+
+    ``min_size`` rejects slivers that carry too few pixels for the statistic
+    the caller intends to compute.
+    """
+    if image is None or not isinstance(image, np.ndarray) or image.size == 0:
+        return None
+    height, width = image.shape[:2]
+    clamped = clamp_bbox(bbox, width=width, height=height)
+    if clamped is None:
+        return None
+    x1, y1, x2, y2 = clamped
+    if x2 - x1 < min_size or y2 - y1 < min_size:
+        return None
+    roi = image[y1:y2, x1:x2]
+    return roi if roi.size else None

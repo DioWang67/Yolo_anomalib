@@ -10,6 +10,7 @@ import numpy as np
 
 from core.color_qc_enhanced import ColorQCEnhanced
 from core.models import ColorCheckItemResult, ColorCheckResult
+from core.services.slot_roi import extract_bbox_roi
 from core.stats_color_checker import ColorDecisionTuning, StatsColorChecker
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,14 @@ _DEFAULT_GENERIC_DETECTOR_CLASSES = ("LED",)
 COLOR_CHECK_EVALUATED_STATUS = "evaluated"
 #: There was no detection ROI to measure, so no color evidence exists.
 COLOR_CHECK_NO_DETECTIONS_STATUS = "no_detections"
+#: At least one detection carried a box that yields no pixels, so that item
+#: could not be measured. Distinct from ``evaluated``, which promises every ROI
+#: was actually compared against the loaded model.
+COLOR_CHECK_UNMEASURABLE_ROI_STATUS = "unmeasurable_roi"
+
+#: Reported for an item whose ROI could not be cropped. The measurement never
+#: happened, so it must not read as a small distance.
+_UNMEASURED_DIFF = 1.0
 
 
 def _is_expected_color_match(
@@ -196,7 +205,12 @@ class ColorCheckerService:
                 color_thresholds=overrides,
             )
             return
+        # ``default_threshold`` reaches this path too. Dropping it here made
+        # an activated global color revision silently inert for every product
+        # on the ``color_qc`` checker, while the run log still announced the
+        # revision as applied.
         self._apply_runtime_configuration(
+            default_threshold=default_threshold,
             color_thresholds=overrides,
             color_rules=rules_overrides,
         )
@@ -272,11 +286,37 @@ class ColorCheckerService:
             supported_colors,
         )
         proc = processed_image if processed_image is not None else frame
+        if proc is None or getattr(proc, "size", 0) == 0:
+            proc = frame
+        unmeasurable = 0
         for idx, det in enumerate(detections):
-            x1, y1, x2, y2 = det.get("bbox", [0, 0, 0, 0])
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(proc.shape[1], x2), min(proc.shape[0], y2)
-            roi = proc[y1:y2, x1:x2]
+            # A box can be degenerate or land outside the image; cropping it
+            # blind produced an empty array, and OpenCV answers that with an
+            # assertion failure that escapes the whole pipeline. One unusable
+            # detection turned into a frame-wide ERROR, and in the async
+            # pipeline into a line stop. Fail this item closed instead.
+            roi = extract_bbox_roi(proc, det.get("bbox"))
+            if roi is None:
+                unmeasurable += 1
+                all_ok = False
+                logger.warning(
+                    "Color check skipped detection %d: bbox %r yields no pixels",
+                    idx,
+                    det.get("bbox"),
+                )
+                items.append(
+                    ColorCheckItemResult(
+                        index=idx,
+                        class_name=det.get("class"),
+                        bbox=det.get("bbox"),
+                        best_color="",
+                        diff=_UNMEASURED_DIFF,
+                        threshold=0.0,
+                        is_ok=False,
+                        measurement_is_ok=False,
+                    )
+                )
+                continue
             # Priority: explicit candidates > YOLO class
             candidate_pool: Iterable[object] = requested_candidates
             if not requested_candidates and det.get("class"):
@@ -313,5 +353,9 @@ class ColorCheckerService:
         return ColorCheckResult(
             is_ok=all_ok,
             items=items,
-            status=COLOR_CHECK_EVALUATED_STATUS,
+            status=(
+                COLOR_CHECK_UNMEASURABLE_ROI_STATUS
+                if unmeasurable
+                else COLOR_CHECK_EVALUATED_STATUS
+            ),
         )

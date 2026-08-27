@@ -788,3 +788,134 @@ class TestColorQcCrossProductIsolation:
         checker.reset_runtime_configuration()
 
         assert [entry.hist_thr for entry in checker.model.colors] == [0.20, 0.30]
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the color-detection review
+# ---------------------------------------------------------------------------
+
+
+def _service_with_production_checker(tmp_path, *, checker_type="stats"):
+    from core.services.color_checker import ColorCheckerService
+
+    stats = {
+        "summary": {
+            "red": {
+                "hsv_min": [2, 132, 72], "hsv_max": [9, 217, 186],
+                "lab_min": [30, 140, 120], "lab_max": [90, 190, 170],
+                "hsv_mean": [3.9, 201.0, 149.1], "lab_mean": [60, 170, 150],
+            }
+        }
+    }
+    path = tmp_path / "color_stats.json"
+    path.write_text(json.dumps(stats), encoding="utf-8")
+    service = ColorCheckerService()
+    service.ensure_loaded(str(path), checker_type=checker_type)
+    return service
+
+
+def test_out_of_frame_bbox_fails_the_item_instead_of_raising(tmp_path):
+    """OpenCV answers an empty ROI with an assertion failure.
+
+    Unguarded, one unusable detection escaped as a frame-wide ERROR -- and in
+    the async pipeline it tripped the stop event, halting the line.
+    """
+    from core.services.color_checker import COLOR_CHECK_UNMEASURABLE_ROI_STATUS
+
+    service = _service_with_production_checker(tmp_path)
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    result = service.check_items(
+        frame=frame,
+        processed_image=frame,
+        detections=[
+            {"class": "red", "bbox": [500, 500, 600, 600]},
+            {"class": "red", "bbox": [10, 10, 60, 60]},
+        ],
+    )
+
+    assert result.status == COLOR_CHECK_UNMEASURABLE_ROI_STATUS
+    assert result.is_ok is False
+    assert result.items[0].is_ok is False
+    assert result.items[0].measurement_is_ok is False
+    assert len(result.items) == 2
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    [[50, 50, 10, 10], [10, 10, 10, 40], [0, 0, 0, 0], None, [1, 2], "nope"],
+)
+def test_degenerate_bboxes_never_raise(tmp_path, bbox):
+    service = _service_with_production_checker(tmp_path)
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    result = service.check_items(
+        frame=frame,
+        processed_image=frame,
+        detections=[{"class": "red", "bbox": bbox}],
+    )
+
+    assert result.is_ok is False
+    assert result.items[0].measurement_is_ok is False
+
+
+def test_unmeasurable_roi_may_not_overwrite_the_detector_class(tmp_path):
+    """``measurement_is_ok`` gates the ``verified_class`` correction upstream."""
+    service = _service_with_production_checker(tmp_path)
+    grey = np.full((100, 100, 3), 128, dtype=np.uint8)
+
+    result = service.check_items(
+        frame=grey,
+        processed_image=grey,
+        detections=[{"class": "red", "bbox": [10, 10, 90, 90]}],
+    )
+
+    assert result.items[0].measurement_is_ok is False
+
+
+def test_color_qc_applies_and_resets_the_global_default_threshold(tmp_path):
+    """An activated ``global`` revision used to be dropped on this path."""
+    path = tmp_path / "model.json"
+    path.write_text(
+        json.dumps(
+            {
+                "config": {"hist_bins": [4, 4, 4], "default_hist_thr": 0.25},
+                "colors": {"Red": {"avg_color_hist": [1.0]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = ColorCheckerService()
+
+    service.ensure_loaded(str(path), checker_type="color_qc")
+    assert service._checker.model.default_hist_thr == pytest.approx(0.25)
+
+    service.ensure_loaded(str(path), checker_type="color_qc", default_threshold=0.9)
+    assert service._checker.model.default_hist_thr == pytest.approx(0.9)
+
+    # The next product restates nothing, so the model baseline must come back.
+    service.ensure_loaded(str(path), checker_type="color_qc")
+    assert service._checker.model.default_hist_thr == pytest.approx(0.25)
+
+
+def test_color_qc_rejects_a_malformed_global_threshold_without_partial_state(tmp_path):
+    path = tmp_path / "model.json"
+    path.write_text(
+        json.dumps(
+            {
+                "config": {"hist_bins": [4, 4, 4], "default_hist_thr": 0.25},
+                "colors": {"Red": {"avg_color_hist": [1.0], "hist_thr": 0.2}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = ColorCheckerService()
+    service.ensure_loaded(str(path), checker_type="color_qc")
+
+    with pytest.raises(RuntimeError):
+        service.ensure_loaded(
+            str(path), checker_type="color_qc", default_threshold="not-a-number"
+        )
+
+    assert service._checker.model.default_hist_thr == pytest.approx(0.25)
+    assert service._checker.model.colors[0].hist_thr == pytest.approx(0.2)
