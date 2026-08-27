@@ -36,6 +36,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version.
 
 ### Fixed
+- A color's baseline is now sampled from the crop's dominant hue rather than
+  from every saturated pixel in it. A detection box drawn around one wire
+  routinely catches part of the next, and the sampler fed those neighbours
+  straight into the named color's statistics: in the stored evidence this is
+  the norm, not an edge case, with Red spanning 2..78 and Green 16..94 in the
+  same file and Red's mean landing on 20.7 -- amber. The dominant hue is
+  located on a circular histogram so a color sitting on the 0/179 seam is
+  found as one cluster instead of being split and half discarded. Crops of a
+  single color are unaffected. How much of each crop's chromatic content was
+  kept is recorded as `dominant_fraction_mean`, and a color whose evidence was
+  mostly *not* the color it names sets the candidate to REVIEW_REQUIRED --
+  the baseline is clean either way, but boxes containing more neighbour than
+  subject are a detection problem the reviewer should hear about. The value
+  reported is the rejected proposal's, not the preserved baseline's, since
+  that is the evidence being judged. `ALGORITHM_VERSION` moves to
+  `stats-robust-v3`: baselines built before and after are not comparable.
 - `tools/color_verifier.py` now states, at the top of the file, that it does
   not answer "what does the line decide?". It applies a stricter
   envelope-based policy than the runtime -- every color matched against the

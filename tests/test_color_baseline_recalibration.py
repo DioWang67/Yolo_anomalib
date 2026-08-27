@@ -416,13 +416,82 @@ def test_crop_without_color_evidence_is_rejected_not_sampled_wholesale():
     assert excinfo.value.coverage < 0.01
 
 
-def test_clean_crop_sampling_is_unchanged():
-    hsv_values, lab_values, coverage = recalibration._sample_color_pixels(
-        _crop("Red"), "Red", sample_size=64
+def test_clean_crop_sampling_keeps_everything():
+    """Narrowing to the dominant hue must be a no-op on a crop of one color."""
+    sampled = recalibration._sample_color_pixels(_crop("Red"), "Red", sample_size=64)
+
+    assert sampled.coverage == pytest.approx(1.0)
+    assert sampled.dominant_fraction == pytest.approx(1.0)
+    assert len(sampled.hsv) == len(sampled.lab) == 64 * 64
+
+
+def _banded_crop(bands: list[tuple[int, int, int]], size: int = 128) -> np.ndarray:
+    hsv = np.zeros((size, size, 3), np.uint8)
+    edges = np.linspace(0, size, len(bands) + 1).astype(int)
+    for index, band in enumerate(bands):
+        hsv[edges[index] : edges[index + 1], :] = band
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+
+def test_a_neighbouring_wire_no_longer_enters_the_baseline():
+    """A detection box around one wire routinely catches part of the next.
+
+    Every saturated pixel used to be fed into the named color's statistics, so
+    recorded hue ranges overlapped badly enough that Red spanned 2..78 and
+    Green 16..94 in the same stored file, and Red's mean landed on 20.7.
+    """
+    red = (4, 200, 150)
+    green = (90, 200, 150)
+    sampled = recalibration._sample_color_pixels(
+        _banded_crop([red, red, red, green]), "Red", sample_size=64
     )
 
-    assert coverage == pytest.approx(1.0)
-    assert len(hsv_values) == len(lab_values) == 64 * 64
+    hue = sampled.hsv[:, 0]
+    assert hue.max() - hue.min() <= 2 * recalibration.DOMINANT_HUE_WINDOW
+    assert hue.max() < 20  # the green band is gone
+    assert sampled.dominant_fraction == pytest.approx(0.75, abs=0.15)
+
+
+def test_evidence_across_the_hue_seam_stays_one_cluster():
+    """A linear histogram would split seam-crossing red and discard half of it."""
+    sampled = recalibration._sample_color_pixels(
+        _banded_crop([(3, 200, 150), (178, 200, 150)]), "Red", sample_size=64
+    )
+
+    hue = sampled.hsv[:, 0]
+    assert sampled.dominant_fraction == pytest.approx(1.0)
+    assert hue.min() <= 3 and hue.max() >= 178
+
+
+def test_mostly_neighbouring_evidence_asks_for_review(tmp_path: Path) -> None:
+    """The sampler keeps the baseline clean; the reviewer still needs telling.
+
+    Boxes that contain more neighbour than subject are a detection problem, and
+    a rebuild that silently succeeded on them would hide it.
+    """
+    # Equal thirds of green, yellow and red: whichever hue wins, most of the
+    # box is something other than the color it names.
+    polluted = _banded_crop([(85, 120, 60), (28, 190, 220), (4, 210, 190)])
+    evidence = tuple(
+        ColorCropEvidence(
+            sample_id=item.sample_id,
+            color=item.color,
+            image_bgr=polluted if item.color == "Green" else item.image_bgr,
+            source_sha256=item.source_sha256,
+        )
+        for item in _evidence()
+    )
+
+    build = StatsColorBaselineRebuilder().build(
+        base_model_path=_base_model(tmp_path),
+        evidence=evidence,
+    )
+
+    green = next(item for item in build.color_reports if item.color == "Green")
+    assert green.dominant_fraction is not None
+    assert green.dominant_fraction < 0.6
+    assert recalibration.DOMINANT_FRACTION_REVIEW_REASON in green.review_reasons
+    assert build.status == "REVIEW_REQUIRED"
 
 
 def test_statistics_skip_unusable_crops_and_report_the_count_actually_used():
@@ -516,36 +585,24 @@ def test_chroma_retention_is_undefined_when_the_baseline_is_achromatic():
     ) == pytest.approx(0.25)
 
 
-def test_widely_spread_evidence_asks_for_review_without_rejecting(tmp_path: Path) -> None:
-    """Drift alone misses pollution that leaves the center in place.
+def test_hue_spread_reason_guards_baselines_built_elsewhere() -> None:
+    """The sampler cannot widen a rebuilt baseline, but imports can arrive wide.
 
-    In the stored evidence one Green proposal drifted 13.7 -- inside the 18.0
-    limit -- while its hue ran from 5 to 173.
+    A summary from the annotation tool, an older algorithm version or a
+    hand-edited file can still span the circle -- one stored candidate's Green
+    drifted only 13.7, inside the 18.0 limit, while its hue ran from 5 to 173.
     """
-    evidence = tuple(
-        ColorCropEvidence(
-            sample_id=item.sample_id,
-            color=item.color,
-            image_bgr=(
-                _two_tone_crop("Green", 25) if item.color == "Green" else item.image_bgr
-            ),
-            source_sha256=item.source_sha256,
-        )
-        for item in _evidence()
-    )
+    # The stored candidate's own numbers: hue running 52..141 at the 10th and
+    # 90th percentiles, which is 89 degrees of circle for a single color.
+    wide = {
+        "hsv_p10": [52.0, 150.0, 150.0],
+        "hsv_p90": [141.0, 150.0, 150.0],
+        "hsv_mean": [96.0, 150.0, 150.0],
+    }
+    spread = recalibration._hue_spread(wide)
 
-    build = StatsColorBaselineRebuilder().build(
-        base_model_path=_base_model(tmp_path),
-        evidence=evidence,
-    )
-
-    green = next(item for item in build.color_reports if item.color == "Green")
-    assert green.hue_spread is not None and green.hue_spread > 30.0
-    assert recalibration.HUE_SPREAD_REVIEW_REASON in green.review_reasons
-    # Asking for review must not double as a rejection.
-    assert not green.rejection_reasons
-    assert build.status == "REVIEW_REQUIRED"
-    assert build.report_payload["review_required_colors"] == ["Green"]
+    assert spread is not None
+    assert spread > recalibration.MAXIMUM_HUE_SPREAD
 
 
 def test_a_clean_rebuild_is_not_flagged_for_review(tmp_path: Path) -> None:
@@ -558,3 +615,8 @@ def test_a_clean_rebuild_is_not_flagged_for_review(tmp_path: Path) -> None:
     assert build.status == "READY"
     assert build.report_payload["review_required_colors"] == []
     assert all(not item.review_reasons for item in build.color_reports)
+    assert all(
+        item.dominant_fraction == pytest.approx(1.0)
+        for item in build.color_reports
+        if item.color != "Black"
+    )

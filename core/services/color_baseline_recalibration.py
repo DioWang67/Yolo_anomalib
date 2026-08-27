@@ -29,7 +29,7 @@ from core.stats_color_checker import StatsColorChecker, circular_hue_mean
 logger = logging.getLogger(__name__)
 
 COLOR_BASELINE_SCHEMA_VERSION = 1
-ALGORITHM_VERSION = "stats-robust-v2"
+ALGORITHM_VERSION = "stats-robust-v3"
 OUTLIER_FILTER_ALGORITHM = "per-color-sample-lab-mad-v1"
 DEFAULT_COLORS = ("Black", "Green", "Orange", "Red", "Yellow")
 
@@ -51,6 +51,11 @@ ACHROMATIC_SATURATION = 40.0
 
 #: A color's evidence is spread too widely across the hue circle to be one
 #: color. Reported for human review; never an automatic rejection.
+#:
+#: Since the sampler narrows a crop to its dominant hue, a baseline rebuilt
+#: here can no longer widen this way, and the reason now mainly guards
+#: baselines that arrive from elsewhere -- the annotation tool, an older
+#: algorithm version, or a hand-edited file.
 HUE_SPREAD_REVIEW_REASON = "HUE_SPREAD_LIMIT_EXCEEDED"
 
 #: Least of the approved baseline's saturation a proposal must retain before a
@@ -61,6 +66,40 @@ HUE_SPREAD_REVIEW_REASON = "HUE_SPREAD_LIMIT_EXCEEDED"
 #: Green all measure a mean saturation of 33-38 against an approved Red of 201,
 #: and the four became statistically indistinguishable from each other.
 MINIMUM_CHROMA_RETENTION = 0.5
+
+#: Half-width, in OpenCV hue degrees, of the window kept around a crop's
+#: dominant hue when sampling a chromatic color.
+#:
+#: A detection box drawn around one wire routinely catches part of the next
+#: one, and the sampler used to feed every saturated pixel in the box into that
+#: color's baseline. In the stored evidence this is the norm rather than an
+#: edge case: the approved baseline's colors span 1.6 to 9.6 hue degrees, while
+#: candidates built from boxes that caught a neighbour span 34 to 89 and
+#: overlap each other. 15 comfortably contains a real color -- the widest in
+#: the approved baseline needs 5 either side of its center -- while excluding a
+#: neighbouring wire, whose hues sit tens of degrees away.
+DOMINANT_HUE_WINDOW = 15.0
+
+#: Bin count for locating the dominant hue. 36 bins is 5 degrees each, fine
+#: enough to separate red from orange (their approved centers are 5.4 apart)
+#: without splitting one color's own spread across many bins.
+DOMINANT_HUE_BINS = 36
+
+#: Least of a color's chromatic evidence that may belong to its dominant hue
+#: before a human is asked to look.
+#:
+#: The sampler now keeps only the dominant-hue window, so a box that caught a
+#: neighbouring wire no longer poisons the baseline -- but it still means the
+#: detection boxes are wrong, and the reviewer should know. Deliberately set at
+#: a level that needs no calibration to defend: below half, most of what the
+#: box contained was not the color it names. The exact figure for milder
+#: pollution is recorded as ``dominant_fraction_mean`` rather than guessed at
+#: with a threshold there is no data to place.
+MINIMUM_DOMINANT_FRACTION = 0.5
+
+#: Most of what the detection boxes contained was not the color they name.
+#: Reported for human review; never an automatic rejection.
+DOMINANT_FRACTION_REVIEW_REASON = "DOMINANT_FRACTION_LOW"
 
 #: A color that the approved baseline says is chromatic has washed out. Like
 #: the spread reason, this asks for review rather than rejecting.
@@ -170,6 +209,10 @@ class ColorBaselineColorReport:
     #: Saturation retained relative to the approved baseline, or None when that
     #: baseline is achromatic.
     chroma_retention: float | None = None
+    #: How much of the evidence's chromatic content belonged to its dominant
+    #: hue. Below 1.0 means detection boxes were catching more than the one
+    #: wire they name.
+    dominant_fraction: float | None = None
     #: Why this color needs a human to look at it. Distinct from
     #: ``rejection_reasons``: nothing was rejected, the evidence just does not
     #: look like a single color.
@@ -198,6 +241,7 @@ class ColorBaselineColorReport:
             "lab_drift": self.lab_drift,
             "hue_spread": self.hue_spread,
             "chroma_retention": self.chroma_retention,
+            "dominant_fraction": self.dominant_fraction,
             "note": self.note,
         }
         if self.review_reasons:
@@ -321,6 +365,7 @@ class StatsColorBaselineRebuilder:
         maximum_hue_drift: float = 18.0,
         maximum_hue_spread: float = MAXIMUM_HUE_SPREAD,
         minimum_chroma_retention: float = MINIMUM_CHROMA_RETENTION,
+        minimum_dominant_fraction: float = MINIMUM_DOMINANT_FRACTION,
         maximum_lab_drift: float = 35.0,
         maximum_accuracy_regression: float = 0.02,
         outlier_z_score_threshold: float = 6.0,
@@ -348,6 +393,7 @@ class StatsColorBaselineRebuilder:
         self.maximum_hue_drift = maximum_hue_drift
         self.maximum_hue_spread = maximum_hue_spread
         self.minimum_chroma_retention = minimum_chroma_retention
+        self.minimum_dominant_fraction = minimum_dominant_fraction
         self.maximum_lab_drift = maximum_lab_drift
         self.maximum_accuracy_regression = maximum_accuracy_regression
         self.outlier_z_score_threshold = outlier_z_score_threshold
@@ -394,6 +440,7 @@ class StatsColorBaselineRebuilder:
         candidate_summary = json.loads(json.dumps(base_summary))
         split_by_color: dict[str, tuple[tuple[ColorCropEvidence, ...], tuple[ColorCropEvidence, ...]]] = {}
         preliminary_states: dict[str, tuple[str, str]] = {}
+        proposal_dominant_by_color: dict[str, float | None] = {}
 
         for color in canonical_colors:
             _raise_if_cancelled(cancel_callback)
@@ -411,6 +458,13 @@ class StatsColorBaselineRebuilder:
                 )
                 continue
             candidate_summary[color] = self._calculate_stats(training)
+            # Keep the *proposal's* value: a color preserved by the safety
+            # check has its summary replaced by the old baseline, and the
+            # reviewer still needs to know what the rejected evidence looked
+            # like -- that is the whole point of showing it to them.
+            proposal_dominant_by_color[color] = candidate_summary[color].get(
+                "dominant_fraction_mean"
+            )
             preliminary_states[color] = ("REBUILT", "")
 
         model_payload = json.loads(json.dumps(base_payload))
@@ -572,6 +626,8 @@ class StatsColorBaselineRebuilder:
             retention = _chroma_retention(
                 base_summary[color], candidate_summary[color]
             )
+            dominant = proposal_dominant_by_color.get(color)
+            dominant = float(dominant) if dominant is not None else None
             reasons: list[str] = []
             if spread is not None and spread > self.maximum_hue_spread:
                 reasons.append(HUE_SPREAD_REVIEW_REASON)
@@ -580,6 +636,11 @@ class StatsColorBaselineRebuilder:
                 and retention < self.minimum_chroma_retention
             ):
                 reasons.append(CHROMA_COLLAPSE_REVIEW_REASON)
+            if (
+                dominant is not None
+                and dominant < self.minimum_dominant_fraction
+            ):
+                reasons.append(DOMINANT_FRACTION_REVIEW_REASON)
             review_reasons = tuple(reasons)
             if review_reasons:
                 review_required = True
@@ -609,6 +670,7 @@ class StatsColorBaselineRebuilder:
                     ),
                     hue_spread=spread,
                     chroma_retention=retention,
+                    dominant_fraction=dominant,
                     review_reasons=review_reasons,
                 )
             )
@@ -639,6 +701,7 @@ class StatsColorBaselineRebuilder:
                 "maximum_hue_drift": self.maximum_hue_drift,
                 "maximum_hue_spread": self.maximum_hue_spread,
                 "minimum_chroma_retention": self.minimum_chroma_retention,
+                "minimum_dominant_fraction": self.minimum_dominant_fraction,
                 "maximum_lab_drift": self.maximum_lab_drift,
                 "maximum_accuracy_regression": self.maximum_accuracy_regression,
             },
@@ -699,10 +762,11 @@ class StatsColorBaselineRebuilder:
         hsv_rows: list[np.ndarray] = []
         lab_rows: list[np.ndarray] = []
         coverages: list[float] = []
+        dominant_fractions: list[float] = []
         skipped: list[str] = []
         for item in evidence:
             try:
-                hsv, lab, coverage = _sample_color_pixels(
+                sampled = _sample_color_pixels(
                     item.image_bgr,
                     item.color,
                     sample_size=self.sample_size,
@@ -715,9 +779,10 @@ class StatsColorBaselineRebuilder:
                     "Color baseline skipped crop %s: %s", item.sample_id, exc
                 )
                 continue
-            hsv_rows.append(hsv)
-            lab_rows.append(lab)
-            coverages.append(coverage)
+            hsv_rows.append(sampled.hsv)
+            lab_rows.append(sampled.lab)
+            coverages.append(sampled.coverage)
+            dominant_fractions.append(sampled.dominant_fraction)
         if not hsv_rows:
             raise ColorBaselineError(
                 f"所有 {len(evidence)} 個裁切都沒有足夠的顏色證據，無法建立基準。"
@@ -741,6 +806,10 @@ class StatsColorBaselineRebuilder:
             "lab_p10": np.percentile(lab_values, 10, axis=0).tolist(),
             "lab_p90": np.percentile(lab_values, 90, axis=0).tolist(),
             "coverage_mean": float(np.mean(coverages)),
+            # How much of each crop's chromatic content belonged to its
+            # dominant hue, averaged. Below 1.0 means detection boxes were
+            # catching more than the one wire they name.
+            "dominant_fraction_mean": float(np.mean(dominant_fractions)),
         }
 
 
@@ -1128,14 +1197,14 @@ def _lab_features_by_sample(
     features: dict[str, list[np.ndarray]] = defaultdict(list)
     for item in evidence:
         try:
-            _hsv, lab, _coverage = _sample_color_pixels(
+            sampled = _sample_color_pixels(
                 item.image_bgr,
                 item.color,
                 sample_size=sample_size,
             )
         except _InsufficientColorPixels:
             continue
-        features[item.sample_id].append(_trimmed_mean(lab))
+        features[item.sample_id].append(_trimmed_mean(sampled.lab))
     # ``sample_features`` can now be empty: every crop for a sample may have
     # been skipped for carrying no color evidence. Stacking an empty list
     # raises, and a sample with no features has no outlier score to offer.
@@ -1144,6 +1213,23 @@ def _lab_features_by_sample(
         for sample_id, sample_features in features.items()
         if sample_features
     }
+
+
+@dataclass(frozen=True)
+class _SampledPixels:
+    """The pixels one crop contributes to a color's baseline.
+
+    ``dominant_fraction`` is how much of the crop's chromatic content the
+    dominant-hue window kept. A clean crop of one wire keeps essentially all of
+    it; a box that caught a neighbour keeps noticeably less, which is the
+    per-crop measure of exactly the pollution that used to enter the baseline
+    unnoticed.
+    """
+
+    hsv: np.ndarray
+    lab: np.ndarray
+    coverage: float
+    dominant_fraction: float
 
 
 class _InsufficientColorPixels(Exception):
@@ -1168,7 +1254,7 @@ def _sample_color_pixels(
     color: str,
     *,
     sample_size: int,
-) -> tuple[np.ndarray, np.ndarray, float]:
+) -> _SampledPixels:
     if not isinstance(image_bgr, np.ndarray) or image_bgr.ndim != 3 or image_bgr.shape[2] != 3 or image_bgr.size == 0:
         raise ColorBaselineError("顏色裁切必須是非空 BGR 影像。")
     height, width = image_bgr.shape[:2]
@@ -1189,9 +1275,19 @@ def _sample_color_pixels(
     lab = cv2.cvtColor(resized, cv2.COLOR_BGR2LAB).astype(np.float32)
     normalized = color.casefold()
     if normalized == "black":
+        # Black is defined by the absence of chroma, so there is no dominant
+        # hue to find and nothing a hue window could usefully exclude.
         mask = (hsv[:, :, 1] < 80) & (hsv[:, :, 2] < 110)
+        dominant_fraction = 1.0
     else:
-        mask = hsv[:, :, 1] >= 20
+        chromatic = hsv[:, :, 1] >= 20
+        mask = _dominant_hue_mask(hsv[:, :, 0], chromatic)
+        chromatic_count = int(np.count_nonzero(chromatic))
+        dominant_fraction = (
+            float(np.count_nonzero(mask)) / chromatic_count
+            if chromatic_count
+            else 0.0
+        )
     selected = int(np.count_nonzero(mask))
     coverage = float(selected) / max(mask.size, 1)
     if selected < _minimum_sampled_pixels(sample_size):
@@ -1203,11 +1299,49 @@ def _sample_color_pixels(
         # of background pixels. A crop with no color evidence has to be
         # dropped, not padded.
         raise _InsufficientColorPixels(color, selected, coverage)
-    return (
-        hsv[mask].reshape(-1, 3),
-        lab[mask].reshape(-1, 3),
-        coverage,
+    return _SampledPixels(
+        hsv=hsv[mask].reshape(-1, 3),
+        lab=lab[mask].reshape(-1, 3),
+        coverage=coverage,
+        dominant_fraction=dominant_fraction,
     )
+
+
+def _dominant_hue_mask(
+    hue: np.ndarray,
+    chromatic: np.ndarray,
+    *,
+    window: float = DOMINANT_HUE_WINDOW,
+    bins: int = DOMINANT_HUE_BINS,
+) -> np.ndarray:
+    """Narrow a chromatic mask to the pixels around the crop's dominant hue.
+
+    A crop is evidence for *one* color, but a detection box drawn around one
+    wire routinely catches part of the next. Selecting every saturated pixel
+    fed those neighbours into the baseline: recorded hue ranges then overlapped
+    each other so badly that Red spanned 2..78 and Green 16..94 in the same
+    file, and Red's mean landed on 20.7 -- amber.
+
+    The dominant hue is located on a circular histogram, so a color sitting on
+    the 0/179 seam is found as one cluster rather than split into two at
+    opposite ends of the axis, and the window kept around it wraps for the same
+    reason.
+
+    Returns a mask over the same shape as ``chromatic``; never widens it.
+    """
+    if not np.any(chromatic):
+        return chromatic
+    values = np.asarray(hue, dtype=np.float64)
+    selected = values[chromatic]
+    edges = np.linspace(0.0, 180.0, bins + 1)
+    counts, _ = np.histogram(np.mod(selected, 180.0), bins=edges)
+    # Fold the histogram circularly before picking the peak, so a cluster
+    # straddling the seam is not beaten by a smaller contiguous one.
+    folded = counts + np.roll(counts, 1) + np.roll(counts, -1)
+    peak = int(np.argmax(folded))
+    center = float((edges[peak] + edges[peak + 1]) / 2.0)
+    distance = np.abs(np.mod(values - center + 90.0, 180.0) - 90.0)
+    return chromatic & (distance <= window)
 
 
 def _minimum_sampled_pixels(sample_size: int) -> int:
