@@ -281,3 +281,60 @@ v4 的 Black 是 `score = raw_ratio / coverage_mean`，其中 `raw_ratio` 在**�
 但也意味著**補訓之後站點必須重跑一次顏色基準重建**。刻意不在訓練端補寫
 `recalibration.algorithm`：那會是謊稱它與站點重建同一套幾何。是否要讓訓練端 deploy
 在替換 `color_model_path` 時直接拒絕或警告，留待決定。
+
+## 十、GUI 重建「未更新，沿用舊基準」的追查
+
+操作員從 GUI 重建，五色全部回報 `PRESERVED_SAFETY_REJECTED`（候選
+`9f3bf5ee9eb530715801592c`）。
+
+### 10.1 真正的原因不是安全門檻
+
+該次重建的 `evidence_sources.color_roi_policy` 是 `inset_x_ratio: 0.0`。ROI policy
+讀自 `self.model.config_snapshot_path`（模型版本 config 快照），而
+`models/Cable1/A/yolo/versions/*.config.yaml` 七份快照**全部沒有** `color_roi_policy`
+這個鍵 —— 它是我當天才加到線上 config 的站點本地欄位。所以解析成預設值「不內縮」，
+重建改用整個偵測框取樣。
+
+與我先前的 scratch 重建對照，兩者輸入**只差這一項**（同 215 樣本＝173 驗收 OK＋42
+顏色覆核 OK、同一個 base、同樣的計數）：
+
+| inset_x_ratio | 結果 |
+|---|---|
+| 0.2（線上 config） | 五色全部 REBUILT、READY |
+| 0.0（版本快照） | 五色全部 PRESERVED_SAFETY_REJECTED |
+
+連鎖過程：Red 新統計 holdout 41/42 = 0.976，舊的 42/42 = 1.0，退步 0.024 超過
+`maximum_accuracy_regression = 0.02`（holdout 只有 42 片，1 片就是 0.0238，等於零
+容忍）→ Red 被否決回退 → 一個「已保留」的顏色退步時，
+`CROSS_COLOR_HOLDOUT_REGRESSION` 分支會把當輪所有還在用新統計的顏色一次全部否決。
+
+**刻意沒有放寬那個門檻。** 門檻做對了事 —— 錯的是輸入幾何。在幾何修正後，五色
+holdout 全 100%，沒有任何退步可觸發連鎖。為了讓錯誤的輸入通過而放寬安全限制，正是
+第三章那個回歸的翻版。
+
+### 10.2 附帶暴露的洗白漏洞
+
+該候選的 `summary` 與已部署基準**逐位元相同**（`coverage_mean` Black 0.370、
+count 6，五色皆同），卻標記 `algorithm: stats-robust-v4`、`status: READY`。它會通過
+第九章新加的三道閘門，然後 Black 繼續 2 倍寬鬆，而且看起來完全合規 —— 比原本的問題
+更難發現，因為閘門會替它背書。
+
+### 10.3 已修
+
+1. **重建的 ROI policy 改讀線上站點設定**；站點設定不存在則拒絕重建，不套預設值。
+   報告新增 `color_roi_policy_source` 記錄幾何來源檔案。
+2. **候選記錄 `preserved_colors` 與 `base_algorithm`**；契約在有沿用顏色時，要求舊
+   基準本身也是現行演算法。含舊欄位 `preserved_by_safety` 的備援，否則檢查碰不到
+   正是暴露這個漏洞的那個檔案。
+3. 候選 `9f3bf5ee` 現在會被正確拒絕，不需人工刪除。
+
+### 10.4 對目標的意義
+
+修正後的幾何正是紅橘分辨與黑色檢測要的東西：dominant fraction Red 0.816、
+Orange 0.735（先前 0.50–0.70，代表框內有 30–50% 是鄰線），Black 的
+`coverage_mean` 0.744 才是 v4 公式該用的分母。
+
+### 10.5 下一步
+
+請重新從 GUI 執行一次重建。輸入條件與 scratch 那次已完全一致，預期五色 REBUILT、
+狀態 READY；若仍出現「沿用」，把報告貼出來再查，不要調門檻。

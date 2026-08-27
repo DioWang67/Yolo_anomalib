@@ -35,6 +35,32 @@ BASELINE_ALGORITHM_VERSION = "stats-robust-v4"
 #: Where a color model records the algorithm that produced it.
 _PROVENANCE_SECTION = "recalibration"
 _PROVENANCE_KEY = "algorithm"
+#: Colors whose statistics were copied from the base rather than measured by the
+#: run that wrote the file.
+_PRESERVED_KEY = "preserved_colors"
+#: What the base that those colors came from claimed for itself.
+_BASE_ALGORITHM_KEY = "base_algorithm"
+#: What the same idea was called before both preservation reasons shared a list.
+_LEGACY_PRESERVED_KEY = "preserved_by_safety"
+
+
+def _provenance(stats_path: str | Path) -> Mapping[str, object]:
+    """Return an artifact's provenance block, or an empty mapping."""
+    try:
+        payload = json.loads(Path(stats_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    section = payload.get(_PROVENANCE_SECTION)
+    return section if isinstance(section, Mapping) else {}
+
+
+def _recorded_string(section: Mapping[str, object], key: str) -> str | None:
+    recorded = section.get(key)
+    if not isinstance(recorded, str):
+        return None
+    return recorded.strip() or None
 
 
 def color_model_algorithm(stats_path: str | Path) -> str | None:
@@ -45,19 +71,7 @@ def color_model_algorithm(stats_path: str | Path) -> str | None:
     be established" identically and a raised exception here would only be
     swallowed at each of them.
     """
-    try:
-        payload = json.loads(Path(stats_path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(payload, Mapping):
-        return None
-    section = payload.get(_PROVENANCE_SECTION)
-    if not isinstance(section, Mapping):
-        return None
-    recorded = section.get(_PROVENANCE_KEY)
-    if not isinstance(recorded, str):
-        return None
-    return recorded.strip() or None
+    return _recorded_string(_provenance(stats_path), _PROVENANCE_KEY)
 
 
 def baseline_compatibility_failure(algorithm: str | None) -> str:
@@ -80,5 +94,36 @@ def baseline_compatibility_failure(algorithm: str | None) -> str:
 
 
 def color_model_compatibility_failure(stats_path: str | Path) -> str:
-    """Return why the color model at ``stats_path`` cannot be trusted, or ``""``."""
-    return baseline_compatibility_failure(color_model_algorithm(stats_path))
+    """Return why the color model at ``stats_path`` cannot be trusted, or ``""``.
+
+    Stricter than the algorithm alone, because a rebuild that preserves a color
+    copies that color's numbers from its base. Such a file honestly records that
+    this run used the current algorithm while part of its statistics were
+    measured by whatever produced the base, so the stamp alone would let the
+    base's geometry borrow a label it did not earn. A mixture is acceptable only
+    when the base claimed the current algorithm as well -- which is the ordinary
+    case of a later rebuild preserving a color that ran short of evidence.
+    """
+    section = _provenance(stats_path)
+    failure = baseline_compatibility_failure(
+        _recorded_string(section, _PROVENANCE_KEY)
+    )
+    if failure:
+        return failure
+    preserved = section.get(_PRESERVED_KEY)
+    if not isinstance(preserved, (list, tuple)):
+        # Artifacts written before the single list existed recorded only the
+        # safety-rejected colors. Falling back to that is what makes this check
+        # reach the file that exposed the hole, rather than only future ones.
+        preserved = section.get(_LEGACY_PRESERVED_KEY)
+    if not isinstance(preserved, (list, tuple)) or not preserved:
+        return ""
+    base_algorithm = _recorded_string(section, _BASE_ALGORITHM_KEY)
+    if base_algorithm == BASELINE_ALGORITHM_VERSION:
+        return ""
+    names = "、".join(str(color) for color in preserved)
+    return (
+        f"{names} 沿用舊基準統計（舊基準演算法 "
+        f"{base_algorithm or '未記錄'}，目前為 {BASELINE_ALGORITHM_VERSION}）："
+        "裁切座標空間不同，統計量不可比較"
+    )

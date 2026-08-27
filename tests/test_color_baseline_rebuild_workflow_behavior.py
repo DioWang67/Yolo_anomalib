@@ -79,7 +79,23 @@ def _snapshot(tmp_path: Path):
     )
 
 
+def _write_station_config(tmp_path: Path, *, inset_x_ratio: float = 0.2) -> Path:
+    """The live config the runtime measures color with, which the worker must use."""
+    config = tmp_path / "models" / "Cable1" / "A" / "yolo" / "config.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        "enable_color_check: true\n"
+        "color_roi_policy:\n"
+        f"  inset_x_ratio: {inset_x_ratio}\n"
+        "  inset_y_ratio: 0.0\n"
+        "  min_size: 8\n",
+        encoding="utf-8",
+    )
+    return config
+
+
 def _configure_worker_dependencies(monkeypatch, tmp_path: Path) -> None:
+    _write_station_config(tmp_path)
     paths = SimpleNamespace(
         acceptance=tmp_path / "acceptance",
         models=tmp_path / "models",
@@ -434,3 +450,99 @@ def test_an_unflagged_color_keeps_its_plain_note() -> None:
 
     assert text == "統計已重建"
     assert tooltip == text
+
+
+def test_rebuild_takes_its_geometry_from_the_station_not_the_model_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A model version snapshot cannot carry the color sampling geometry.
+
+    The snapshot is frozen at the model version, while ``color_roi_policy`` is a
+    station-local field that a model deployment preserves rather than replaces --
+    so no snapshot has ever recorded one. Reading it there resolved to the
+    default of no inset on every model version, and a rebuild then sampled the
+    full detector bbox: the exact geometry the policy exists to move away from.
+    It failed silently, because every resulting statistic is well-formed and
+    only measured somewhere else.
+    """
+    _configure_worker_dependencies(monkeypatch, tmp_path)
+    _write_station_config(tmp_path, inset_x_ratio=0.2)
+    monkeypatch.setattr(_EvidenceProvider, "snapshot", _snapshot(tmp_path))
+    captured: dict[str, object] = {}
+
+    def _collect(**kwargs):
+        captured["roi_policy"] = kwargs["roi_policy"]
+        return ("evidence",)
+
+    def _build(**kwargs):
+        captured["evidence_metadata"] = kwargs["evidence_metadata"]
+        return SimpleNamespace(outlier_filter=None, color_reports=())
+
+    monkeypatch.setattr(rebuild_dialog, "ColorBaselineEvidenceProvider", _EvidenceProvider)
+    monkeypatch.setattr(rebuild_dialog, "AcceptanceRepository", lambda _root: object())
+    monkeypatch.setattr(rebuild_dialog, "AcceptanceInferenceService", _Service)
+    monkeypatch.setattr(
+        rebuild_dialog, "_resolve_color_model", lambda *_args: tmp_path / "color.json"
+    )
+    monkeypatch.setattr(rebuild_dialog, "collect_color_baseline_evidence", _collect)
+    monkeypatch.setattr(
+        rebuild_dialog,
+        "StatsColorBaselineRebuilder",
+        lambda: SimpleNamespace(build=_build),
+    )
+    monkeypatch.setattr(
+        rebuild_dialog,
+        "ColorBaselineCandidateStore",
+        lambda _root: SimpleNamespace(
+            commit=lambda **_kwargs: SimpleNamespace(display_version="baseline-v1")
+        ),
+    )
+    worker = rebuild_dialog.ColorBaselineRebuildWorker(
+        project_root=tmp_path,
+        product="Cable1",
+        area="A",
+        # "fusion" resolves to the yolo model directory, which is where the
+        # station config for this scope lives.
+        inference_type="fusion",
+        model=_model(tmp_path),
+    )
+
+    worker.run()
+
+    # The snapshot written by ``_model`` records no policy at all, so a default
+    # here would be indistinguishable from success.
+    assert captured["roi_policy"].inset_x_ratio == 0.2
+    assert captured["roi_policy"].min_size == 8
+    metadata = captured["evidence_metadata"]
+    assert metadata["color_roi_policy"]["inset_x_ratio"] == 0.2
+    assert metadata["color_roi_policy_source"].endswith("config.yaml")
+    assert "versions" not in metadata["color_roi_policy_source"]
+
+
+def test_rebuild_refuses_to_guess_when_the_station_config_is_missing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Defaulting here would silently rebuild in the wrong geometry."""
+    _configure_worker_dependencies(monkeypatch, tmp_path)
+    (tmp_path / "models" / "Cable1" / "A" / "yolo" / "config.yaml").unlink()
+    monkeypatch.setattr(_EvidenceProvider, "snapshot", _snapshot(tmp_path))
+    monkeypatch.setattr(rebuild_dialog, "ColorBaselineEvidenceProvider", _EvidenceProvider)
+    monkeypatch.setattr(
+        rebuild_dialog, "_resolve_color_model", lambda *_args: tmp_path / "color.json"
+    )
+    worker = rebuild_dialog.ColorBaselineRebuildWorker(
+        project_root=tmp_path,
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        model=_model(tmp_path),
+    )
+    failures: list[str] = []
+    worker.failed.connect(failures.append)
+
+    worker.run()
+
+    assert failures
+    assert "config" in failures[0]

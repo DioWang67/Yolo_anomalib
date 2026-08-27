@@ -91,8 +91,25 @@ class ColorBaselineRebuildWorker(QThread):
                 self.project_root,
                 config_path,
             )
-            roi_policy = _resolve_color_roi_policy(config_path)
             selected_type = "yolo" if self.inference_type.casefold() == "fusion" else self.inference_type.casefold()
+            # The version snapshot governs detection -- the boxes have to come
+            # from the model version under test -- but it must not govern the
+            # color sampling geometry. That has to match what the runtime
+            # measures with today, and no snapshot can carry it: the snapshot is
+            # frozen at the model version, while ``color_roi_policy`` is a
+            # station-local field that a model deployment preserves rather than
+            # replaces. Reading it from the snapshot resolved to the default of
+            # no inset on every model version, so a rebuild sampled the full
+            # detector bbox -- the very geometry the policy exists to move away
+            # from -- and then stamped the result with the current algorithm.
+            station_config_path = (
+                self.data_paths.models
+                / self.product
+                / self.area
+                / selected_type
+                / "config.yaml"
+            )
+            roi_policy = _resolve_color_roi_policy(station_config_path)
             evidence_provider = ColorBaselineEvidenceProvider(
                 product=self.product,
                 area=self.area,
@@ -146,6 +163,9 @@ class ColorBaselineRebuildWorker(QThread):
             self.phase_changed.emit("正在分割建模與保留樣本，重算顏色統計…")
             evidence_metadata = evidence_snapshot.to_report_dict()
             evidence_metadata["color_roi_policy"] = roi_policy.to_dict()
+            # Which file the geometry came from. Without it the recorded policy
+            # cannot be checked against the config the line actually runs.
+            evidence_metadata["color_roi_policy_source"] = str(station_config_path)
             build = StatsColorBaselineRebuilder().build(
                 base_model_path=base_model_path,
                 evidence=evidence,
@@ -514,12 +534,19 @@ def _review_explanation(report) -> tuple[str, str]:
 
 
 def _resolve_color_roi_policy(config_path: Path) -> ColorRoiPolicy:
-    """Load the exact bbox policy used by production color measurement."""
+    """Load the bbox policy the runtime measures color with.
+
+    Must be the live station config, not a model version snapshot. The runtime
+    reads this same field from this same file, so taking it from anywhere else
+    lets a baseline be built in a geometry production does not use, and nothing
+    downstream can tell: every statistic is well-formed, only measured
+    elsewhere.
+    """
     if config_path.is_symlink() or not config_path.is_file():
-        raise ColorBaselineError("選取的模型 config 快照不存在。")
+        raise ColorBaselineError(f"站點模型設定不存在：{config_path}")
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(payload, dict):
-        raise ColorBaselineError("選取的模型 config 快照格式錯誤。")
+        raise ColorBaselineError(f"站點模型設定格式錯誤：{config_path}")
     try:
         return ColorRoiPolicy.from_mapping(payload.get("color_roi_policy"))
     except (TypeError, ValueError) as exc:

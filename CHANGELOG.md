@@ -26,6 +26,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   typo as `warn` would grant the opposite of what the config asked for.
 
 ### Fixed
+- Color baseline rebuilds took their sampling geometry from the model version
+  config snapshot, which cannot carry it. `color_roi_policy` is a station-local
+  field that a model deployment preserves rather than replaces, so no snapshot
+  had ever recorded one, and every rebuild resolved it to the default of no
+  inset -- sampling the full detector bbox, the exact geometry the policy exists
+  to move away from. It failed silently, because every resulting statistic is
+  well-formed and only measured somewhere else. With the correct geometry the
+  same 215 samples rebuild all five colors; with the snapshot's default all five
+  were rejected by the drift guard and reverted. The guard was right and has not
+  been loosened: the input was wrong. The geometry now comes from the live
+  station config, a missing one refuses the rebuild rather than defaulting, and
+  the report records which file it came from.
+- A candidate could claim the current algorithm for statistics it had not
+  produced. A rebuild that preserves a color copies that color's numbers from
+  the base, so the file honestly records the current algorithm while part of its
+  statistics were measured by whatever built the base. One rebuild whose five
+  colors were all preserved came out byte-identical to the deployed baseline,
+  stamped as current, and passed every gate -- the gate vouching for the thing
+  it exists to catch. Candidates now record `preserved_colors` and
+  `base_algorithm`, and a mixture is compatible only when the base was current
+  too, which still admits the ordinary case of preserving a color that ran short
+  of evidence.
 - The compatibility gate covered one of the three doors into "compare or publish
   a color baseline". Baseline candidates were checked; color profile packages and
   release publication were not. A package built from an excluded candidate stayed

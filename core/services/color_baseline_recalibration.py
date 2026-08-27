@@ -711,6 +711,25 @@ class StatsColorBaselineRebuilder:
         model_payload["recalibration"]["preserved_by_safety"] = sorted(
             rejected_proposals
         )
+        # Every color whose numbers came from the base rather than from this
+        # run, for either reason. Recorded as one list because a reader deciding
+        # whether to trust the file does not care which reason applied -- only
+        # that those statistics were measured by whatever built the base.
+        model_payload["recalibration"]["preserved_colors"] = sorted(
+            {
+                color
+                for color in canonical_colors
+                if preliminary_states[color][0] == "PRESERVED_INSUFFICIENT"
+                or color in rejected_proposals
+            }
+        )
+        # What the base claimed for itself, so a reader can tell a mixture that
+        # is uniformly current from one resting on an older geometry. A base
+        # with no record of its own reads as None, which is the honest answer
+        # and the one that must not be treated as agreement.
+        model_payload["recalibration"]["base_algorithm"] = (
+            _payload_algorithm(base_payload)
+        )
         # A wide spread never rejects a rebuild on its own -- the threshold is
         # calibrated on a handful of baselines, and wrongly blocking a good one
         # is a production problem too. It routes the candidate to the human
@@ -740,6 +759,8 @@ class StatsColorBaselineRebuilder:
                 "minimum_holdout_accuracy": self.minimum_holdout_accuracy,
             },
             "preserved_by_safety": sorted(rejected_proposals),
+            "preserved_colors": model_payload["recalibration"]["preserved_colors"],
+            "base_algorithm": model_payload["recalibration"]["base_algorithm"],
             "review_required_colors": sorted(
                 item.color for item in color_reports if item.review_reasons
             ),
@@ -1435,6 +1456,17 @@ def _hsv_trimmed_mean(values: np.ndarray) -> np.ndarray:
     result = np.asarray(_trimmed_mean(values), dtype=np.float64)
     result[0] = _circular_trimmed_hue_mean(np.asarray(values)[:, 0])
     return result
+
+
+def _payload_algorithm(payload: Mapping[str, Any]) -> str | None:
+    """Return the algorithm a loaded color model payload records for itself."""
+    section = payload.get("recalibration")
+    if not isinstance(section, Mapping):
+        return None
+    recorded = section.get("algorithm")
+    if not isinstance(recorded, str):
+        return None
+    return recorded.strip() or None
 
 
 def _correct_predictions(

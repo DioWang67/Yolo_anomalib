@@ -123,3 +123,101 @@ def test_the_rebuilder_stamps_the_contract_version() -> None:
     from core.services.color_baseline_recalibration import ALGORITHM_VERSION
 
     assert ALGORITHM_VERSION == BASELINE_ALGORITHM_VERSION
+
+
+def test_preserved_colors_cannot_borrow_the_current_label(tmp_path: Path) -> None:
+    """A rebuild that preserves a color copies that color's numbers from the base.
+
+    The file then honestly records that this run used the current algorithm
+    while part of its statistics were measured by whatever produced the base.
+    Trusting the stamp alone let a rebuild whose five colors were all preserved
+    come out byte-identical to the deployed baseline and still pass every gate.
+    """
+    path = _write(
+        tmp_path / "mixed.json",
+        {
+            "summary": {},
+            "recalibration": {
+                "algorithm": BASELINE_ALGORITHM_VERSION,
+                "preserved_colors": ["Black", "Red"],
+                "base_algorithm": "stats-robust-v2",
+            },
+        },
+    )
+
+    failure = color_model_compatibility_failure(path)
+
+    assert "Black" in failure and "Red" in failure
+    assert "stats-robust-v2" in failure
+
+
+def test_a_mixture_on_a_current_base_is_accepted(tmp_path: Path) -> None:
+    """Otherwise a color that ran short of evidence would block every rebuild.
+
+    Preserving from a base built by the same algorithm keeps one geometry
+    throughout, which is the ordinary case and must not be refused.
+    """
+    path = _write(
+        tmp_path / "mixed.json",
+        {
+            "summary": {},
+            "recalibration": {
+                "algorithm": BASELINE_ALGORITHM_VERSION,
+                "preserved_colors": ["Green"],
+                "base_algorithm": BASELINE_ALGORITHM_VERSION,
+            },
+        },
+    )
+
+    assert color_model_compatibility_failure(path) == ""
+
+
+def test_a_base_with_no_record_is_not_treated_as_agreement(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "mixed.json",
+        {
+            "summary": {},
+            "recalibration": {
+                "algorithm": BASELINE_ALGORITHM_VERSION,
+                "preserved_colors": ["Black"],
+            },
+        },
+    )
+
+    assert "未記錄" in color_model_compatibility_failure(path)
+
+
+def test_the_older_field_name_still_reaches_the_check(tmp_path: Path) -> None:
+    """The file that exposed this hole predates the combined list.
+
+    Reading only the new field would have left that candidate passing, which is
+    the one case the check exists for.
+    """
+    path = _write(
+        tmp_path / "legacy.json",
+        {
+            "summary": {},
+            "recalibration": {
+                "algorithm": BASELINE_ALGORITHM_VERSION,
+                "preserved_by_safety": ["Black", "Green", "Orange", "Red", "Yellow"],
+            },
+        },
+    )
+
+    assert color_model_compatibility_failure(path) != ""
+
+
+def test_a_fully_rebuilt_candidate_is_unaffected(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "rebuilt.json",
+        {
+            "summary": {},
+            "recalibration": {
+                "algorithm": BASELINE_ALGORITHM_VERSION,
+                "preserved_colors": [],
+                "base_algorithm": "stats-robust-v2",
+            },
+        },
+    )
+
+    assert color_model_compatibility_failure(path) == ""
