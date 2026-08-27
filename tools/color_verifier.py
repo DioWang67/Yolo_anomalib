@@ -1,6 +1,28 @@
-﻿"""
-完整改進版 LED 顏色檢測程式
-可直接替換原 color_verifier.py
+﻿"""Standalone LED color verification CLI.
+
+WARNING -- this tool does not answer "what does the line decide?".
+
+It applies a stricter, envelope-based policy than the production runtime in
+``core/stats_color_checker.py``: every color is matched against the recorded
+``hsv_min``/``hsv_max`` box, and a region whose match ratio falls below
+``MIN_HSV_MATCH_RATIO`` scores zero outright. The runtime instead uses
+hand-tuned, open-ended gates for red, orange and green -- red checks a lower
+bound on V and no upper bound at all.
+
+The two therefore disagree on ordinary inputs. Measured against the shared
+conformance cases, this tool agrees with the runtime on 8 of 15: it reports
+``Unknown`` for a plain bright red whose V sits just past the baseline's
+recorded 99th percentile, and reports ``Orange`` with high confidence for a
+red region that catches an orange edge.
+
+Neither policy is wrong in itself -- a strict envelope check is a reasonable
+thing to want from a calibration tool -- but the name invites the other
+reading. Use it to ask whether evidence falls inside a baseline's recorded
+envelope. Do not use it to explain or predict a production verdict; run the
+runtime checker for that.
+
+See tests/test_color_verifier_divergence.py, which pins this difference so it
+stays a documented choice rather than a discovery.
 """
 from __future__ import annotations
 

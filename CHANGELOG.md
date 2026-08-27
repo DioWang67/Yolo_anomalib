@@ -36,6 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version.
 
 ### Fixed
+- `tools/color_verifier.py` now states, at the top of the file, that it does
+  not answer "what does the line decide?". It applies a stricter
+  envelope-based policy than the runtime -- every color matched against the
+  recorded `hsv_min`/`hsv_max` box, with anything under `MIN_HSV_MATCH_RATIO`
+  zeroed -- while the runtime uses hand-tuned open-ended gates for red, orange
+  and green. Measured on the shared conformance cases the two agree on 8 of
+  15: the tool reports `Unknown` for a plain bright red whose V sits just past
+  the baseline's recorded 99th percentile, and reports `Orange` with high
+  confidence for a red region catching an orange edge. Neither policy is wrong
+  in itself, but the name invited the other reading and nothing recorded the
+  difference. `tests/test_color_verifier_divergence.py` pins it so it stays a
+  documented choice rather than something found the hard way during a
+  confusing tool run.
 - A rebuilt color baseline whose evidence does not look like a single color
   now asks for human review instead of arriving marked READY. The existing
   safety check measures *drift* -- how far the new center moved from the
