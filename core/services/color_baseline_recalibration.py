@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 from collections import defaultdict
@@ -23,7 +24,9 @@ import cv2
 import numpy as np
 
 from core.services.inspection_release_store import sha256_file
-from core.stats_color_checker import StatsColorChecker
+from core.stats_color_checker import StatsColorChecker, circular_hue_mean
+
+logger = logging.getLogger(__name__)
 
 COLOR_BASELINE_SCHEMA_VERSION = 1
 ALGORITHM_VERSION = "stats-robust-v2"
@@ -559,20 +562,38 @@ class StatsColorBaselineRebuilder:
         hsv_rows: list[np.ndarray] = []
         lab_rows: list[np.ndarray] = []
         coverages: list[float] = []
+        skipped: list[str] = []
         for item in evidence:
-            hsv, lab, coverage = _sample_color_pixels(
-                item.image_bgr,
-                item.color,
-                sample_size=self.sample_size,
-            )
+            try:
+                hsv, lab, coverage = _sample_color_pixels(
+                    item.image_bgr,
+                    item.color,
+                    sample_size=self.sample_size,
+                )
+            except _InsufficientColorPixels as exc:
+                # One unusable crop must not fail the whole rebuild, and must
+                # not be silently averaged into the baseline either.
+                skipped.append(str(item.sample_id))
+                logger.warning(
+                    "Color baseline skipped crop %s: %s", item.sample_id, exc
+                )
+                continue
             hsv_rows.append(hsv)
             lab_rows.append(lab)
             coverages.append(coverage)
+        if not hsv_rows:
+            raise ColorBaselineError(
+                f"所有 {len(evidence)} 個裁切都沒有足夠的顏色證據，無法建立基準。"
+            )
         hsv_values = np.concatenate(hsv_rows, axis=0)
         lab_values = np.concatenate(lab_rows, axis=0)
         return {
-            "count": len(evidence),
-            "hsv_mean": _trimmed_mean(hsv_values).tolist(),
+            # The number of crops the statistics were actually built from, not
+            # the number offered. Reporting the offered count would overstate
+            # the evidence behind a baseline that had dropped crops.
+            "count": len(hsv_rows),
+            "skipped_crops": skipped,
+            "hsv_mean": _hsv_trimmed_mean(hsv_values).tolist(),
             "hsv_min": np.percentile(hsv_values, 1, axis=0).tolist(),
             "hsv_max": np.percentile(hsv_values, 99, axis=0).tolist(),
             "lab_mean": _trimmed_mean(lab_values).tolist(),
@@ -969,16 +990,40 @@ def _lab_features_by_sample(
 ) -> dict[str, np.ndarray]:
     features: dict[str, list[np.ndarray]] = defaultdict(list)
     for item in evidence:
-        _hsv, lab, _coverage = _sample_color_pixels(
-            item.image_bgr,
-            item.color,
-            sample_size=sample_size,
-        )
+        try:
+            _hsv, lab, _coverage = _sample_color_pixels(
+                item.image_bgr,
+                item.color,
+                sample_size=sample_size,
+            )
+        except _InsufficientColorPixels:
+            continue
         features[item.sample_id].append(_trimmed_mean(lab))
+    # ``sample_features`` can now be empty: every crop for a sample may have
+    # been skipped for carrying no color evidence. Stacking an empty list
+    # raises, and a sample with no features has no outlier score to offer.
     return {
         sample_id: np.mean(np.vstack(sample_features), axis=0)
         for sample_id, sample_features in features.items()
+        if sample_features
     }
+
+
+class _InsufficientColorPixels(Exception):
+    """One crop carries too little color evidence to contribute to a baseline.
+
+    Internal to this module: callers drop the crop and record that they did,
+    rather than letting one unusable crop fail a whole rebuild.
+    """
+
+    def __init__(self, color: str, selected: int, coverage: float) -> None:
+        super().__init__(
+            f"{color} 裁切僅有 {selected} 個有效像素（覆蓋率 {coverage:.3f}），"
+            "不足以作為顏色基準。"
+        )
+        self.color = color
+        self.selected = selected
+        self.coverage = coverage
 
 
 def _sample_color_pixels(
@@ -1010,9 +1055,17 @@ def _sample_color_pixels(
         mask = (hsv[:, :, 1] < 80) & (hsv[:, :, 2] < 110)
     else:
         mask = hsv[:, :, 1] >= 20
-    coverage = float(np.count_nonzero(mask)) / max(mask.size, 1)
-    if np.count_nonzero(mask) < sample_size:
-        mask = np.ones(mask.shape, dtype=bool)
+    selected = int(np.count_nonzero(mask))
+    coverage = float(selected) / max(mask.size, 1)
+    if selected < _minimum_sampled_pixels(sample_size):
+        # Too little of this crop carries the kind of pixel the color is made
+        # of. The previous behavior was to discard the mask and sample *every*
+        # pixel instead, so a crop that is mostly unsaturated background
+        # produced a "color baseline" built out of that background -- the
+        # recorded coverage said 0.00 while the statistics came from thousands
+        # of background pixels. A crop with no color evidence has to be
+        # dropped, not padded.
+        raise _InsufficientColorPixels(color, selected, coverage)
     return (
         hsv[mask].reshape(-1, 3),
         lab[mask].reshape(-1, 3),
@@ -1020,11 +1073,56 @@ def _sample_color_pixels(
     )
 
 
+def _minimum_sampled_pixels(sample_size: int) -> int:
+    """Fewest masked pixels a crop must contribute to a baseline.
+
+    This is an absolute pixel floor, not a fraction of the crop: the historical
+    check compared the count against ``sample_size`` while the mask holds
+    ``sample_size ** 2`` pixels, so the effective floor has always been
+    ``1 / sample_size`` of the crop -- about 1.6% at the default 64. The value
+    is preserved rather than "corrected" to a fraction, because raising it
+    would reject crops the line currently accepts, which is a tuning decision
+    rather than a bug fix. Naming it makes the choice visible.
+    """
+    return max(1, sample_size)
+
+
 def _trimmed_mean(values: np.ndarray) -> np.ndarray:
     lower = np.percentile(values, 5, axis=0)
     upper = np.percentile(values, 95, axis=0)
     clipped = np.clip(values, lower, upper)
     return np.mean(clipped, axis=0)
+
+
+def _circular_trimmed_hue_mean(hue: np.ndarray) -> float:
+    """Trimmed mean of hue samples on OpenCV's 0..179 circle.
+
+    Samples are re-expressed as signed offsets from the circular center, so the
+    5/95 trim runs on a continuous axis instead of across the 0/179 seam.
+    """
+    values = np.asarray(hue, dtype=np.float64).ravel()
+    if values.size == 0:
+        return 0.0
+    center = circular_hue_mean(values)
+    offsets = np.mod(values - center + 90.0, 180.0) - 90.0
+    lower = float(np.percentile(offsets, 5))
+    upper = float(np.percentile(offsets, 95))
+    trimmed = np.clip(offsets, lower, upper)
+    return float(np.mod(center + float(np.mean(trimmed)), 180.0))
+
+
+def _hsv_trimmed_mean(values: np.ndarray) -> np.ndarray:
+    """Trimmed HSV mean whose hue channel is averaged on its circle.
+
+    Hue is periodic, so averaging it linearly places the mean of red samples at
+    3 and 178 near 90 -- which is green. Inference compares this value with
+    circular distance, so producing it linearly here made the two ends of the
+    contract disagree and cost genuine red parts their score. Saturation and
+    value are ordinary linear channels and keep the plain trimmed mean.
+    """
+    result = np.asarray(_trimmed_mean(values), dtype=np.float64)
+    result[0] = _circular_trimmed_hue_mean(np.asarray(values)[:, 0])
+    return result
 
 
 def _correct_predictions(

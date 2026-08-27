@@ -384,3 +384,86 @@ def test_correct_predictions_requires_threshold_acceptance_and_color_match() -> 
             return next(self._results)
 
     assert recalibration._correct_predictions(_Checker(), evidence, "Black") == 1
+
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the color-baseline audit
+# ---------------------------------------------------------------------------
+
+
+def _mostly_background_crop(color: str) -> np.ndarray:
+    """A crop where almost nothing carries the color's own kind of pixel."""
+    hsv = np.zeros((64, 64, 3), np.uint8)
+    h, s, v = HSV_BY_COLOR[color]
+    hsv[:2, :2] = (h, s, v)
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+
+def test_crop_without_color_evidence_is_rejected_not_sampled_wholesale():
+    """The mask used to be discarded and *every* pixel sampled instead.
+
+    A crop that is mostly unsaturated background then produced a "color
+    baseline" built out of that background, while the recorded coverage
+    reported 0.00.
+    """
+    with pytest.raises(recalibration._InsufficientColorPixels) as excinfo:
+        recalibration._sample_color_pixels(
+            _mostly_background_crop("Red"), "Red", sample_size=64
+        )
+
+    assert excinfo.value.color == "Red"
+    assert excinfo.value.coverage < 0.01
+
+
+def test_clean_crop_sampling_is_unchanged():
+    hsv_values, lab_values, coverage = recalibration._sample_color_pixels(
+        _crop("Red"), "Red", sample_size=64
+    )
+
+    assert coverage == pytest.approx(1.0)
+    assert len(hsv_values) == len(lab_values) == 64 * 64
+
+
+def test_statistics_skip_unusable_crops_and_report_the_count_actually_used():
+    rebuilder = StatsColorBaselineRebuilder()
+    evidence = [
+        ColorCropEvidence(
+            sample_id=f"good-{index}",
+            color="Red",
+            image_bgr=_crop("Red", offset=index),
+            source_sha256=f"sha-good-{index}",
+        )
+        for index in range(3)
+    ] + [
+        ColorCropEvidence(
+            sample_id="empty-1",
+            color="Red",
+            image_bgr=_mostly_background_crop("Red"),
+            source_sha256="sha-empty-1",
+        )
+    ]
+
+    stats = rebuilder._calculate_stats(evidence)
+
+    # ``count`` must describe the evidence the numbers came from, not the
+    # evidence that was offered.
+    assert stats["count"] == 3
+    assert stats["skipped_crops"] == ["empty-1"]
+    assert stats["coverage_mean"] == pytest.approx(1.0)
+
+
+def test_statistics_fail_closed_when_no_crop_carries_color_evidence():
+    rebuilder = StatsColorBaselineRebuilder()
+    evidence = [
+        ColorCropEvidence(
+            sample_id=f"empty-{index}",
+            color="Red",
+            image_bgr=_mostly_background_crop("Red"),
+            source_sha256=f"sha-empty-{index}",
+        )
+        for index in range(3)
+    ]
+
+    with pytest.raises(ColorBaselineError):
+        rebuilder._calculate_stats(evidence)

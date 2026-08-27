@@ -27,6 +27,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version.
 
 ### Fixed
+- A color baseline is no longer built out of background pixels. When fewer
+  than `sample_size` pixels in a crop matched the kind of pixel the color is
+  made of, `_sample_color_pixels()` discarded its mask and sampled *every*
+  pixel instead -- so a crop that is mostly unsaturated background produced a
+  "color baseline" made of that background, while the coverage recorded
+  alongside it reported 0.00. Such a crop is now dropped, the dropped ids are
+  recorded in the summary as `skipped_crops`, `count` reports the crops the
+  statistics were actually built from rather than the crops offered, and a
+  color with no usable crop at all fails the rebuild instead of producing a
+  signable baseline. The pixel floor itself is unchanged and now named, since
+  raising it would reject crops the line currently accepts.
+- Color check no longer passes a region it never measured. When no pixel
+  cleared the saturation gate, `StatsColorChecker` answered with a hard-coded
+  `black: 0.7` -- a score picked to clear black's own threshold, invented for a
+  ROI carrying no color evidence, and written past the caller's allowed color
+  vocabulary. A washed-out or unlit region therefore passed the color check,
+  and because the result also read as a trustworthy measurement it overwrote
+  the detector's class, carrying the wrong label into the review dataset that
+  retrains the detector. The absence is now reported and fails closed,
+  including when a product configures a threshold of zero.
+- Hue is now averaged on its circle at both ends of the baseline contract.
+  OpenCV hue wraps at 0/179, but the mean was taken linearly when the baseline
+  was written and again when a region was scored, so red samples at 3 and 178
+  averaged to ~90 -- green. A dim red part crossing the seam was classified
+  Green outright, and even a bright one lost a quarter of its score to a color
+  it does not resemble. Existing `color_stats.json` files keep working; a
+  baseline whose samples straddle the seam needs recalibration to benefit.
+- A detection whose box is degenerate or lands outside the image no longer
+  takes down the frame. Cropping it blind produced an empty array, which
+  OpenCV answers with an assertion failure that escaped the whole pipeline: one
+  unusable box became a frame-wide ERROR, and in the async pipeline it tripped
+  the stop event and halted the line. The item now fails closed on its own and
+  the result reports `unmeasurable_roi` rather than claiming every ROI was
+  evaluated. Bbox cropping is shared with the crop-saving path, which had the
+  same gap.
+- Fusion runs measured color from the wrong image. `processed_image` is the
+  clean image detections were measured on, and both the color checker and the
+  result sink depend on that; the fusion merge pointed it at `result_frame` --
+  the YOLO overlay drawn onto the anomalib heatmap -- so color was read from
+  heatmap pseudo-color plus the drawn box borders, and the saved annotation was
+  drawn over an already-annotated frame. The overlay remains available as
+  `result_frame` and the heatmap as `heatmap_path`.
+- An activated `global` color revision now reaches the `color_qc` checker.
+  `ColorCheckerService` dropped `default_threshold` on that path and
+  `ColorQCEnhanced` had no way to accept it, so the revision was silently inert
+  for every product on that checker while the run log still announced it as
+  applied. It now applies, returns to the model baseline when a later product
+  restates nothing, and rejects a malformed value without leaving partial
+  state.
+- A color whose baseline lacks `hsv_mean` or `lab_mean` no longer outscores one
+  that has them. The absent similarity term defaulted to a perfect 1.0 and
+  still collected its full 0.2-0.3 weight; absent terms are now dropped and the
+  remaining weights renormalized, which is a no-op when every statistic is
+  present.
+- The hue membership test used for colors without a dedicated rule now survives
+  the 0/179 seam, so a margin pushing a range past either end -- or a color
+  calibrated around hue 0 -- no longer reads as "never matches".
+- Malformed color statistics are rejected at load with the offending key named,
+  instead of loading and failing later as an IndexError inside the matcher.
+- The black shortcut no longer reports a confidence unrelated to the rule that
+  fired, which could produce "this region is black, and black is NG" in one
+  result.
+- `_compute_hsv3d_hist` no longer swallows an OpenCV failure in silence. The
+  pure-Python path exists for environments without cv2, not as a shock absorber
+  for runtime errors: it is ~11x slower per ROI and blows the inspection
+  latency budget. Anything falling back is now logged, and an empty region is
+  rejected before it reaches OpenCV.
 - Release activation, rollback history, and retention cleanup now use
   recoverable commit points so database, audit, and filesystem failures cannot
   leave an active blocked release or silently orphan inspection evidence.
@@ -181,6 +248,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Multiple allowed roots scenario tests
 
 ### Changed
+- The black shortcut, the yellow shortcut, and the main scoring path in
+  `StatsColorChecker` now judge the same center crop. They previously used
+  three different crops, so the three decisions could legitimately disagree
+  about an elongated region.
+- The hue and S/V gates for red, orange, and green moved from module constants
+  into `ColorDecisionTuning`, so a product can retune them through
+  `color_decision_tuning` in its `config.yaml`. The values were one product's
+  calibration hard-coded in the matcher, which contradicted the module's own
+  documented contract that threshold changes never require a code release.
+  Defaults are unchanged.
 - Consolidated engineering version operations into component, candidate,
   validation and deployment views; UI metrics now use 誤殺／漏檢 terminology.
 - Acceptance color crops now use the processed-image coordinate space emitted
