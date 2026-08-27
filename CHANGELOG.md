@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Cross-implementation conformance tests between the runtime color checker and
+  the training-pipeline color gate. The two are separate code bases judging the
+  same product, so a decision rule that moves on one side and not the other lets
+  a model clear the gate and behave differently on the line, and neither
+  repository can notice on its own. Both carry a byte-identical
+  `tests/fixtures/color_conformance.json` with the color model embedded, so
+  each suite is self-contained; the workspace CI asserts the two copies still
+  match. Legitimate differences are recorded under `known_divergences` with the
+  reason rather than smoothed away.
 - Acceptance color discovery now reports the in-scope artifacts it withholds
   instead of dropping them silently. `discover_color_variants()` returns a
   `ColorVariantDiscovery` carrying both the selectable variants and a
