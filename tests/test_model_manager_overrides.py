@@ -256,6 +256,33 @@ def test_missing_model_camera_settings_preserve_global_values():
     assert base_config.calibration == {"target_luma": 100.0, "tolerance": 4.0}
 
 
+def test_model_color_roi_policy_overrides_the_global_policy():
+    base_config = DetectionConfig(
+        weights="global.onnx",
+        color_roi_policy={"inset_x_ratio": 0.0},
+    )
+    manager = ModelManager(
+        DetectionLogger(), engine_factory=_FakeInferenceEngine
+    )
+
+    manager._apply_model_config(
+        base_config,
+        {
+            "color_roi_policy": {
+                "inset_x_ratio": 0.2,
+                "inset_y_ratio": 0.0,
+                "min_size": 8,
+            }
+        },
+    )
+
+    assert base_config.color_roi_policy == {
+        "inset_x_ratio": 0.2,
+        "inset_y_ratio": 0.0,
+        "min_size": 8,
+    }
+
+
 def test_schema_none_values_preserve_global_scalar_settings():
     """Schema defaults must not silently disable or corrupt global settings."""
     base_config = DetectionConfig(

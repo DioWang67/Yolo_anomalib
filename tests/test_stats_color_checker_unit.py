@@ -16,7 +16,8 @@ def dummy_stats_json(tmp_path):
                 "hsv_max": [180, 50, 50],
                 "lab_min": [0, 120, 120],
                 "lab_max": [50, 135, 135],
-                "hsv_mean": [90, 25, 25]
+                "hsv_mean": [90, 25, 25],
+                "coverage_mean": 1.0,
             },
             "target_green": {
                 "hsv_min": [40, 50, 50],
@@ -134,8 +135,8 @@ def test_decision_tuning_from_dict_ignores_unknown_keys():
     assert tuning.black_s_threshold == 50.0  # None -> default kept
 
 
-def test_decision_tuning_changes_black_shortcut(dummy_stats_json):
-    """tuning 確實生效：放寬黑色門檻後，灰圖被黑色捷徑捕捉"""
+def test_manual_black_tuning_cannot_override_the_learned_baseline(dummy_stats_json):
+    """Black is decided by its baseline rather than a product-wide shortcut."""
     from core.stats_color_checker import ColorDecisionTuning
 
     # V=100 的深灰圖：預設 black_v_threshold=80 不會判黑
@@ -150,9 +151,9 @@ def test_decision_tuning_changes_black_shortcut(dummy_stats_json):
     )
     relaxed_result = relaxed_checker.check(gray_bgr)
 
-    assert relaxed_result.best_color == "black"
-    assert relaxed_result.metrics["debug"].get("shortcut") == "black"
-    assert default_result.metrics["debug"].get("shortcut") != "black"
+    assert relaxed_result.is_ok is False
+    assert default_result.is_ok is False
+    assert relaxed_result.metrics["debug"]["black_baseline"]["raw_ratio"] == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -339,20 +340,11 @@ def test_stats_arrays_must_carry_three_channels(tmp_path):
 
 
 def test_black_score_survives_a_non_uniform_crop(dummy_stats_json):
-    """Black's threshold has about 1% of headroom on real crops.
-
-    A change to which pixels the black rule looks at, or to the number it
-    reports, moves that score by more than the headroom. One such change --
-    unifying the three center crops, and reporting a fired rule's margin
-    instead of coverage -- took a genuine black region from 0.50 to 0.02 and
-    rejected every good board on the acceptance set, while every unit test
-    here still passed because they all used uniform patches.
-    """
+    """Learned envelope scoring keeps a textured, reflective Black ROI valid."""
     import cv2
 
     # Dark, mostly-black but textured, the way a real wire crop is: elongated,
-    # with highlights that keep coverage well under black_min_coverage so the
-    # decision comes from the mean/median rule rather than from coverage.
+    # with highlights that test learned-envelope coverage normalization.
     size_h, size_w = 40, 160
     hsv = np.zeros((size_h, size_w, 3), np.uint8)
     hsv[:, :, 1] = 25
@@ -365,18 +357,65 @@ def test_black_score_survives_a_non_uniform_crop(dummy_stats_json):
     result = checker.check(crop)
 
     assert result.best_color == "black"
-    assert result.metrics["debug"].get("shortcut") == "black"
-    # Coverage, not a rule margin: the value the threshold was calibrated on.
+    assert result.metrics["debug"]["black_baseline"]["raw_ratio"] > 0.45
     assert result.metrics["score"] > 0.45
     assert result.is_ok is True
 
 
-def test_black_shortcut_names_the_rules_that_fired(dummy_stats_json):
-    """The score stays coverage; the incoherence is answered by saying why."""
+def test_black_baseline_debug_exposes_score_normalization(dummy_stats_json):
     gray = np.full((20, 20, 3), 30, dtype=np.uint8)
 
     result = StatsColorChecker.from_json(str(dummy_stats_json)).check(gray)
 
-    rules = result.metrics["debug"].get("black_rules")
-    assert rules, "the black shortcut must record which rule decided"
-    assert set(rules) <= {"mean", "median", "coverage"}
+    debug = result.metrics["debug"]["black_baseline"]
+    assert debug["raw_ratio"] == pytest.approx(1.0)
+    assert debug["reference_coverage"] == pytest.approx(1.0)
+    assert debug["score"] == pytest.approx(1.0)
+
+
+def test_black_coverage_is_normalized_by_the_learned_reference(tmp_path):
+    stats = {
+        "summary": {
+            "black": {
+                "hsv_min": [0, 0, 0],
+                "hsv_max": [179, 80, 80],
+                "lab_min": [0, 120, 120],
+                "lab_max": [80, 136, 136],
+                "coverage_mean": 0.4,
+            }
+        }
+    }
+    path = tmp_path / "black.json"
+    path.write_text(json.dumps(stats), encoding="utf-8")
+    image = np.full((20, 20, 3), 180, dtype=np.uint8)
+    image[:, :8] = 20
+
+    result = StatsColorChecker.from_json(path).check(image)
+
+    debug = result.metrics["debug"]["black_baseline"]
+    assert debug["raw_ratio"] == pytest.approx(5 / 14)
+    assert debug["reference_coverage"] == pytest.approx(0.4)
+    assert debug["score"] == pytest.approx((5 / 14) / 0.4)
+    assert result.is_ok is True
+
+
+def test_black_baseline_without_reference_coverage_fails_closed(tmp_path):
+    stats = {
+        "summary": {
+            "black": {
+                "hsv_min": [0, 0, 0],
+                "hsv_max": [179, 255, 255],
+                "lab_min": [0, 0, 0],
+                "lab_max": [255, 255, 255],
+            }
+        }
+    }
+    path = tmp_path / "black-without-coverage.json"
+    path.write_text(json.dumps(stats), encoding="utf-8")
+
+    result = StatsColorChecker.from_json(path).check(
+        np.full((20, 20, 3), 255, dtype=np.uint8)
+    )
+
+    assert result.is_ok is False
+    assert result.metrics["debug"]["black_baseline"]["score"] == 0.0

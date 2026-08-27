@@ -10,7 +10,7 @@ import numpy as np
 
 from core.color_qc_enhanced import ColorQCEnhanced
 from core.models import ColorCheckItemResult, ColorCheckResult
-from core.services.slot_roi import extract_bbox_roi
+from core.services.slot_roi import ColorRoiPolicy, extract_bbox_roi
 from core.stats_color_checker import ColorDecisionTuning, StatsColorChecker
 
 logger = logging.getLogger(__name__)
@@ -133,6 +133,7 @@ class ColorCheckerService:
         self._model_path: str | None = None
         self._checker_type: str = "color_qc"
         self._decision_tuning: dict[str, Any] | None = None
+        self._roi_policy = ColorRoiPolicy()
 
     def ensure_loaded(
         self,
@@ -142,8 +143,13 @@ class ColorCheckerService:
         checker_type: str = "color_qc",
         default_threshold: float | None = None,
         decision_tuning: dict[str, Any] | None = None,
+        roi_policy: dict[str, Any] | None = None,
     ) -> None:
         """Load/Reload the color model if needed and apply overrides if provided."""
+        try:
+            resolved_roi_policy = ColorRoiPolicy.from_mapping(roi_policy)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"Invalid color ROI policy: {exc}") from exc
         checker_type = (checker_type or "color_qc").lower()
         if checker_type == "led_qc":
             checker_type = "color_qc"  # backward compatibility alias
@@ -204,6 +210,7 @@ class ColorCheckerService:
                 default_threshold=default_threshold,
                 color_thresholds=overrides,
             )
+            self._roi_policy = resolved_roi_policy
             return
         # ``default_threshold`` reaches this path too. Dropping it here made
         # an activated global color revision silently inert for every product
@@ -214,6 +221,7 @@ class ColorCheckerService:
             color_thresholds=overrides,
             color_rules=rules_overrides,
         )
+        self._roi_policy = resolved_roi_policy
 
     def _apply_runtime_configuration(self, **configuration: Any) -> None:
         """Hand this invocation's configuration to the checker, failing loudly.
@@ -295,7 +303,11 @@ class ColorCheckerService:
             # assertion failure that escapes the whole pipeline. One unusable
             # detection turned into a frame-wide ERROR, and in the async
             # pipeline into a line stop. Fail this item closed instead.
-            roi = extract_bbox_roi(proc, det.get("bbox"))
+            roi = extract_bbox_roi(
+                proc,
+                det.get("bbox"),
+                policy=self._roi_policy,
+            )
             if roi is None:
                 unmeasurable += 1
                 all_ok = False

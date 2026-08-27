@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,6 +21,63 @@ class SlotROI:
     class_name: str
     bbox: tuple[int, int, int, int]
     image: np.ndarray
+
+
+@dataclass(frozen=True)
+class ColorRoiPolicy:
+    """Immutable inward-crop policy shared by inference and recalibration.
+
+    Ratios are applied independently to both sides of an axis. For example,
+    ``inset_x_ratio=0.20`` keeps the centered 60% of a detection's width.
+    """
+
+    inset_x_ratio: float = 0.0
+    inset_y_ratio: float = 0.0
+    min_size: int = 1
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any] | None) -> ColorRoiPolicy:
+        if value is None:
+            return cls()
+        if not isinstance(value, Mapping):
+            raise TypeError("color_roi_policy must be a mapping")
+        allowed = {"inset_x_ratio", "inset_y_ratio", "min_size"}
+        unknown = sorted(str(key) for key in value if key not in allowed)
+        if unknown:
+            raise ValueError(
+                "color_roi_policy contains unknown keys: " + ", ".join(unknown)
+            )
+        try:
+            inset_x_ratio = float(value.get("inset_x_ratio", 0.0))
+            inset_y_ratio = float(value.get("inset_y_ratio", 0.0))
+            raw_min_size = value.get("min_size", 1)
+            if isinstance(raw_min_size, bool):
+                raise ValueError("min_size must be an integer")
+            min_size = int(raw_min_size)
+            if float(raw_min_size) != min_size:
+                raise ValueError("min_size must be an integer")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid color_roi_policy: {exc}") from exc
+        for name, ratio in (
+            ("inset_x_ratio", inset_x_ratio),
+            ("inset_y_ratio", inset_y_ratio),
+        ):
+            if not np.isfinite(ratio) or not 0.0 <= ratio < 0.5:
+                raise ValueError(f"{name} must be finite and in [0.0, 0.5)")
+        if min_size < 1:
+            raise ValueError("min_size must be at least 1")
+        return cls(
+            inset_x_ratio=inset_x_ratio,
+            inset_y_ratio=inset_y_ratio,
+            min_size=min_size,
+        )
+
+    def to_dict(self) -> dict[str, float | int]:
+        return {
+            "inset_x_ratio": self.inset_x_ratio,
+            "inset_y_ratio": self.inset_y_ratio,
+            "min_size": self.min_size,
+        }
 
 
 def extract_slot_rois(
@@ -105,6 +163,7 @@ def extract_bbox_roi(
     bbox: Any,
     *,
     min_size: int = 1,
+    policy: ColorRoiPolicy | None = None,
 ) -> np.ndarray | None:
     """Crop ``bbox`` out of ``image``, or return None when it is unusable.
 
@@ -118,7 +177,17 @@ def extract_bbox_roi(
     if clamped is None:
         return None
     x1, y1, x2, y2 = clamped
-    if x2 - x1 < min_size or y2 - y1 < min_size:
+    effective_policy = policy or ColorRoiPolicy(min_size=min_size)
+    box_width = x2 - x1
+    box_height = y2 - y1
+    inset_x = int(round(box_width * effective_policy.inset_x_ratio))
+    inset_y = int(round(box_height * effective_policy.inset_y_ratio))
+    x1 += inset_x
+    x2 -= inset_x
+    y1 += inset_y
+    y2 -= inset_y
+    effective_min_size = max(min_size, effective_policy.min_size)
+    if x2 - x1 < effective_min_size or y2 - y1 < effective_min_size:
         return None
     roi = image[y1:y2, x1:x2]
     return roi if roi.size else None

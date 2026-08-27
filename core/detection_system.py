@@ -734,6 +734,12 @@ class DetectionSystem:
                     getattr(self.config, "color_checker_type", "color_qc") or "color_qc"
                 )
                 default_threshold = getattr(self.config, "color_score_threshold", None)
+                roi_policy = getattr(self.config, "color_roi_policy", None)
+                roi_arguments: dict[str, Any] = (
+                    {"roi_policy": roi_policy}
+                    if isinstance(roi_policy, Mapping)
+                    else {}
+                )
                 self.color_service.ensure_loaded(
                     color_model_path,
                     overrides=overrides,
@@ -741,6 +747,7 @@ class DetectionSystem:
                     checker_type=checker_type,
                     default_threshold=default_threshold,
                     decision_tuning=decision_tuning,
+                    **roi_arguments,
                 )
                 revision_ids = self.color_override_loader.last_active_revision_ids
                 if revision_ids:

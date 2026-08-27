@@ -24,12 +24,13 @@ import cv2
 import numpy as np
 
 from core.services.inspection_release_store import sha256_file
+from core.services.slot_roi import ColorRoiPolicy, extract_bbox_roi
 from core.stats_color_checker import StatsColorChecker, circular_hue_mean
 
 logger = logging.getLogger(__name__)
 
 COLOR_BASELINE_SCHEMA_VERSION = 1
-ALGORITHM_VERSION = "stats-robust-v3"
+ALGORITHM_VERSION = "stats-robust-v4"
 OUTLIER_FILTER_ALGORITHM = "per-color-sample-lab-mad-v1"
 DEFAULT_COLORS = ("Black", "Green", "Orange", "Red", "Yellow")
 
@@ -104,6 +105,12 @@ DOMINANT_FRACTION_REVIEW_REASON = "DOMINANT_FRACTION_LOW"
 #: A color that the approved baseline says is chromatic has washed out. Like
 #: the spread reason, this asks for review rather than rejecting.
 CHROMA_COLLAPSE_REVIEW_REASON = "CHROMA_COLLAPSE"
+
+#: A candidate below this measured holdout accuracy is never READY, even when
+#: it improves on an already-bad deployed baseline. Relative-only safety can
+#: otherwise preserve or approve a baseline that remains operationally useless.
+ABSOLUTE_HOLDOUT_ACCURACY_REASON = "ABSOLUTE_HOLDOUT_ACCURACY_BELOW_MINIMUM"
+DEFAULT_MINIMUM_HOLDOUT_ACCURACY = 0.90
 
 
 def _mean_saturation(stats: Mapping[str, Any]) -> float | None:
@@ -368,6 +375,7 @@ class StatsColorBaselineRebuilder:
         minimum_dominant_fraction: float = MINIMUM_DOMINANT_FRACTION,
         maximum_lab_drift: float = 35.0,
         maximum_accuracy_regression: float = 0.02,
+        minimum_holdout_accuracy: float = DEFAULT_MINIMUM_HOLDOUT_ACCURACY,
         outlier_z_score_threshold: float = 6.0,
         maximum_outlier_fraction: float = 0.1,
         minimum_outlier_sample_count: int = 20,
@@ -387,6 +395,8 @@ class StatsColorBaselineRebuilder:
             raise ColorBaselineError("maximum_outlier_fraction 必須介於 0 與 0.25。")
         if minimum_outlier_sample_count < 5:
             raise ColorBaselineError("minimum_outlier_sample_count 必須至少為 5。")
+        if not 0.0 <= minimum_holdout_accuracy <= 1.0:
+            raise ColorBaselineError("minimum_holdout_accuracy 必須介於 0 與 1。")
         self.minimum_crops_per_color = minimum_crops_per_color
         self.minimum_holdout_crops = minimum_holdout_crops
         self.holdout_fraction = holdout_fraction
@@ -396,6 +406,7 @@ class StatsColorBaselineRebuilder:
         self.minimum_dominant_fraction = minimum_dominant_fraction
         self.maximum_lab_drift = maximum_lab_drift
         self.maximum_accuracy_regression = maximum_accuracy_regression
+        self.minimum_holdout_accuracy = minimum_holdout_accuracy
         self.outlier_z_score_threshold = outlier_z_score_threshold
         self.maximum_outlier_fraction = maximum_outlier_fraction
         self.minimum_outlier_sample_count = minimum_outlier_sample_count
@@ -512,6 +523,11 @@ class StatsColorBaselineRebuilder:
                 base_summary[color],
                 candidate_summary[color],
             )
+            if color.casefold() == "black":
+                # Hue is undefined for achromatic evidence. Using its numeric
+                # OpenCV placeholder rejected Black proposals for moving 38
+                # hue units even though their S/V and LAB evidence improved.
+                hue_drift = None
             previous_correct_by_color[color] = previous_correct
             proposal_drift_by_color[color] = (hue_drift, lab_drift)
             if preliminary_states[color][0] != "REBUILT":
@@ -618,6 +634,8 @@ class StatsColorBaselineRebuilder:
                 base_summary[color],
                 candidate_summary[color],
             )
+            if color.casefold() == "black":
+                final_hue_drift = None
             # Spread is judged on the statistics that will actually ship for
             # this color, so a proposal already preserved by the drift check is
             # measured on the preserved baseline rather than on the discarded
@@ -629,6 +647,16 @@ class StatsColorBaselineRebuilder:
             dominant = proposal_dominant_by_color.get(color)
             dominant = float(dominant) if dominant is not None else None
             reasons: list[str] = []
+            final_accuracy = _ratio(
+                final_correct_by_color[color],
+                len(holdout),
+            )
+            if (
+                final_accuracy is None
+                or final_accuracy < self.minimum_holdout_accuracy
+            ):
+                reasons.append(ABSOLUTE_HOLDOUT_ACCURACY_REASON)
+                incomplete = True
             if spread is not None and spread > self.maximum_hue_spread:
                 reasons.append(HUE_SPREAD_REVIEW_REASON)
             if (
@@ -704,10 +732,16 @@ class StatsColorBaselineRebuilder:
                 "minimum_dominant_fraction": self.minimum_dominant_fraction,
                 "maximum_lab_drift": self.maximum_lab_drift,
                 "maximum_accuracy_regression": self.maximum_accuracy_regression,
+                "minimum_holdout_accuracy": self.minimum_holdout_accuracy,
             },
             "preserved_by_safety": sorted(rejected_proposals),
             "review_required_colors": sorted(
                 item.color for item in color_reports if item.review_reasons
+            ),
+            "absolute_accuracy_failures": sorted(
+                item.color
+                for item in color_reports
+                if ABSOLUTE_HOLDOUT_ACCURACY_REASON in item.review_reasons
             ),
             "color_reports": [item.to_dict() for item in color_reports],
             "limitations": [
@@ -962,6 +996,7 @@ def collect_confirmed_ok_evidence(
     expected_colors: Sequence[str] = DEFAULT_COLORS,
     progress_callback: Callable[[int, int, str], None] | None = None,
     cancel_callback: Callable[[], bool] | None = None,
+    roi_policy: ColorRoiPolicy | None = None,
 ) -> tuple[ColorCropEvidence, ...]:
     """Compatibility wrapper for acceptance-only baseline evidence."""
     selected_records = tuple(
@@ -988,6 +1023,7 @@ def collect_confirmed_ok_evidence(
         expected_colors=expected_colors,
         progress_callback=progress_callback,
         cancel_callback=cancel_callback,
+        roi_policy=roi_policy,
     )
 
 
@@ -999,6 +1035,7 @@ def collect_color_baseline_evidence(
     expected_colors: Sequence[str] = DEFAULT_COLORS,
     progress_callback: Callable[[int, int, str], None] | None = None,
     cancel_callback: Callable[[], bool] | None = None,
+    roi_policy: ColorRoiPolicy | None = None,
 ) -> tuple[ColorCropEvidence, ...]:
     """Rerun the selected detector and crop known colors from verified OK images."""
     selected = tuple(samples)
@@ -1025,18 +1062,17 @@ def collect_color_baseline_evidence(
                 f"{record.sample_id} 推論結果缺少 processed_image；"
                 "為避免座標系錯誤，已拒絕建立顏色基準。"
             )
-        height, width = crop_source.shape[:2]
         for item in result.items:
             canonical = color_lookup.get(str(item.label).casefold())
             if canonical is None:
                 continue
-            x1, y1, x2, y2 = _clamped_bbox(
+            crop = extract_bbox_roi(
+                crop_source,
                 item.bbox_xyxy,
-                width=width,
-                height=height,
+                min_size=8,
+                policy=roi_policy,
             )
-            crop = crop_source[y1:y2, x1:x2]
-            if crop.shape[0] < 8 or crop.shape[1] < 8:
+            if crop is None:
                 continue
             evidence.append(
                 ColorCropEvidence(

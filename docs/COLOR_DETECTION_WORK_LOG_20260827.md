@@ -166,3 +166,41 @@ ruff 全過，mypy 無新增錯誤，跨實作 conformance fixture 為最新。
 - `audit_baselines.py` — 掃描既有 `color_stats.json`，標出色相跨度可疑的顏色
 
 三個腳本都需要「先 import onnxruntime」那道處理，見第六節。
+
+---
+
+## 八、續作結果（ROI 與 Black v4）
+
+### 已完成
+
+- 新增共用且不可變的 `ColorRoiPolicy`；Cable1/A 採每側水平內縮 20%、垂直不縮、最小邊長 8 px。線上推論、重建 GUI、headless 重建與 model config 使用同一份 policy。
+- Black 不再使用手寫 S/V shortcut；推論 repo 與訓練 repo 都改為 learned S/V + LAB 範圍的聯合匹配，並用基準的 `coverage_mean` 正規化。缺少或無效的 `coverage_mean` 會 fail closed。
+- 重建器升級為 `stats-robust-v4`，Black hue drift 明確為 `null`；新增逐色 holdout 絕對準確率下限 0.90，避免「新舊一樣差」仍通過相對退化檢查。
+- 部署會保留經簽核的 `color_roi_policy`，不讓訓練輸出默默覆蓋站點取樣幾何。
+
+### v4 scratch 候選
+
+- 證據：215 張 confirmed-OK、1291 crops。
+- 狀態：`READY`；五色全部 `REBUILT`，無 safety preserve、無 review-required color、無 absolute-accuracy failure。
+- Holdout：Black 84/84；Green、Orange、Red、Yellow 各 42/42。
+- ROI purity（x inset 0.20）：Red 0.816、Green 0.701、Orange 0.735、Yellow 0.758 dominant fraction。
+- 產出：`.tmp/color_rebuild_Cable1_A/color_stats_v4.json`、`report_v4.json`、`eval_v4.json`、`roi_black_analysis.json`。
+
+### 250 張 confirmed acceptance 端到端
+
+| 基準 | OK→OK | OK→NG | NG→OK | NG→NG | 正確率 |
+|---|---:|---:|---:|---:|---:|
+| deployed（新程式碼） | 169 | 4 | 0 | 77 | 98.4% |
+| rebuilt v4（新程式碼） | 170 | 3 | 0 | 77 | 98.8% |
+
+v4 修好 `ACC-24DAF6D4E8EF`，沒有新增誤殺或漏放。剩餘三個 OK false reject 中，有樣本同時帶有 count / sequence / missing / unexpected-component 原因，不應用放寬顏色門檻掩蓋。
+
+### 最終驗證
+
+- `yolo11_inference`：1982 passed、6 skipped。
+- `Yolo11_auto_train`：973 passed、5 skipped（使用含 FastAPI/Uvicorn 的 base conda；`yolo_anomalib` 缺這兩個 optional dependencies）。
+- workspace：31 passed。
+
+### 唯一尚需人工完成
+
+候選仍未寫入 `station_data`。請由有權限的簽核人從 GUI 執行重建／審查，填寫真實身分與原因；GUI 會套用相同 ROI policy 與 v4 安全門檻。不得用 headless 腳本建立無歸屬的正式候選。

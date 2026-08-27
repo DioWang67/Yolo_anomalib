@@ -44,6 +44,7 @@ from core.services.model_acceptance import (
     ModelIdentity,
 )
 from core.services.model_version_registry import ModelVersionRecord
+from core.services.slot_roi import ColorRoiPolicy
 from core.station_data import load_station_data_paths
 from core.workspace import load_workspace_paths
 
@@ -86,6 +87,7 @@ class ColorBaselineRebuildWorker(QThread):
                 self.project_root,
                 config_path,
             )
+            roi_policy = _resolve_color_roi_policy(config_path)
             selected_type = "yolo" if self.inference_type.casefold() == "fusion" else self.inference_type.casefold()
             evidence_provider = ColorBaselineEvidenceProvider(
                 product=self.product,
@@ -135,12 +137,15 @@ class ColorBaselineRebuildWorker(QThread):
                 inference_type=self.inference_type,
                 progress_callback=self.progress_changed.emit,
                 cancel_callback=self.isInterruptionRequested,
+                roi_policy=roi_policy,
             )
             self.phase_changed.emit("正在分割建模與保留樣本，重算顏色統計…")
+            evidence_metadata = evidence_snapshot.to_report_dict()
+            evidence_metadata["color_roi_policy"] = roi_policy.to_dict()
             build = StatsColorBaselineRebuilder().build(
                 base_model_path=base_model_path,
                 evidence=evidence,
-                evidence_metadata=evidence_snapshot.to_report_dict(),
+                evidence_metadata=evidence_metadata,
                 cancel_callback=self.isInterruptionRequested,
             )
             self.outlier_filter_ready.emit(build.outlier_filter)
@@ -464,6 +469,19 @@ def _resolve_color_model(project_root: Path, config_path: Path) -> Path:
         if resolved.is_file() and not resolved.is_symlink():
             return resolved
     raise ColorBaselineError(f"找不到舊顏色基準：{raw_value}")
+
+
+def _resolve_color_roi_policy(config_path: Path) -> ColorRoiPolicy:
+    """Load the exact bbox policy used by production color measurement."""
+    if config_path.is_symlink() or not config_path.is_file():
+        raise ColorBaselineError("選取的模型 config 快照不存在。")
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ColorBaselineError("選取的模型 config 快照格式錯誤。")
+    try:
+        return ColorRoiPolicy.from_mapping(payload.get("color_roi_policy"))
+    except (TypeError, ValueError) as exc:
+        raise ColorBaselineError(f"顏色 ROI 設定無效：{exc}") from exc
 
 
 def _sha256_file(path: Path) -> str:

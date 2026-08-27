@@ -254,6 +254,7 @@ class ModelManager:
             "exposure_time", "gain", "light_brightness", "calibration",
             "expected_items", "position_config", "anomalib_config",
             "color_threshold_overrides", "color_rules_overrides",
+            "color_decision_tuning", "color_roi_policy",
             "backends", "pipeline", "defect_coverage",
         ]
         for field in _OPTIONAL_FIELDS:

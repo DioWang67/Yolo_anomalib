@@ -122,6 +122,7 @@ class _ColorRange:
     lab_max: np.ndarray
     hsv_mean: np.ndarray | None = None
     lab_mean: np.ndarray | None = None
+    coverage_mean: float | None = None
 
 
 def _margin_vector(margin: Sequence[float] | float | None) -> np.ndarray:
@@ -167,6 +168,7 @@ def _load_color_ranges(
             lab_max=lab_max,
             hsv_mean=_optional_stat_array(stats, "hsv_mean"),
             lab_mean=_optional_stat_array(stats, "lab_mean"),
+            coverage_mean=_optional_stat_float(stats, "coverage_mean"),
         )
     return ranges
 
@@ -220,6 +222,26 @@ def _optional_stat_array(stats: Mapping[str, object], key: str) -> np.ndarray | 
         return None
     array = np.asarray(stats[key], dtype=np.float32).ravel()
     return array if array.size == 3 else None
+
+
+def _optional_stat_float(stats: Mapping[str, object], key: str) -> float | None:
+    """Read an optional positive scalar statistic, or None if unusable.
+
+    Values arrive from a JSON model file, so the type is genuinely unknown
+    here: a malformed entry must read as absent rather than raise, because the
+    caller treats absence as "fail closed" and that is the safe answer either
+    way.
+    """
+    raw = stats.get(key)
+    if raw is None:
+        return None
+    try:
+        value = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value) or value <= 0.0:
+        return None
+    return value
 
 
 def _circular_hue_distance(h1: float, h2: float) -> float:
@@ -307,10 +329,6 @@ def _improved_match_ratio(
             & (v_vals >= tuning.green_v_min)
             & (v_vals <= tuning.green_v_max)
         )
-    elif color_name == "black":
-        h_mask = (s_vals < tuning.black_s_threshold) & (
-            v_vals < tuning.black_v_threshold
-        )
     else:
         h_mask = (
             _hue_in_range(h_vals, color_range.hsv_min[0], color_range.hsv_max[0])
@@ -377,6 +395,44 @@ def _improved_match_ratio(
     if total_weight <= 0.0:
         return 0.0
     return sum(value * weight for value, weight in terms) / total_weight
+
+
+def _black_baseline_match(
+    hsv_img: np.ndarray,
+    lab_img: np.ndarray,
+    color_range: _ColorRange,
+) -> tuple[float, float, float]:
+    """Score Black from its learned S/V and LAB envelope.
+
+    Hue is intentionally ignored because it is undefined for achromatic
+    pixels. ``coverage_mean`` records how much of a normal Black crop matched
+    the baseline during calibration; normalizing by it turns that learned crop
+    coverage into a stable confidence with useful headroom.
+
+    Returns ``(score, raw_ratio, reference_coverage)``.
+    """
+    if hsv_img.size == 0 or lab_img.size == 0:
+        return 0.0, 0.0, 1.0
+    sv_match = (
+        (hsv_img[:, :, 1] >= color_range.hsv_min[1])
+        & (hsv_img[:, :, 1] <= color_range.hsv_max[1])
+        & (hsv_img[:, :, 2] >= color_range.hsv_min[2])
+        & (hsv_img[:, :, 2] <= color_range.hsv_max[2])
+    )
+    lab_match = np.all(
+        (lab_img >= color_range.lab_min) & (lab_img <= color_range.lab_max),
+        axis=2,
+    )
+    raw_ratio = float(np.mean(sv_match & lab_match))
+    reference_coverage = color_range.coverage_mean
+    if (
+        reference_coverage is None
+        or not np.isfinite(reference_coverage)
+        or not 0.0 < reference_coverage <= 1.0
+    ):
+        return 0.0, raw_ratio, 0.0
+    score = min(1.0, raw_ratio / max(reference_coverage, 1e-6))
+    return score, raw_ratio, reference_coverage
 
 
 def _separate_orange_red(
@@ -456,75 +512,13 @@ def _separate_orange_red(
 
 
 def _center_crop_array(img: np.ndarray, margin_ratio: float) -> np.ndarray:
-    """Crop a centered region, falling back to the full image when it cannot.
-
-    Shared so the black shortcut, the yellow shortcut and the main scoring path
-    all judge the *same* pixels. They previously used three different crops --
-    per-axis 15%, ``min(h, w)`` at a hard-coded 15%, and the tuned ratio -- so
-    the three decisions could legitimately disagree about an elongated ROI.
-    """
+    """Crop a centered region, falling back to the full image when it cannot."""
     h, w = img.shape[:2]
     margin = int(min(h, w) * margin_ratio)
     if margin <= 0 or margin * 2 >= h or margin * 2 >= w:
         return img
     cropped = img[margin : h - margin, margin : w - margin]
     return cropped if cropped.size else img
-
-
-def _is_black_image(
-    hsv_img: np.ndarray,
-    tuning: ColorDecisionTuning = _DEFAULT_TUNING,
-) -> tuple[bool, float, tuple[str, ...]]:
-    """Decide whether a region is black, and say which rule decided it.
-
-    Returns ``(is_black, coverage, rules)``. ``coverage`` is the fraction of
-    the center that is both unsaturated and dark, and it is what the caller
-    scores against black's threshold.
-
-    An earlier version reported the *margin* of whichever rule fired instead,
-    on the grounds that answering with coverage when the mean rule decided is
-    incoherent. It is -- but coverage is also what the threshold was calibrated
-    against, and swapping it collapsed real black scores from ~0.5 to ~0.02 and
-    rejected every good board on the line. The incoherence is real and is now
-    answered by naming the rules that fired, which costs nothing, rather than
-    by moving a number the verdict depends on.
-    """
-    # Deliberately a per-axis margin, not the shared ``_center_crop_array``.
-    # The other paths use ``min(h, w)`` and unifying them looks like tidying,
-    # but black's threshold has ~1% of headroom on real crops and was
-    # calibrated against *this* crop: switching shaved a genuine black from
-    # 0.456 to 0.446 against a 0.45 threshold and rejected good boards. Making
-    # the three crops agree is a recalibration, not a cleanup, and has to be
-    # done with the threshold in the same change.
-    h, w = hsv_img.shape[:2]
-    margin_y = int(h * tuning.center_margin_ratio)
-    margin_x = int(w * tuning.center_margin_ratio)
-    center_region = hsv_img[margin_y : h - margin_y, margin_x : w - margin_x]
-    if center_region.size == 0:
-        center_region = hsv_img
-
-    mean_s = float(np.mean(center_region[:, :, 1]))
-    mean_v = float(np.mean(center_region[:, :, 2]))
-    median_s = float(np.median(center_region[:, :, 1]))
-    median_v = float(np.median(center_region[:, :, 2]))
-
-    black_s = tuning.black_s_threshold
-    black_v = tuning.black_v_threshold
-    black_mask = (center_region[:, :, 1] < black_s) & (
-        center_region[:, :, 2] < black_v
-    )
-    black_coverage = float(np.count_nonzero(black_mask)) / max(black_mask.size, 1)
-
-    rules: list[str] = []
-    if mean_s < black_s and mean_v < black_v:
-        rules.append("mean")
-    if median_s < black_s * 0.8 and median_v < black_v * 0.8:
-        rules.append("median")
-    if black_coverage > tuning.black_min_coverage:
-        rules.append("coverage")
-
-    is_black = bool(rules)
-    return is_black, (black_coverage if is_black else 0.0), tuple(rules)
 
 
 def _detect_yellow_special(
@@ -626,17 +620,6 @@ class StatsColorChecker:
         hsv_img = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
         lab_img = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
 
-        is_black, black_conf, black_rules = _is_black_image(hsv_img, self._tuning)
-        if is_black and "black" in ranges:
-            score_map = dict.fromkeys(ranges, 0.0)
-            score_map["black"] = black_conf
-            # Naming the rules that fired keeps the decision auditable without
-            # changing the number the threshold compares against.
-            return self._result_from_scores(
-                score_map,
-                debug={"shortcut": "black", "black_rules": list(black_rules)},
-            )
-
         is_yellow, yellow_conf = _detect_yellow_special(hsv_img, self._tuning)
         if is_yellow and "yellow" in ranges:
             score_map = dict.fromkeys(ranges, 0.0)
@@ -645,6 +628,18 @@ class StatsColorChecker:
 
         center_hsv = self._center_crop(hsv_img)
         center_lab = self._center_crop(lab_img)
+        black_measurement: tuple[float, float, float] | None = None
+        if "black" in ranges:
+            black_measurement = _black_baseline_match(
+                center_hsv,
+                center_lab,
+                ranges["black"],
+            )
+            debug["black_baseline"] = {
+                "score": black_measurement[0],
+                "raw_ratio": black_measurement[1],
+                "reference_coverage": black_measurement[2],
+            }
         sat_mask = center_hsv[:, :, 1] >= self._tuning.sat_threshold
         valid_hsv = center_hsv[sat_mask].reshape(-1, 3)
         valid_lab = center_lab[sat_mask].reshape(-1, 3)
@@ -657,18 +652,35 @@ class StatsColorChecker:
             # the pipeline reads a passing measurement as grounds to overwrite
             # the detector's class. Report the absence instead: a verdict with
             # no evidence behind it fails closed.
+            score_map = dict.fromkeys(ranges, 0.0)
+            if black_measurement is not None:
+                score_map["black"] = black_measurement[0]
+            debug["no_chromatic_pixels"] = True
+            has_black_evidence = bool(
+                black_measurement is not None
+                and black_measurement[1] > 0.0
+                and black_measurement[2] > 0.0
+            )
+            if not has_black_evidence:
+                debug["no_pixels"] = True
             return self._result_from_scores(
-                dict.fromkeys(ranges, 0.0),
-                debug={"no_pixels": True},
-                has_evidence=False,
+                score_map,
+                debug=debug,
+                has_evidence=has_black_evidence,
             )
 
-        scores = {
-            name: _improved_match_ratio(
-                valid_hsv, valid_lab, color_range, name, self._tuning
-            )
-            for name, color_range in ranges.items()
-        }
+        scores = {}
+        for name, color_range in ranges.items():
+            if name == "black" and black_measurement is not None:
+                scores[name] = black_measurement[0]
+            else:
+                scores[name] = _improved_match_ratio(
+                    valid_hsv,
+                    valid_lab,
+                    color_range,
+                    name,
+                    self._tuning,
+                )
         # Tie-break for Orange vs Red
         if "orange" in scores and "red" in scores:
             o_score = scores["orange"]

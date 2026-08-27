@@ -177,6 +177,9 @@ class DetectionConfig:
     # Global fallback for StatsColorChecker decision knobs; per-model
     # config.yaml ``color_decision_tuning`` takes precedence.
     color_decision_tuning: dict[str, float] | None = None
+    # Shared by runtime measurement and baseline rebuilding. Ratios trim each
+    # side of a detector bbox before any color-specific center sampling.
+    color_roi_policy: dict[str, float | int] | None = None
     color_fail_closed: bool = True
     output_dir: str = "Result"
     anomalib_config: dict[str, Any] | None = None
@@ -346,6 +349,7 @@ class DetectionConfig:
             ),
             "color_score_threshold": normalized.get("color_score_threshold"),
             "color_decision_tuning": normalized.get("color_decision_tuning"),
+            "color_roi_policy": normalized.get("color_roi_policy"),
             "color_fail_closed": bool(normalized.get("color_fail_closed", True)),
             "output_dir": str(normalized.get("output_dir", "Result")),
             "anomalib_config": normalized.get("anomalib_config"),

@@ -18,6 +18,7 @@ from core.services.color_baseline_recalibration import (
     StatsColorBaselineRebuilder,
     collect_confirmed_ok_evidence,
 )
+from core.services.slot_roi import ColorRoiPolicy
 from core.types import DetectionItem, DetectionResult
 
 HSV_BY_COLOR = {
@@ -180,7 +181,9 @@ def test_unsafe_color_update_is_rejected_and_old_baseline_is_preserved(
     )
 
     yellow = next(item for item in build.color_reports if item.color == "Yellow")
-    assert build.status == "READY"
+    # Relative safety preserved the old baseline, but the new absolute floor
+    # correctly prevents that known-bad result from being marked READY.
+    assert build.status == "INCOMPLETE"
     assert yellow.state == "PRESERVED_SAFETY_REJECTED"
     assert build.model_payload["summary"]["Yellow"] == original["summary"]["Yellow"]
     assert yellow.hue_drift == pytest.approx(0.0)
@@ -195,6 +198,7 @@ def test_unsafe_color_update_is_rejected_and_old_baseline_is_preserved(
     )
     assert persisted["rejected_proposal"]["reasons"]
     assert "Yellow" in build.report_payload["preserved_by_safety"]
+    assert build.report_payload["absolute_accuracy_failures"] == ["Yellow"]
 
 
 def test_holdout_regression_falls_back_until_final_checker_is_safe(
@@ -359,6 +363,23 @@ def test_collects_only_known_component_crops_from_confirmed_ok() -> None:
     assert np.mean(evidence[0].image_bgr[:, :, 2]) > 100
 
 
+def test_baseline_collection_uses_the_shared_color_roi_policy() -> None:
+    evidence = collect_confirmed_ok_evidence(
+        repository=_Repository(),
+        inference_service=_Service(),
+        records=(_Record(),),
+        inference_type="yolo",
+        roi_policy=ColorRoiPolicy(
+            inset_x_ratio=0.2,
+            inset_y_ratio=0.0,
+            min_size=8,
+        ),
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].image_bgr.shape == (40, 24, 3)
+
+
 def test_correct_predictions_requires_threshold_acceptance_and_color_match() -> None:
     evidence = tuple(
         ColorCropEvidence(
@@ -491,7 +512,10 @@ def test_mostly_neighbouring_evidence_asks_for_review(tmp_path: Path) -> None:
     assert green.dominant_fraction is not None
     assert green.dominant_fraction < 0.6
     assert recalibration.DOMINANT_FRACTION_REVIEW_REASON in green.review_reasons
-    assert build.status == "REVIEW_REQUIRED"
+    # The contamination warning still routes to review, while the independent
+    # absolute accuracy floor makes the candidate non-activatable.
+    assert build.status == "INCOMPLETE"
+    assert "Green" in build.report_payload["absolute_accuracy_failures"]
 
 
 def test_statistics_skip_unusable_crops_and_report_the_count_actually_used():
@@ -619,4 +643,29 @@ def test_a_clean_rebuild_is_not_flagged_for_review(tmp_path: Path) -> None:
         item.dominant_fraction == pytest.approx(1.0)
         for item in build.color_reports
         if item.color != "Black"
+    )
+
+
+def test_absolute_accuracy_floor_blocks_an_improved_but_unusable_candidate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def below_floor(_checker, evidence, expected_color):
+        return len(evidence) - 1 if expected_color == "Black" else len(evidence)
+
+    monkeypatch.setattr(recalibration, "_correct_predictions", below_floor)
+
+    build = StatsColorBaselineRebuilder(
+        minimum_holdout_accuracy=0.90,
+    ).build(
+        base_model_path=_base_model(tmp_path),
+        evidence=_evidence(),
+    )
+
+    assert build.status == "INCOMPLETE"
+    assert build.report_payload["absolute_accuracy_failures"] == ["Black"]
+    black = next(item for item in build.color_reports if item.color == "Black")
+    assert (
+        recalibration.ABSOLUTE_HOLDOUT_ACCURACY_REASON
+        in black.review_reasons
     )

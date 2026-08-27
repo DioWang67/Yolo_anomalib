@@ -36,6 +36,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version.
 
 ### Fixed
+- Color ROIs are now cropped by a shared, config-driven `ColorRoiPolicy`
+  instead of by each caller's own margins. Cable1/A insets 20% from each side
+  horizontally, nothing vertically, with an 8 px floor, because the wires run
+  horizontally and a box drawn around one routinely catches its neighbour --
+  measured at 30-50% of each crop's chromatic content. Inference, the rebuild
+  dialog and headless recalibration all read the same policy, so the geometry a
+  baseline was calibrated on is the geometry the line measures with, and
+  deployment preserves an approved `color_roi_policy` rather than letting a
+  training output overwrite the station's sampling geometry silently.
+- Black is decided from its learned S/V and LAB envelope, normalized by the
+  baseline's `coverage_mean`, in both the runtime and the training gate. The
+  hand-written `s < 50 & v < 80` shortcut is gone. It was neither learned nor a
+  clean rule: its statistical baseline scored 3.6% on its own holdout while the
+  hand-set threshold had about 1% of headroom on real crops, which is what made
+  an earlier consistency cleanup able to reject every good board. A missing or
+  malformed `coverage_mean` now fails closed instead of scoring against a
+  reference that does not exist.
+- The rebuilder moves to `stats-robust-v4` and gains an absolute per-color
+  holdout floor of 0.90 alongside the existing relative check. The relative
+  rule alone kept a baseline that was no better than a bad predecessor: Black
+  sat at 3.6% indefinitely because each new proposal was merely "not an
+  improvement". Black's hue drift is now reported as `null` rather than 0.0,
+  since hue is undefined for it and a zero read as "no drift".
+
+  Measured on the 250 confirmed Cable1/A acceptance samples: false rejects fall
+  from 16 to 4 on the deployed baseline -- the gain is the ROI policy and Black
+  v4, not the baseline itself -- and to 3 with a v4 rebuild. Escapes stay at
+  0/77 throughout. A v4 candidate reaches READY with all five colors REBUILT
+  and 100% holdout, no safety preserve and no review-required color.
 - Reverted two changes to the black shortcut that looked like cleanups and
   were not. Reporting the fired rule's margin instead of coverage, and sharing
   the center crop with the other paths, each moved black's score by more than

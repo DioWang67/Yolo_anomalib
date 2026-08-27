@@ -50,6 +50,10 @@ steps:
 enable_color_check: true
 color_checker_type: stats
 color_model_path: models/Cable1/A/yolo/color_stats.json
+color_roi_policy:
+  inset_x_ratio: 0.2
+  inset_y_ratio: 0.0
+  min_size: 8
 position_config:
   Cable1:
     A:
