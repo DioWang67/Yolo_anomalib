@@ -336,3 +336,47 @@ def test_stats_arrays_must_carry_three_channels(tmp_path):
 
     failure = stats_color_model_load_failure(str(path))
     assert "hsv_min" in failure
+
+
+def test_black_score_survives_a_non_uniform_crop(dummy_stats_json):
+    """Black's threshold has about 1% of headroom on real crops.
+
+    A change to which pixels the black rule looks at, or to the number it
+    reports, moves that score by more than the headroom. One such change --
+    unifying the three center crops, and reporting a fired rule's margin
+    instead of coverage -- took a genuine black region from 0.50 to 0.02 and
+    rejected every good board on the acceptance set, while every unit test
+    here still passed because they all used uniform patches.
+    """
+    import cv2
+
+    # Dark, mostly-black but textured, the way a real wire crop is: elongated,
+    # with highlights that keep coverage well under black_min_coverage so the
+    # decision comes from the mean/median rule rather than from coverage.
+    size_h, size_w = 40, 160
+    hsv = np.zeros((size_h, size_w, 3), np.uint8)
+    hsv[:, :, 1] = 25
+    hsv[:, :, 2] = 35
+    hsv[::3, :, 2] = 95          # specular streaks
+    hsv[:, ::7, 1] = 60
+    crop = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+    checker = StatsColorChecker.from_json(str(dummy_stats_json))
+    result = checker.check(crop)
+
+    assert result.best_color == "black"
+    assert result.metrics["debug"].get("shortcut") == "black"
+    # Coverage, not a rule margin: the value the threshold was calibrated on.
+    assert result.metrics["score"] > 0.45
+    assert result.is_ok is True
+
+
+def test_black_shortcut_names_the_rules_that_fired(dummy_stats_json):
+    """The score stays coverage; the incoherence is answered by saying why."""
+    gray = np.full((20, 20, 3), 30, dtype=np.uint8)
+
+    result = StatsColorChecker.from_json(str(dummy_stats_json)).check(gray)
+
+    rules = result.metrics["debug"].get("black_rules")
+    assert rules, "the black shortcut must record which rule decided"
+    assert set(rules) <= {"mean", "median", "coverage"}

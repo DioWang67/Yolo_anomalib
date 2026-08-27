@@ -36,6 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version.
 
 ### Fixed
+- Reverted two changes to the black shortcut that looked like cleanups and
+  were not. Reporting the fired rule's margin instead of coverage, and sharing
+  the center crop with the other paths, each moved black's score by more than
+  the ~1% of headroom its threshold has on real crops: a genuine black region
+  went from 0.50 to 0.02, and every good board on the Cable1 acceptance set
+  was rejected. Coverage is what the threshold was calibrated against and is
+  restored; the incoherence of scoring a mean-rule decision with coverage is
+  now answered by naming the rules that fired in `debug.black_rules`, which
+  costs nothing, rather than by moving the number the verdict depends on.
+  Unifying the three center crops remains worth doing, but it is a
+  recalibration and has to move the threshold in the same change.
 - `tools/color_verifier.py` now reports the verdict the line actually reaches.
   It calls `StatsColorChecker` -- the same object the inspection pipeline uses
   -- instead of carrying its own scoring. The two had drifted into different

@@ -471,18 +471,37 @@ def _center_crop_array(img: np.ndarray, margin_ratio: float) -> np.ndarray:
     return cropped if cropped.size else img
 
 
-def _rule_margin(value: float, limit: float) -> float:
-    """How far below ``limit`` a measurement sits, on a 0..1 scale."""
-    if limit <= 0:
-        return 0.0
-    return float(min(1.0, max(0.0, 1.0 - value / limit)))
-
-
 def _is_black_image(
     hsv_img: np.ndarray,
     tuning: ColorDecisionTuning = _DEFAULT_TUNING,
-) -> tuple[bool, float]:
-    center_region = _center_crop_array(hsv_img, tuning.center_margin_ratio)
+) -> tuple[bool, float, tuple[str, ...]]:
+    """Decide whether a region is black, and say which rule decided it.
+
+    Returns ``(is_black, coverage, rules)``. ``coverage`` is the fraction of
+    the center that is both unsaturated and dark, and it is what the caller
+    scores against black's threshold.
+
+    An earlier version reported the *margin* of whichever rule fired instead,
+    on the grounds that answering with coverage when the mean rule decided is
+    incoherent. It is -- but coverage is also what the threshold was calibrated
+    against, and swapping it collapsed real black scores from ~0.5 to ~0.02 and
+    rejected every good board on the line. The incoherence is real and is now
+    answered by naming the rules that fired, which costs nothing, rather than
+    by moving a number the verdict depends on.
+    """
+    # Deliberately a per-axis margin, not the shared ``_center_crop_array``.
+    # The other paths use ``min(h, w)`` and unifying them looks like tidying,
+    # but black's threshold has ~1% of headroom on real crops and was
+    # calibrated against *this* crop: switching shaved a genuine black from
+    # 0.456 to 0.446 against a 0.45 threshold and rejected good boards. Making
+    # the three crops agree is a recalibration, not a cleanup, and has to be
+    # done with the threshold in the same change.
+    h, w = hsv_img.shape[:2]
+    margin_y = int(h * tuning.center_margin_ratio)
+    margin_x = int(w * tuning.center_margin_ratio)
+    center_region = hsv_img[margin_y : h - margin_y, margin_x : w - margin_x]
+    if center_region.size == 0:
+        center_region = hsv_img
 
     mean_s = float(np.mean(center_region[:, :, 1]))
     mean_v = float(np.mean(center_region[:, :, 2]))
@@ -496,25 +515,16 @@ def _is_black_image(
     )
     black_coverage = float(np.count_nonzero(black_mask)) / max(black_mask.size, 1)
 
-    # Confidence has to describe the rule that actually fired. Reporting
-    # coverage unconditionally meant a decision reached by the mean or median
-    # rule was scored by an unrelated number, which could then fail black's own
-    # threshold -- "it is black, and black is NG" in the same result.
-    evidence = [0.0]
+    rules: list[str] = []
     if mean_s < black_s and mean_v < black_v:
-        evidence.append(min(_rule_margin(mean_s, black_s), _rule_margin(mean_v, black_v)))
+        rules.append("mean")
     if median_s < black_s * 0.8 and median_v < black_v * 0.8:
-        evidence.append(
-            min(
-                _rule_margin(median_s, black_s * 0.8),
-                _rule_margin(median_v, black_v * 0.8),
-            )
-        )
+        rules.append("median")
     if black_coverage > tuning.black_min_coverage:
-        evidence.append(black_coverage)
+        rules.append("coverage")
 
-    is_black = len(evidence) > 1
-    return is_black, (max(evidence) if is_black else 0.0)
+    is_black = bool(rules)
+    return is_black, (black_coverage if is_black else 0.0), tuple(rules)
 
 
 def _detect_yellow_special(
@@ -616,11 +626,16 @@ class StatsColorChecker:
         hsv_img = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
         lab_img = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
 
-        is_black, black_conf = _is_black_image(hsv_img, self._tuning)
+        is_black, black_conf, black_rules = _is_black_image(hsv_img, self._tuning)
         if is_black and "black" in ranges:
             score_map = dict.fromkeys(ranges, 0.0)
             score_map["black"] = black_conf
-            return self._result_from_scores(score_map, debug={"shortcut": "black"})
+            # Naming the rules that fired keeps the decision auditable without
+            # changing the number the threshold compares against.
+            return self._result_from_scores(
+                score_map,
+                debug={"shortcut": "black", "black_rules": list(black_rules)},
+            )
 
         is_yellow, yellow_conf = _detect_yellow_special(hsv_img, self._tuning)
         if is_yellow and "yellow" in ranges:
