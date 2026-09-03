@@ -75,6 +75,9 @@ from app.gui.auto_inspection_controller import (  # noqa: E402
     AutoInspectionController,
 )
 from app.gui.calibration_handler import CalibrationHandlerMixin  # noqa: E402
+from app.gui.color_preflight_handler import (  # noqa: E402
+    ColorPreflightHandlerMixin,
+)
 from app.gui.camera_handler import CameraHandlerMixin  # noqa: E402
 from app.gui.controller import DetectionController  # noqa: E402
 from app.gui.engineering_settings_page import EngineeringSettingsPage  # noqa: E402
@@ -115,7 +118,11 @@ _PIPELINE_SHUTDOWN_SETTLE_TIMEOUT_SECONDS = 10.0
 
 
 class DetectionSystemGUI(
-    QMainWindow, CameraHandlerMixin, LightHandlerMixin, CalibrationHandlerMixin
+    QMainWindow,
+    CameraHandlerMixin,
+    LightHandlerMixin,
+    CalibrationHandlerMixin,
+    ColorPreflightHandlerMixin,
 ):
     def __init__(
         self,

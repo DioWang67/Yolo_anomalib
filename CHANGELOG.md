@@ -8,6 +8,120 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- A pre-shift color check -- 燈光控制 > 顏色開線檢查 in the GUI, beside the
+  illumination calibration it completes, and `tools/color_preflight.py` for
+  engineers and for the cross-shift trend -- and the second half of an operator
+  ritual that already existed. The station puts the golden sample
+  in the fixture and runs the illumination calibration until mean luma is back
+  inside tolerance -- which closes the loop on brightness, the cheapest axis to
+  control, and leaves color measured against statistics from another day. The
+  SOP said as much: brightness calibration does not correct a cast, and a
+  suspected cast had to be chased through the light hardware. The first
+  evidence of one was a misjudged board.
+
+  The check reads one saved inspection of the reference board and reports, per
+  color, whether it read as itself and how much threshold headroom is left
+  against a reference recorded on a known-good day -- the same shape as
+  `calibration.target_luma`. Headroom is judged as a *retention ratio*, not an
+  absolute tolerance: margins differ by an order of magnitude between colors,
+  so one absolute figure would let black collapse unreported while flagging
+  ordinary variation in red. It reads a persisted result rather than driving
+  the camera, so the same command answers the retrospective question -- point
+  it at older snapshots, or `--trend`, and a cast that has been building for a
+  fortnight is visible instead of remembered.
+
+  It writes no baseline, by design. A statistic derived from one board at shift
+  start has no evidence set, no holdout and no named approval, which is what
+  the deployed-baseline contract exists to refuse; the remedies on failure are
+  the illumination calibration or an escalation to a rebuild with sign-off.
+  `--record-reference` writes only the reference margins, only under a name,
+  and refuses a board whose colors misread or whose baseline is not the
+  approved one -- recording either would make the fault the target for every
+  later shift. Runs land in an append-only ledger under station data; a
+  truncated line costs that run rather than the history. The reference is
+  station-local and preserved by both deploy paths, so a version rollback
+  cannot republish another day's numbers as the bar.
+
+  The reference is bound to the SHA-256 of the baseline it was measured
+  against, and is set aside as stale when that file changes. That binding is
+  what makes the check usable *before* a station's baseline reaches the current
+  contract: the first cut refused to record a reference at all in that state,
+  which left every station unable to watch its own drift until an unrelated
+  migration finished -- exactly the period when drift goes unseen. A baseline
+  that cannot be shown to be current is therefore reported as WARN, not NG, and
+  NG is reserved for a board that actually read wrongly. Reporting it as NG
+  every shift until the migration completes would only teach operators that NG
+  means nothing; the enforcement that should stop a line for it is
+  `color_baseline_algorithm_enforcement: strict`, which refuses the load.
+
+  The dialog and the command share one evaluation service rather than each
+  resolving the station's board, its reference and its baseline provenance for
+  itself -- including which remedy to name, so neither can end up telling an
+  operator to check the lighting when the lighting is fine and the reference is
+  stale.
+
+  The panel shows the evidence rather than describing it. Per colour it carries
+  the crop the station saved with the region the colour check actually measured
+  outlined on it -- the saved crop is the whole detection box, while the
+  measurement uses the station's ROI inset and then a centred sub-crop, so the
+  outline is the difference between seeing the wire and seeing what was judged
+  -- beside a plot of today's pixels inside the envelope the baseline recorded:
+  its min/max box, its 10th-to-90th percentile core, and its mean as a cross.
+  A margin is one number standing in for a distribution; it says how much room
+  is left but not in which direction, and a colour drifting toward its
+  neighbour looks nothing like one losing saturation.
+
+  Three things that decide whether that picture tells the truth:
+  - The plot frames the envelope rather than the channel. Red lives within a
+    few degrees of hue out of 180, so a full-scale axis draws its envelope as a
+    speck; the window covers the envelope and the bulk of the cloud, so a drift
+    outside the envelope stays visible instead of being clipped into the border.
+  - The axis pair is chosen per colour. Black's recorded hue spans the circle,
+    so plotting hue for it would draw a box around the whole chart and imply a
+    tolerance that does not exist; saturation and value are what its envelope
+    pins down.
+  - The cloud is drawn as density, not as a scatter of equal dots. The measured
+    region is a wire against a board, and after the runtime's own saturation
+    pass the background is still in frame -- an equal-weight dot makes two
+    hundred background pixels look exactly as important as two hundred wire
+    pixels, while the colour check judges the dominant colour. On a scatter the
+    mean of all measured pixels reads as a drift the dominant cluster does not
+    have.
+
+  The pixels inside the outlined region that are *not* this colour are veiled,
+  and the share that is counts as `命中`. That answers a question the numbers
+  had been hiding: the wires run diagonally through an axis-aligned box, so
+  part of every measured region is board -- and the baseline's own
+  `coverage_mean` (0.17 to 0.41 on Cable1/A) says the same thing in a figure
+  nobody reads.
+
+  The share is taken over the denominator the runtime itself divides by, which
+  differs per colour: the saturation-gated pixels for a chromatic colour, the
+  whole region for black, which is scored on the whole crop against its learned
+  coverage. One share for both would describe a calculation the line does not
+  perform for four colours out of five -- against the runtime's denominators
+  Cable1/A reads 67% to 73% for the chromatic colours and 57% for black, where
+  a single whole-region figure would have said 45% to 66%. It is deliberately
+  not compared against `coverage_mean`, which was measured with the
+  calibration's dominant-hue mask rather than a plain envelope test; its value
+  is its own trend, computed the same way every shift, where a fall means the
+  box is catching less of the wire than it used to.
+
+  Crops are paired to colour measurements by the detection index in the crop's
+  filename, not by list position. The station writes a crop only for a usable
+  bounding box, so position pairing puts one wire's picture beside another
+  wire's numbers from the first skipped detection onward, and a crop naming a
+  different class is dropped rather than shown.
+
+  The verdict leads as a phrase rather than a code ("可以開線" / "不要用這片放行"),
+  states read as words with the identifier the ledger records kept in a
+  tooltip, and the notice and remedy show their lead sentence with the full
+  wording on hover. It reuses the application's own palette and action-button
+  styling rather than introducing a second visual language. Both report how old the inspection they read is, because reading a
+  saved result has exactly one trap: an operator who forgot to trigger one
+  would otherwise be judging this shift on last week's board. The dialog is
+  non-modal and watches for the next inspection, so the golden sample can stay
+  in the fixture while the operator presses 開始檢測 and the table updates.
 - One place decides whether a stored color baseline may be trusted:
   `core/color_baseline_contract.py` owns the current algorithm version and the
   single reader of the algorithm an artifact records for itself. A baseline is

@@ -384,6 +384,85 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "calib_failed": "Calibration did not converge ({reason}); nothing saved. Best luma={luma}.",
         "calib_saved": "Saved to model config (backup: {backup}).",
         "calib_error": "Calibration failed: {error}",
+        "preflight_menu": "Pre-shift Color Check...",
+        "preflight_title": "Pre-shift Color Check",
+        "preflight_hint": (
+            "Brightness first (Illumination Calibration), then leave the golden "
+            "sample in place, run one manual inspection, and read it here."
+        ),
+        "preflight_snapshot": "Inspection read",
+        "preflight_taken_at": "Taken",
+        "preflight_retention_floor": "Margin retention floor",
+        "preflight_no_reference": (
+            "No reference recorded yet, so this run can only report what it "
+            "measured. Record one from a known-good board."
+        ),
+        "preflight_provenance": "Deployed baseline",
+        "preflight_col_color": "Color",
+        "preflight_col_count": "Read / expected",
+        "preflight_col_margin": "Margin",
+        "preflight_col_reference": "Reference",
+        "preflight_col_retention": "Retained",
+        "preflight_col_state": "State",
+        "preflight_unmeasured_row": "(not measured)",
+        "preflight_verdict": "Verdict: {status}",
+        "preflight_state_ok": "Holding",
+        "preflight_state_margin_low": "Margin eroding",
+        "preflight_state_below_threshold": "Below threshold",
+        "preflight_state_no_reference": "No reference",
+        "preflight_state_reference_stale": "Reference expired",
+        "preflight_state_missing": "Not read",
+        "preflight_state_unexpected": "Extra reading",
+        "preflight_state_unmeasured": "Unmeasurable",
+        "preflight_verdict_ok": "Cleared to run",
+        "preflight_verdict_warn": "Runnable, needs attention",
+        "preflight_verdict_ng": "Do not run on this",
+        "preflight_scope": "{product} / {area} · {model_type}",
+        "preflight_reference_recorded": "Reference by {operator}, {when}",
+        "preflight_reference_stale": (
+            "The reference was measured against a different baseline file, so "
+            "its margins are not comparable with today's. Record a new one from "
+            "a known-good board."
+        ),
+        "preflight_remedy_misread": (
+            "Check the fixture and the lighting, then run the illumination "
+            "calibration. If it does not recover, escalate to a color baseline "
+            "rebuild with acceptance and sign-off. Never adjust the baseline "
+            "from this reading."
+        ),
+        "preflight_remedy_margin": (
+            "Headroom is eroding while the colours still read correctly -- "
+            "usually the light ageing. Run the illumination calibration; if the "
+            "margin keeps falling shift after shift, plan a baseline rebuild."
+        ),
+        "preflight_remedy_stale": (
+            "Only the reference is out of date, not this board. Record a new "
+            "reference once you are satisfied the sample and the light are good."
+        ),
+        "preflight_remedy_record": (
+            "Nothing is wrong yet -- there is simply nothing to compare with. "
+            "Record this board as the reference if the sample and the light are "
+            "known good."
+        ),
+        "preflight_remedy_baseline": (
+            "The colours read correctly. The note above is about the deployed "
+            "baseline predating the current contract, which is fixed by a "
+            "rebuild with acceptance and sign-off, not at shift start. Drift "
+            "checking works meanwhile: the reference is tied to this baseline "
+            "and will expire when it is rebuilt."
+        ),
+        "preflight_refresh_btn": "Re-read Latest Inspection",
+        "preflight_record_btn": "Record as Reference",
+        "preflight_close_btn": "Close",
+        "preflight_operator_title": "Record Reference Margins",
+        "preflight_operator_prompt": (
+            "Every later shift is judged against these margins, so the record "
+            "carries who chose it. Your name:"
+        ),
+        "preflight_recorded": "Reference recorded by {operator} at {when}.",
+        "preflight_record_failed": "Cannot record a reference: {error}",
+        "preflight_unavailable": "Nothing to check yet: {error}",
+        "preflight_ledger_failed": "Could not write the pre-shift log: {error}",
         "result_details": "Result Details",
         "field_decision": "Field Decision",
         "conclusion": "Conclusion",
@@ -792,6 +871,77 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "calib_failed": "校正未收斂（{reason}），未寫入。最佳亮度={luma}。",
         "calib_saved": "已寫入機種設定（備份：{backup}）。",
         "calib_error": "校正失敗：{error}",
+        "preflight_menu": "顏色開線檢查…",
+        "preflight_title": "顏色開線檢查",
+        "preflight_hint": (
+            "先做「光源校正」把亮度拉進容差，金板不要拿走，跑一次手動檢測，"
+            "再回到這裡讀取。"
+        ),
+        "preflight_snapshot": "讀取的檢測",
+        "preflight_taken_at": "拍攝時間",
+        "preflight_retention_floor": "餘裕保留率門檻",
+        "preflight_no_reference": (
+            "尚未建立參考餘裕，這次只能回報量到的值。請在確認良好的金板上按"
+            "「記錄為參考餘裕」。"
+        ),
+        "preflight_provenance": "已部署基準",
+        "preflight_col_color": "色別",
+        "preflight_col_count": "讀到 / 應有",
+        "preflight_col_margin": "餘裕",
+        "preflight_col_reference": "參考",
+        "preflight_col_retention": "保留",
+        "preflight_col_state": "狀態",
+        "preflight_unmeasured_row": "（未量測）",
+        "preflight_verdict": "判定：{status}",
+        "preflight_reference_stale": (
+            "參考餘裕是對著另一份基準檔量的，數字與今天不可比。請在確認良好的"
+            "金板上重新記錄一次。"
+        ),
+        "preflight_state_ok": "維持",
+        "preflight_state_margin_low": "餘裕衰退",
+        "preflight_state_below_threshold": "已低於門檻",
+        "preflight_state_no_reference": "無參考",
+        "preflight_state_reference_stale": "參考已過期",
+        "preflight_state_missing": "沒讀到",
+        "preflight_state_unexpected": "多讀到",
+        "preflight_state_unmeasured": "無法量測",
+        "preflight_verdict_ok": "可以開線",
+        "preflight_verdict_warn": "可開線，但要處理",
+        "preflight_verdict_ng": "不要用這片放行",
+        "preflight_scope": "{product} / {area} · {model_type}",
+        "preflight_reference_recorded": "參考由 {operator} 於 {when} 建立",
+        "preflight_remedy_misread": (
+            "先檢查治具與光源，再做光源校正。仍未恢復則升級為顏色基準重建 + "
+            "重跑驗收 + 簽核。不要用這次讀數去改基準。"
+        ),
+        "preflight_remedy_margin": (
+            "顏色都還判對，但餘裕在衰退 —— 通常是光源老化。先做光源校正；"
+            "若連續幾班持續下滑，就要規劃基準重建。"
+        ),
+        "preflight_remedy_stale": (
+            "過期的只是參考餘裕，不是這片板子。確認樣本與光源良好後，重新記錄"
+            "一次參考餘裕即可。"
+        ),
+        "preflight_remedy_record": (
+            "目前沒有問題，只是沒有可比對的基準。若樣本與光源確認良好，就把這"
+            "片板子記錄為參考餘裕。"
+        ),
+        "preflight_remedy_baseline": (
+            "顏色都判對了。上面那則提示是關於「已部署基準早於現行契約」，那要"
+            "靠基準重建 + 驗收 + 簽核處理，不是開線時能解決的。在那之前漂移偵測"
+            "仍然可用：參考餘裕會綁定目前這份基準，基準重建後自動失效。"
+        ),
+        "preflight_refresh_btn": "重新讀取最新檢測",
+        "preflight_record_btn": "記錄為參考餘裕",
+        "preflight_close_btn": "關閉",
+        "preflight_operator_title": "記錄參考餘裕",
+        "preflight_operator_prompt": (
+            "之後每一班都會跟這組餘裕比對，因此紀錄會留下是誰決定的。請輸入姓名："
+        ),
+        "preflight_recorded": "已由 {operator} 於 {when} 建立參考餘裕。",
+        "preflight_record_failed": "無法建立參考餘裕：{error}",
+        "preflight_unavailable": "目前無法檢查：{error}",
+        "preflight_ledger_failed": "開線紀錄寫入失敗：{error}",
         "result_details": "檢測結果",
         "field_decision": "現場判定",
         "conclusion": "結論",

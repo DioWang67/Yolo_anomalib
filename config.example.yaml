@@ -202,6 +202,25 @@ inspection_sync_allow_insecure_http: false
 #   orange_red_tie_margin: 0.15  # score gap below this triggers tie-break
 #   center_margin_ratio: 0.15    # fraction removed independently from every edge
 #
+# Pre-shift color check (tools/color_preflight.py). Recorded once on a known-good
+# golden sample and compared at the start of every shift, the way
+# calibration.target_luma is. It changes no score and binds no baseline, so it is
+# not part of the baseline contract -- but it is station-local, so a deployment or
+# a version rollback preserves it rather than publishing another day's numbers.
+# Write it with `--record-reference --operator <name>` rather than by hand: the
+# tool refuses a board whose colors misread, so a fault cannot become the target.
+# color_preflight:
+#   # Fraction of the recorded headroom a color must keep to pass without
+#   # comment. A ratio, not an absolute tolerance: margins differ by an order of
+#   # magnitude between colors, so one absolute figure would let black collapse
+#   # unreported while flagging ordinary variation in red.
+#   minimum_margin_retention: 0.6
+#   reference_margins:           # score minus threshold, per color, on the reference board
+#     Black: 0.126
+#     Green: 0.492
+#   recorded_at: '2026-09-02T07:41:00+08:00'
+#   recorded_by: line-lead-a
+#
 # Production default: if color check is enabled but the color model/rules cannot
 # load, mark the inspection as FAIL instead of silently passing color validation.
 # color_fail_closed: true

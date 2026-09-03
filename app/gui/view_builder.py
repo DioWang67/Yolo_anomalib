@@ -347,6 +347,13 @@ def build_menu_bar(gui: DetectionSystemGUI) -> QMenuBar:
     calibration_action.triggered.connect(gui.open_calibration_dialog)
     lighting_menu.addAction(calibration_action)
 
+    # Beside the brightness calibration because it is the second half of the
+    # same start-of-shift ritual: brightness is the proxy, colour is what the
+    # line actually compares.
+    preflight_action = QAction(tr(language, "preflight_menu"), gui)
+    preflight_action.triggered.connect(gui.open_color_preflight_dialog)
+    lighting_menu.addAction(preflight_action)
+
     help_menu = menubar.addMenu(tr(language, "help_menu"))
     about_action = QAction(tr(language, "about"), gui)
     about_action.triggered.connect(gui.show_about)

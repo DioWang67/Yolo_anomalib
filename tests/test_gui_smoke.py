@@ -133,6 +133,19 @@ def test_gui_smoke(monkeypatch, tmp_path):
     assert window.menuBar().actions()[0].text() == "檔案"
     assert window.info_panel.session_stats.title() == "當班統計"
 
+    # The start-of-shift ritual is two steps in one menu: brightness, then the
+    # colour it stands in for. A menu action wired to a method the window does
+    # not have raises at build time, so this also pins the mixin.
+    lighting_menu = next(
+        action.menu()
+        for action in window.menuBar().actions()
+        if action.text() == "燈光控制"
+    )
+    lighting_labels = [action.text() for action in lighting_menu.actions()]
+    assert "光源校正…" in lighting_labels
+    assert "顏色開線檢查…" in lighting_labels
+    assert callable(window.open_color_preflight_dialog)
+
     window.control_panel.language_combo.setCurrentIndex(
         window.control_panel.language_combo.findData("en")
     )

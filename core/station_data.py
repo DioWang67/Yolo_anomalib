@@ -35,6 +35,7 @@ class StationDataPaths:
     acceptance: Path
     acceptance_reports: Path
     color_baselines: Path
+    color_preflight: Path
     color_profiles: Path
     color_revisions: Path
     inspection_releases: Path
@@ -117,6 +118,7 @@ def station_data_paths_from_workspace(workspace: WorkspacePaths) -> StationDataP
         acceptance=root / "acceptance",
         acceptance_reports=root / "acceptance_reports",
         color_baselines=root / ".color_baselines",
+        color_preflight=root / ".color_preflight",
         color_profiles=root / ".color_profiles",
         color_revisions=root / ".color_revisions",
         inspection_releases=root / ".inspection_releases",
