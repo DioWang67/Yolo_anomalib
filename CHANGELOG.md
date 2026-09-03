@@ -78,6 +78,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails closed on. `None` stays reserved for a station that configured no color
   palette at all, generic detector classes included, so a station naming only
   those is unaffected.
+- `tools/color_verifier.py` stopped applying two rules the runtime no longer
+  has. Its envelope report short-circuited on the black and yellow indicators,
+  returning that color's raw coverage as a confidence with every other color
+  zeroed -- so `envelope_ratios`, documented as a per-color report, carried one
+  number and four zeros. Both indicators are now reported without adjusting any
+  score. Its sampling margin was 0.12 while the runtime measured at 0.15, which
+  made the report and the verdict describe different regions of the same part;
+  it now takes the runtime's constant. `ORANGE_RED_TIE_MARGIN` and
+  `GREEN_DOMINANCE_RATIO`, left behind unreferenced when the verdict moved to
+  the runtime, are gone.
 - Stats Color's baseline contract is now `stats-robust-v5`. Calibration and
   runtime share one per-axis center-crop helper, so an elongated 300x100 ROI is
   measured as 210x70 on both sides instead of 210x70 during rebuild and 270x70

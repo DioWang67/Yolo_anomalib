@@ -117,7 +117,14 @@ def test_center_crop_uses_each_axis_for_rectangular_images():
     assert cropped.shape == (8, 80, 3)
 
 
-def test_yellow_shortcut_returns_real_center_mask():
+def test_yellow_indicator_is_reported_without_short_circuiting_the_report():
+    """``envelope_ratios`` is documented per color, so it must stay per color.
+
+    The indicator used to return early with Yellow set to its own coverage and
+    every other color zeroed -- a raw fraction reported as a confidence, and a
+    per-color report carrying one number. The runtime and the training gate both
+    dropped this shortcut; a third copy here would be the one left to drift.
+    """
     hsv_img = np.full((10, 20, 3), (25.0, 200.0, 200.0), dtype=np.float32)
     lab_img = np.full((10, 20, 3), (150.0, 128.0, 128.0), dtype=np.float32)
 
@@ -128,8 +135,11 @@ def test_yellow_shortcut_returns_real_center_mask():
         edge_margin=0.1,
     )
 
+    assert debug["is_yellow_detected"] is True
+    assert debug["yellow_score_adjustment"] == 0.0
+    assert "shortcut" not in debug
+    # Scored against the baseline envelope like every other color.
     assert ratios["Yellow"] == pytest.approx(1.0)
-    assert debug["shortcut"] == "Yellow"
     assert 0 < np.count_nonzero(masks["Yellow"]) < masks["Yellow"].size
     assert not np.any(masks["Yellow"][[0, -1], :])
 

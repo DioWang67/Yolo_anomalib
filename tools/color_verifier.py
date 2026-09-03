@@ -37,13 +37,17 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from core.stats_color_checker import StatsColorChecker
+from core.stats_color_checker import CENTER_MARGIN_RATIO, StatsColorChecker
 
 SUPPORTED_FORMATS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
 
 # Default sampling thresholds
 DEFAULT_SAT_THRESHOLD = 20.0
-DEFAULT_EDGE_MARGIN = 0.12
+# The envelope report answers "does this evidence sit inside the baseline's
+# recorded range?", so it has to look at the pixels the verdict looked at. This
+# was 0.12 while the runtime measured at 0.15, which made the report and the
+# verdict describe different regions of the same part.
+DEFAULT_EDGE_MARGIN = CENTER_MARGIN_RATIO
 DEFAULT_MIN_VALID_PIXELS = 40
 
 # Black detection thresholds
@@ -59,8 +63,10 @@ YELLOW_H_RANGE = (20, 35)
 YELLOW_S_MIN = 80
 YELLOW_V_MIN = 150
 
-ORANGE_RED_TIE_MARGIN = 0.15
-GREEN_DOMINANCE_RATIO = 0.3
+# ``ORANGE_RED_TIE_MARGIN`` and ``GREEN_DOMINANCE_RATIO`` lived here for the
+# decision chain that was removed when the verdict moved to the runtime. They
+# were left behind unreferenced, which reads as though this tool still applies
+# a tie-break and a dominance override -- the runtime has neither.
 MIN_HSV_MATCH_RATIO = 0.01
 COLOR_CONF_THRESHOLDS = {
     "Black": 0.45,
@@ -311,8 +317,14 @@ def _evaluate_image_improved(
         "min_valid_pixels": min_valid_pixels,
     }
 
-    # 快速檢查黑色
-    is_black, black_conf, black_mask = _is_black_image(
+    # The black and yellow indicators are reported, not acted on. They used to
+    # return here with the recognized color set to its own coverage and every
+    # other color zeroed, which made ``envelope_ratios`` -- documented as a
+    # per-color report -- carry one number and four zeros, and reported a raw
+    # coverage fraction as a confidence. The runtime and the training gate both
+    # removed the same shortcut; leaving it here would keep a third copy of the
+    # rule the other two no longer have.
+    is_black, black_conf, _black_mask = _is_black_image(
         hsv_img,
         BLACK_S_THRESHOLD,
         BLACK_V_THRESHOLD,
@@ -320,30 +332,15 @@ def _evaluate_image_improved(
     )
     debug_info["is_black_detected"] = is_black
     debug_info["black_confidence"] = float(black_conf)
+    debug_info["black_score_adjustment"] = 0.0
 
-    if is_black and "Black" in color_ranges:
-        ratios = dict.fromkeys(color_ranges.keys(), 0.0)
-        ratios["Black"] = black_conf
-        masks = {color: np.zeros(hsv_img.shape[:2], dtype=bool) for color in color_ranges.keys()}
-        masks["Black"] = black_mask
-        debug_info["shortcut"] = "Black"
-        return ratios, masks, debug_info
-
-    # 快速檢查黃色
-    is_yellow, yellow_conf, yellow_mask = _detect_yellow_special(
+    is_yellow, yellow_conf, _yellow_mask = _detect_yellow_special(
         hsv_img,
         edge_margin=edge_margin,
     )
     debug_info["is_yellow_detected"] = is_yellow
     debug_info["yellow_confidence"] = float(yellow_conf)
-
-    if is_yellow and "Yellow" in color_ranges:
-        ratios = dict.fromkeys(color_ranges.keys(), 0.0)
-        ratios["Yellow"] = yellow_conf
-        masks = {color: np.zeros(hsv_img.shape[:2], dtype=bool) for color in color_ranges.keys()}
-        masks["Yellow"] = yellow_mask
-        debug_info["shortcut"] = "Yellow"
-        return ratios, masks, debug_info
+    debug_info["yellow_score_adjustment"] = 0.0
 
     center_hsv = _crop_center(hsv_img, edge_margin)
     center_lab = _crop_center(lab_img, edge_margin)
