@@ -31,15 +31,26 @@ def _payload() -> dict:
 
 
 def _render(spec: dict) -> np.ndarray:
+    """Mirror of ``render()`` in the workspace generator.
+
+    ``size`` gives a square patch; ``height``/``width`` give an elongated one,
+    and ``orientation`` says which axis the bands run along. On a square patch a
+    per-axis center crop and one derived from ``min(h, w)`` are the same crop,
+    so square-only cases cannot see a sampling-geometry change.
+    """
     size = int(spec.get("size", 96))
-    hsv = np.zeros((size, size, 3), np.uint8)
+    height = int(spec.get("height", size))
+    width = int(spec.get("width", size))
     bands = spec["bands"]
-    edges = np.linspace(0, size, len(bands) + 1).astype(int)
+    vertical = str(spec.get("orientation", "horizontal")) == "vertical"
+    hsv = np.zeros((height, width, 3), np.uint8)
+    edges = np.linspace(0, width if vertical else height, len(bands) + 1).astype(int)
     for index, band in enumerate(bands):
         low, high = edges[index], edges[index + 1]
-        hsv[low:high, :, 0] = band[0]
-        hsv[low:high, :, 1] = band[1]
-        hsv[low:high, :, 2] = band[2]
+        region = hsv[:, low:high] if vertical else hsv[low:high, :]
+        region[:, :, 0] = band[0]
+        region[:, :, 1] = band[1]
+        region[:, :, 2] = band[2]
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
 

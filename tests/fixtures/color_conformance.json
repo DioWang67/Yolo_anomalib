@@ -223,6 +223,161 @@
           ]
         ]
       }
+    },
+    {
+      "color": "red",
+      "confident": true,
+      "name": "wide red strip with an orange end",
+      "spec": {
+        "bands": [
+          [
+            4,
+            210,
+            190
+          ],
+          [
+            4,
+            210,
+            190
+          ],
+          [
+            12,
+            200,
+            210
+          ]
+        ],
+        "height": 96,
+        "orientation": "vertical",
+        "width": 384
+      }
+    },
+    {
+      "color": "red",
+      "confident": true,
+      "name": "tall red strip with an orange end",
+      "spec": {
+        "bands": [
+          [
+            4,
+            210,
+            190
+          ],
+          [
+            4,
+            210,
+            190
+          ],
+          [
+            12,
+            200,
+            210
+          ]
+        ],
+        "height": 384,
+        "width": 96
+      }
+    },
+    {
+      "color": "green",
+      "confident": true,
+      "name": "yellow minority beside green",
+      "spec": {
+        "bands": [
+          [
+            28,
+            190,
+            220
+          ],
+          [
+            28,
+            190,
+            220
+          ],
+          [
+            85,
+            120,
+            60
+          ],
+          [
+            85,
+            120,
+            60
+          ],
+          [
+            85,
+            120,
+            60
+          ]
+        ]
+      }
+    },
+    {
+      "color": "black",
+      "confident": true,
+      "name": "yellow minority beside black",
+      "spec": {
+        "bands": [
+          [
+            28,
+            190,
+            220
+          ],
+          [
+            28,
+            190,
+            220
+          ],
+          [
+            0,
+            20,
+            30
+          ],
+          [
+            0,
+            20,
+            30
+          ],
+          [
+            0,
+            20,
+            30
+          ]
+        ]
+      }
+    },
+    {
+      "color": "red",
+      "confident": true,
+      "name": "red majority with a green minority",
+      "spec": {
+        "bands": [
+          [
+            4,
+            210,
+            190
+          ],
+          [
+            4,
+            210,
+            190
+          ],
+          [
+            4,
+            210,
+            190
+          ],
+          [
+            85,
+            120,
+            60
+          ],
+          [
+            85,
+            120,
+            60
+          ]
+        ]
+      }
     }
   ],
   "color_model": {
