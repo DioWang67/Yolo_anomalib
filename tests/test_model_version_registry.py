@@ -169,6 +169,61 @@ def test_activate_restores_version_config_but_preserves_station_fields(
     assert registry.previous_version("PCBA1", "A", "yolo").weight_path.name == current_name
 
 
+def test_activate_keeps_the_station_color_contract_fields(tmp_path: Path) -> None:
+    """The live station owns the geometry and tuning its baseline was built on.
+
+    A rollback that republished a snapshot's color fields would leave the approved
+    baseline describing a geometry the station no longer measures in, which strict
+    enforcement rejects outright and ``warn`` scores through the wrong crop.
+    """
+    models_root, target = _create_target(tmp_path)
+    old_name = "PCBA1_A_v1.0.0_20260701.onnx"
+    current_name = "PCBA1_A_v1.0.1_20260715.onnx"
+    _add_version(
+        target,
+        old_name,
+        b"old",
+        version="1.0.0",
+        trained_at="2026-07-01T08:00:00+08:00",
+        config={
+            "weights": f"models/PCBA1/A/yolo/weights/{old_name}",
+            # A geometry measured on another day, and an enforcement level the
+            # station has since tightened.
+            "color_roi_policy": {"inset_x_ratio": 0.05},
+            "color_baseline_algorithm_enforcement": "warn",
+            # Present in the snapshot only: the station never set this one.
+            "color_decision_tuning": {"center_margin_ratio": 0.4},
+        },
+    )
+    _add_version(
+        target,
+        current_name,
+        b"new",
+        version="1.0.1",
+        trained_at="2026-07-15T09:30:00+08:00",
+    )
+    _write_yaml(
+        target / "config.yaml",
+        {
+            "weights": f"models/PCBA1/A/yolo/weights/{current_name}",
+            "color_roi_policy": {"inset_x_ratio": 0.2},
+            "color_baseline_algorithm_enforcement": "strict",
+        },
+    )
+    registry = ModelVersionRegistry(models_root)
+    old_record = next(
+        item for item in registry.list_versions() if item.weight_path.name == old_name
+    )
+
+    registry.activate(old_record, operator="operator-a")
+
+    config = yaml.safe_load((target / "config.yaml").read_text(encoding="utf-8"))
+    assert config["color_roi_policy"] == {"inset_x_ratio": 0.2}
+    assert config["color_baseline_algorithm_enforcement"] == "strict"
+    # The station holds no tuning, so the snapshot's must not be published either.
+    assert "color_decision_tuning" not in config
+
+
 def test_registry_hides_noncurrent_best_alias(
     tmp_path: Path,
 ) -> None:

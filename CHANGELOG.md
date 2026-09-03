@@ -43,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a box. `missing_locations=None` still means "the caller resolved nothing, fall
   back to expected boxes", while an empty list is now an explicit "draw no
   locations".
+- Operator version activation and rollback no longer drop the station's color
+  contract fields. `STATION_LOCAL_FIELDS` in
+  `core/services/model_version_registry.py` carried no color field at all while
+  activation overwrites the live `config.yaml`, and no version snapshot on disk
+  carried `color_roi_policy` -- so switching or rolling back a model version
+  silently republished the default geometry over a station running an inset.
+  Under v5 the deployed baseline then describes a geometry the station no longer
+  measures in: `strict` raises and the line stops, `warn` keeps scoring through
+  the wrong crop. For these three fields the live station wins including its
+  absence, so a snapshot cannot supply a foreign value either.
 - Color baseline rebuilds took their sampling geometry from the model version
   config snapshot, which cannot carry it. `color_roi_policy` is a station-local
   field that a model deployment preserves rather than replaces, so no snapshot

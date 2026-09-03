@@ -45,6 +45,24 @@ STATION_LOCAL_FIELDS = {
     "save_processed",
 }
 
+# Color inspection is bound to these fields: the approved baseline artifact records
+# the sampling geometry and decision tuning it was measured under, and the runtime
+# refuses a baseline whose live station config no longer matches. So a snapshot
+# taken on another day must not supply them either -- publishing a foreign value
+# invalidates the station's approved baseline just as surely as dropping the
+# station's own. For these the live station wins, including when it holds no value.
+STATION_OWNED_COLOR_FIELDS = frozenset(
+    {
+        "color_baseline_algorithm_enforcement",
+        "color_decision_tuning",
+        # The pre-shift color reference was recorded on this fixture under this
+        # light. It binds no baseline, but republishing another day's numbers
+        # over it would silently move the bar the next shift is judged against.
+        "color_preflight",
+        "color_roi_policy",
+    }
+)
+
 
 class ModelVersionRegistryError(RuntimeError):
     """Raised when model history cannot be read or safely changed."""
@@ -237,6 +255,11 @@ class ModelVersionRegistry:
             for field_name in STATION_LOCAL_FIELDS:
                 if field_name in current_config:
                     next_config[field_name] = current_config[field_name]
+            for field_name in STATION_OWNED_COLOR_FIELDS:
+                if field_name in current_config:
+                    next_config[field_name] = current_config[field_name]
+                else:
+                    next_config.pop(field_name, None)
             self._set_config_weight(
                 next_config,
                 refreshed,
