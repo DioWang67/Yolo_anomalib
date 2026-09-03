@@ -3,7 +3,7 @@
 文件狀態：**已實作／曾於 2026-08-05 至 08-19 靜默失效並已修復／Cable1/A 維持 `report_only`／現場 Gate 尚待完成**
 適用範圍：`Cable1 / A / YOLO 1.0.6`
 建立日期：2026-07-29
-最後更新：2026-08-19（見 §17 回歸事件紀錄）
+最後更新：2026-08-26（§18 A/B 報告工具；回歸事件紀錄見 §17）
 變更類型：推論後處理、結果可視化、品質 Gate
 目前執行設定：`Cable1/A 1.0.6` 維持 `report_only`；未修改 YOLO NMS
 `iou_thres=0.45`，也未修改線序。位置檢測啟用時會 fail-closed 停止自動消除。
@@ -11,6 +11,10 @@
 §17 的修復讓本機制**第一次能真正產生 report-only 候選資料**，但不改變
 §10／§15 的切換條件：`suppress` 仍須完成 500 次、完整班次與具名批准。
 `tests/test_pilot_config_safety.py` 會強制 config 維持 `report_only`。
+
+§18 建立了 §10 所要求的 A/B 報告工具並量化 Gate 進度。首次量測：
+**report-only 證據 0 筆（0 / 500）** — 產線尚未以 report_only 累積任何資料，
+因此距離切換的差距不是程式，而是實地運轉與具名批准。
 
 > **⚠️ 讀本文件前必看**：本文件在 2026-08-05 至 08-19 期間所描述的機制**實際上無法
 > 觸發**。§6.2 條件 6 與 §6.3 規則 6 所寫的「兩框顏色檢查都必須通過」，在顏色檢查
@@ -427,7 +431,9 @@ Red → Orange → Green → Yellow → Black → Black
       獨立列示，不得宣稱整張 PASS。
 - [x] raw、effective、suppressed 三份資料可以互相追溯。
 - [x] GUI 與結果圖能指出本案例的`#5/#6`與`97.7%`重疊。
-- [ ] report-only 與 suppress 的結果差異有 A/B 報告。
+- [~] report-only 與 suppress 的結果差異有 A/B 報告。**工具已建立**
+      （`tools/duplicate_filter_ab_report.py`，見 §18），但首次執行顯示現有資料
+      全為 `suppress` 模式紀錄，report-only 分母為 0，因此本項仍不得勾選。
 - [ ] 延遲符合 p95 目標。
 - [x] 模型版本、config hash、filter policy version 已保存。
 - [ ] 製程／AI／軟體三方具名批准。
@@ -671,4 +677,92 @@ detector 標籤、低信心量測仍須退回、顏色不符不得使判定變�
 
 - **detector 補訓**（§14）：66 筆重複框的路徑、框號與 IoU 已在稽核報告中，可直接
   作為複判／重訓輸入。這是唯一的根因修復，其餘皆為後處理補償。
-- §15 現場 Gate（500 次／完整班次／具名批准）仍未完成。
+- §15 現場 Gate（500 次／完整班次／具名批准）仍未完成。§18 的工具已能量化進度，
+  首次量測結果為 **report-only 證據 0 筆**。
+
+## 18. A/B 報告與 Gate 進度量測（2026-08-26 建立）
+
+### 18.1 為什麼需要獨立工具
+
+§10 要求「report-only 與 suppress 的結果差異有 A/B 報告」，但在此之前沒有任何工具
+能產生它。`tools/audit_cross_class_duplicates.py` 報告的是**哪些框**會被消除；
+§16 的四位簽核人要為**板子的判定**負責，一份框清單無法讓人簽名。
+
+### 18.2 工具
+
+```text
+tools/duplicate_filter_ab.py         純邏輯：單筆快照的雙模式判定重放與差異分類
+tools/duplicate_filter_ab_report.py  CLI：掃描證據窗口、產生 schema 化報告
+tests/test_duplicate_filter_ab.py    32 項測試
+```
+
+執行方式（唯讀，不修改任何結果檔、config 或資料庫）：
+
+```text
+python tools\duplicate_filter_ab_report.py <Result 路徑> ^
+  --config models\Cable1\A\yolo\config.yaml ^
+  --product Cable1 --area A ^
+  --code-revision <commit> ^
+  --output-json <報告路徑>
+```
+
+### 18.3 三個刻意的設計決定
+
+1. **不重寫判定邏輯。** 重放直接驅動生產的 `CrossClassDuplicateFilterStep`、
+   `CountCheckStep`、`SequenceCheckStep` 與 `finalize_status`。第二份 count／
+   sequence／撤回／finalize 實作會在任何人修改 `core/pipeline/steps.py` 的那一刻
+   與產線脫節，而一份與產線不一致的 A/B 報告比沒有報告更危險。
+
+2. **保真度以「快照記錄的模式」為錨。** 每筆快照先用它**當初記錄的**模式重放，與
+   記錄狀態比對。無法重現記錄狀態者列為 `fidelity_mismatch` 並**排除**於帳本之外
+   — 它由已不存在的程式產生，或重放不完整，兩者都不得當作今日程式的證據。
+   狀態能重現但**原因**不同者仍可用：這正是 2026-08-19 顏色撤回修正的預期效果。
+
+3. **兩本帳絕不混算。** Gate 進度只計算產線真正以 `report_only` 執行的次數；
+   以 `suppress` 記錄的快照是合法的 A/B 素材，但不能充當 report-only 的分母。
+
+### 18.4 工具不能證明的事
+
+- **程式版號**：快照記錄 `config_hash` 與 `model_version`，但**不記錄產生它的程式
+  版號**。§17.1 的回歸能潛伏十四天，正是因為 config 看起來完全正確而程式行為已改。
+  因此 `--code-revision` 是寫出報告的必要參數，並在報告中明確標記為
+  `code_revision_is_operator_declared: true` — 這是操作者的宣告，不是從資料推導的
+  事實。
+- **完整班次**：班別邊界不在快照裡。報告只陳述觀測到的時間跨度與日期，
+  `full_shift_confirmed` 恆為 `null`，並附理由「需具名證言」。由於 §15 取兩條件中
+  較晚完成者，未經證言的班次會使 `gate_satisfied` 保持 `false`。工具不會自行發明
+  班別定義。
+
+### 18.5 首次執行結果（`Result/20260819`，161 筆快照）
+
+| 項目 | 數值 |
+| --- | --- |
+| 掃描／可比對 | 161 / 161 |
+| 記錄模式分布 | `suppress` 161、`report_only` **0** |
+| **Gate 進度** | **report_only 0 / 500** |
+| 保真度 | 重現 161、狀態不符 0、原因漂移 2 |
+| 抑制候選快照 | 9 |
+| 判定改變 | **0**（fail→pass 0、pass→fail 0） |
+| 僅原因改變 | 9 |
+
+三項必須一起讀的結論：
+
+1. **report-only 證據為 0。** 08-19 之後 `Result/` 沒有新資料，而 08-19 當天全部
+   161 筆都記錄為 `suppress`（config 切回 `report_only` 之前或離線驗證重放）。
+   §15 的 500 次 Gate 分母是 0，不是「接近完成」。
+2. **保真度乾淨。** 161 筆全部能被今日程式重現狀態，代表重放可信；2 筆原因漂移
+   對應顏色撤回修正。
+3. **判定改變 0 筆有兩種讀法，報告會明說是哪一種。** 9 筆產生了抑制候選，但每一片
+   板子都另有獨立的真實不良（線序），所以判定不變。這代表此窗口**既未出現新的逃逸，
+   也未出現新的誤殺，同時也無法證明效益**。報告的 `evidence_notes` 會直接寫出這句話，
+   避免簽核人把 `fail_to_pass=0` 讀成「已證明安全」。
+
+### 18.6 下一步
+
+工具已就位，缺的不再是程式：
+
+1. 產線以 `report_only` 實際運轉，累積 500 次或完整班次（取較晚者）；
+2. 期間用本工具定期輸出報告，觀察 `fail_to_pass` 是否出現、以及是否有
+   `pass_to_fail`；
+3. 每一筆 `fail_to_pass` 都必須人工複判（§10 的 known NG 不得變成 false PASS）；
+4. 帶著報告完成 §15／§16 的具名批准，才可切換 `suppress`。

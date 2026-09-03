@@ -295,6 +295,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each suite is self-contained; the workspace CI asserts the two copies still
   match. Legitimate differences are recorded under `known_divergences` with the
   reason rather than smoothed away.
+- `tools/duplicate_filter_ab_report.py` produces the report_only versus suppress
+  A/B report that section 10 of the cross-class duplicate proposal lists as a
+  blocking gate, and counts pilot progress toward the section 15 threshold.
+  Nothing produced that report before: the duplicate audit reports which boxes a
+  policy would suppress, while the named approvers sign for what happens to the
+  board. The replay drives the production filter, count, sequence and finalize
+  steps rather than reimplementing them, and anchors its fidelity check on the
+  mode each snapshot was recorded under, so a snapshot today's code cannot
+  reproduce is excluded from the ledger instead of being presented as evidence
+  about today's code. Gate progress counts only runs the line actually made in
+  report_only; suppress-recorded snapshots stay valid A/B material but cannot
+  pad a report-only denominator. The report states what it cannot prove: the
+  code revision is an operator declaration (snapshots record config hash and
+  model version but not the revision that produced them), and full-shift
+  coverage is left to a named attestation instead of a computed guess, which
+  keeps the gate unsatisfied until someone signs for it. Its first run over
+  `Result/20260819` reports zero report-only inspections, so the section 15
+  count stands at 0/500.
 - Acceptance color discovery now reports the in-scope artifacts it withholds
   instead of dropping them silently. `discover_color_variants()` returns a
   `ColorVariantDiscovery` carrying both the selectable variants and a
