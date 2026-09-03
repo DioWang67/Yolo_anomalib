@@ -71,6 +71,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `color_roi_policy` stamp. The runtime always resolves a geometry and always
   compares it to the recorded one, so an unstamped artifact loads at no station;
   it was being discovered after the sign-off, when the evidence was gone.
+- The acceptance picker and the publication gate now ask what the line asks.
+  Both checked only the algorithm label, which says which rules measured the
+  statistics and nothing about the geometry or tuning they were measured under,
+  so a baseline could be offered, selected, accepted over a full sample set, and
+  then refused by the runtime. Both now pass the live station's
+  `color_roi_policy` and complete `color_decision_tuning`, resolved through one
+  shared `core/services/station_color_settings.py`; the candidate door also
+  reads the artifact's own provenance rather than trusting the store's label,
+  because a candidate whose statistics were never rewritten has been seen
+  carrying a current label. The component catalog stops showing such a candidate
+  as VERIFIED.
 - `_supported_candidates` no longer collapses "a palette was configured and the
   model can score none of it" into "no restriction". That widened a wrong
   palette into the full vocabulary and reported a measurement taken against

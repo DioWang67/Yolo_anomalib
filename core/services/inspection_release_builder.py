@@ -15,7 +15,9 @@ import yaml
 from core.color_baseline_contract import (
     baseline_compatibility_failure,
     color_model_algorithm,
+    color_model_compatibility_failure,
 )
+from core.services.acceptance_artifacts import color_scope_model_type
 from core.services.color_profile_store import (
     ColorProfilePackage,
     ColorProfileStore,
@@ -31,6 +33,12 @@ from core.services.inspection_release_models import (
 )
 from core.services.inspection_release_store import sha256_file
 from core.services.model_version_registry import ModelVersionRecord
+from core.services.station_color_settings import (
+    StationColorSettingsError,
+    station_color_decision_tuning,
+    station_color_roi_policy,
+    station_config_path,
+)
 from core.station_data import load_station_data_paths
 from tools.color_calibration_service import canonical_sha256
 from tools.color_configuration_revisions import (
@@ -113,8 +121,14 @@ def build_release_from_matrix(
                 )
             color_model_path = str(bundle_color.get("path") or "")
             color_model_sha256 = str(bundle_color.get("sha256") or "")
+    roi_policy, decision_tuning = _station_color_expectations(
+        str(model.get("models_root") or ""), product, area, inference_type
+    )
     _reject_incompatible_color_baseline(
-        color_model_path, recorded_algorithm=str(color.get("algorithm") or "")
+        color_model_path,
+        recorded_algorithm=str(color.get("algorithm") or ""),
+        expected_roi_policy=roi_policy,
+        expected_decision_tuning=decision_tuning,
     )
     project_root = Path(str(model.get("models_root") or "")).expanduser().resolve().parent
     data_paths = load_station_data_paths(project_root)
@@ -230,9 +244,17 @@ def build_validated_release_from_matrix(
             effective_color["color_model_sha256"] = str(
                 bundle_color.get("sha256") or ""
             )
+    roi_policy, decision_tuning = _station_color_expectations(
+        str(model.get("models_root") or ""),
+        report_scope.product,
+        report_scope.area,
+        str(payload.get("inference_type") or ""),
+    )
     _reject_incompatible_color_baseline(
         effective_color.get("color_model_path"),
         recorded_algorithm=str(effective_color.get("algorithm") or ""),
+        expected_roi_policy=roi_policy,
+        expected_decision_tuning=decision_tuning,
     )
     _verify_matrix_model_matches_draft(draft, model)
     _verify_matrix_color_matches_draft(draft, effective_color)
@@ -374,10 +396,35 @@ def build_draft_release(
     )
 
 
+def _station_color_expectations(
+    models_root: str | None, product: str, area: str, inference_type: str
+) -> tuple[dict[str, float | int] | None, dict[str, float] | None]:
+    """Resolve what the station will hold a published baseline to.
+
+    Returns ``(None, None)`` when the station config cannot be read: a
+    publication must not be blocked by an unreadable file that the algorithm
+    check alone can still judge, and the runtime loader remains the last word.
+    """
+    if not models_root:
+        return None, None
+    try:
+        config_path = station_config_path(
+            models_root, product, area, color_scope_model_type(inference_type)
+        )
+        return (
+            station_color_roi_policy(config_path).to_dict(),
+            station_color_decision_tuning(config_path).to_dict(),
+        )
+    except StationColorSettingsError:
+        return None, None
+
+
 def _reject_incompatible_color_baseline(
     color_model_path: str | Path | None,
     *,
     recorded_algorithm: str | None = None,
+    expected_roi_policy: Mapping[str, Any] | None = None,
+    expected_decision_tuning: Mapping[str, Any] | None = None,
 ) -> None:
     """Refuse to publish statistics measured on a superseded crop geometry.
 
@@ -400,6 +447,18 @@ def _reject_incompatible_color_baseline(
         color_model_path
     )
     incompatible = baseline_compatibility_failure(claimed)
+    if not incompatible and (
+        expected_roi_policy is not None or expected_decision_tuning is not None
+    ):
+        # The algorithm label says which rules measured the statistics; it says
+        # nothing about the geometry or tuning they were measured under, and the
+        # runtime refuses a mismatch in either. Asking here is what keeps this
+        # door from passing something the line will not load.
+        incompatible = color_model_compatibility_failure(
+            color_model_path,
+            expected_roi_policy=expected_roi_policy,
+            expected_decision_tuning=expected_decision_tuning,
+        )
     if incompatible:
         raise InspectionReleaseError(
             f"顏色基準無法發布：{incompatible}。"

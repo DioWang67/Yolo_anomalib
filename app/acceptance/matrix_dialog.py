@@ -370,6 +370,10 @@ class AcceptanceMatrixDialog(QDialog):
                 model_type=color_model_type,
                 baselines_root=self.data_paths.color_baselines,
                 profiles_root=self.data_paths.color_profiles,
+                # Hold every offered baseline to the geometry and tuning the
+                # line will hold it to, so an incompatible one is excluded here
+                # rather than after a full acceptance run.
+                models_root=self.data_paths.models,
             )
             for variant in discovery.variants:
                 self._append_color_variant(variant)

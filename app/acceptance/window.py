@@ -577,6 +577,10 @@ class ModelAcceptanceWindow(QMainWindow):
                 model_type=color_scope_model_type(inference_type),
                 baselines_root=self.data_paths.color_baselines,
                 profiles_root=self.data_paths.color_profiles,
+                # Hold every offered baseline to the geometry and tuning the
+                # line will hold it to, so an incompatible one is excluded here
+                # rather than after a full acceptance run.
+                models_root=self.data_paths.models,
             )
         except (AcceptanceMatrixError, OSError, RuntimeError, ValueError) as exc:
             # A scope whose color store cannot be read must not silently look

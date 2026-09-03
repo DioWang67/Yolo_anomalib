@@ -8,7 +8,10 @@ from pathlib import Path
 
 import yaml
 
-from core.color_baseline_contract import baseline_compatibility_failure
+from core.color_baseline_contract import (
+    baseline_compatibility_failure,
+    color_model_compatibility_failure,
+)
 from core.services.color_baseline_recalibration import (
     ColorBaselineCandidateStore,
 )
@@ -207,8 +210,16 @@ class InspectionComponentCatalog:
                     status=("DEPLOYED" if candidate.color_model_sha256 in deployed_color_bases else "HISTORY"),
                     created_at=candidate.created_at,
                     integrity=(
+                        # Both the store's label and the artifact's own record.
+                        # They can disagree, and a candidate shown as VERIFIED
+                        # that the runtime will refuse is worse than no listing.
                         "INCOMPATIBLE"
-                        if baseline_compatibility_failure(candidate.algorithm)
+                        if (
+                            baseline_compatibility_failure(candidate.algorithm)
+                            or color_model_compatibility_failure(
+                                candidate.color_model_path
+                            )
+                        )
                         else ("VERIFIED" if candidate.status == "READY" else "WARNING")
                     ),
                     source_path=candidate.color_model_path,

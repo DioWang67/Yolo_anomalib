@@ -35,6 +35,8 @@ from core.services.inspection_release_store import (
     InspectionReleaseStore,
 )
 from core.services.model_version_registry import ModelVersionRecord
+from core.services.slot_roi import ColorRoiPolicy
+from core.stats_color_checker import ColorDecisionTuning
 
 
 def _write(path: Path, content: bytes) -> tuple[str, str]:
@@ -998,9 +1000,20 @@ def test_builder_binds_exact_full_color_baseline_from_matrix(tmp_path):
     )
 
 
-def _stale_baseline_report(tmp_path, *, artifact_algorithm, recorded_algorithm):
+def _stale_baseline_report(
+    tmp_path,
+    *,
+    artifact_algorithm,
+    recorded_algorithm,
+    artifact_provenance_extra=None,
+    station_config_body=None,
+):
     """Build the smallest matrix report that reaches the publication gate."""
     models_root = tmp_path / "models"
+    if station_config_body is not None:
+        station = models_root / "Cable1" / "A" / "yolo"
+        station.mkdir(parents=True, exist_ok=True)
+        (station / "config.yaml").write_text(station_config_body, encoding="utf-8")
     model_path, model_sha = _write(models_root / "model.onnx", b"model")
     embedded_path = models_root / "embedded-color.json"
     embedded_path.write_text(
@@ -1019,7 +1032,10 @@ def _stale_baseline_report(tmp_path, *, artifact_algorithm, recorded_algorithm):
     candidate_path.parent.mkdir(parents=True)
     payload = {"summary": {"Black": {"count": 120}}}
     if artifact_algorithm is not None:
-        payload["recalibration"] = {"algorithm": artifact_algorithm}
+        payload["recalibration"] = {
+            "algorithm": artifact_algorithm,
+            **(artifact_provenance_extra or {}),
+        }
     candidate_path.write_text(json.dumps(payload), encoding="utf-8")
     candidate_sha = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
     global_config = tmp_path / "config.yaml"
@@ -1132,6 +1148,61 @@ def test_builder_prefers_what_the_report_recorded_over_the_artifact(tmp_path):
         )
 
     assert "stats-robust-v2" in str(excinfo.value)
+
+
+def test_builder_refuses_a_baseline_measured_in_another_geometry(tmp_path):
+    """The algorithm label is current, and the geometry still does not match.
+
+    A report can name a baseline built under the geometry of the day, while the
+    station has since been re-inset. Publishing that pairs statistics with a
+    runtime that measures elsewhere -- the exact failure the algorithm check
+    was added for, one axis over, and the label cannot see it.
+    """
+    report_path = _stale_baseline_report(
+        tmp_path,
+        artifact_algorithm=BASELINE_ALGORITHM_VERSION,
+        recorded_algorithm=BASELINE_ALGORITHM_VERSION,
+        artifact_provenance_extra={
+            "color_decision_tuning": ColorDecisionTuning().to_dict(),
+            "color_roi_policy": ColorRoiPolicy().to_dict(),
+        },
+        station_config_body="color_roi_policy:\n  inset_x_ratio: 0.2\n",
+    )
+
+    with pytest.raises(InspectionReleaseError) as excinfo:
+        build_release_from_matrix(
+            report_path,
+            combination_id="combo-stale",
+            display_version="inspection-v1.0.3",
+            operator="tester",
+            reason="geometry drift",
+        )
+
+    assert "ROI policy" in str(excinfo.value)
+
+
+def test_builder_publishes_a_baseline_matching_the_station_geometry(tmp_path):
+    """The same gate must not block the artifact the station actually wants."""
+    report_path = _stale_baseline_report(
+        tmp_path,
+        artifact_algorithm=BASELINE_ALGORITHM_VERSION,
+        recorded_algorithm=BASELINE_ALGORITHM_VERSION,
+        artifact_provenance_extra={
+            "color_decision_tuning": ColorDecisionTuning().to_dict(),
+            "color_roi_policy": ColorRoiPolicy(inset_x_ratio=0.2).to_dict(),
+        },
+        station_config_body="color_roi_policy:\n  inset_x_ratio: 0.2\n",
+    )
+
+    release = build_release_from_matrix(
+        report_path,
+        combination_id="combo-stale",
+        display_version="inspection-v1.0.3",
+        operator="tester",
+        reason="matching geometry",
+    )
+
+    assert release.display_version == "inspection-v1.0.3"
 
 
 def test_builder_refuses_a_baseline_that_records_no_algorithm(tmp_path):

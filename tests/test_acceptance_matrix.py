@@ -37,6 +37,8 @@ from core.services.model_acceptance import (
     ModelIdentity,
 )
 from core.services.model_version_registry import ModelVersionRecord
+from core.services.slot_roi import ColorRoiPolicy
+from core.stats_color_checker import ColorDecisionTuning
 from tools.color_calibration_service import (
     COLOR_CONFIG_SCHEMA_VERSION,
     ColorCalibrationScope,
@@ -61,6 +63,22 @@ _LOADABLE_STATS_PAYLOAD = {
         }
     }
 }
+
+
+def _current_provenance() -> dict:
+    """The provenance block every real artifact carries.
+
+    Both doors -- candidate and package -- read it from the artifact, so a
+    fixture without one describes a baseline the line would refuse rather than
+    a usable candidate.
+    """
+    return {
+        "algorithm": color_baseline_contract.BASELINE_ALGORITHM_VERSION,
+        "color_decision_tuning": ColorDecisionTuning().to_dict(),
+        # The rebuilder refuses to write an artifact without this, so a fixture
+        # lacking it describes something no station could produce.
+        "color_roi_policy": ColorRoiPolicy().to_dict(),
+    }
 
 
 def _write_image(path: Path, value: int) -> None:
@@ -551,9 +569,10 @@ def test_color_discovery_lists_embedded_active_and_exact_revision(
                 **_LOADABLE_STATS_PAYLOAD,
                 # A package is offered only when its statistics record the crop
                 # geometry they were measured on, exactly as a candidate is.
-                "recalibration": {
-                    "algorithm": color_baseline_contract.BASELINE_ALGORITHM_VERSION
-                },
+                    "recalibration": {
+                        "algorithm": color_baseline_contract.BASELINE_ALGORITHM_VERSION,
+                        "color_decision_tuning": ColorDecisionTuning().to_dict(),
+                    },
             }
         ),
         encoding="utf-8",
@@ -725,7 +744,10 @@ def test_color_discovery_includes_immutable_baseline_candidate(
         model_type="yolo",
         build=ColorBaselineBuild(
             status="INCOMPLETE",
-            model_payload=_LOADABLE_STATS_PAYLOAD,
+            model_payload={
+                **_LOADABLE_STATS_PAYLOAD,
+                "recalibration": _current_provenance(),
+            },
             report_payload={
                 "status": "INCOMPLETE",
                 "color_reports": [],
@@ -767,7 +789,10 @@ def _commit_baseline_candidate(root: Path):
         model_type="yolo",
         build=ColorBaselineBuild(
             status="INCOMPLETE",
-            model_payload=_LOADABLE_STATS_PAYLOAD,
+            model_payload={
+                **_LOADABLE_STATS_PAYLOAD,
+                "recalibration": _current_provenance(),
+            },
             report_payload={"status": "INCOMPLETE", "color_reports": []},
             evidence_sha256="e" * 64,
             color_reports=(),
@@ -830,8 +855,12 @@ def test_unloadable_baseline_is_excluded_instead_of_offered(tmp_path: Path) -> N
         model_type="yolo",
         build=ColorBaselineBuild(
             status="READY",
-            # Only a count: no hsv/lab ranges, so StatsColorChecker cannot load it.
-            model_payload={"summary": {"Black": {"count": 30}}},
+            # Only a count: no hsv/lab ranges, so StatsColorChecker cannot load
+            # it. Provenance is present so the load failure is what excludes it.
+            model_payload={
+                "summary": {"Black": {"count": 30}},
+                "recalibration": _current_provenance(),
+            },
             report_payload={"status": "READY", "color_reports": []},
             evidence_sha256="e" * 64,
             color_reports=(),
@@ -897,6 +926,63 @@ def test_compatible_baseline_produces_no_exclusion(tmp_path: Path) -> None:
     )
 
     assert discovery.exclusions == ()
+    assert len(discovery.stored_color_models) == 1
+
+
+def _write_station_config(tmp_path: Path, body: str) -> Path:
+    station = tmp_path / "models" / "Cable1" / "A" / "yolo"
+    station.mkdir(parents=True, exist_ok=True)
+    (station / "config.yaml").write_text(body, encoding="utf-8")
+    return tmp_path / "models"
+
+
+def test_a_baseline_measured_in_another_geometry_is_excluded_here(
+    tmp_path: Path,
+) -> None:
+    """The gate has to ask what the line will ask.
+
+    Checking only the algorithm label let a baseline be offered, selected, and
+    accepted over a full sample set, and only then be refused by the runtime for
+    a geometry it was never measured in -- after the sign-off, when the evidence
+    was already gone.
+    """
+    _commit_baseline_candidate(tmp_path / ".color_baselines")
+    models_root = _write_station_config(
+        tmp_path,
+        "color_roi_policy:\n  inset_x_ratio: 0.2\n",
+    )
+
+    discovery = discover_color_variants(
+        tmp_path / ".color_revisions",
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        baselines_root=tmp_path / ".color_baselines",
+        models_root=models_root,
+    )
+
+    assert discovery.stored_color_models == ()
+    assert len(discovery.exclusions) == 1
+    assert "ROI policy" in discovery.exclusions[0].reason
+
+
+def test_a_baseline_matching_the_station_geometry_is_still_offered(
+    tmp_path: Path,
+) -> None:
+    _commit_baseline_candidate(tmp_path / ".color_baselines")
+    # The candidate was built under the default policy, so the station running
+    # that same policy is the one it is valid for.
+    models_root = _write_station_config(tmp_path, "enable_color_check: true\n")
+
+    discovery = discover_color_variants(
+        tmp_path / ".color_revisions",
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        baselines_root=tmp_path / ".color_baselines",
+        models_root=models_root,
+    )
+
     assert len(discovery.stored_color_models) == 1
 
 

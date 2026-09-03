@@ -62,6 +62,11 @@ from core.services.model_acceptance import (
     verified_acceptance_image_path,
 )
 from core.services.model_version_registry import ModelVersionRecord
+from core.services.station_color_settings import (
+    station_color_decision_tuning,
+    station_color_roi_policy,
+    station_config_path,
+)
 from core.station_data import load_station_data_paths
 from core.stats_color_checker import stats_color_model_load_failure
 from tools.color_calibration_service import ColorCalibrationError
@@ -365,6 +370,7 @@ def discover_color_variants(
     checker_type: str = "stats",
     baselines_root: str | Path | None = None,
     profiles_root: str | Path | None = None,
+    models_root: str | Path | None = None,
 ) -> ColorVariantDiscovery:
     """Discover embedded, active, and exact immutable color revisions.
 
@@ -372,7 +378,21 @@ def discover_color_variants(
     withheld. The two are produced by this single scan on purpose: an exclusion
     list rebuilt by a second pass would be free to drift out of agreement with
     what was actually offered.
+
+    ``models_root`` supplies the live station config, and with it the geometry
+    and decision tuning the runtime will hold a baseline to. Without it this
+    scan can only check an artifact's algorithm label, which is how a baseline
+    could be offered here, selected, accepted, and then refused by the line for
+    a geometry mismatch nobody had asked about.
     """
+    expected_roi_policy: dict[str, float | int] | None = None
+    expected_decision_tuning: dict[str, float] | None = None
+    if models_root is not None:
+        config_path = station_config_path(models_root, product, area, model_type)
+        expected_roi_policy = station_color_roi_policy(config_path).to_dict()
+        expected_decision_tuning = station_color_decision_tuning(
+            config_path
+        ).to_dict()
     store = ColorConfigurationRevisionStore(root=revisions_root)
     exclusions: list[ColorVariantExclusion] = []
     variants: list[AcceptanceColorVariant] = [
@@ -389,7 +409,17 @@ def discover_color_variants(
             area=area,
             model_type=model_type,
         ):
-            incompatible = baseline_compatibility_failure(candidate.algorithm)
+            # Both doors, because they can disagree: the store records what the
+            # rebuild claimed, while the artifact records what it was measured
+            # with. A candidate whose stats were never rewritten has been seen
+            # carrying a current algorithm label.
+            incompatible = baseline_compatibility_failure(
+                candidate.algorithm
+            ) or color_model_compatibility_failure(
+                candidate.color_model_path,
+                expected_roi_policy=expected_roi_policy,
+                expected_decision_tuning=expected_decision_tuning,
+            )
             if incompatible:
                 # In scope, but built by a superseded algorithm. Reported rather
                 # than dropped: the operator created this candidate and nothing
@@ -447,7 +477,9 @@ def discover_color_variants(
                 # algorithm -- otherwise this door could only ever agree with
                 # the candidate door by accident.
                 incompatible = color_model_compatibility_failure(
-                    profile.color_model_path
+                    profile.color_model_path,
+                    expected_roi_policy=expected_roi_policy,
+                    expected_decision_tuning=expected_decision_tuning,
                 )
                 if incompatible:
                     exclusions.append(
