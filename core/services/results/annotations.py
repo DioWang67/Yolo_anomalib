@@ -98,7 +98,10 @@ def annotate_yolo_frame(
                         fail_indices.append(source_index)
                 except Exception:
                     continue
-    if not missing_locations:
+    # ``None`` preserves the direct-call fallback for callers that have not
+    # resolved spatial evidence. An empty list is an explicit decision not to
+    # draw locations (for example, when position checking is disabled).
+    if missing_locations is None:
         _draw_missing_expected_boxes(frame, detections, missing_items, expected_boxes)
     if fail_indices:
         panel_lines.append(
@@ -113,11 +116,16 @@ def annotate_yolo_frame(
     elif detections:
         panel_lines.extend(_build_detection_summary_lines(detections))
 
-    if missing_locations:
-        missing_names = [str(item.get("class", "")) for item in missing_locations]
+    missing_names = [str(item).strip() for item in (missing_items or [])]
+    if not missing_names:
+        missing_names = [
+            str(item.get("class", "")).strip() for item in (missing_locations or [])
+        ]
+    missing_names = [name for name in missing_names if name]
+    if missing_names:
         panel_lines.append(
             (
-                f"Missing: {', '.join(name for name in missing_names if name)}",
+                f"Missing: {', '.join(missing_names)}",
                 (0, 0, 255),
             )
         )

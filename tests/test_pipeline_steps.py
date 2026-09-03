@@ -1239,6 +1239,16 @@ class TestBaseClassNameInference:
 
 
 class TestMissingItemLocations:
+    def test_build_missing_item_locations_requires_enabled_position_check(self):
+        cfg = _make_pos_config(
+            {"part_b": {"x1": 50, "y1": 10, "x2": 70, "y2": 30}},
+            enabled=False,
+        )
+
+        locations = build_missing_item_locations(cfg, "P", "A", ["part_b"])
+
+        assert locations == []
+
     def test_build_missing_item_locations_uses_layout_alignment(self):
         cfg = _make_pos_config(
             {
@@ -1270,6 +1280,31 @@ class TestMissingItemLocations:
                 "class": "part_b",
                 "expected_key": "part_b",
                 "bbox": [55, 7, 75, 27],
+                "reason": "missing",
+            }
+        ]
+
+    def test_build_missing_item_locations_skips_occupied_instance(self):
+        cfg = _make_pos_config(
+            {
+                "Black#0": {"x1": 10, "y1": 10, "x2": 30, "y2": 30},
+                "Black#1": {"x1": 50, "y1": 10, "x2": 70, "y2": 30},
+            }
+        )
+
+        locations = build_missing_item_locations(
+            cfg,
+            "P",
+            "A",
+            ["Black"],
+            detections=[{"position_expected_key": "Black#0"}],
+        )
+
+        assert locations == [
+            {
+                "class": "Black",
+                "expected_key": "Black#1",
+                "bbox": [50, 10, 70, 30],
                 "reason": "missing",
             }
         ]

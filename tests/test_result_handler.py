@@ -387,6 +387,7 @@ def test_save_results_draws_missing_expected_box(tmp_result_dir):
     cfg.position_config = {
         "P": {
             "A": {
+                "enabled": True,
                 "expected_boxes": {
                     "bolt": {"x1": 86, "y1": 96, "x2": 116, "y2": 126},
                 }
@@ -424,6 +425,7 @@ def test_save_results_shifts_missing_expected_box_using_detected_offsets(tmp_res
     cfg.position_config = {
         "P": {
             "A": {
+                "enabled": True,
                 "expected_boxes": {
                     "part_a": {"x1": 105, "y1": 95, "x2": 135, "y2": 125},
                     "part_b": {"x1": 155, "y1": 95, "x2": 185, "y2": 125},
@@ -492,6 +494,7 @@ def test_save_results_yolo_draws_missing_item_location(tmp_result_dir):
         position_config={
             "P": {
                 "A": {
+                    "enabled": True,
                     "expected_boxes": {
                         "nut": {"x1": 10, "y1": 12, "x2": 35, "y2": 32}
                     }
@@ -532,6 +535,43 @@ def test_save_results_yolo_draws_missing_item_location(tmp_result_dir):
     assert os.path.exists(out["failure_crop_paths"][0])
 
 
+def test_save_results_suppresses_missing_location_when_position_disabled(
+    tmp_result_dir,
+):
+    cfg = DummyConfig(
+        buffer_limit=1,
+        position_config={
+            "P": {
+                "A": {
+                    "enabled": False,
+                    "expected_boxes": {
+                        "nut": {"x1": 100, "y1": 120, "x2": 130, "y2": 145}
+                    },
+                }
+            }
+        },
+    )
+    handler = ResultHandler(cfg, base_dir=tmp_result_dir, logger=DummyLogger())
+
+    out = handler.save_results(
+        frame=_mk_img(w=160, h=160, value=20),
+        detections=[],
+        status="DETECTION_FAIL",
+        detector="yolo",
+        missing_items=["nut"],
+        processed_image=_mk_img(w=160, h=160, value=20),
+        product="P",
+        area="A",
+    )
+
+    assert out["missing_locations"] == []
+    assert out["failure_crop_paths"] == []
+    annotated = cv2.imread(out["annotated_path"])
+    assert annotated is not None
+    blue, green, red = (int(value) for value in annotated[120, 100])
+    assert max(blue, green, red) - min(blue, green, red) < 20
+
+
 def test_update_config_refreshes_missing_item_locations(tmp_result_dir):
     h = ResultHandler(
         DummyConfig(buffer_limit=1),
@@ -559,6 +599,7 @@ def test_update_config_refreshes_missing_item_locations(tmp_result_dir):
             position_config={
                 "PCBA1": {
                     "B": {
+                        "enabled": True,
                         "expected_boxes": {
                             "J3": {"x1": 10, "y1": 12, "x2": 35, "y2": 32}
                         }
@@ -636,6 +677,7 @@ def test_save_results_fusion_draws_missing_item_location(tmp_result_dir):
         position_config={
             "P": {
                 "A": {
+                    "enabled": True,
                     "expected_boxes": {
                         "cover": {"x1": 8, "y1": 9, "x2": 28, "y2": 29}
                     }

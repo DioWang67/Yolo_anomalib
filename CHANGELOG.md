@@ -26,6 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   typo as `warn` would grant the opposite of what the config asked for.
 
 ### Fixed
+- A disabled position configuration is no longer used as spatial evidence for a
+  missing item. `build_missing_item_locations()` read `expected_boxes` without
+  consulting `enabled`, so a station that had deliberately turned position
+  checking off still got missing parts annotated at coordinates nobody was
+  maintaining -- boxes drawn with the authority of a check that was not running.
+  `ResultHandler` applies the same gate at its own lookup.
+- Repeated expected positions no longer collapse onto one another. `used_keys`
+  started empty, so an expected box already claimed by a real detection could be
+  handed to a missing item as well; it is now seeded from the detections' own
+  `position_expected_key`.
+- The annotation panel names every missing item, not only those a location could
+  be resolved for. The `Missing:` line was built from `missing_locations`, so an
+  item with no usable expected box -- the ordinary case once the gate above
+  applies -- vanished from the operator's summary instead of being named without
+  a box. `missing_locations=None` still means "the caller resolved nothing, fall
+  back to expected boxes", while an empty list is now an explicit "draw no
+  locations".
 - Color baseline rebuilds took their sampling geometry from the model version
   config snapshot, which cannot carry it. `color_roi_policy` is a station-local
   field that a model deployment preserves rather than replaces, so no snapshot

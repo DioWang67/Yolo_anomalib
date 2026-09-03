@@ -789,6 +789,17 @@ class ResultHandler:
         product: str | None,
         area: str | None,
     ) -> dict[str, dict[str, Any]]:
+        cfg = self._get_position_config(product, area)
+        if not bool(cfg.get("enabled", False)):
+            return {}
+        boxes = cfg.get("expected_boxes", {})
+        return boxes if isinstance(boxes, dict) else {}
+
+    def _get_position_config(
+        self,
+        product: str | None,
+        area: str | None,
+    ) -> dict[str, Any]:
         if not product or not area:
             return {}
 
@@ -796,16 +807,14 @@ class ResultHandler:
         try:
             if hasattr(source, "get_position_config"):
                 cfg = source.get_position_config(product, area)
-                boxes = cfg.get("expected_boxes", {}) if isinstance(cfg, dict) else {}
-                return boxes if isinstance(boxes, dict) else {}
+                return cfg if isinstance(cfg, dict) else {}
         except Exception:
             return {}
 
         try:
             position_config = self._cfg_get("position_config", {})
             area_cfg = position_config.get(product, {}).get(area, {})
-            boxes = area_cfg.get("expected_boxes", {}) if isinstance(area_cfg, dict) else {}
-            return boxes if isinstance(boxes, dict) else {}
+            return area_cfg if isinstance(area_cfg, dict) else {}
         except Exception:
             return {}
 

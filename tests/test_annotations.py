@@ -128,6 +128,33 @@ def test_annotate_yolo_frame_draws_missing_expected_box_without_detection():
     assert tuple(frame[80, 120]) == (0, 0, 255)
 
 
+def test_annotate_yolo_frame_lists_missing_items_without_spatial_locations(
+    monkeypatch,
+):
+    frame = np.zeros((180, 180, 3), dtype=np.uint8)
+    captured_lines = []
+    monkeypatch.setattr(
+        "core.services.results.annotations._draw_info_panel",
+        lambda _frame, lines, origin: captured_lines.extend(lines),
+    )
+
+    annotate_yolo_frame(
+        FakeImageUtils(),
+        frame,
+        detections=[],
+        color_result=None,
+        status="FAIL",
+        missing_items=["bolt", "nut"],
+        expected_boxes={
+            "bolt": {"x1": 120.0, "y1": 80.0, "x2": 150.0, "y2": 110.0},
+        },
+        missing_locations=[],
+    )
+
+    assert ("Missing: bolt, nut", (0, 0, 255)) in captured_lines
+    assert tuple(frame[80, 120]) == (0, 0, 0)
+
+
 def test_annotate_yolo_frame_shifts_missing_expected_box_by_detected_offset():
     frame = np.zeros((220, 220, 3), dtype=np.uint8)
     detections = [
@@ -175,7 +202,9 @@ def test_annotate_yolo_frame_shifts_missing_expected_box_by_detected_offset():
         },
     )
 
-    assert tuple(frame[135, 135]) == (0, 0, 255)
+    # Use the lower corner because the expanded missing-items panel can cover
+    # the upper edge on this intentionally small test canvas.
+    assert tuple(frame[165, 165]) == (0, 0, 255)
 
 
 def test_annotate_yolo_frame_prefers_missing_locations_over_expected_boxes():

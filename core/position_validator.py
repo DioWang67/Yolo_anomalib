@@ -50,7 +50,10 @@ def build_missing_item_locations(
 
     Returns:
         List of dictionaries with ``class`` and ``bbox`` keys suitable for
-        annotation. Empty when the config has no expected box for an item.
+        annotation. Empty when position checking is disabled or the config has
+        no expected box for an item. A disabled position configuration is not
+        trustworthy spatial evidence and must not be used to claim a missing
+        item's location.
     """
     if not config or not product or not area or not missing_items:
         return []
@@ -60,12 +63,19 @@ def build_missing_item_locations(
     except Exception:
         return []
 
+    if not bool(pos_config.get("enabled", False)):
+        return []
+
     expected_boxes = pos_config.get("expected_boxes", {}) or {}
     if not isinstance(expected_boxes, dict):
         return []
 
     locations: list[dict[str, Any]] = []
-    used_keys: set[str] = set()
+    used_keys = {
+        str(detection.get("position_expected_key"))
+        for detection in (detections or [])
+        if detection.get("position_expected_key")
+    }
     alignment = extract_layout_alignment(detections or [])
     for item in missing_items:
         item_name = str(item).strip()
