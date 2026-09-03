@@ -33,6 +33,8 @@
 | 驗收證據綁定與跨行程互斥 | [安全設計 §1.1／§1.2](architecture/SECURITY.md) | [模組架構：驗收證據層](architecture/MODULE_ARCHITECTURE_ZH_TW.md) |
 | 受限裝置 runtime 評估 | [Firmware Runtime Plan](architecture/FIRMWARE_RUNTIME_PLAN.md) | 需以 benchmark gate 決定 |
 | 門檻／模型／保存政策歷程 | [Calibration Change Log](records/CALIBRATION_CHANGE_LOG.md) | 只追加，不覆寫歷史 |
+| 顏色檢測接手／目前未完事項 | [顏色工作紀錄 2026-09-02](COLOR_DETECTION_WORK_LOG_20260902.md) | [2026-08-27（v4 時代，歷史）](COLOR_DETECTION_WORK_LOG_20260827.md) |
+| 開線前顏色檢查 | [誤判 SOP §9](operations/MISJUDGE_TRIAGE_SOP.md) | `tools/color_preflight.py --trend` |
 
 ## 目錄責任
 

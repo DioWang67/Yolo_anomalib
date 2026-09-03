@@ -3,6 +3,15 @@
 接手用。涵蓋 `yolo11_inference`、`Yolo11_auto_train` 與 workspace 三個 repo。
 **全部已提交、尚未 push。**
 
+> **這份文件是 2026-08-27 當下的紀錄，不是現行狀態。** 它寫於
+> `stats-robust-v4` 時代，文中所有「目前為 stats-robust-v4」、覆蓋率數字與
+> 待辦事項都應以歷史紀錄閱讀 —— 該文所述的 v4 重建已被後續的契約升版取代，
+> 且 v4 的 artifact 一律與現行契約不相容。
+>
+> 現行契約版本以 `core/color_baseline_contract.py` 的
+> `BASELINE_ALGORITHM_VERSION` 為準；升版後每個工位要做什麼，見
+> `docs/model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md` 第 5.3 節。
+
 ---
 
 ## 一、目前狀態

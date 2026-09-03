@@ -51,12 +51,17 @@ picture-tool-color-calibrate apply color-threshold-report.json `
 
 `stats` checker 的執行結果以 diff 表示，但設定檔使用相似度分數；部署工具會自動執行 `config_value = 1 - diff_threshold`。其他 checker 直接使用 diff 門檻，作業員與工程師不需要自行換算。
 
-## 完整五色基準重建
+## 完整顏色基準重建
 
 逐色門檻校正只調整特定顏色的接受範圍；`重建完整顏色基準`會合併人工
 確認為 OK 的驗收照片，以及顏色覆核中確認為 `actually_ok` 的照片，重新計算
-Black、Green、Orange、Red、Yellow 五色的 HSV/Lab 統計中心。兩者不是同一
-功能，也不能以單純放寬門檻取代基準重建。
+該工位各色的 HSV/Lab 統計中心。兩者不是同一功能，也不能以單純放寬門檻
+取代基準重建。
+
+重建的色別取自工位 `config.yaml` 的 `expected_items`（Cable1/A 是 Black、
+Green、Orange、Red、Yellow 五色），不是寫死的清單。重建只能**刷新既有色別**，
+不能新增 —— 新增色別的前置條件見
+`docs/model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md` 第 5.1.3 節。
 
 合併時會依產品、區域、模型與 `stats` checker 精確篩選，以影像 SHA-256
 驗證及去重。若同一影像同時存在 OK 與 NG 真值，或圖片遺失、雜湊不符、
