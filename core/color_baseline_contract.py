@@ -8,12 +8,12 @@ not fail loudly -- it shifts every score by whatever the two crops differ by,
 which reads as a working system with a mysteriously generous or harsh color
 check.
 
-This module therefore owns two things and nothing else: which algorithm is
-current, and the single way to read an artifact's own record of the algorithm
-that built it. Three parties consult it -- the acceptance picker, the
-publication gate and the runtime loader -- and they must never drift into
-disagreeing about which baselines are usable, which is exactly what happens
-when each grows its own copy of the check.
+This module therefore owns the current algorithm and the single compatibility
+decision over an artifact's provenance, including the ROI geometry used to
+measure it. Three parties consult it -- the acceptance picker, the publication
+gate and the runtime loader -- and they must never drift into disagreeing about
+which baselines are usable, which is exactly what happens when each grows its
+own copy of the check.
 
 It deliberately sits below the rebuilder: the rebuilder imports the checker, so
 the version cannot live in the rebuilder without the runtime having to import
@@ -30,30 +30,92 @@ from pathlib import Path
 #: geometry, the sampling mask, or the definition of a recorded quantity. A bump
 #: invalidates comparison against every earlier baseline; it is not a changelog
 #: for the rebuilder's internals.
-BASELINE_ALGORITHM_VERSION = "stats-robust-v4"
+BASELINE_ALGORITHM_VERSION = "stats-robust-v5"
 
 #: Where a color model records the algorithm that produced it.
 _PROVENANCE_SECTION = "recalibration"
+#: Where a stats artifact keeps its per-color statistics, one key per color.
+_SUMMARY_SECTION = "summary"
 _PROVENANCE_KEY = "algorithm"
 #: Colors whose statistics were copied from the base rather than measured by the
 #: run that wrote the file.
 _PRESERVED_KEY = "preserved_colors"
 #: What the base that those colors came from claimed for itself.
 _BASE_ALGORITHM_KEY = "base_algorithm"
+#: Sampling geometry used by the run that wrote the artifact.
+_ROI_POLICY_KEY = "color_roi_policy"
+#: Sampling geometry of the base supplying any preserved colors.
+_BASE_ROI_POLICY_KEY = "base_color_roi_policy"
+#: Complete resolved classifier tuning used for rebuild validation.
+_DECISION_TUNING_KEY = "color_decision_tuning"
+#: Resolved tuning used by the base supplying any preserved colors.
+_BASE_DECISION_TUNING_KEY = "base_color_decision_tuning"
+#: v5 classifier fields. Adding, removing or redefining one requires a new
+#: baseline algorithm version; a partial mapping is not resolved provenance.
+_REQUIRED_DECISION_TUNING_KEYS = frozenset(
+    {
+        "sat_threshold",
+        "yellow_h_min",
+        "yellow_h_max",
+        "yellow_s_min",
+        "yellow_v_min",
+        "orange_red_tie_margin",
+        "center_margin_ratio",
+        "red_h_low_max",
+        "red_h_high_min",
+        "red_s_min",
+        "red_v_min",
+        "orange_h_min",
+        "orange_h_max",
+        "orange_s_min",
+        "orange_v_min",
+        "green_h_min",
+        "green_h_max",
+        "green_s_min",
+        "green_v_min",
+        "green_v_max",
+    }
+)
 #: What the same idea was called before both preservation reasons shared a list.
 _LEGACY_PRESERVED_KEY = "preserved_by_safety"
 
 
-def _provenance(stats_path: str | Path) -> Mapping[str, object]:
-    """Return an artifact's provenance block, or an empty mapping."""
+def _payload(stats_path: str | Path) -> Mapping[str, object] | None:
+    """Return an artifact's parsed contents, or ``None`` when unreadable."""
     try:
         payload = json.loads(Path(stats_path).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        return {}
-    if not isinstance(payload, Mapping):
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _provenance(stats_path: str | Path) -> Mapping[str, object]:
+    """Return an artifact's provenance block, or an empty mapping."""
+    payload = _payload(stats_path)
+    if payload is None:
         return {}
     section = payload.get(_PROVENANCE_SECTION)
     return section if isinstance(section, Mapping) else {}
+
+
+def color_model_vocabulary(stats_path: str | Path) -> frozenset[str] | None:
+    """Return the colors a stats artifact carries statistics for, casefolded.
+
+    ``None`` means the artifact could not be read or has no summary at all --
+    which a caller must not treat as "an artifact that scores no colors", or a
+    corrupt file would read as a configuration error about every color.
+    """
+    payload = _payload(stats_path)
+    if payload is None:
+        return None
+    summary = payload.get(_SUMMARY_SECTION)
+    if not isinstance(summary, Mapping):
+        return None
+    return frozenset(
+        normalized.casefold()
+        for color in summary
+        if (normalized := str(color or "").strip())
+    )
 
 
 def _recorded_string(section: Mapping[str, object], key: str) -> str | None:
@@ -61,6 +123,48 @@ def _recorded_string(section: Mapping[str, object], key: str) -> str | None:
     if not isinstance(recorded, str):
         return None
     return recorded.strip() or None
+
+
+def _canonical_roi_policy(value: object) -> tuple[float, float, int] | None:
+    """Normalize the geometry fields needed for an exact contract comparison."""
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        inset_x = float(value["inset_x_ratio"])
+        inset_y = float(value["inset_y_ratio"])
+        raw_min_size = value["min_size"]
+        if isinstance(raw_min_size, bool):
+            return None
+        min_size = int(raw_min_size)
+        if float(raw_min_size) != min_size:
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    return inset_x, inset_y, min_size
+
+
+def _format_roi_policy(policy: tuple[float, float, int]) -> str:
+    return f"inset_x={policy[0]:g}, inset_y={policy[1]:g}, min_size={policy[2]}"
+
+
+def _canonical_tuning(value: object) -> tuple[tuple[str, float], ...] | None:
+    """Normalize a complete resolved tuning mapping for exact comparison."""
+    if not isinstance(value, Mapping) or not value:
+        return None
+    normalized: list[tuple[str, float]] = []
+    try:
+        for key, raw_value in value.items():
+            if not isinstance(key, str) or not key.strip() or isinstance(raw_value, bool):
+                return None
+            number = float(raw_value)
+            if not (-float("inf") < number < float("inf")):
+                return None
+            normalized.append((key.strip(), number))
+    except (TypeError, ValueError):
+        return None
+    if {key for key, _value in normalized} != _REQUIRED_DECISION_TUNING_KEYS:
+        return None
+    return tuple(sorted(normalized))
 
 
 def color_model_algorithm(stats_path: str | Path) -> str | None:
@@ -93,7 +197,12 @@ def baseline_compatibility_failure(algorithm: str | None) -> str:
     )
 
 
-def color_model_compatibility_failure(stats_path: str | Path) -> str:
+def color_model_compatibility_failure(
+    stats_path: str | Path,
+    *,
+    expected_roi_policy: Mapping[str, object] | None = None,
+    expected_decision_tuning: Mapping[str, object] | None = None,
+) -> str:
     """Return why the color model at ``stats_path`` cannot be trusted, or ``""``.
 
     Stricter than the algorithm alone, because a rebuild that preserves a color
@@ -110,6 +219,35 @@ def color_model_compatibility_failure(stats_path: str | Path) -> str:
     )
     if failure:
         return failure
+    recorded_tuning = _canonical_tuning(section.get(_DECISION_TUNING_KEY))
+    if recorded_tuning is None:
+        return "未記錄完整 resolved color decision tuning：無法確認驗證與執行期 classifier 相同"
+    expected_tuning = (
+        _canonical_tuning(expected_decision_tuning)
+        if expected_decision_tuning is not None
+        else None
+    )
+    if expected_decision_tuning is not None and expected_tuning is None:
+        return "執行期 color decision tuning 格式無效，無法確認 classifier 契約"
+    if expected_tuning is not None and recorded_tuning != expected_tuning:
+        return "color decision tuning 不一致：基準驗證與執行期 classifier 不同"
+    expected_geometry = (
+        _canonical_roi_policy(expected_roi_policy)
+        if expected_roi_policy is not None
+        else None
+    )
+    if expected_roi_policy is not None and expected_geometry is None:
+        return "執行期顏色 ROI policy 格式無效，無法確認量測幾何"
+    if expected_geometry is not None:
+        recorded_geometry = _canonical_roi_policy(section.get(_ROI_POLICY_KEY))
+        if recorded_geometry is None:
+            return "未記錄顏色 ROI policy：無法確認基準與執行期量測幾何相同"
+        if recorded_geometry != expected_geometry:
+            return (
+                "顏色 ROI policy 不一致（基準："
+                f"{_format_roi_policy(recorded_geometry)}；執行期："
+                f"{_format_roi_policy(expected_geometry)}）"
+            )
     preserved = section.get(_PRESERVED_KEY)
     if not isinstance(preserved, (list, tuple)):
         # Artifacts written before the single list existed recorded only the
@@ -120,7 +258,32 @@ def color_model_compatibility_failure(stats_path: str | Path) -> str:
         return ""
     base_algorithm = _recorded_string(section, _BASE_ALGORITHM_KEY)
     if base_algorithm == BASELINE_ALGORITHM_VERSION:
-        return ""
+        base_tuning = _canonical_tuning(section.get(_BASE_DECISION_TUNING_KEY))
+        if base_tuning is None:
+            return (
+                f"{'、'.join(str(color) for color in preserved)} 沿用的舊基準"
+                "未記錄完整 resolved color decision tuning"
+            )
+        if base_tuning != recorded_tuning:
+            return (
+                f"{'、'.join(str(color) for color in preserved)} 沿用不同 color "
+                "decision tuning 的舊基準"
+            )
+        if expected_geometry is None:
+            return ""
+        base_geometry = _canonical_roi_policy(section.get(_BASE_ROI_POLICY_KEY))
+        if base_geometry is None:
+            return (
+                f"{'、'.join(str(color) for color in preserved)} 沿用的舊基準"
+                "未記錄顏色 ROI policy：無法確認量測幾何相同"
+            )
+        if base_geometry == expected_geometry:
+            return ""
+        return (
+            f"{'、'.join(str(color) for color in preserved)} 沿用不同顏色 ROI policy "
+            f"的舊基準（舊基準：{_format_roi_policy(base_geometry)}；執行期："
+            f"{_format_roi_policy(expected_geometry)}）"
+        )
     names = "、".join(str(color) for color in preserved)
     return (
         f"{names} 沿用舊基準統計（舊基準演算法 "

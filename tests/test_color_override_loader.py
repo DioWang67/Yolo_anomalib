@@ -8,6 +8,7 @@ import pytest
 import core.services.color_override_loader as color_override_loader
 from core.services.color_checker import ColorCheckerService
 from core.services.color_override_loader import ColorOverrideLoader
+from core.stats_color_checker import ColorDecisionTuning
 
 
 def test_color_override_loader_returns_global_fallback_when_file_is_missing(tmp_path):
@@ -94,7 +95,7 @@ def test_color_override_loader_reads_decision_tuning(tmp_path):
         """
 color_decision_tuning:
   yellow_h_min: 18
-  black_s_threshold: 55
+  orange_h_max: 24
 """,
         encoding="utf-8",
     )
@@ -107,11 +108,11 @@ color_decision_tuning:
 
     overrides, rules, tuning = loader.load(config, "Cable1", "A", "yolo", MagicMock())
 
-    assert tuning == {"yellow_h_min": 18, "black_s_threshold": 55}
+    assert tuning == {"yellow_h_min": 18, "orange_h_max": 24}
 
     # Cached path returns the same values
     overrides, rules, tuning = loader.load(config, "Cable1", "A", "yolo", MagicMock())
-    assert tuning == {"yellow_h_min": 18, "black_s_threshold": 55}
+    assert tuning == {"yellow_h_min": 18, "orange_h_max": 24}
 
 
 def test_color_override_loader_falls_back_to_global_decision_tuning(tmp_path):
@@ -135,6 +136,7 @@ def test_color_checker_rejects_an_active_override_that_cannot_be_applied():
     )
     service._model_path = "color-model.json"
     service._checker_type = "stats"
+    service._decision_tuning = ColorDecisionTuning().to_dict()
 
     with pytest.raises(RuntimeError, match="active color configuration"):
         service.ensure_loaded(

@@ -24,9 +24,14 @@ import cv2
 import numpy as np
 
 from core.color_baseline_contract import BASELINE_ALGORITHM_VERSION
+from core.color_sampling import center_crop_by_ratio
 from core.services.inspection_release_store import sha256_file
 from core.services.slot_roi import ColorRoiPolicy, extract_bbox_roi
-from core.stats_color_checker import StatsColorChecker, circular_hue_mean
+from core.stats_color_checker import (
+    ColorDecisionTuning,
+    StatsColorChecker,
+    circular_hue_mean,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -424,8 +429,16 @@ class StatsColorBaselineRebuilder:
         evidence: Sequence[ColorCropEvidence],
         expected_colors: Sequence[str] = DEFAULT_COLORS,
         evidence_metadata: Mapping[str, Any] | None = None,
+        decision_tuning: Mapping[str, Any] | None = None,
         cancel_callback: Callable[[], bool] | None = None,
     ) -> ColorBaselineBuild:
+        try:
+            resolved_tuning = ColorDecisionTuning.from_dict(
+                dict(decision_tuning) if decision_tuning is not None else None
+            )
+        except (TypeError, ValueError) as exc:
+            raise ColorBaselineError(f"顏色 decision tuning 無效：{exc}") from exc
+        resolved_tuning_payload = resolved_tuning.to_dict()
         base_path = Path(base_model_path).expanduser().resolve()
         base_payload = _read_stats_payload(base_path)
         base_summary = base_payload["summary"]
@@ -433,24 +446,51 @@ class StatsColorBaselineRebuilder:
             expected_colors,
             base_summary,
         )
-        grouped = _validate_and_group_evidence(evidence, canonical_colors)
+        grouped = _validate_and_group_evidence(
+            evidence,
+            canonical_colors,
+            center_margin_ratio=resolved_tuning.center_margin_ratio,
+        )
         normalized_metadata = _normalized_evidence_metadata(evidence_metadata)
+        # The runtime always resolves a geometry and always compares it against
+        # the one recorded here, so an artifact without the stamp is rejected at
+        # every station. Refuse to write one rather than let an operator discover
+        # it after the sign-off, when the evidence is gone.
+        if "color_roi_policy" not in normalized_metadata:
+            raise ColorBaselineError(
+                "顏色基準證據未記錄 color_roi_policy：執行期一律以站點的量測"
+                "幾何檢查基準，未記錄幾何的基準會被拒絕載入。"
+            )
+        try:
+            recorded_roi_policy: dict[str, float | int] = ColorRoiPolicy.from_mapping(
+                normalized_metadata.get("color_roi_policy")
+            ).to_dict()
+        except (TypeError, ValueError) as exc:
+            raise ColorBaselineError(
+                f"顏色基準證據的 ROI policy 無效：{exc}"
+            ) from exc
         outlier_filter = _build_outlier_filter_report(
             grouped,
             z_score_threshold=self.outlier_z_score_threshold,
             maximum_auto_exclusion_fraction=self.maximum_outlier_fraction,
             minimum_sample_count=self.minimum_outlier_sample_count,
             sample_size=min(self.sample_size, 32),
+            center_margin_ratio=resolved_tuning.center_margin_ratio,
             cancel_callback=cancel_callback,
         )
         excluded_sample_ids = set(outlier_filter.excluded_sample_ids)
         filtered_evidence = tuple(
             item for item in evidence if item.sample_id not in excluded_sample_ids
         )
-        grouped = _validate_and_group_evidence(filtered_evidence, canonical_colors)
+        grouped = _validate_and_group_evidence(
+            filtered_evidence,
+            canonical_colors,
+            center_margin_ratio=resolved_tuning.center_margin_ratio,
+        )
         digest_metadata = {
             **normalized_metadata,
             "statistical_outlier_filter": outlier_filter.to_dict(),
+            "color_decision_tuning": resolved_tuning_payload,
         }
         evidence_sha256 = _evidence_digest(filtered_evidence, digest_metadata)
         candidate_summary = json.loads(json.dumps(base_summary))
@@ -473,7 +513,10 @@ class StatsColorBaselineRebuilder:
                     ),
                 )
                 continue
-            candidate_summary[color] = self._calculate_stats(training)
+            candidate_summary[color] = self._calculate_stats(
+                training,
+                center_margin_ratio=resolved_tuning.center_margin_ratio,
+            )
             # Keep the *proposal's* value: a color preserved by the safety
             # check has its summary replaced by the old baseline, and the
             # reviewer still needs to know what the rejected evidence looked
@@ -494,7 +537,9 @@ class StatsColorBaselineRebuilder:
             "minimum_holdout_crops": self.minimum_holdout_crops,
             "holdout_fraction": self.holdout_fraction,
             "statistical_outlier_filter": outlier_filter.to_dict(),
+            "color_decision_tuning": resolved_tuning_payload,
         }
+        model_payload["recalibration"]["color_roi_policy"] = recorded_roi_policy
         if normalized_metadata:
             model_payload["recalibration"]["evidence_lineage_sha256"] = (
                 hashlib.sha256(_canonical_json(normalized_metadata)).hexdigest()
@@ -503,8 +548,14 @@ class StatsColorBaselineRebuilder:
                 normalized_metadata.get("counts") or {}
             )
 
-        previous_checker = StatsColorChecker.from_json(base_path)
-        proposal_checker = _checker_from_payload(model_payload)
+        previous_checker = StatsColorChecker.from_json(
+            base_path,
+            tuning=resolved_tuning,
+        )
+        proposal_checker = _checker_from_payload(
+            model_payload,
+            tuning=resolved_tuning,
+        )
         previous_correct_by_color: dict[str, int] = {}
         proposal_drift_by_color: dict[
             str, tuple[float | None, float | None]
@@ -555,7 +606,10 @@ class StatsColorBaselineRebuilder:
 
         while True:
             _raise_if_cancelled(cancel_callback)
-            current_checker = _checker_from_payload(model_payload)
+            current_checker = _checker_from_payload(
+                model_payload,
+                tuning=resolved_tuning,
+            )
             current_correct_by_color = {
                 color: _correct_predictions(
                     current_checker,
@@ -730,6 +784,27 @@ class StatsColorBaselineRebuilder:
         model_payload["recalibration"]["base_algorithm"] = (
             _payload_algorithm(base_payload)
         )
+        base_recalibration = base_payload.get("recalibration")
+        base_roi_policy = (
+            base_recalibration.get("color_roi_policy")
+            if isinstance(base_recalibration, Mapping)
+            else None
+        )
+        model_payload["recalibration"]["base_color_roi_policy"] = (
+            json.loads(json.dumps(base_roi_policy))
+            if isinstance(base_roi_policy, Mapping)
+            else None
+        )
+        base_decision_tuning = (
+            base_recalibration.get("color_decision_tuning")
+            if isinstance(base_recalibration, Mapping)
+            else None
+        )
+        model_payload["recalibration"]["base_color_decision_tuning"] = (
+            json.loads(json.dumps(base_decision_tuning))
+            if isinstance(base_decision_tuning, Mapping)
+            else None
+        )
         # A wide spread never rejects a rebuild on its own -- the threshold is
         # calibrated on a handful of baselines, and wrongly blocking a good one
         # is a production problem too. It routes the candidate to the human
@@ -761,6 +836,16 @@ class StatsColorBaselineRebuilder:
             "preserved_by_safety": sorted(rejected_proposals),
             "preserved_colors": model_payload["recalibration"]["preserved_colors"],
             "base_algorithm": model_payload["recalibration"]["base_algorithm"],
+            "color_roi_policy": model_payload["recalibration"].get(
+                "color_roi_policy"
+            ),
+            "base_color_roi_policy": model_payload["recalibration"][
+                "base_color_roi_policy"
+            ],
+            "color_decision_tuning": resolved_tuning_payload,
+            "base_color_decision_tuning": model_payload["recalibration"][
+                "base_color_decision_tuning"
+            ],
             "review_required_colors": sorted(
                 item.color for item in color_reports if item.review_reasons
             ),
@@ -818,6 +903,8 @@ class StatsColorBaselineRebuilder:
     def _calculate_stats(
         self,
         evidence: Sequence[ColorCropEvidence],
+        *,
+        center_margin_ratio: float = ColorDecisionTuning().center_margin_ratio,
     ) -> dict[str, Any]:
         hsv_rows: list[np.ndarray] = []
         lab_rows: list[np.ndarray] = []
@@ -830,6 +917,7 @@ class StatsColorBaselineRebuilder:
                     item.image_bgr,
                     item.color,
                     sample_size=self.sample_size,
+                    center_margin_ratio=center_margin_ratio,
                 )
             except _InsufficientColorPixels as exc:
                 # One unusable crop must not fail the whole rebuild, and must
@@ -1124,6 +1212,7 @@ def _build_outlier_filter_report(
     maximum_auto_exclusion_fraction: float,
     minimum_sample_count: int,
     sample_size: int,
+    center_margin_ratio: float,
     cancel_callback: Callable[[], bool] | None,
 ) -> ColorBaselineOutlierFilterReport:
     total_sample_ids = {
@@ -1144,6 +1233,7 @@ def _build_outlier_filter_report(
         features_by_sample = _lab_features_by_sample(
             color_evidence,
             sample_size=sample_size,
+            center_margin_ratio=center_margin_ratio,
         )
         sample_count = len(features_by_sample)
         if sample_count < minimum_sample_count:
@@ -1255,6 +1345,7 @@ def _lab_features_by_sample(
     evidence: Sequence[ColorCropEvidence],
     *,
     sample_size: int,
+    center_margin_ratio: float,
 ) -> dict[str, np.ndarray]:
     features: dict[str, list[np.ndarray]] = defaultdict(list)
     for item in evidence:
@@ -1263,6 +1354,7 @@ def _lab_features_by_sample(
                 item.image_bgr,
                 item.color,
                 sample_size=sample_size,
+                center_margin_ratio=center_margin_ratio,
             )
         except _InsufficientColorPixels:
             continue
@@ -1316,18 +1408,11 @@ def _sample_color_pixels(
     color: str,
     *,
     sample_size: int,
+    center_margin_ratio: float = ColorDecisionTuning().center_margin_ratio,
 ) -> _SampledPixels:
     if not isinstance(image_bgr, np.ndarray) or image_bgr.ndim != 3 or image_bgr.shape[2] != 3 or image_bgr.size == 0:
         raise ColorBaselineError("顏色裁切必須是非空 BGR 影像。")
-    height, width = image_bgr.shape[:2]
-    margin_y = int(height * 0.15)
-    margin_x = int(width * 0.15)
-    center = image_bgr[
-        margin_y : height - margin_y,
-        margin_x : width - margin_x,
-    ]
-    if center.size == 0:
-        center = image_bgr
+    center = center_crop_by_ratio(image_bgr, center_margin_ratio)
     resized = cv2.resize(
         center,
         (sample_size, sample_size),
@@ -1502,14 +1587,18 @@ def _center_drift(
     return hue_drift, lab_drift
 
 
-def _checker_from_payload(payload: Mapping[str, Any]) -> StatsColorChecker:
+def _checker_from_payload(
+    payload: Mapping[str, Any],
+    *,
+    tuning: ColorDecisionTuning | None = None,
+) -> StatsColorChecker:
     from tempfile import TemporaryDirectory
 
     temporary = TemporaryDirectory(prefix="color-baseline-check-")
     try:
         path = Path(temporary.name) / "color_stats.json"
         path.write_bytes(_canonical_json(dict(payload)))
-        return StatsColorChecker.from_json(path)
+        return StatsColorChecker.from_json(path, tuning=tuning)
     finally:
         temporary.cleanup()
 
@@ -1517,6 +1606,8 @@ def _checker_from_payload(payload: Mapping[str, Any]) -> StatsColorChecker:
 def _validate_and_group_evidence(
     evidence: Sequence[ColorCropEvidence],
     expected_colors: Sequence[str],
+    *,
+    center_margin_ratio: float = ColorDecisionTuning().center_margin_ratio,
 ) -> dict[str, tuple[ColorCropEvidence, ...]]:
     allowed = {color.casefold(): color for color in expected_colors}
     grouped: dict[str, list[ColorCropEvidence]] = defaultdict(list)
@@ -1526,7 +1617,12 @@ def _validate_and_group_evidence(
             continue
         if not str(item.sample_id).strip():
             raise ColorBaselineError("顏色裁切缺少 sample_id。")
-        _sample_color_pixels(item.image_bgr, item.color, sample_size=16)
+        _sample_color_pixels(
+            item.image_bgr,
+            item.color,
+            sample_size=16,
+            center_margin_ratio=center_margin_ratio,
+        )
         grouped[normalized].append(item)
     return {color.casefold(): tuple(grouped[color.casefold()]) for color in expected_colors}
 
@@ -1540,7 +1636,17 @@ def _resolve_expected_colors(
     for requested in expected_colors:
         existing = lookup.get(str(requested).casefold())
         if existing is None:
-            raise ColorBaselineError(f"舊基準缺少必要色別：{requested}")
+            # A rebuild refreshes statistics against the old baseline: every
+            # color is compared with its predecessor for drift, chroma
+            # retention and holdout regression, and a color that ran short of
+            # evidence falls back to the old statistics. A color with no
+            # predecessor has none of that, so it cannot be introduced here --
+            # it needs a base baseline that already carries it.
+            raise ColorBaselineError(
+                f"舊基準缺少必要色別：{requested}。重建是「以舊基準為基礎更新統計」，"
+                "沒有前一版可比對漂移與退化，也沒有證據不足時可沿用的統計，"
+                "因此無法在重建中新增色別。請先建立含此色別的基礎基準。"
+            )
         resolved.append(existing)
     if len({color.casefold() for color in resolved}) != len(resolved):
         raise ColorBaselineError("必要色別不可重複。")

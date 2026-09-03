@@ -81,8 +81,25 @@ def _evidence(colors=DEFAULT_COLORS, count: int = 35):
     )
 
 
+def _roi_metadata() -> dict[str, object]:
+    """Geometry stamp every rebuild needs.
+
+    The runtime always resolves a station geometry and always compares it to the
+    one recorded in the artifact, so the rebuilder refuses to write a baseline
+    without it. Tests that assert on the geometry pass their own instead.
+    """
+    return {"color_roi_policy": {"inset_x_ratio": 0.2}}
+
+
+def _build(
+    rebuilder: StatsColorBaselineRebuilder | None = None, **kwargs: object
+) -> object:
+    kwargs.setdefault("evidence_metadata", _roi_metadata())
+    return (rebuilder or StatsColorBaselineRebuilder()).build(**kwargs)
+
+
 def test_rebuilds_all_five_colors_with_holdout(tmp_path: Path) -> None:
-    build = StatsColorBaselineRebuilder().build(
+    build = _build(
         base_model_path=_base_model(tmp_path),
         evidence=_evidence(),
     )
@@ -111,7 +128,7 @@ def test_isolated_color_outlier_photo_is_excluded_from_all_colors(
             )
         )
 
-    build = StatsColorBaselineRebuilder().build(
+    build = _build(
         base_model_path=_base_model(tmp_path),
         evidence=tuple(evidence),
     )
@@ -138,7 +155,7 @@ def test_batch_wide_shift_is_not_mass_excluded(tmp_path: Path) -> None:
             )
         )
 
-    build = StatsColorBaselineRebuilder().build(
+    build = _build(
         base_model_path=_base_model(tmp_path),
         evidence=tuple(evidence),
     )
@@ -175,7 +192,7 @@ def test_unsafe_color_update_is_rejected_and_old_baseline_is_preserved(
         for item in _evidence()
     )
 
-    build = StatsColorBaselineRebuilder().build(
+    build = _build(
         base_model_path=base,
         evidence=shifted_evidence,
     )
@@ -216,7 +233,7 @@ def test_holdout_regression_falls_back_until_final_checker_is_safe(
                 return SimpleNamespace(best_color="Black", is_ok=True)
             return result
 
-    def checker_from_payload(payload):
+    def checker_from_payload(payload, *, tuning=None):
         if payload["summary"] == original["summary"]:
             return old_checker
         return _GreenRegressionChecker()
@@ -226,10 +243,11 @@ def test_holdout_regression_falls_back_until_final_checker_is_safe(
         "_checker_from_payload",
         checker_from_payload,
     )
-    build = StatsColorBaselineRebuilder(
-        maximum_hue_drift=180.0,
-        maximum_lab_drift=1000.0,
-    ).build(
+    build = _build(
+        rebuilder=StatsColorBaselineRebuilder(
+            maximum_hue_drift=180.0,
+            maximum_lab_drift=1000.0,
+        ),
         base_model_path=base,
         evidence=_evidence(),
     )
@@ -249,7 +267,7 @@ def test_preserves_colors_that_do_not_reach_minimum(tmp_path: Path) -> None:
     base = _base_model(tmp_path)
     original = json.loads(base.read_text(encoding="utf-8"))
 
-    build = StatsColorBaselineRebuilder().build(
+    build = _build(
         base_model_path=base,
         evidence=_evidence(colors=("Black",), count=35),
     )
@@ -263,6 +281,7 @@ def test_preserves_colors_that_do_not_reach_minimum(tmp_path: Path) -> None:
 
 def test_candidate_report_preserves_evidence_source_lineage(tmp_path: Path) -> None:
     metadata = {
+        **_roi_metadata(),
         "schema_version": 1,
         "counts": {
             "selected_total": 7,
@@ -278,22 +297,103 @@ def test_candidate_report_preserves_evidence_source_lineage(tmp_path: Path) -> N
         ],
     }
 
-    build = StatsColorBaselineRebuilder().build(
+    build = _build(
         base_model_path=_base_model(tmp_path),
         evidence=_evidence(),
         evidence_metadata=metadata,
     )
 
     assert build.report_payload["evidence_sources"] == metadata
-    recalibration = build.model_payload["recalibration"]
-    assert recalibration["evidence_source_counts"]["selected_total"] == 7
-    assert len(recalibration["evidence_lineage_sha256"]) == 64
+    provenance = build.model_payload["recalibration"]
+    assert provenance["evidence_source_counts"]["selected_total"] == 7
+    assert len(provenance["evidence_lineage_sha256"]) == 64
+
+
+def test_rebuild_records_and_validates_with_resolved_station_tuning(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    seen_yellow_max: list[float] = []
+
+    def record_tuning(checker, evidence, expected_color):
+        seen_yellow_max.append(checker._tuning.yellow_h_max)
+        return len(evidence)
+
+    monkeypatch.setattr(recalibration, "_correct_predictions", record_tuning)
+    build = _build(
+        base_model_path=_base_model(tmp_path),
+        evidence=_evidence(),
+        decision_tuning={"yellow_h_max": 37},
+    )
+
+    expected = recalibration.ColorDecisionTuning.from_dict(
+        {"yellow_h_max": 37}
+    ).to_dict()
+    assert seen_yellow_max
+    assert set(seen_yellow_max) == {37.0}
+    assert build.model_payload["recalibration"]["color_decision_tuning"] == expected
+    assert build.report_payload["color_decision_tuning"] == expected
+
+
+def test_rebuild_and_runtime_share_center_crop_geometry(monkeypatch) -> None:
+    image = np.zeros((100, 300, 3), dtype=np.uint8)
+    image[:, :] = (0, 0, 255)
+    captured: dict[str, tuple[int, ...]] = {}
+    real_resize = recalibration.cv2.resize
+
+    def capture_resize(source, size, *, interpolation):
+        captured["shape"] = source.shape
+        return real_resize(source, size, interpolation=interpolation)
+
+    monkeypatch.setattr(recalibration.cv2, "resize", capture_resize)
+    recalibration._sample_color_pixels(image, "Red", sample_size=64)
+
+    from core.color_sampling import center_crop_by_ratio
+
+    assert center_crop_by_ratio(image, 0.15).shape == (70, 210, 3)
+    assert captured["shape"] == (70, 210, 3)
+
+
+def test_candidate_artifact_records_the_runtime_roi_geometry(tmp_path: Path) -> None:
+    roi_policy = {
+        "inset_x_ratio": 0.2,
+        "inset_y_ratio": 0.0,
+        "min_size": 8,
+    }
+
+    build = _build(
+        base_model_path=_base_model(tmp_path),
+        evidence=_evidence(),
+        evidence_metadata={"color_roi_policy": roi_policy},
+    )
+
+    assert build.model_payload["recalibration"]["color_roi_policy"] == roi_policy
+    assert build.report_payload["color_roi_policy"] == roi_policy
+
+
+def test_rebuild_refuses_to_stamp_a_baseline_without_the_roi_geometry(
+    tmp_path: Path,
+) -> None:
+    """An unstamped artifact is rejected at every station, so never write one.
+
+    The runtime always resolves a geometry and always compares it against the
+    recorded one, so a baseline with no stamp cannot load anywhere. Failing here
+    costs one dialog; failing at load costs the sign-off and the evidence set.
+    """
+    with pytest.raises(ColorBaselineError) as excinfo:
+        StatsColorBaselineRebuilder().build(
+            base_model_path=_base_model(tmp_path),
+            evidence=_evidence(),
+            evidence_metadata={"schema_version": 1},
+        )
+
+    assert "color_roi_policy" in str(excinfo.value)
 
 
 def test_candidate_store_is_deterministic_and_detects_tampering(
     tmp_path: Path,
 ) -> None:
-    build = StatsColorBaselineRebuilder().build(
+    build = _build(
         base_model_path=_base_model(tmp_path),
         evidence=_evidence(),
     )
@@ -503,7 +603,7 @@ def test_mostly_neighbouring_evidence_asks_for_review(tmp_path: Path) -> None:
         for item in _evidence()
     )
 
-    build = StatsColorBaselineRebuilder().build(
+    build = _build(
         base_model_path=_base_model(tmp_path),
         evidence=evidence,
     )
@@ -631,7 +731,7 @@ def test_hue_spread_reason_guards_baselines_built_elsewhere() -> None:
 
 def test_a_clean_rebuild_is_not_flagged_for_review(tmp_path: Path) -> None:
     """The guard against the check firing on good evidence."""
-    build = StatsColorBaselineRebuilder().build(
+    build = _build(
         base_model_path=_base_model(tmp_path),
         evidence=_evidence(),
     )
@@ -655,9 +755,10 @@ def test_absolute_accuracy_floor_blocks_an_improved_but_unusable_candidate(
 
     monkeypatch.setattr(recalibration, "_correct_predictions", below_floor)
 
-    build = StatsColorBaselineRebuilder(
-        minimum_holdout_accuracy=0.90,
-    ).build(
+    build = _build(
+        rebuilder=StatsColorBaselineRebuilder(
+            minimum_holdout_accuracy=0.90,
+        ),
         base_model_path=_base_model(tmp_path),
         evidence=_evidence(),
     )

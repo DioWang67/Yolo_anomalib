@@ -14,6 +14,7 @@ from core.services.color_checker import (
 from core.stats_color_checker import (
     COLOR_CONF_THRESHOLDS,
     DEFAULT_RATIO_THRESHOLD,
+    ColorDecisionTuning,
     StatsColorChecker,
 )
 
@@ -133,7 +134,9 @@ def test_generic_detector_with_only_unsupported_color_candidates_fails_closed():
         supported_colors=("Orange",),
     )
 
-    assert checker.allowed_colors == [None]
+    # An empty palette, not ``None``: a palette was configured, so widening it
+    # back to the full vocabulary would measure against colors nobody asked for.
+    assert checker.allowed_colors == [[]]
     assert result.is_ok is False
     assert result.items[0].is_ok is False
 
@@ -151,9 +154,24 @@ def test_unknown_detector_class_is_not_implicitly_treated_as_generic():
     assert result.items[0].is_ok is False
 
 
+def test_missing_candidates_scores_all_colors_instead_of_echoing_yolo_class():
+    """The color checker must remain independent of the detector's answer."""
+    result, checker = _check_detection(
+        detected_class="Red",
+        best_color="Orange",
+        candidates=None,
+        supported_colors=("Red", "Orange"),
+    )
+
+    assert checker.allowed_colors == [None]
+    assert result.items[0].measurement_is_ok is True
+    assert result.items[0].is_ok is False
+    assert result.items[0].best_color == "Orange"
+
+
 @pytest.mark.parametrize(
     ("candidates", "expected_allowed"),
-    ((["Green"], None), (["Green", "Orange"], ["Orange"])),
+    ((["Green"], []), (["Green", "Orange"], ["Orange"])),
 )
 def test_configured_color_missing_from_model_fails_closed(
     candidates,
@@ -168,6 +186,19 @@ def test_configured_color_missing_from_model_fails_closed(
 
     assert checker.allowed_colors == [expected_allowed]
     assert result.is_ok is False
+    assert result.items[0].is_ok is False
+
+
+def test_one_supported_candidate_cannot_hide_another_unsupported_candidate():
+    result, checker = _check_detection(
+        detected_class="Orange",
+        best_color="Orange",
+        candidates=["Orange", "Blakc"],
+        supported_colors=("Orange",),
+    )
+
+    assert checker.allowed_colors == [["Orange"]]
+    assert result.items[0].measurement_is_ok is False
     assert result.items[0].is_ok is False
 
 
@@ -922,7 +953,7 @@ def test_color_qc_rejects_a_malformed_global_threshold_without_partial_state(tmp
     assert service._checker.model.colors[0].hist_thr == pytest.approx(0.2)
 
 
-def _stats_model(path, *, algorithm):
+def _stats_model(path, *, algorithm, roi_policy=None, decision_tuning=None):
     """Write a loadable stats model that either records its algorithm or does not."""
     payload = {
         "summary": {
@@ -937,7 +968,13 @@ def _stats_model(path, *, algorithm):
         }
     }
     if algorithm is not None:
-        payload["recalibration"] = {"algorithm": algorithm}
+        payload["recalibration"] = {
+            "algorithm": algorithm,
+            "color_roi_policy": roi_policy
+            or {"inset_x_ratio": 0.0, "inset_y_ratio": 0.0, "min_size": 1},
+            "color_decision_tuning": decision_tuning
+            or ColorDecisionTuning().to_dict(),
+        }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return str(path)
 
@@ -998,6 +1035,49 @@ def test_tightening_enforcement_re_examines_an_already_loaded_baseline(tmp_path)
 
     with pytest.raises(RuntimeError):
         service.ensure_loaded(path, checker_type="stats", algorithm_enforcement="strict")
+
+
+def test_changing_roi_policy_reexamines_the_same_baseline_path(tmp_path):
+    path = _stats_model(
+        tmp_path / "stats.json",
+        algorithm=BASELINE_ALGORITHM_VERSION,
+        roi_policy={"inset_x_ratio": 0.2, "inset_y_ratio": 0.0, "min_size": 8},
+    )
+    service = ColorCheckerService()
+    service.ensure_loaded(
+        path,
+        checker_type="stats",
+        roi_policy={"inset_x_ratio": 0.2, "inset_y_ratio": 0.0, "min_size": 8},
+        algorithm_enforcement="strict",
+    )
+
+    with pytest.raises(RuntimeError, match="ROI policy"):
+        service.ensure_loaded(
+            path,
+            checker_type="stats",
+            roi_policy={"inset_x_ratio": 0.1, "inset_y_ratio": 0.0, "min_size": 8},
+            algorithm_enforcement="strict",
+        )
+
+
+def test_strict_rejects_runtime_tuning_different_from_artifact(tmp_path):
+    baseline_tuning = ColorDecisionTuning().to_dict()
+    path = _stats_model(
+        tmp_path / "stats.json",
+        algorithm=BASELINE_ALGORITHM_VERSION,
+        decision_tuning=baseline_tuning,
+    )
+    service = ColorCheckerService()
+
+    with pytest.raises(RuntimeError, match="tuning"):
+        service.ensure_loaded(
+            path,
+            checker_type="stats",
+            decision_tuning={"yellow_h_max": baseline_tuning["yellow_h_max"] + 1},
+            algorithm_enforcement="strict",
+        )
+
+    assert service._checker is None
 
 
 def test_an_unreadable_enforcement_value_enforces_rather_than_relaxes(tmp_path):

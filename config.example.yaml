@@ -195,15 +195,12 @@ inspection_sync_allow_insecure_http: false
 # pass first (docs/operations/MISJUDGE_TRIAGE_SOP.md section 5).
 # color_decision_tuning:
 #   sat_threshold: 20.0          # pixels below this saturation are ignored
-#   black_s_threshold: 50.0      # S below this and V below black_v -> black
-#   black_v_threshold: 80.0
-#   black_min_coverage: 0.6      # black pixel coverage shortcut trigger
 #   yellow_h_min: 20             # HSV hue window for yellow detection
 #   yellow_h_max: 35
 #   yellow_s_min: 80
 #   yellow_v_min: 150
 #   orange_red_tie_margin: 0.15  # score gap below this triggers tie-break
-#   center_margin_ratio: 0.15    # ROI border ratio excluded from sampling
+#   center_margin_ratio: 0.15    # fraction removed independently from every edge
 #
 # Production default: if color check is enabled but the color model/rules cannot
 # load, mark the inspection as FAIL instead of silently passing color validation.

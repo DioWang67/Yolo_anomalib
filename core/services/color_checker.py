@@ -12,11 +12,14 @@ from core.color_baseline_contract import color_model_compatibility_failure
 from core.color_qc_enhanced import ColorQCEnhanced
 from core.models import ColorCheckItemResult, ColorCheckResult
 from core.services.slot_roi import ColorRoiPolicy, extract_bbox_roi
+from core.services.station_color_settings import (
+    DEFAULT_GENERIC_DETECTOR_CLASSES,
+)
 from core.stats_color_checker import ColorDecisionTuning, StatsColorChecker
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_GENERIC_DETECTOR_CLASSES = ("LED",)
+_DEFAULT_GENERIC_DETECTOR_CLASSES = DEFAULT_GENERIC_DETECTOR_CLASSES
 
 #: Every detection ROI was measured against the loaded color model.
 COLOR_CHECK_EVALUATED_STATUS = "evaluated"
@@ -77,24 +80,22 @@ def _is_expected_color_match(
     )
 
 
-def _configured_colors_are_supported(
+def _unsupported_configured_colors(
     configured_colors: Iterable[str],
     supported_colors: Iterable[str],
-) -> bool:
-    """Fail closed when explicit color candidates cannot be evaluated."""
+) -> frozenset[str]:
+    """Return every explicit color candidate the checker cannot evaluate."""
     configured = {
         str(color or "").strip().casefold()
         for color in configured_colors
         if str(color or "").strip()
     }
-    if not configured:
-        return True
     supported = {
         str(color or "").strip().casefold()
         for color in supported_colors
         if str(color or "").strip()
     }
-    return bool(configured & supported)
+    return frozenset(configured - supported)
 
 
 def _supported_color_names(checker: object) -> frozenset[str]:
@@ -144,14 +145,31 @@ def _resolve_algorithm_enforcement(value: object) -> str:
 def _supported_candidates(
     candidates: Iterable[object],
     supported_colors: frozenset[str],
+    generic_detector_classes: frozenset[str],
 ) -> list[str] | None:
-    filtered = [
+    """Narrow an explicit color palette to what the loaded model can score.
+
+    ``None`` means "no restriction" and is reserved for the case where no color
+    palette was configured at all -- a station that names only generic detector
+    classes included, since those are not colors. A palette that *was*
+    configured but that the model can score none of returns an empty list,
+    which the checker fails closed on. Collapsing that case to ``None`` widened
+    a wrong palette into the full vocabulary and reported a measurement taken
+    against a palette nobody asked for.
+    """
+    requested = [
         normalized
         for candidate in candidates
         if (normalized := str(candidate or "").strip())
-        and normalized.casefold() in supported_colors
+        and normalized.casefold() not in generic_detector_classes
     ]
-    return filtered or None
+    if not requested:
+        return None
+    return [
+        candidate
+        for candidate in requested
+        if candidate.casefold() in supported_colors
+    ]
 
 
 class ColorCheckerService:
@@ -190,37 +208,51 @@ class ColorCheckerService:
         checker_type = (checker_type or "color_qc").lower()
         if checker_type == "led_qc":
             checker_type = "color_qc"  # backward compatibility alias
-        need_reload = (
-            self._checker is None
-            or self._model_path != model_path
-            or self._checker_type != checker_type
-            or (checker_type == "stats" and self._decision_tuning != decision_tuning)
-            # A tightened mode must re-examine a baseline that was already
-            # loaded under the permissive one, or turning enforcement on would
-            # do nothing until the next unrelated reload.
-            or (checker_type == "stats" and self._algorithm_enforcement != enforcement)
-        )
-        if need_reload and checker_type == "stats":
+        resolved_tuning: ColorDecisionTuning | None = None
+        resolved_tuning_payload: dict[str, float] | None = None
+        if checker_type == "stats":
             try:
-                tuning = ColorDecisionTuning.from_dict(decision_tuning)
+                resolved_tuning = ColorDecisionTuning.from_dict(decision_tuning)
             except (TypeError, ValueError) as e:
                 logger.warning(
                     "Invalid color_decision_tuning %s (%s); using defaults",
                     decision_tuning,
                     e,
                 )
-                tuning = ColorDecisionTuning()
+                resolved_tuning = ColorDecisionTuning()
+            resolved_tuning_payload = resolved_tuning.to_dict()
+        need_reload = (
+            self._checker is None
+            or self._model_path != model_path
+            or self._checker_type != checker_type
+            or (
+                checker_type == "stats"
+                and self._decision_tuning != resolved_tuning_payload
+            )
+            # Geometry is part of a stats baseline's meaning. Reusing the same
+            # model path under a different ROI must re-run compatibility rather
+            # than merely changing the crop applied to an already-trusted file.
+            or (checker_type == "stats" and self._roi_policy != resolved_roi_policy)
+            # A tightened mode must re-examine a baseline that was already
+            # loaded under the permissive one, or turning enforcement on would
+            # do nothing until the next unrelated reload.
+            or (checker_type == "stats" and self._algorithm_enforcement != enforcement)
+        )
+        if need_reload and checker_type == "stats":
+            assert resolved_tuning is not None
+            assert resolved_tuning_payload is not None
             try:
                 # Runtime overrides are deliberately not baked in here: they are
                 # applied below through the same reset-then-apply path used when
                 # an already-loaded checker is reused, so both paths produce an
                 # identical effective configuration.
-                self._checker = StatsColorChecker.from_json(model_path, tuning=tuning)
+                self._checker = StatsColorChecker.from_json(
+                    model_path,
+                    tuning=resolved_tuning,
+                )
                 self._checker_type = checker_type
                 self._model_path = model_path
-                self._decision_tuning = (
-                    dict(decision_tuning) if decision_tuning else None
-                )
+                self._decision_tuning = resolved_tuning_payload
             except (OSError, RuntimeError, TypeError, ValueError, KeyError) as e:
                 logger.warning("Failed to load StatsColorChecker from %s: %s", model_path, e)
                 self._checker = None
@@ -234,7 +266,11 @@ class ColorCheckerService:
             # well-formed. What cannot be established is whether those numbers
             # were measured on the crop geometry this code measures, and a
             # mismatch shifts every score instead of failing.
-            incompatible = color_model_compatibility_failure(model_path)
+            incompatible = color_model_compatibility_failure(
+                model_path,
+                expected_roi_policy=resolved_roi_policy.to_dict(),
+                expected_decision_tuning=resolved_tuning_payload,
+            )
             self._algorithm_enforcement = enforcement
             if incompatible:
                 if enforcement == ALGORITHM_ENFORCEMENT_STRICT:
@@ -355,10 +391,16 @@ class ColorCheckerService:
             if (normalized := str(value or "").strip())
             and normalized.casefold() not in generic_detector_classes
         }
-        configured_colors_are_supported = _configured_colors_are_supported(
+        unsupported_configured_colors = _unsupported_configured_colors(
             configured_colors,
             supported_colors,
         )
+        configured_colors_are_supported = not unsupported_configured_colors
+        if unsupported_configured_colors:
+            logger.error(
+                "Color candidates are absent from the loaded model: %s",
+                ", ".join(sorted(unsupported_configured_colors)),
+            )
         proc = processed_image if processed_image is not None else frame
         if proc is None or getattr(proc, "size", 0) == 0:
             proc = frame
@@ -395,11 +437,15 @@ class ColorCheckerService:
                     )
                 )
                 continue
-            # Priority: explicit candidates > YOLO class
-            candidate_pool: Iterable[object] = requested_candidates
-            if not requested_candidates and det.get("class"):
-                candidate_pool = (det.get("class"),)
-            allowed = _supported_candidates(candidate_pool, supported_colors)
+            # Explicit product candidates may narrow the palette. With no
+            # candidates, score the checker's full vocabulary: using the YOLO
+            # class as the only candidate makes the color check circular and
+            # hides exactly the class mismatch it exists to detect.
+            allowed = _supported_candidates(
+                requested_candidates,
+                supported_colors,
+                generic_detector_classes,
+            )
             c_res = self._checker.check(roi, allowed_colors=allowed)
             # The measurement's own verdict, kept separate from whether it
             # agrees with the detector. An unsupported configured vocabulary

@@ -760,6 +760,30 @@ class TestColorCheckStep:
         assert base_context.result["detections"][0]["verified_class"] == "Black"
         assert base_context.status == "PASS"
 
+    def test_expected_items_are_forwarded_as_the_full_color_palette(
+        self, mock_env, base_context, mock_color_service
+    ):
+        """Duplicate expected slots narrow to every configured color, not YOLO's guess."""
+        mock_color_service.is_ready.return_value = True
+        mock_result = MagicMock()
+        mock_result.items = []
+        mock_result.to_dict.return_value = {
+            "is_ok": True,
+            "items": [],
+            "status": "evaluated",
+        }
+        mock_color_service.check_items.return_value = mock_result
+        base_context.config.expected_items = {
+            "TestProduct": {
+                "TestArea": ["Red", "Green", "Orange", "Yellow", "Black", "Black"]
+            }
+        }
+
+        ColorCheckStep(mock_color_service, mock_env.logger).run(base_context)
+
+        candidates = mock_color_service.check_items.call_args.kwargs["candidates"]
+        assert set(candidates) == {"Red", "Green", "Orange", "Yellow", "Black"}
+
     def test_candidate_lookup_failure_fails_closed(
         self, mock_env, base_context, mock_color_service
     ):

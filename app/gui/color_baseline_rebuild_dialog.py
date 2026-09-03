@@ -49,7 +49,14 @@ from core.services.model_acceptance import (
 )
 from core.services.model_version_registry import ModelVersionRecord
 from core.services.slot_roi import ColorRoiPolicy
+from core.services.station_color_settings import (
+    StationColorSettingsError,
+    station_color_decision_tuning,
+    station_color_roi_policy,
+    station_expected_color_names,
+)
 from core.station_data import load_station_data_paths
+from core.stats_color_checker import ColorDecisionTuning
 from core.workspace import load_workspace_paths
 
 
@@ -110,6 +117,7 @@ class ColorBaselineRebuildWorker(QThread):
                 / "config.yaml"
             )
             roi_policy = _resolve_color_roi_policy(station_config_path)
+            decision_tuning = _resolve_color_decision_tuning(station_config_path)
             evidence_provider = ColorBaselineEvidenceProvider(
                 product=self.product,
                 area=self.area,
@@ -166,11 +174,20 @@ class ColorBaselineRebuildWorker(QThread):
             # Which file the geometry came from. Without it the recorded policy
             # cannot be checked against the config the line actually runs.
             evidence_metadata["color_roi_policy_source"] = str(station_config_path)
+            # Rebuild the colors this station inspects, not a fixed five. A
+            # station whose expected_items differ rebuilt the wrong set: colors
+            # it does inspect were left on their old statistics, and the report
+            # named colors it does not have.
+            expected_colors = _resolve_expected_colors_for_station(
+                station_config_path, self.product, self.area
+            )
             build = StatsColorBaselineRebuilder().build(
                 base_model_path=base_model_path,
                 evidence=evidence,
                 evidence_metadata=evidence_metadata,
+                decision_tuning=decision_tuning.to_dict(),
                 cancel_callback=self.isInterruptionRequested,
+                **({"expected_colors": expected_colors} if expected_colors else {}),
             )
             self.outlier_filter_ready.emit(build.outlier_filter)
             candidate = ColorBaselineCandidateStore(self.data_paths.color_baselines).commit(
@@ -536,21 +553,36 @@ def _review_explanation(report) -> tuple[str, str]:
 def _resolve_color_roi_policy(config_path: Path) -> ColorRoiPolicy:
     """Load the bbox policy the runtime measures color with.
 
-    Must be the live station config, not a model version snapshot. The runtime
-    reads this same field from this same file, so taking it from anywhere else
-    lets a baseline be built in a geometry production does not use, and nothing
-    downstream can tell: every statistic is well-formed, only measured
-    elsewhere.
+    Shared with the acceptance and publication gates, which have to judge an
+    artifact against the same geometry this rebuild stamps into it.
     """
-    if config_path.is_symlink() or not config_path.is_file():
-        raise ColorBaselineError(f"站點模型設定不存在：{config_path}")
-    payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    if not isinstance(payload, dict):
-        raise ColorBaselineError(f"站點模型設定格式錯誤：{config_path}")
     try:
-        return ColorRoiPolicy.from_mapping(payload.get("color_roi_policy"))
-    except (TypeError, ValueError) as exc:
-        raise ColorBaselineError(f"顏色 ROI 設定無效：{exc}") from exc
+        return station_color_roi_policy(config_path)
+    except StationColorSettingsError as exc:
+        raise ColorBaselineError(str(exc)) from exc
+
+
+def _resolve_color_decision_tuning(config_path: Path) -> ColorDecisionTuning:
+    """Load the complete effective tuning used by the live station."""
+    try:
+        return station_color_decision_tuning(config_path)
+    except StationColorSettingsError as exc:
+        raise ColorBaselineError(str(exc)) from exc
+
+
+def _resolve_expected_colors_for_station(
+    config_path: Path, product: str, area: str
+) -> tuple[str, ...]:
+    """Colors this station inspects, or ``()`` when its config names none.
+
+    An empty result leaves the rebuilder on its own default set rather than
+    rebuilding nothing, which is what a station config with no
+    ``expected_items`` for this scope should mean.
+    """
+    try:
+        return station_expected_color_names(config_path, product, area)
+    except StationColorSettingsError as exc:
+        raise ColorBaselineError(str(exc)) from exc
 
 
 def _sha256_file(path: Path) -> str:

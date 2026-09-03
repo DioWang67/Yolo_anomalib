@@ -53,6 +53,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measures in: `strict` raises and the line stops, `warn` keeps scoring through
   the wrong crop. For these three fields the live station wins including its
   absence, so a snapshot cannot supply a foreign value either.
+- Baseline rebuilds cover the colors the station actually inspects, taken from
+  its `expected_items`, instead of a hardcoded five. A station with a different
+  palette rebuilt the wrong set: colors it does inspect kept their old
+  statistics, and the report named colors it does not have. Repeated positions
+  collapse to one color and generic detector classes are excluded, which is the
+  same line the runtime draws when it narrows the palette.
+- Adding a color the deployed baseline cannot score is caught at startup and
+  names the color. The runtime folds an unscoreable candidate into every item's
+  verdict, so one unknown or misspelled name in `expected_items` made every
+  board fail the color check indefinitely -- under `warn` as much as `strict` --
+  and nothing compared the configured colors against the baseline's vocabulary.
+  A rebuild still refuses to introduce a color the base baseline lacks, and now
+  says why: there is no predecessor to measure drift or regression against, and
+  nothing to fall back to when evidence runs short.
+- `StatsColorBaselineRebuilder.build()` refuses to write a baseline with no
+  `color_roi_policy` stamp. The runtime always resolves a geometry and always
+  compares it to the recorded one, so an unstamped artifact loads at no station;
+  it was being discovered after the sign-off, when the evidence was gone.
+- `_supported_candidates` no longer collapses "a palette was configured and the
+  model can score none of it" into "no restriction". That widened a wrong
+  palette into the full vocabulary and reported a measurement taken against
+  colors nobody asked for; it now returns an empty palette, which the checker
+  fails closed on. `None` stays reserved for a station that configured no color
+  palette at all, generic detector classes included, so a station naming only
+  those is unaffected.
+- Stats Color's baseline contract is now `stats-robust-v5`. Calibration and
+  runtime share one per-axis center-crop helper, so an elongated 300x100 ROI is
+  measured as 210x70 on both sides instead of 210x70 during rebuild and 270x70
+  at runtime. Every v4 artifact is intentionally incompatible with v5.
+- Baseline rebuild and holdout validation now use the live station's complete
+  resolved `color_decision_tuning`, and artifacts record that full effective
+  mapping plus the tuning behind any preserved base colors. Strict runtime
+  loading rejects missing or different tuning, including a same-path config
+  change that would otherwise reuse the cached checker.
+- The Yellow shortcut no longer returns before the other colors are scored.
+  Its Yellow/Orange ratios remain in diagnostics with no score adjustment so
+  Cable1/A regression can measure the shortcut's removal before a replacement
+  tie-break is calibrated.
+- `StatsColorChecker` now distinguishes no restriction (`allowed_colors=None`)
+  from an explicit empty or wholly unsupported vocabulary, which fails closed.
+  The unused Black decision knobs and their misleading example configuration
+  were removed; v5 Black remains driven solely by learned S/V, LAB and coverage.
+- Color verification without an explicit product palette now scores the full
+  model vocabulary instead of using YOLO's class as its only candidate, which
+  made the verifier circular and could hide a Red/Orange disagreement. Every
+  explicitly configured color must now exist in the loaded model; a partial
+  intersection no longer silently drops misspelled or absent colors.
+- Strict baseline compatibility now binds the artifact to its complete
+  `color_roi_policy`, not only to the algorithm label. Rebuild artifacts
+  record their geometry and the base geometry behind preserved colors; runtime
+  policy changes re-run compatibility even when the model path is unchanged.
+- Strict color-baseline enforcement now treats a missing configured color model
+  as a configuration error. It no longer silently disables color inspection,
+  which lets detector-only bundles fail closed until the station's approved v5
+  baseline is present.
 - Color baseline rebuilds took their sampling geometry from the model version
   config snapshot, which cannot carry it. `color_roi_policy` is a station-local
   field that a model deployment preserves rather than replaces, so no snapshot

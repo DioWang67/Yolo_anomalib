@@ -88,7 +88,9 @@ def _write_station_config(tmp_path: Path, *, inset_x_ratio: float = 0.2) -> Path
         "color_roi_policy:\n"
         f"  inset_x_ratio: {inset_x_ratio}\n"
         "  inset_y_ratio: 0.0\n"
-        "  min_size: 8\n",
+        "  min_size: 8\n"
+        "color_decision_tuning:\n"
+        "  yellow_h_max: 37\n",
         encoding="utf-8",
     )
     return config
@@ -477,6 +479,7 @@ def test_rebuild_takes_its_geometry_from_the_station_not_the_model_snapshot(
 
     def _build(**kwargs):
         captured["evidence_metadata"] = kwargs["evidence_metadata"]
+        captured["decision_tuning"] = kwargs["decision_tuning"]
         return SimpleNamespace(outlier_filter=None, color_reports=())
 
     monkeypatch.setattr(rebuild_dialog, "ColorBaselineEvidenceProvider", _EvidenceProvider)
@@ -518,6 +521,9 @@ def test_rebuild_takes_its_geometry_from_the_station_not_the_model_snapshot(
     assert metadata["color_roi_policy"]["inset_x_ratio"] == 0.2
     assert metadata["color_roi_policy_source"].endswith("config.yaml")
     assert "versions" not in metadata["color_roi_policy_source"]
+    assert captured["decision_tuning"]["yellow_h_max"] == 37.0
+    # Provenance receives the complete resolved classifier, not just YAML keys.
+    assert captured["decision_tuning"]["sat_threshold"] == 20.0
 
 
 def test_rebuild_refuses_to_guess_when_the_station_config_is_missing(

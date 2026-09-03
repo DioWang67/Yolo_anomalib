@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -12,19 +12,16 @@ import cv2
 import numpy as np
 
 from core.color_qc_enhanced import ColorQCAdvancedResult
+from core.color_sampling import center_crop_by_ratio
 
 # Default sampling thresholds. These are only fallbacks: per-product values
 # belong in the model config.yaml under ``color_decision_tuning`` (loaded via
 # ColorOverrideLoader) so threshold changes never require a code release.
 DEFAULT_SAT_THRESHOLD = 20.0
-BLACK_S_THRESHOLD = 50.0
-BLACK_V_THRESHOLD = 80.0
-BLACK_MIN_COVERAGE = 0.6
 YELLOW_H_RANGE = (20, 35)
 YELLOW_S_MIN = 80
 YELLOW_V_MIN = 150
 ORANGE_RED_TIE_MARGIN = 0.15
-GREEN_DOMINANCE_RATIO = 0.3
 CENTER_MARGIN_RATIO = 0.15
 DEFAULT_RATIO_THRESHOLD = 0.35
 
@@ -63,9 +60,6 @@ class ColorDecisionTuning:
     """
 
     sat_threshold: float = DEFAULT_SAT_THRESHOLD
-    black_s_threshold: float = BLACK_S_THRESHOLD
-    black_v_threshold: float = BLACK_V_THRESHOLD
-    black_min_coverage: float = BLACK_MIN_COVERAGE
     yellow_h_min: float = YELLOW_H_RANGE[0]
     yellow_h_max: float = YELLOW_H_RANGE[1]
     yellow_s_min: float = YELLOW_S_MIN
@@ -108,6 +102,10 @@ class ColorDecisionTuning:
             if key in known and value is not None
         }
         return cls(**kwargs)
+
+    def to_dict(self) -> dict[str, float]:
+        """Return the complete effective classifier tuning in stable form."""
+        return {key: float(value) for key, value in asdict(self).items()}
 
 
 _DEFAULT_TUNING = ColorDecisionTuning()
@@ -511,21 +509,11 @@ def _separate_orange_red(
     return predicted, float(pair_score), debug
 
 
-def _center_crop_array(img: np.ndarray, margin_ratio: float) -> np.ndarray:
-    """Crop a centered region, falling back to the full image when it cannot."""
-    h, w = img.shape[:2]
-    margin = int(min(h, w) * margin_ratio)
-    if margin <= 0 or margin * 2 >= h or margin * 2 >= w:
-        return img
-    cropped = img[margin : h - margin, margin : w - margin]
-    return cropped if cropped.size else img
-
-
 def _detect_yellow_special(
     hsv_img: np.ndarray,
     tuning: ColorDecisionTuning = _DEFAULT_TUNING,
-) -> tuple[bool, float]:
-    center = _center_crop_array(hsv_img, tuning.center_margin_ratio)
+) -> tuple[bool, float, float]:
+    center = center_crop_by_ratio(hsv_img, tuning.center_margin_ratio)
 
     h_vals = center[:, :, 0]
     s_vals = center[:, :, 1]
@@ -542,7 +530,11 @@ def _detect_yellow_special(
     orange_ratio = float(np.count_nonzero(orange_like_mask)) / max(
         orange_like_mask.size, 1
     )
-    return (yellow_ratio > 0.25 and yellow_ratio > orange_ratio * 1.3), yellow_ratio
+    return (
+        yellow_ratio > 0.25 and yellow_ratio > orange_ratio * 1.3,
+        yellow_ratio,
+        orange_ratio,
+    )
 
 
 class StatsColorChecker:
@@ -615,16 +607,24 @@ class StatsColorChecker:
         debug: dict[str, object] = {}
         ranges = self._filter_ranges(allowed_colors)
         if not ranges:
-            ranges = self._ranges
+            return self._result_from_scores(
+                {},
+                debug={"no_evaluable_candidates": True},
+                has_evidence=False,
+            )
 
         hsv_img = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
         lab_img = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
 
-        is_yellow, yellow_conf = _detect_yellow_special(hsv_img, self._tuning)
-        if is_yellow and "yellow" in ranges:
-            score_map = dict.fromkeys(ranges, 0.0)
-            score_map["yellow"] = yellow_conf
-            return self._result_from_scores(score_map, debug={"shortcut": "yellow"})
+        is_yellow, yellow_ratio, orange_ratio = _detect_yellow_special(
+            hsv_img, self._tuning
+        )
+        debug["yellow_special"] = {
+            "matched": is_yellow,
+            "yellow_ratio": yellow_ratio,
+            "orange_ratio": orange_ratio,
+            "score_adjustment": 0.0,
+        }
 
         center_hsv = self._center_crop(hsv_img)
         center_lab = self._center_crop(lab_img)
@@ -715,6 +715,22 @@ class StatsColorChecker:
                 configure a threshold of 0 and ``0.0 >= 0.0`` would otherwise
                 pass every unmeasurable ROI.
         """
+        if not score_map:
+            threshold = self._default_threshold
+            return ColorQCAdvancedResult(
+                best_color="",
+                diff=1.0,
+                threshold=float(max(0.0, 1.0 - threshold)),
+                is_ok=False,
+                scores=[],
+                metrics={
+                    "score": 0.0,
+                    "threshold": float(threshold),
+                    "has_evidence": False,
+                    "ratios": {},
+                    "debug": debug,
+                },
+            )
         best_name, best_score = ("", 0.0)
         for name, score in score_map.items():
             if best_name == "" or score > best_score:
@@ -857,7 +873,7 @@ class StatsColorChecker:
     def _filter_ranges(
         self, allowed_colors: Iterable[str] | None
     ) -> dict[str, _ColorRange]:
-        if not allowed_colors:
+        if allowed_colors is None:
             return self._ranges
         selected: dict[str, _ColorRange] = {}
         for name in allowed_colors:
@@ -869,4 +885,4 @@ class StatsColorChecker:
         return selected
 
     def _center_crop(self, img: np.ndarray) -> np.ndarray:
-        return _center_crop_array(img, self._tuning.center_margin_ratio)
+        return center_crop_by_ratio(img, self._tuning.center_margin_ratio)

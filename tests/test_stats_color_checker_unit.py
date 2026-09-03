@@ -54,15 +54,74 @@ def test_check_solid_color(dummy_stats_json):
     assert bool(result.is_ok)
 
 def test_check_unsupported_color(dummy_stats_json):
-    """測試請求不支援的顏色（應回退到所有可用顏色）處理"""
+    """An explicit unsupported vocabulary must not widen to every color."""
     checker = StatsColorChecker.from_json(str(dummy_stats_json))
     # Use uint8 for black image
     img = np.zeros((10, 10, 3), dtype=np.uint8)
     result = checker.check(img, allowed_colors=["blue"])
 
-    # Fallback to all. All zeros image will match 'black'.
+    assert result.best_color == ""
+    assert result.is_ok is False
+    assert result.scores == []
+    assert result.metrics["debug"]["no_evaluable_candidates"] is True
+
+
+def test_none_allows_every_supported_color(dummy_stats_json):
+    checker = StatsColorChecker.from_json(str(dummy_stats_json))
+
+    result = checker.check(np.zeros((10, 10, 3), dtype=np.uint8), allowed_colors=None)
+
     assert result.best_color == "black"
-    assert bool(result.is_ok)
+    assert result.is_ok is True
+
+
+def test_explicit_empty_candidates_fail_closed(dummy_stats_json):
+    checker = StatsColorChecker.from_json(str(dummy_stats_json))
+
+    result = checker.check(np.zeros((10, 10, 3), dtype=np.uint8), allowed_colors=[])
+
+    assert result.best_color == ""
+    assert result.is_ok is False
+
+
+def test_yellow_special_is_diagnostic_and_does_not_skip_other_scores(tmp_path):
+    import cv2
+
+    summary = {}
+    for name, hue in {
+        "black": 0,
+        "green": 85,
+        "orange": 12,
+        "red": 3,
+        "yellow": 25,
+    }.items():
+        summary[name] = {
+            "hsv_min": [0, 0, 0],
+            "hsv_max": [179, 255, 255],
+            "hsv_mean": [hue, 180, 180],
+            "lab_min": [0, 0, 0],
+            "lab_max": [255, 255, 255],
+            "lab_mean": [128, 128, 128],
+            "coverage_mean": 1.0,
+        }
+    path = tmp_path / "five-colors.json"
+    path.write_text(json.dumps({"summary": summary}), encoding="utf-8")
+    hsv = np.zeros((100, 100, 3), dtype=np.uint8)
+    hsv[:, :] = (3, 200, 180)
+    # Survives the 15% per-edge crop as 25/70 = 35.7% Yellow evidence.
+    hsv[:, 15:40] = (25, 200, 200)
+
+    result = StatsColorChecker.from_json(path).check(
+        cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    )
+    scores = dict(result.scores)
+
+    assert result.metrics["debug"]["yellow_special"]["matched"] is True
+    assert result.metrics["debug"]["yellow_special"]["score_adjustment"] == 0.0
+    assert set(scores) == set(summary)
+    assert scores["red"] > 0.0
+    assert scores["orange"] > 0.0
+    assert scores["green"] > 0.0
 
 def test_circular_hue_distance():
     """測試色調（Hue）環形距離計算法"""
@@ -101,9 +160,6 @@ def test_orange_red_tiebreak_cannot_inflate_orange_above_black():
 def test_decision_tuning_defaults_match_module_constants():
     """未提供 tuning 時，行為必須與歷史常數完全一致（零行為變更保證）"""
     from core.stats_color_checker import (
-        BLACK_MIN_COVERAGE,
-        BLACK_S_THRESHOLD,
-        BLACK_V_THRESHOLD,
         CENTER_MARGIN_RATIO,
         DEFAULT_SAT_THRESHOLD,
         ORANGE_RED_TIE_MARGIN,
@@ -115,9 +171,6 @@ def test_decision_tuning_defaults_match_module_constants():
 
     tuning = ColorDecisionTuning.from_dict(None)
     assert tuning.sat_threshold == DEFAULT_SAT_THRESHOLD
-    assert tuning.black_s_threshold == BLACK_S_THRESHOLD
-    assert tuning.black_v_threshold == BLACK_V_THRESHOLD
-    assert tuning.black_min_coverage == BLACK_MIN_COVERAGE
     assert (tuning.yellow_h_min, tuning.yellow_h_max) == YELLOW_H_RANGE
     assert tuning.yellow_s_min == YELLOW_S_MIN
     assert tuning.yellow_v_min == YELLOW_V_MIN
@@ -132,28 +185,7 @@ def test_decision_tuning_from_dict_ignores_unknown_keys():
         {"yellow_h_min": 18, "not_a_real_knob": 1.0, "black_s_threshold": None}
     )
     assert tuning.yellow_h_min == 18.0
-    assert tuning.black_s_threshold == 50.0  # None -> default kept
-
-
-def test_manual_black_tuning_cannot_override_the_learned_baseline(dummy_stats_json):
-    """Black is decided by its baseline rather than a product-wide shortcut."""
-    from core.stats_color_checker import ColorDecisionTuning
-
-    # V=100 的深灰圖：預設 black_v_threshold=80 不會判黑
-    gray_bgr = np.full((20, 20, 3), 100, dtype=np.uint8)
-
-    default_checker = StatsColorChecker.from_json(str(dummy_stats_json))
-    default_result = default_checker.check(gray_bgr)
-
-    relaxed = ColorDecisionTuning.from_dict({"black_v_threshold": 120})
-    relaxed_checker = StatsColorChecker.from_json(
-        str(dummy_stats_json), tuning=relaxed
-    )
-    relaxed_result = relaxed_checker.check(gray_bgr)
-
-    assert relaxed_result.is_ok is False
-    assert default_result.is_ok is False
-    assert relaxed_result.metrics["debug"]["black_baseline"]["raw_ratio"] == 0.0
+    assert not hasattr(tuning, "black_s_threshold")
 
 
 # ---------------------------------------------------------------------------
