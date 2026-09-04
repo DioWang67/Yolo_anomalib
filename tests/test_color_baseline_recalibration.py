@@ -112,9 +112,19 @@ def test_rebuilds_all_five_colors_with_holdout(tmp_path: Path) -> None:
     assert build.report_payload["limitations"]
 
 
-def test_isolated_color_outlier_photo_is_excluded_from_all_colors(
+def test_wrong_hue_photo_is_excluded_from_only_its_own_color(
     tmp_path: Path,
 ) -> None:
+    """One crop whose content does not match its own color label never
+    reaches the statistical (Lab-distance) outlier filter at all: the
+    dominant-hue search that builds a color's statistics is gated to that
+    color's own runtime hue window first (``_expected_hue_mask``), so a
+    green crop mislabeled "Yellow" contributes no Lab feature for the
+    z-score filter to catch and no pixel for Yellow's stats to average in.
+    The other four colors' crops for the same sample_id are unaffected --
+    only the one wrong label was ever a problem, not the photo itself, so
+    there is nothing here for a global sample_id exclusion to do.
+    """
     evidence = list(_evidence())
     for color in DEFAULT_COLORS:
         evidence.append(
@@ -133,17 +143,29 @@ def test_isolated_color_outlier_photo_is_excluded_from_all_colors(
         evidence=tuple(evidence),
     )
 
-    assert build.outlier_filter.status == "AUTO_EXCLUDED"
-    assert build.outlier_filter.excluded_sample_ids == ("ACC-OUTLIER",)
-    assert all(report.total_crops == 35 for report in build.color_reports)
-    persisted = build.report_payload["statistical_outlier_filter"]
-    assert persisted["excluded_sample_ids"] == ["ACC-OUTLIER"]
-    assert build.model_payload["recalibration"][
-        "statistical_outlier_filter"
-    ] == persisted
+    assert build.outlier_filter.status == "NO_OUTLIERS"
+    assert build.outlier_filter.excluded_sample_ids == ()
+    assert all(report.total_crops == 36 for report in build.color_reports)
+    assert "ACC-OUTLIER" in build.model_payload["summary"]["Yellow"]["skipped_crops"]
+    yellow_report = next(
+        report for report in build.color_reports if report.color == "Yellow"
+    )
+    assert yellow_report.state == "REBUILT"
 
 
 def test_batch_wide_shift_is_not_mass_excluded(tmp_path: Path) -> None:
+    """A wrong-hue batch large enough to look like a genuine shift, not one
+    outlier photo, still cannot buy Yellow a passing rebuild. The hue gate
+    drops all four bad crops before they ever reach the Lab-feature outlier
+    scoring, so there is no systematic-shift signal for the z-score filter
+    to (correctly) decline to auto-exclude -- the batch is simply evidence
+    Yellow's statistics were never built from. What still catches it is the
+    holdout split, which is not hue-gated: a wrong-hue crop that lands there
+    is scored against the freshly built (clean) Yellow statistics like any
+    other holdout crop, and reliably misses, which is what pulls Yellow
+    under the absolute holdout-accuracy floor and keeps the whole build
+    INCOMPLETE.
+    """
     evidence = list(_evidence())
     for index in range(4):
         evidence.append(
@@ -160,19 +182,24 @@ def test_batch_wide_shift_is_not_mass_excluded(tmp_path: Path) -> None:
         evidence=tuple(evidence),
     )
 
-    assert build.outlier_filter.status == "SYSTEMATIC_SHIFT_NOT_FILTERED"
+    assert build.outlier_filter.status == "NO_OUTLIERS"
     assert build.outlier_filter.excluded_sample_ids == ()
     yellow_finding = next(
         finding
         for finding in build.outlier_filter.findings
         if finding.color == "Yellow"
     )
-    assert yellow_finding.status == "SYSTEMATIC_SHIFT_NOT_FILTERED"
-    assert len(yellow_finding.candidate_sample_ids) == 4
+    # 35 valid Lab features, not 39: all four bad crops carry no pixel inside
+    # Yellow's own hue gate, so none of them ever reach the z-score scoring.
+    assert yellow_finding.status == "NO_OUTLIERS"
+    assert yellow_finding.sample_count == 35
+    assert yellow_finding.candidate_sample_ids == ()
     yellow_report = next(
         report for report in build.color_reports if report.color == "Yellow"
     )
     assert yellow_report.total_crops == 39
+    assert build.status == "INCOMPLETE"
+    assert "ABSOLUTE_HOLDOUT_ACCURACY_BELOW_MINIMUM" in yellow_report.review_reasons
 
 
 def test_unsafe_color_update_is_rejected_and_old_baseline_is_preserved(
@@ -198,23 +225,24 @@ def test_unsafe_color_update_is_rejected_and_old_baseline_is_preserved(
     )
 
     yellow = next(item for item in build.color_reports if item.color == "Yellow")
-    # Relative safety preserved the old baseline, but the new absolute floor
-    # correctly prevents that known-bad result from being marked READY.
+    # Every training crop labeled Yellow is actually green, so none of them
+    # carries a pixel inside Yellow's own hue gate: the hue-gated sampler
+    # (_expected_hue_mask) never gets far enough to propose a candidate for
+    # the drift/regression safety gate to reject, and PRESERVED_INSUFFICIENT
+    # -- the same state "too few crops" uses -- is the correct, one-level-
+    # earlier way to describe "this evidence cannot build a Yellow baseline
+    # at all". The old baseline is still preserved either way, and the
+    # holdout split (not hue-gated) still consistently misses these green
+    # crops against it, which is what keeps the build INCOMPLETE.
     assert build.status == "INCOMPLETE"
-    assert yellow.state == "PRESERVED_SAFETY_REJECTED"
+    assert yellow.state == "PRESERVED_INSUFFICIENT"
     assert build.model_payload["summary"]["Yellow"] == original["summary"]["Yellow"]
     assert yellow.hue_drift == pytest.approx(0.0)
     assert yellow.lab_drift == pytest.approx(0.0)
     assert "Hue" not in yellow.note
     assert "Lab" not in yellow.note
-    assert yellow.rejection_reasons
-    persisted = next(
-        item
-        for item in build.report_payload["color_reports"]
-        if item["color"] == "Yellow"
-    )
-    assert persisted["rejected_proposal"]["reasons"]
-    assert "Yellow" in build.report_payload["preserved_by_safety"]
+    assert "ABSOLUTE_HOLDOUT_ACCURACY_BELOW_MINIMUM" in yellow.review_reasons
+    assert "Yellow" in build.report_payload["preserved_colors"]
     assert build.report_payload["absolute_accuracy_failures"] == ["Yellow"]
 
 
@@ -335,7 +363,19 @@ def test_rebuild_records_and_validates_with_resolved_station_tuning(
     assert build.report_payload["color_decision_tuning"] == expected
 
 
-def test_rebuild_and_runtime_share_center_crop_geometry(monkeypatch) -> None:
+def test_rebuild_samples_the_whole_evidence_crop_not_a_center_sub_region(
+    monkeypatch,
+) -> None:
+    """Rebuild and runtime must agree on which pixels count.
+
+    The runtime now measures the whole detection box, restricted to its
+    largest connected match, rather than a fixed geometric sub-crop -- so a
+    baseline's statistics have to be measured over that same whole box.
+    ``_sample_color_pixels`` no longer center-crops before resizing; keeping
+    a center-crop here would leave rebuild and runtime disagreeing about
+    which pixels count, the same class of mismatch stats-robust-v5 already
+    existed to fix once.
+    """
     image = np.zeros((100, 300, 3), dtype=np.uint8)
     image[:, :] = (0, 0, 255)
     captured: dict[str, tuple[int, ...]] = {}
@@ -348,10 +388,7 @@ def test_rebuild_and_runtime_share_center_crop_geometry(monkeypatch) -> None:
     monkeypatch.setattr(recalibration.cv2, "resize", capture_resize)
     recalibration._sample_color_pixels(image, "Red", sample_size=64)
 
-    from core.color_sampling import center_crop_by_ratio
-
-    assert center_crop_by_ratio(image, 0.15).shape == (70, 210, 3)
-    assert captured["shape"] == (70, 210, 3)
+    assert captured["shape"] == image.shape
 
 
 def test_candidate_artifact_records_the_runtime_roi_geometry(tmp_path: Path) -> None:
@@ -463,7 +500,17 @@ def test_collects_only_known_component_crops_from_confirmed_ok() -> None:
     assert np.mean(evidence[0].image_bgr[:, :, 2]) > 100
 
 
-def test_baseline_collection_uses_the_shared_color_roi_policy() -> None:
+def test_baseline_collection_does_not_apply_the_roi_policy_inset() -> None:
+    """Evidence must come from the same whole box the runtime now measures.
+
+    The runtime measures the whole detection box restricted to its largest
+    connected match, not a fixed geometric inset, so applying
+    ``color_roi_policy``'s inset here would again measure a baseline against
+    a region the runtime does not score against -- the same class of mismatch
+    stats-robust-v5 already existed to fix once. ``roi_policy`` is still
+    accepted (and still recorded into the baseline's metadata elsewhere), but
+    no longer applied to the evidence crop itself.
+    """
     evidence = collect_confirmed_ok_evidence(
         repository=_Repository(),
         inference_service=_Service(),
@@ -477,7 +524,7 @@ def test_baseline_collection_uses_the_shared_color_roi_policy() -> None:
     )
 
     assert len(evidence) == 1
-    assert evidence[0].image_bgr.shape == (40, 24, 3)
+    assert evidence[0].image_bgr.shape == (40, 40, 3)
 
 
 def test_correct_predictions_requires_threshold_acceptance_and_color_match() -> None:

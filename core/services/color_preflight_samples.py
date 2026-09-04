@@ -9,18 +9,20 @@ falling percentage.
 So this module produces, per colour, the two things an operator can read
 directly:
 
-* **the crop that was measured** -- the saved detection crop with the region
-  the colour check actually used marked on it, because the saved crop is the
-  whole bounding box while the measurement uses the station's ROI inset and
-  then a centred sub-crop; and
+* **the crop that was measured** -- the saved detection crop, veiled outside
+  the largest connected region that matches the colour's envelope, because
+  the whole box is what stats-robust-v6 measures and a stray same-hue pixel
+  elsewhere in it is not the wire; and
 * **where its pixels sit inside the baseline's envelope** -- today's cloud
   against the recorded min/max box, the 10th-to-90th percentile core, and the
   baseline mean.
 
-Both geometries come from the production helpers (``extract_bbox_roi`` and
-``center_crop_by_ratio``) rather than being recomputed here. A picture of the
-wrong region is worse than no picture, and this file existing at all is only
-justified while it shows what the line measured.
+The blob selection mirrors ``core.stats_color_checker``'s
+``largest_matching_blob`` rather than recomputing its own rule. A picture of
+the wrong region is worse than no picture, and this file existing at all is
+only justified while it shows what the line measured -- there is no longer a
+fixed geometric sub-crop to mark instead, so v6 stations have nothing smaller
+than the whole box to isolate here.
 
 No Qt here: this is measurement, and the painting lives in the GUI layer.
 """
@@ -34,8 +36,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from core.color_sampling import center_crop_by_ratio
-from core.services.slot_roi import ColorRoiPolicy, extract_bbox_roi
+from core.stats_color_checker import DEFAULT_MIN_BLOB_PIXELS, largest_matching_blob
 
 #: Hue is what separates red from orange from yellow, so it is the axis worth
 #: watching -- unless the baseline barely constrains it, which is what an
@@ -73,8 +74,9 @@ class ColorGamutSample:
     color: str
     #: The saved detection crop, BGR, exactly as the station stored it.
     crop_bgr: np.ndarray | None
-    #: The region of ``crop_bgr`` the colour check measured, as
-    #: ``(x1, y1, x2, y2)``. ``None`` when the policy rejected the box.
+    #: The region of ``crop_bgr`` the colour check measures, as
+    #: ``(x1, y1, x2, y2)`` -- the whole crop under v6. ``None`` only when
+    #: there was no usable crop at all.
     measured_box: tuple[int, int, int, int] | None
     #: Measured pixels as HSV rows, thinned for plotting.
     cloud_hsv: np.ndarray | None
@@ -85,14 +87,15 @@ class ColorGamutSample:
     core_min: tuple[float, float, float] | None
     core_max: tuple[float, float, float] | None
     baseline_mean: tuple[float, float, float] | None
-    #: Per-pixel mask over the measured region: True where the pixel falls
-    #: inside the baseline's recorded envelope. Shaped like the region, so it
-    #: can be drawn over the marked box -- which is how "the box is half
-    #: background" becomes visible instead of inferred.
+    #: The largest connected region matching the baseline's envelope, shaped
+    #: like the crop -- empty when no such region was found. Drawn as a veil
+    #: over everything outside it, which is how "the box is mostly board" or
+    #: "the wire fell apart into two pieces" becomes visible instead of
+    #: inferred.
     hit_mask: np.ndarray | None = None
     #: Pixels the runtime actually divides by. For a chromatic colour that is
     #: the saturation-gated subset; for black it is the whole region, because
-    #: black is scored on the whole crop against its learned coverage.
+    #: black is scored on the whole crop against its own matched share.
     counted_mask: np.ndarray | None = None
 
     @property
@@ -101,19 +104,15 @@ class ColorGamutSample:
 
     @property
     def hit_fraction(self) -> float | None:
-        """Share of what the runtime divides by that is inside the envelope.
+        """The matched region's share of what the runtime divides by.
 
         The denominator is the runtime's, not the whole region: a chromatic
         colour is scored over the saturation-gated pixels while black is scored
         over the whole crop, so reporting one share for both would describe a
         calculation the line does not perform for four colours out of five.
-
-        Not the checker's ``coverage_mean`` either: that was measured with the
-        calibration's dominant-hue mask, and this is a plain envelope test, so
-        the two are not comparable and are never shown as if they were. What
-        this is good for is its own trend -- computed the same way every shift,
-        a falling share means the marked box is catching less of the wire than
-        it used to, which is what a part shifting in the fixture looks like.
+        There is no separate ``coverage_mean`` to compare against any more --
+        v6 retired it -- so this figure and the runtime's own score are the
+        same shape of number, computed the same way.
         """
         if self.hit_mask is None or self.hit_mask.size == 0:
             return None
@@ -303,37 +302,18 @@ def _thin(rows: np.ndarray, limit: int = _MAX_CLOUD_POINTS) -> np.ndarray:
 
 def measured_region(
     crop_bgr: np.ndarray,
-    roi_policy: ColorRoiPolicy,
-    center_margin_ratio: float,
 ) -> tuple[np.ndarray, tuple[int, int, int, int]] | None:
-    """Return the pixels the colour check measured, and where they came from.
+    """Return the pixels the colour check measures, and their extent.
 
-    The saved crop is the whole detection box, so the station's inset and the
-    centred sub-crop are applied here -- through the same two helpers the
-    runtime uses, because a marked region that does not match the measurement
-    would be a picture of a lie.
+    That is the whole saved detection crop: v6 measures the whole box
+    restricted to its largest connected match, not a fixed geometric
+    sub-crop, so there is no smaller region to isolate here any more. What
+    changes per colour is ``hit_mask`` in ``build_gamut_samples``, not this.
     """
     if not isinstance(crop_bgr, np.ndarray) or crop_bgr.size == 0:
         return None
     height, width = crop_bgr.shape[:2]
-    inset = extract_bbox_roi(
-        crop_bgr, [0, 0, width, height], policy=roi_policy
-    )
-    if inset is None or inset.size == 0:
-        return None
-    inset_x = int(round(width * roi_policy.inset_x_ratio))
-    inset_y = int(round(height * roi_policy.inset_y_ratio))
-    measured = center_crop_by_ratio(inset, center_margin_ratio)
-    if measured.size == 0:
-        return None
-    # center_crop_by_ratio trims the same fraction from each edge, and returns
-    # the input untouched when it cannot; recovering the offset from the shapes
-    # keeps this in step with it rather than restating its rule.
-    margin_y = (inset.shape[0] - measured.shape[0]) // 2
-    margin_x = (inset.shape[1] - measured.shape[1]) // 2
-    x1 = inset_x + margin_x
-    y1 = inset_y + margin_y
-    return measured, (x1, y1, x1 + measured.shape[1], y1 + measured.shape[0])
+    return crop_bgr, (0, 0, width, height)
 
 
 def build_gamut_samples(
@@ -342,17 +322,16 @@ def build_gamut_samples(
     detections: Sequence[Mapping[str, object]],
     color_items: Sequence[Mapping[str, object]],
     baseline_summary: Mapping[str, object],
-    roi_policy: ColorRoiPolicy,
-    center_margin_ratio: float,
     sat_threshold: float = 0.0,
+    min_blob_pixels: float = DEFAULT_MIN_BLOB_PIXELS,
 ) -> dict[str, ColorGamutSample]:
     """Build one sample per colour that was read, keyed by colour name.
 
     Crops are matched to colour measurements by position: the station writes
     one crop per detection in detection order, and the colour check reports one
-    item per detection in the same order. A colour read twice keeps the crop
-    whose measured region is smallest -- the tighter box is the one with least
-    room to spare, and this panel is about what is closest to the edge.
+    item per detection in the same order. A colour read twice keeps the
+    reading with the least matching evidence -- the one closest to failing,
+    and this panel is about what is closest to the edge.
     """
     envelopes = {
         str(name).casefold(): value
@@ -378,11 +357,7 @@ def build_gamut_samples(
             crop_class = _crop_class(path)
             if not declared or crop_class.casefold() == declared.casefold():
                 crop_bgr = cv2.imread(str(path))
-        region = (
-            measured_region(crop_bgr, roi_policy, center_margin_ratio)
-            if crop_bgr is not None
-            else None
-        )
+        region = measured_region(crop_bgr) if crop_bgr is not None else None
         stats = envelopes.get(observed.casefold(), {})
         envelope_min = _triple(stats.get("hsv_min"))
         envelope_max = _triple(stats.get("hsv_max"))
@@ -395,6 +370,29 @@ def build_gamut_samples(
         if region is not None:
             measured, measured_box = region
             hsv = cv2.cvtColor(measured, cv2.COLOR_BGR2HSV)
+            is_achromatic = axis == AXIS_SATURATION_VALUE
+            sat_mask = (
+                np.ones(hsv.shape[:2], dtype=bool)
+                if is_achromatic or sat_threshold <= 0
+                else hsv[:, :, 1] >= float(sat_threshold)
+            )
+            counted_mask = sat_mask
+            envelope_match = _envelope_mask(hsv, envelope_min, envelope_max)
+            # Restricted to the largest connected match, mirroring
+            # ``core.stats_color_checker``'s own blob selection: a stray
+            # pixel elsewhere in the box that happens to share this colour's
+            # envelope is not the wire, and used to inflate the picture the
+            # same way it used to inflate the score before v6.
+            blob = (
+                largest_matching_blob(
+                    envelope_match & sat_mask, min_blob_pixels
+                )
+                if envelope_match is not None
+                else None
+            )
+            hit_mask = (
+                blob if blob is not None else np.zeros(hsv.shape[:2], dtype=bool)
+            )
             rows = hsv.reshape(-1, 3).astype(np.float32)
             # Mirror the runtime's own first pass over these pixels: it drops
             # everything below the saturation threshold before scoring a
@@ -402,17 +400,11 @@ def build_gamut_samples(
             # on the unfiltered crop because black *is* the desaturated case.
             # Without this the cloud is mostly the board behind the wire, and a
             # picture of the background is worse than no picture.
-            if axis != AXIS_SATURATION_VALUE and sat_threshold > 0:
+            if not is_achromatic and sat_threshold > 0:
                 kept = rows[rows[:, 1] >= float(sat_threshold)]
                 if len(kept):
                     rows = kept
             cloud = _thin(rows)
-            hit_mask = _envelope_mask(hsv, envelope_min, envelope_max)
-            counted_mask = (
-                np.ones(hsv.shape[:2], dtype=bool)
-                if axis == AXIS_SATURATION_VALUE or sat_threshold <= 0
-                else hsv[:, :, 1] >= float(sat_threshold)
-            )
         sample = ColorGamutSample(
             color=observed,
             crop_bgr=crop_bgr,
@@ -428,14 +420,22 @@ def build_gamut_samples(
             counted_mask=counted_mask,
         )
         existing = samples.get(observed)
-        if existing is None or _box_area(measured_box) < _box_area(
-            existing.measured_box
-        ):
+        if existing is None or _worse(sample, existing):
             samples[observed] = sample
     return samples
 
 
-def _box_area(box: tuple[int, int, int, int] | None) -> int:
-    if box is None:
-        return 1 << 30
-    return max(0, box[2] - box[0]) * max(0, box[3] - box[1])
+def _worse(candidate: ColorGamutSample, existing: ColorGamutSample) -> bool:
+    """Whether ``candidate`` has less matching evidence than ``existing``.
+
+    A reading with no evidence at all (no crop, or no hit fraction to
+    compute) is treated as the worse of the two, so a real reading is never
+    displaced by one that could not be measured.
+    """
+    candidate_hit = candidate.hit_fraction
+    existing_hit = existing.hit_fraction
+    if candidate_hit is None:
+        return False
+    if existing_hit is None:
+        return True
+    return candidate_hit < existing_hit

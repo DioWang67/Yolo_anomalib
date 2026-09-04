@@ -24,6 +24,12 @@ YELLOW_V_MIN = 150
 ORANGE_RED_TIE_MARGIN = 0.15
 CENTER_MARGIN_RATIO = 0.15
 DEFAULT_RATIO_THRESHOLD = 0.35
+#: Below this many pixels, a connected match region is treated as noise
+#: rather than the wire. Deliberately small: a real deployment threshold
+#: needs measuring against real crops before it can move, same as any other
+#: value compared against a threshold (see the color-threshold-headroom
+#: lesson this project has already paid for twice).
+DEFAULT_MIN_BLOB_PIXELS = 8.0
 
 # Hue/S/V gates for the colors that cannot be expressed as a plain box in the
 # stats summary: red wraps the 0/179 seam, and orange/green need tighter gates
@@ -43,7 +49,13 @@ GREEN_S_MIN = 75
 GREEN_V_RANGE = (30, 100)
 
 COLOR_CONF_THRESHOLDS = {
-    "black": 0.45,
+    # 0.45 was calibrated for the retired coverage_mean-normalized Black
+    # score; the current largest-connected-blob fraction of the whole box
+    # never approached it (430 real Black crops: mean 0.452, min 0.124).
+    # Measured directly against 861 non-Black crops scored through Black's
+    # own envelope (mean 0.048, max 0.407), TPR/FPR are flat at 99.77%/0.23%
+    # across thr in [0.15, 0.22]; 0.20 sits at the center of that plateau.
+    "black": 0.20,
     "yellow": 0.20,
     "orange": 0.25,
     "red": 0.25,
@@ -79,6 +91,11 @@ class ColorDecisionTuning:
     green_s_min: float = GREEN_S_MIN
     green_v_min: float = GREEN_V_RANGE[0]
     green_v_max: float = GREEN_V_RANGE[1]
+    #: Floor on the largest connected matching region, in pixels. Below this,
+    #: a color is unmeasurable rather than scored from noise -- the same
+    #: distinction ``insufficient_pixels`` already draws, just against a
+    #: region size instead of a whole-crop pixel count.
+    min_blob_pixels: float = DEFAULT_MIN_BLOB_PIXELS
 
     @classmethod
     def from_dict(cls, data: dict | None) -> ColorDecisionTuning:
@@ -286,19 +303,63 @@ def _hue_in_range(h_vals: np.ndarray, hue_min: float, hue_max: float) -> np.ndar
     return (h_vals >= lo) | (h_vals <= hi)
 
 
+def largest_matching_blob(
+    match_mask: np.ndarray, min_pixels: float
+) -> np.ndarray | None:
+    """The largest 4-connected region of ``match_mask``, or ``None`` below floor.
+
+    A detection box is scored for one known expected color, not classified
+    from scratch, so this never has to guess *which* color a region is -- only
+    which pixels, among those already matching that color's envelope, belong
+    to one coherent object rather than to scattered, unrelated pixels
+    elsewhere in the box (board silkscreen, a reflection, a neighboring wire).
+    A wire's position and curve vary board to board; a fixed geometric crop
+    used to exclude that scattered matter by luck, when the wire happened to
+    sit where the crop assumed it would. This excludes it by construction
+    instead, which is what let a real board's fixed-crop measurement collapse
+    to near zero while the wire was plainly present a few pixels outside the
+    sampled window.
+
+    ``min_pixels`` rejects a match too small to trust -- a handful of stray
+    pixels sharing a hue is not a wire -- the same distinction a whole-region
+    pixel-count floor already draws elsewhere in this module.
+    """
+    if match_mask.size == 0:
+        return None
+    count, labels = cv2.connectedComponents(
+        match_mask.astype(np.uint8), connectivity=4
+    )
+    if count <= 1:
+        return None
+    sizes = np.bincount(labels.ravel())
+    sizes[0] = 0  # label 0 is background, never a candidate
+    largest_label = int(np.argmax(sizes))
+    if sizes[largest_label] < min_pixels:
+        return None
+    return labels == largest_label
+
+
 def _improved_match_ratio(
-    hsv_vals: np.ndarray,
-    lab_vals: np.ndarray,
+    hsv_img: np.ndarray,
+    lab_img: np.ndarray,
     color_range: _ColorRange,
     color_name: str,
     tuning: ColorDecisionTuning = _DEFAULT_TUNING,
 ) -> float:
-    if hsv_vals.size == 0 or lab_vals.size == 0:
+    """Score a chromatic color from its largest connected matching region.
+
+    ``hsv_img``/``lab_img`` are the whole detection box in its own 2D shape,
+    not a pre-flattened, pre-cropped pixel list: connected-component selection
+    needs the spatial layout a flat array throws away. See
+    ``largest_matching_blob`` for why a region is selected at all, instead of
+    scoring every matching pixel found anywhere in the box.
+    """
+    if hsv_img.size == 0 or lab_img.size == 0:
         return 0.0
 
-    h_vals = hsv_vals[:, 0]
-    s_vals = hsv_vals[:, 1]
-    v_vals = hsv_vals[:, 2]
+    h_vals = hsv_img[:, :, 0]
+    s_vals = hsv_img[:, :, 1]
+    v_vals = hsv_img[:, :, 2]
 
     if color_name == "red":
         h_mask = (
@@ -336,19 +397,49 @@ def _improved_match_ratio(
             & (v_vals <= color_range.hsv_max[2])
         )
 
-    hsv_ratio = float(np.count_nonzero(h_mask)) / len(hsv_vals)
+    sat_mask = s_vals >= tuning.sat_threshold
+    candidate_pixels = int(np.count_nonzero(sat_mask))
+    if candidate_pixels == 0:
+        return 0.0
+
+    blob_mask = largest_matching_blob(h_mask & sat_mask, tuning.min_blob_pixels)
+    if blob_mask is not None:
+        hsv_ratio = float(np.count_nonzero(blob_mask)) / candidate_pixels
+        measured_mask = blob_mask
+    else:
+        # No pixel anywhere in the box satisfied this color's hue/sat/value
+        # envelope at all, so there is no coherent region to restrict to --
+        # this is not the contamination problem blob selection exists for (a
+        # wire sitting somewhere a fixed crop did not expect); it is a
+        # genuinely weak hue signal, real desaturation being the recorded
+        # case. The LAB and hue-mean terms below still carry information a
+        # zero hsv_ratio does not erase, so they fall back to the whole
+        # candidate pool rather than being discarded with it.
+        hsv_ratio = 0.0
+        measured_mask = sat_mask
+
+    blob_hsv = hsv_img[measured_mask]
+    blob_lab = lab_img[measured_mask]
 
     lab_mask = (
-        (lab_vals[:, 0] >= color_range.lab_min[0])
-        & (lab_vals[:, 0] <= color_range.lab_max[0])
-        & (lab_vals[:, 1] >= color_range.lab_min[1])
-        & (lab_vals[:, 1] <= color_range.lab_max[1])
-        & (lab_vals[:, 2] >= color_range.lab_min[2])
-        & (lab_vals[:, 2] <= color_range.lab_max[2])
+        (blob_lab[:, 0] >= color_range.lab_min[0])
+        & (blob_lab[:, 0] <= color_range.lab_max[0])
+        & (blob_lab[:, 1] >= color_range.lab_min[1])
+        & (blob_lab[:, 1] <= color_range.lab_max[1])
+        & (blob_lab[:, 2] >= color_range.lab_min[2])
+        & (blob_lab[:, 2] <= color_range.lab_max[2])
     )
-    lab_ratio = float(np.count_nonzero(lab_mask)) / len(lab_vals)
+    # Same denominator as hsv_ratio, not the blob's own size: dividing by the
+    # blob would make lab_ratio measure "of the pixels I already decided are
+    # this color by hue, how many also agree by LAB" -- trivially close to
+    # 1.0 whenever hue and LAB happen to correlate, which inflated an
+    # otherwise-ordinary minority region past a majority one whose LAB
+    # envelope happened not to include this exact rendering. Keeping the
+    # whole candidate pool as the denominator keeps lab_ratio bounded by
+    # hsv_ratio, an independent check rather than a free bonus.
+    lab_ratio = float(np.count_nonzero(lab_mask)) / candidate_pixels
 
-    mean_h = circular_hue_mean(h_vals)
+    mean_h = circular_hue_mean(blob_hsv[:, 0])
     hue_similarity: float | None = None
     if color_range.hsv_mean is not None:
         expected_h = float(color_range.hsv_mean[0])
@@ -357,8 +448,8 @@ def _improved_match_ratio(
 
     lab_chroma_similarity: float | None = None
     if color_range.lab_mean is not None and color_name in {"orange", "red"}:
-        mean_a = float(np.mean(lab_vals[:, 1]))
-        mean_b = float(np.mean(lab_vals[:, 2]))
+        mean_a = float(np.mean(blob_lab[:, 1]))
+        mean_b = float(np.mean(blob_lab[:, 2]))
         expected_a = float(color_range.lab_mean[1])
         expected_b = float(color_range.lab_mean[2])
         lab_chroma_dist = np.sqrt(
@@ -399,18 +490,30 @@ def _black_baseline_match(
     hsv_img: np.ndarray,
     lab_img: np.ndarray,
     color_range: _ColorRange,
-) -> tuple[float, float, float]:
-    """Score Black from its learned S/V and LAB envelope.
+    tuning: ColorDecisionTuning = _DEFAULT_TUNING,
+) -> tuple[float, int]:
+    """Score Black from its largest connected S/V+LAB matching region.
 
     Hue is intentionally ignored because it is undefined for achromatic
-    pixels. ``coverage_mean`` records how much of a normal Black crop matched
-    the baseline during calibration; normalizing by it turns that learned crop
-    coverage into a stable confidence with useful headroom.
+    pixels, and unlike every other color this is not saturation-gated first --
+    black *is* the desaturated case. Otherwise this is the same measurement as
+    every chromatic color now gets: the whole detection box, restricted to its
+    largest connected match, because black's wire varies board to board the
+    same way a chromatic one does.
 
-    Returns ``(score, raw_ratio, reference_coverage)``.
+    The score is that region's own share of the whole box. There is no
+    baseline coverage figure to divide by any more: ``coverage_mean`` recorded
+    how much of a *fixed, differently framed* crop matched during calibration,
+    which is a property of that crop's geometry, not of black -- and was
+    already the first fragility this project paid for once. A region already
+    isolated by connectivity does not need a second, geometry-coupled number
+    to normalize away contamination it no longer contains.
+
+    Returns ``(score, blob_pixel_count)``; the count is diagnostic, kept for
+    the same reason ``debug["black_baseline"]`` records it today.
     """
     if hsv_img.size == 0 or lab_img.size == 0:
-        return 0.0, 0.0, 1.0
+        return 0.0, 0
     sv_match = (
         (hsv_img[:, :, 1] >= color_range.hsv_min[1])
         & (hsv_img[:, :, 1] <= color_range.hsv_max[1])
@@ -421,16 +524,13 @@ def _black_baseline_match(
         (lab_img >= color_range.lab_min) & (lab_img <= color_range.lab_max),
         axis=2,
     )
-    raw_ratio = float(np.mean(sv_match & lab_match))
-    reference_coverage = color_range.coverage_mean
-    if (
-        reference_coverage is None
-        or not np.isfinite(reference_coverage)
-        or not 0.0 < reference_coverage <= 1.0
-    ):
-        return 0.0, raw_ratio, 0.0
-    score = min(1.0, raw_ratio / max(reference_coverage, 1e-6))
-    return score, raw_ratio, reference_coverage
+    blob_mask = largest_matching_blob(sv_match & lab_match, tuning.min_blob_pixels)
+    if blob_mask is None:
+        return 0.0, 0
+    blob_pixels = int(np.count_nonzero(blob_mask))
+    total_pixels = hsv_img.shape[0] * hsv_img.shape[1]
+    score = float(blob_pixels) / float(total_pixels) if total_pixels else 0.0
+    return min(1.0, score), blob_pixels
 
 
 def _separate_orange_red(
@@ -626,23 +726,26 @@ class StatsColorChecker:
             "score_adjustment": 0.0,
         }
 
-        center_hsv = self._center_crop(hsv_img)
-        center_lab = self._center_crop(lab_img)
-        black_measurement: tuple[float, float, float] | None = None
+        # No more center-crop: every color, black included, is now measured
+        # over the whole detection box and restricted to its own largest
+        # connected match. A fixed geometric sub-crop assumed the wire sits in
+        # a fixed fraction of the box, which real boards do not honor -- see
+        # ``largest_matching_blob`` and ``_black_baseline_match``.
+        black_measurement: tuple[float, int] | None = None
         if "black" in ranges:
             black_measurement = _black_baseline_match(
-                center_hsv,
-                center_lab,
+                hsv_img,
+                lab_img,
                 ranges["black"],
+                self._tuning,
             )
             debug["black_baseline"] = {
                 "score": black_measurement[0],
-                "raw_ratio": black_measurement[1],
-                "reference_coverage": black_measurement[2],
+                "blob_pixels": black_measurement[1],
             }
-        sat_mask = center_hsv[:, :, 1] >= self._tuning.sat_threshold
-        valid_hsv = center_hsv[sat_mask].reshape(-1, 3)
-        valid_lab = center_lab[sat_mask].reshape(-1, 3)
+        sat_mask = hsv_img[:, :, 1] >= self._tuning.sat_threshold
+        valid_hsv = hsv_img[sat_mask].reshape(-1, 3)
+        valid_lab = lab_img[sat_mask].reshape(-1, 3)
         if len(valid_hsv) == 0 or len(valid_lab) == 0:
             # Nothing cleared the saturation gate, so no color was measured.
             # This branch used to answer with a hard-coded ``black: 0.7`` --
@@ -657,9 +760,7 @@ class StatsColorChecker:
                 score_map["black"] = black_measurement[0]
             debug["no_chromatic_pixels"] = True
             has_black_evidence = bool(
-                black_measurement is not None
-                and black_measurement[1] > 0.0
-                and black_measurement[2] > 0.0
+                black_measurement is not None and black_measurement[1] > 0
             )
             if not has_black_evidence:
                 debug["no_pixels"] = True
@@ -675,8 +776,8 @@ class StatsColorChecker:
                 scores[name] = black_measurement[0]
             else:
                 scores[name] = _improved_match_ratio(
-                    valid_hsv,
-                    valid_lab,
+                    hsv_img,
+                    lab_img,
                     color_range,
                     name,
                     self._tuning,
@@ -883,6 +984,3 @@ class StatsColorChecker:
             if key in self._ranges:
                 selected[key] = self._ranges[key]
         return selected
-
-    def _center_crop(self, img: np.ndarray) -> np.ndarray:
-        return center_crop_by_ratio(img, self._tuning.center_margin_ratio)

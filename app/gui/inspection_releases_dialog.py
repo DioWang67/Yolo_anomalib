@@ -390,15 +390,8 @@ class InspectionReleasesDialog(QDialog):
         if not store.root.is_dir():
             return ()
         revisions = []
-        for scope_root in store.root.iterdir():
-            if (
-                not scope_root.is_dir()
-                or scope_root.name == "active"
-                or scope_root.name.startswith(".")
-            ):
-                continue
+        for scope in store.iter_scopes():
             try:
-                scope = store.scope_for_hash(scope_root.name)
                 if (
                     scope.product,
                     scope.area,

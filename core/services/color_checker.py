@@ -411,10 +411,17 @@ class ColorCheckerService:
             # assertion failure that escapes the whole pipeline. One unusable
             # detection turned into a frame-wide ERROR, and in the async
             # pipeline into a line stop. Fail this item closed instead.
+            #
+            # The inset ratios in ``self._roi_policy`` are not applied here:
+            # the checker now measures the whole box itself, restricted to its
+            # largest connected matching region, because a fixed geometric
+            # inset assumes the wire sits in a fixed fraction of the box and
+            # real boards do not honor that assumption. Only ``min_size``
+            # still applies, to reject a box too small to measure at all.
             roi = extract_bbox_roi(
                 proc,
                 det.get("bbox"),
-                policy=self._roi_policy,
+                policy=ColorRoiPolicy(min_size=self._roi_policy.min_size),
             )
             if roi is None:
                 unmeasurable += 1

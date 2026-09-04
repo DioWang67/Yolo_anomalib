@@ -200,7 +200,10 @@ inspection_sync_allow_insecure_http: false
 #   yellow_s_min: 80
 #   yellow_v_min: 150
 #   orange_red_tie_margin: 0.15  # score gap below this triggers tie-break
-#   center_margin_ratio: 0.15    # fraction removed independently from every edge
+#   min_blob_pixels: 8.0         # floor on the largest connected color match;
+#                                # below this a color is unmeasurable, not scored from noise
+#   center_margin_ratio: 0.15    # diagnostic-only now (the yellow fast-detect
+#                                # indicator); scoring measures the whole detection box
 #
 # Pre-shift color check (tools/color_preflight.py). Recorded once on a known-good
 # golden sample and compared at the start of every shift, the way

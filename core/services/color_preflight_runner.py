@@ -199,7 +199,8 @@ def baseline_provenance_failure(
 
 
 def gamut_samples_for(
-    config_path: str | Path, snapshot_path: str | Path
+    config_path: str | Path,
+    snapshot_path: str | Path,
 ) -> dict[str, "ColorGamutSample"]:
     """Load the crops and colour clouds behind one reading.
 
@@ -216,7 +217,6 @@ def gamut_samples_for(
     path = Path(config_path).expanduser()
     try:
         station_config = read_station_config(path)
-        roi_policy = station_color_roi_policy(path)
         tuning = station_color_decision_tuning(path)
         payload = _read_snapshot(Path(snapshot_path))
     except (ColorPreflightUnavailable, StationColorSettingsError):
@@ -247,9 +247,8 @@ def gamut_samples_for(
             detections=payload.get("detections") or [],
             color_items=color_result.get("items") or [],
             baseline_summary=summary,
-            roi_policy=roi_policy,
-            center_margin_ratio=tuning.center_margin_ratio,
             sat_threshold=tuning.sat_threshold,
+            min_blob_pixels=tuning.min_blob_pixels,
         )
     except (OSError, ValueError, TypeError):
         return {}

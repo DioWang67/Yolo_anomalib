@@ -210,6 +210,16 @@ def test_evaluation_options_fail_fast(option, value, message):
 
 
 def test_verify_directory_reports_low_saturation_as_unknown(tmp_path):
+    """A bright, unsaturated image matches no real color's envelope.
+
+    A maximally wide envelope (``hsv_max: [179, 255, 255]``) used to make this
+    case work by a different route: Black's score fell back to a hard-coded
+    0.0 whenever ``coverage_mean`` was absent, regardless of what the image
+    showed. That fallback is gone -- a region already isolated by its largest
+    connected match does not need a second figure to fail closed through --
+    so the fixture instead gives Black an envelope an all-white image
+    genuinely fails (V well above any real black's ceiling).
+    """
     input_dir = tmp_path / "images"
     input_dir.mkdir()
     assert cv2.imwrite(str(input_dir / "white.png"), np.full((20, 20, 3), 255, dtype=np.uint8))
@@ -218,8 +228,7 @@ def test_verify_directory_reports_low_saturation_as_unknown(tmp_path):
         """
         {
           "summary": {
-            "Black": {"hsv_min": [0, 0, 0], "hsv_max": [179, 255, 255], "lab_min": [0, 0, 0], "lab_max": [255, 255, 255]},
-            "White": {"hsv_min": [0, 0, 0], "hsv_max": [179, 255, 255], "lab_min": [0, 0, 0], "lab_max": [255, 255, 255]}
+            "Black": {"hsv_min": [0, 0, 0], "hsv_max": [179, 80, 80], "lab_min": [0, 0, 0], "lab_max": [80, 135, 135]}
           }
         }
         """,

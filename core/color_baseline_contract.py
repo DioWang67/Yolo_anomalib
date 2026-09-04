@@ -30,7 +30,7 @@ from pathlib import Path
 #: geometry, the sampling mask, or the definition of a recorded quantity. A bump
 #: invalidates comparison against every earlier baseline; it is not a changelog
 #: for the rebuilder's internals.
-BASELINE_ALGORITHM_VERSION = "stats-robust-v5"
+BASELINE_ALGORITHM_VERSION = "stats-robust-v6"
 
 #: Where a color model records the algorithm that produced it.
 _PROVENANCE_SECTION = "recalibration"
@@ -50,7 +50,7 @@ _BASE_ROI_POLICY_KEY = "base_color_roi_policy"
 _DECISION_TUNING_KEY = "color_decision_tuning"
 #: Resolved tuning used by the base supplying any preserved colors.
 _BASE_DECISION_TUNING_KEY = "base_color_decision_tuning"
-#: v5 classifier fields. Adding, removing or redefining one requires a new
+#: v6 classifier fields. Adding, removing or redefining one requires a new
 #: baseline algorithm version; a partial mapping is not resolved provenance.
 _REQUIRED_DECISION_TUNING_KEYS = frozenset(
     {
@@ -74,6 +74,7 @@ _REQUIRED_DECISION_TUNING_KEYS = frozenset(
         "green_s_min",
         "green_v_min",
         "green_v_max",
+        "min_blob_pixels",
     }
 )
 #: What the same idea was called before both preservation reasons shared a list.

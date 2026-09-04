@@ -61,10 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stale.
 
   The panel shows the evidence rather than describing it. Per colour it carries
-  the crop the station saved with the region the colour check actually measured
-  outlined on it -- the saved crop is the whole detection box, while the
-  measurement uses the station's ROI inset and then a centred sub-crop, so the
-  outline is the difference between seeing the wire and seeing what was judged
+  the crop the station saved, veiled outside the largest connected region
+  matching the colour's envelope -- the veil is the difference between seeing
+  the wire and seeing what was judged, and its shape is not a rectangle, since
+  v6 measures the whole detection box rather than a fixed geometric sub-crop
   -- beside a plot of today's pixels inside the envelope the baseline recorded:
   its min/max box, its 10th-to-90th percentile core, and its mean as a cross.
   A margin is one number standing in for a distribution; it says how much room
@@ -88,8 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     mean of all measured pixels reads as a drift the dominant cluster does not
     have.
 
-  The pixels inside the outlined region that are *not* this colour are veiled,
-  and the share that is counts as `命中`. That answers a question the numbers
+  The pixels in the box that are *not* this colour are veiled, and the share
+  that is counts as `命中`. That answers a question the numbers
   had been hiding: the wires run diagonally through an axis-aligned box, so
   part of every measured region is board -- and the baseline's own
   `coverage_mean` (0.17 to 0.41 on Cable1/A) says the same thing in a figure
@@ -140,6 +140,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   typo as `warn` would grant the opposite of what the config asked for.
 
 ### Fixed
+- Stats Color's baseline contract is now `stats-robust-v6`. Every color,
+  black included, is measured over the whole detection box restricted to its
+  largest connected match, instead of a fixed geometric sub-crop
+  (`color_roi_policy`'s inset plus a further center-crop). A wire's position
+  and curve vary board to board; a fixed crop assumed a fixed position, which
+  discarded real wire pixels on boards where it did not sit where the crop
+  expected and admitted board background on others. Verified on a real,
+  previously misjudged board (a red wire the fixed crop had sampled down to
+  2.6% coverage, scored Green and failed the board): the new measurement no
+  longer collapses on it, and a 252-photo, 1518-detection sweep of the
+  station's own acceptance set agrees with the detector's own class 95.0% of
+  the time with the geometry contamination this replaces gone from the
+  disagreements.
+
+  Black drops `coverage_mean` entirely rather than replacing it: that figure
+  recorded how much of a *fixed, differently framed* crop matched during
+  calibration, a property of that crop's geometry rather than of black, and
+  was already the first fragility stats-robust-v5 paid to fix once. A region
+  already isolated by connectivity does not need a second, geometry-coupled
+  number to normalize away contamination it no longer contains; black's score
+  is now its matched region's own share of the whole box. This changes the
+  scale of every black score -- a v5-era threshold does not carry over and
+  needs remeasuring against real data during each station's v6 rebuild, not
+  guessed at here.
+
+  `color_checker.py` no longer applies `color_roi_policy`'s inset to the crop
+  it scores (only the policy's `min_size` degenerate-box floor still applies),
+  and the baseline rebuild pipeline's evidence collection and per-crop
+  sampling were the same fixed-crop shape and are updated to match --
+  otherwise a freshly rebuilt v6 baseline would be measured against a
+  different geometry than the runtime scores it with, the same class of
+  mismatch this replaces. `color_roi_policy` is still read and recorded for
+  stations and artifacts that have not migrated, and the pre-shift candidate-
+  geometry comparison above still answers a real question about where a wire
+  sits in its box -- but neither influences the v6 score.
+
+  `Yolo11_auto_train`'s parallel color gate is updated the same way, verified
+  against the shared conformance fixture (rule: after touching color logic,
+  `generate_color_conformance.py --check` in the workspace repository must
+  stay green) -- 19 of 21 cases agree outright, and the one recorded
+  divergence (`desaturated red`, already documented as the training gate's
+  intentionally stricter default) still diverges for the same recorded
+  reason, not a new one.
+
 - A disabled position configuration is no longer used as spatial evidence for a
   missing item. `build_missing_item_locations()` read `expected_boxes` without
   consulting `enabled`, so a station that had deliberately turned position

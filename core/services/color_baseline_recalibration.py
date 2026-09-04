@@ -24,7 +24,6 @@ import cv2
 import numpy as np
 
 from core.color_baseline_contract import BASELINE_ALGORITHM_VERSION
-from core.color_sampling import center_crop_by_ratio
 from core.services.inspection_release_store import sha256_file
 from core.services.slot_roi import ColorRoiPolicy, extract_bbox_roi
 from core.stats_color_checker import (
@@ -449,7 +448,6 @@ class StatsColorBaselineRebuilder:
         grouped = _validate_and_group_evidence(
             evidence,
             canonical_colors,
-            center_margin_ratio=resolved_tuning.center_margin_ratio,
         )
         normalized_metadata = _normalized_evidence_metadata(evidence_metadata)
         # The runtime always resolves a geometry and always compares it against
@@ -475,7 +473,7 @@ class StatsColorBaselineRebuilder:
             maximum_auto_exclusion_fraction=self.maximum_outlier_fraction,
             minimum_sample_count=self.minimum_outlier_sample_count,
             sample_size=min(self.sample_size, 32),
-            center_margin_ratio=resolved_tuning.center_margin_ratio,
+            tuning=resolved_tuning,
             cancel_callback=cancel_callback,
         )
         excluded_sample_ids = set(outlier_filter.excluded_sample_ids)
@@ -485,7 +483,6 @@ class StatsColorBaselineRebuilder:
         grouped = _validate_and_group_evidence(
             filtered_evidence,
             canonical_colors,
-            center_margin_ratio=resolved_tuning.center_margin_ratio,
         )
         digest_metadata = {
             **normalized_metadata,
@@ -513,10 +510,30 @@ class StatsColorBaselineRebuilder:
                     ),
                 )
                 continue
-            candidate_summary[color] = self._calculate_stats(
-                training,
-                center_margin_ratio=resolved_tuning.center_margin_ratio,
-            )
+            try:
+                stats = self._calculate_stats(
+                    training,
+                    tuning=resolved_tuning,
+                )
+            except ColorBaselineError:
+                # Every training crop labeled this color turned out to carry
+                # no pixels inside the color's own hue gate -- a systematic
+                # mislabeling or a wrong-color batch, not merely "too few
+                # crops" (that case is already handled above, by count,
+                # before any pixel is even looked at). Preserving the old
+                # baseline is the same safe response as too little evidence;
+                # the distinct note tells a reviewer why, rather than leaving
+                # them to guess between the two.
+                preliminary_states[color] = (
+                    "PRESERVED_INSUFFICIENT",
+                    (
+                        f"{len(training)} 個訓練裁切沒有任何一個的主要色相"
+                        f"落在 {color} 自己的色相範圍內，可能是證據標記錯誤"
+                        "或整批誤判；此色沿用原基準。"
+                    ),
+                )
+                continue
+            candidate_summary[color] = stats
             # Keep the *proposal's* value: a color preserved by the safety
             # check has its summary replaced by the old baseline, and the
             # reviewer still needs to know what the rejected evidence looked
@@ -904,7 +921,7 @@ class StatsColorBaselineRebuilder:
         self,
         evidence: Sequence[ColorCropEvidence],
         *,
-        center_margin_ratio: float = ColorDecisionTuning().center_margin_ratio,
+        tuning: ColorDecisionTuning = ColorDecisionTuning(),
     ) -> dict[str, Any]:
         hsv_rows: list[np.ndarray] = []
         lab_rows: list[np.ndarray] = []
@@ -917,7 +934,7 @@ class StatsColorBaselineRebuilder:
                     item.image_bgr,
                     item.color,
                     sample_size=self.sample_size,
-                    center_margin_ratio=center_margin_ratio,
+                    tuning=tuning,
                 )
             except _InsufficientColorPixels as exc:
                 # One unusable crop must not fail the whole rebuild, and must
@@ -1180,11 +1197,20 @@ def collect_color_baseline_evidence(
             canonical = color_lookup.get(str(item.label).casefold())
             if canonical is None:
                 continue
+            # No inset here: the runtime now measures the whole detection box
+            # restricted to its largest connected match, not a fixed
+            # geometric sub-crop, so evidence must come from the same whole
+            # box the runtime will score against a rebuilt baseline with.
+            # ``roi_policy`` is still recorded into the baseline's metadata
+            # elsewhere (for stations that have not rebuilt), but no longer
+            # applied to the crop itself.
             crop = extract_bbox_roi(
                 crop_source,
                 item.bbox_xyxy,
-                min_size=8,
-                policy=roi_policy,
+                min_size=(roi_policy.min_size if roi_policy is not None else 8),
+                policy=ColorRoiPolicy(
+                    min_size=roi_policy.min_size if roi_policy is not None else 8
+                ),
             )
             if crop is None:
                 continue
@@ -1212,7 +1238,7 @@ def _build_outlier_filter_report(
     maximum_auto_exclusion_fraction: float,
     minimum_sample_count: int,
     sample_size: int,
-    center_margin_ratio: float,
+    tuning: ColorDecisionTuning,
     cancel_callback: Callable[[], bool] | None,
 ) -> ColorBaselineOutlierFilterReport:
     total_sample_ids = {
@@ -1233,7 +1259,7 @@ def _build_outlier_filter_report(
         features_by_sample = _lab_features_by_sample(
             color_evidence,
             sample_size=sample_size,
-            center_margin_ratio=center_margin_ratio,
+            tuning=tuning,
         )
         sample_count = len(features_by_sample)
         if sample_count < minimum_sample_count:
@@ -1345,7 +1371,7 @@ def _lab_features_by_sample(
     evidence: Sequence[ColorCropEvidence],
     *,
     sample_size: int,
-    center_margin_ratio: float,
+    tuning: ColorDecisionTuning,
 ) -> dict[str, np.ndarray]:
     features: dict[str, list[np.ndarray]] = defaultdict(list)
     for item in evidence:
@@ -1354,7 +1380,7 @@ def _lab_features_by_sample(
                 item.image_bgr,
                 item.color,
                 sample_size=sample_size,
-                center_margin_ratio=center_margin_ratio,
+                tuning=tuning,
             )
         except _InsufficientColorPixels:
             continue
@@ -1403,18 +1429,74 @@ class _InsufficientColorPixels(Exception):
         self.coverage = coverage
 
 
+def _expected_hue_mask(
+    hue: np.ndarray, color: str, tuning: ColorDecisionTuning
+) -> np.ndarray | None:
+    """Pixels whose hue falls inside ``color``'s own runtime hue gate.
+
+    Mirrors the exact per-color hue windows ``_improved_match_ratio`` in
+    ``core.stats_color_checker`` scores a live crop against, so the evidence
+    sampler cannot hand its dominant-hue search a pixel population the
+    runtime would never even consider a candidate match for this color in
+    the first place. Without this, the dominant-hue window below has no
+    notion of *which* color it is sampling for: it locks onto whatever hue
+    is most common anywhere in the box, which is the labeled wire only when
+    the labeled wire's own pixels outnumber everything else in the box (a
+    neighboring wire caught by a tightly-packed board, or the board's own
+    green solder mask). Fresh Orange and Yellow evidence measured a dominant
+    hue of roughly 57-67 -- inside neither color's own gate, and closer to
+    the green solder mask than to either wire -- before this filter existed.
+
+    ``color`` must already be casefolded. ``None`` means this color has no
+    tuning-defined hue gate (Black is achromatic and handled by its own
+    branch above; any future chromatic color without a hard-coded gate falls
+    back to the unrestricted dominant-hue search).
+    """
+    if color == "red":
+        return (hue <= tuning.red_h_low_max) | (hue >= tuning.red_h_high_min)
+    if color == "orange":
+        return (hue >= tuning.orange_h_min) & (hue <= tuning.orange_h_max)
+    if color == "yellow":
+        return (hue >= tuning.yellow_h_min) & (hue <= tuning.yellow_h_max)
+    if color == "green":
+        return (hue >= tuning.green_h_min) & (hue <= tuning.green_h_max)
+    return None
+
+
 def _sample_color_pixels(
     image_bgr: np.ndarray,
     color: str,
     *,
     sample_size: int,
-    center_margin_ratio: float = ColorDecisionTuning().center_margin_ratio,
+    tuning: ColorDecisionTuning = ColorDecisionTuning(),
+    restrict_to_expected_hue: bool = True,
 ) -> _SampledPixels:
+    """Sample the pixels one evidence crop contributes to ``color``'s baseline.
+
+    ``restrict_to_expected_hue`` gates the dominant-hue search to ``color``'s
+    own runtime hue window (see ``_expected_hue_mask``) before it looks for
+    the box's dominant cluster. It defaults to on for the two call sites that
+    turn pixels into numbers a candidate baseline or its outlier score is
+    built from (``StatsColorBaselineRebuilder._calculate_stats`` and
+    ``_lab_features_by_sample``), both of which already catch
+    ``_InsufficientColorPixels`` per crop and skip just that one. It must stay
+    off for ``_validate_and_group_evidence``'s upfront structural check, which
+    is unguarded by design (one truly unsampleable image should fail the
+    whole rebuild loudly) and runs *before* the statistical outlier filter
+    gets a chance to catch a single mislabeled crop on its own -- gating
+    there would turn one bad label into a hard crash instead of a finding.
+    """
     if not isinstance(image_bgr, np.ndarray) or image_bgr.ndim != 3 or image_bgr.shape[2] != 3 or image_bgr.size == 0:
         raise ColorBaselineError("顏色裁切必須是非空 BGR 影像。")
-    center = center_crop_by_ratio(image_bgr, center_margin_ratio)
+    # The whole evidence crop, not a further center-cropped sub-region: the
+    # runtime now measures the whole detection box restricted to its largest
+    # connected match rather than a fixed geometric crop, so a baseline's
+    # statistics have to be measured over the same domain the runtime will
+    # score against it with. Keeping a center-crop here would leave
+    # calibration and runtime disagreeing about which pixels count, the same
+    # class of mismatch stats-robust-v5 already existed to fix once.
     resized = cv2.resize(
-        center,
+        image_bgr,
         (sample_size, sample_size),
         interpolation=cv2.INTER_AREA,
     )
@@ -1428,7 +1510,18 @@ def _sample_color_pixels(
         dominant_fraction = 1.0
     else:
         chromatic = hsv[:, :, 1] >= 20
-        mask = _dominant_hue_mask(hsv[:, :, 0], chromatic)
+        own_hue = (
+            _expected_hue_mask(hsv[:, :, 0], normalized, tuning)
+            if restrict_to_expected_hue
+            else None
+        )
+        candidate = chromatic if own_hue is None else (chromatic & own_hue)
+        mask = _dominant_hue_mask(hsv[:, :, 0], candidate)
+        # Denominator stays every chromatic pixel, not just the gated
+        # candidates: dominant_fraction exists to report how much of the
+        # box's chromatic content was NOT the target color, and narrowing the
+        # denominator to the already-gated population would hide exactly the
+        # contamination this metric is for.
         chromatic_count = int(np.count_nonzero(chromatic))
         dominant_fraction = (
             float(np.count_nonzero(mask)) / chromatic_count
@@ -1606,9 +1699,19 @@ def _checker_from_payload(
 def _validate_and_group_evidence(
     evidence: Sequence[ColorCropEvidence],
     expected_colors: Sequence[str],
-    *,
-    center_margin_ratio: float = ColorDecisionTuning().center_margin_ratio,
 ) -> dict[str, tuple[ColorCropEvidence, ...]]:
+    """Assert every crop is structurally sampleable, and group it by color.
+
+    Deliberately unguarded and deliberately not hue-gated: one image that
+    cannot be sampled at all is a corrupt evidence set, worth failing the
+    whole rebuild for loudly and early. A crop whose dominant color does not
+    match its label is a different problem -- evidence *quality*, not
+    *validity* -- and belongs to the statistical outlier filter that runs
+    right after this, which can tell one bad photo from a systematic shift.
+    Gating this call the same way ``_calculate_stats`` gates its own would
+    let a single mislabeled crop crash the rebuild before that filter ever
+    saw it.
+    """
     allowed = {color.casefold(): color for color in expected_colors}
     grouped: dict[str, list[ColorCropEvidence]] = defaultdict(list)
     for item in evidence:
@@ -1621,7 +1724,7 @@ def _validate_and_group_evidence(
             item.image_bgr,
             item.color,
             sample_size=16,
-            center_margin_ratio=center_margin_ratio,
+            restrict_to_expected_hue=False,
         )
         grouped[normalized].append(item)
     return {color.casefold(): tuple(grouped[color.casefold()]) for color in expected_colors}

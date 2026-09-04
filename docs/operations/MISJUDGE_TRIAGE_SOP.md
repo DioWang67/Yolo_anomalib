@@ -125,8 +125,11 @@ python tools/export_review_dataset.py `
    其實沒有。
 
    已移除的鍵：黑色門檻（`black_s_threshold` / `black_v_threshold` /
-   `black_min_coverage`）不再存在。黑色改由基準學到的 S/V、LAB 與 coverage
-   決定，沒有可調的手寫門檻 —— 黑色判定要移動，只能重建基準。
+   `black_min_coverage`）不再存在。黑色改由基準學到的 S/V 與 LAB 範圍決定，
+   分數是符合範圍的最大連通區塊佔整個偵測框的比例（`stats-robust-v6`；不再
+   除以 `coverage_mean`，這個欄位已停用）——沒有可調的手寫門檻，黑色判定要
+   移動只能重建基準。`min_blob_pixels`（連通區塊的最小可信像素數，每色共用
+   一個值）是 v6 新增的鍵，同樣受下面「不是熱重載」規則約束。
 
    > **`color_decision_tuning` 不是熱重載即生效的無痛調整。**
    > 已部署的顏色基準會記錄它是在哪一組完整 tuning 下驗證的，執行期會逐鍵

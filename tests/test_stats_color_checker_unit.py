@@ -120,6 +120,11 @@ def test_yellow_special_is_diagnostic_and_does_not_skip_other_scores(tmp_path):
     assert result.metrics["debug"]["yellow_special"]["score_adjustment"] == 0.0
     assert set(scores) == set(summary)
     assert scores["red"] > 0.0
+    # Neither orange nor green's hue appears anywhere in this image, so
+    # neither has a connected match to restrict to; both fall back to the
+    # whole candidate pool for their LAB/hue-mean terms rather than being
+    # scored a hard zero, which is what keeps them evaluable at all instead
+    # of silently disappearing whenever a board's actual color is absent.
     assert scores["orange"] > 0.0
     assert scores["green"] > 0.0
 
@@ -296,15 +301,20 @@ def test_seam_straddling_red_is_not_scored_as_another_color():
 def test_missing_hue_baseline_does_not_inflate_a_color(dummy_stats_json):
     """An absent statistic defaulted to a perfect 1.0 and kept its full weight.
 
-    A color with no ``hsv_mean`` therefore outscored one that has it, which is
-    exactly backwards.
+    A color with no ``hsv_mean`` therefore outscored one whose actual hue
+    honestly disagreed with its recorded mean, which is exactly backwards --
+    the missing statistic must not draw a better score than an honest,
+    partial mismatch would.
     """
     from core.stats_color_checker import _ColorRange, _improved_match_ratio
 
-    # Pixels that match neither the recorded hue nor either bounding box, so
-    # nothing but the (absent) similarity term could contribute a score.
-    hsv = np.array([[150.0, 200.0, 200.0]] * 50, dtype=np.float32)
-    lab = np.array([[150.0, 10.0, 10.0]] * 50, dtype=np.float32)
+    # A small solid block inside both bounding boxes, so hsv_ratio and
+    # lab_ratio are identical (1.0) for both color_range variants below --
+    # the only thing that can still differ between them is the hue-mean term,
+    # which is why this isolates it. Its own hue (70) sits inside the box but
+    # away from the recorded mean (60) used in one variant.
+    hsv = np.full((6, 6, 3), (70.0, 200.0, 200.0), dtype=np.float32)
+    lab = np.full((6, 6, 3), (150.0, 110.0, 150.0), dtype=np.float32)
     bounds = {
         "hsv_min": np.array([40, 50, 50], np.float32),
         "hsv_max": np.array([80, 255, 255], np.float32),
@@ -319,18 +329,17 @@ def test_missing_hue_baseline_does_not_inflate_a_color(dummy_stats_json):
     scored = _improved_match_ratio(hsv, lab, with_mean, "c")
     unscored = _improved_match_ratio(hsv, lab, without_mean, "c")
 
-    # The contract is that an absent term does not participate: the score is
-    # the renormalized combination of the terms that *are* present. Here both
-    # ratio terms are zero, so a color with no hue baseline scores zero --
-    # where it used to collect a perfect 1.0 times the hue weight and beat the
-    # color that actually has the statistic.
-    #
-    # This is deliberately not stated as "removing a term can never raise the
-    # score". Renormalization does not promise that: with the remaining terms
-    # at 1.0, dropping a low-scoring term does raise the result. What it rules
-    # out is evidence that was never measured being scored as a perfect match.
-    assert unscored == pytest.approx(0.0)
-    assert unscored < scored
+    # Both ratio terms are a perfect 1.0 for both variants, so a color with no
+    # hue baseline collects exactly that: 1.0, the renormalized combination of
+    # the terms that *are* present -- not the old behavior of defaulting the
+    # absent hue term to a perfect 1.0 too (which would have looked identical
+    # here) and not a term the caller supplied being ignored. The variant that
+    # *does* record a mean pays for the partial mismatch between its recorded
+    # mean (60) and this block's actual hue (70): its hue-similarity term is
+    # real but imperfect, so it honestly scores lower than the color with no
+    # such statistic to be honest about.
+    assert unscored == pytest.approx(1.0)
+    assert scored < unscored
 
 
 def test_hue_range_test_wraps_around_zero():
@@ -371,41 +380,57 @@ def test_stats_arrays_must_carry_three_channels(tmp_path):
     assert "hsv_min" in failure
 
 
-def test_black_score_survives_a_non_uniform_crop(dummy_stats_json):
-    """Learned envelope scoring keeps a textured, reflective Black ROI valid."""
+def test_black_score_survives_realistic_specular_highlights(dummy_stats_json):
+    """Localized glare spots -- unlike a periodic grid -- do not fragment the wire.
+
+    A wire's real surface glare sits in a few small spots, not a lattice
+    cutting all the way across the frame. Small punctures do not sever the
+    surrounding region's connectivity, so the largest connected match still
+    covers nearly the whole crop.
+    """
     import cv2
 
-    # Dark, mostly-black but textured, the way a real wire crop is: elongated,
-    # with highlights that test learned-envelope coverage normalization.
+    rng = np.random.default_rng(7)
     size_h, size_w = 40, 160
     hsv = np.zeros((size_h, size_w, 3), np.uint8)
     hsv[:, :, 1] = 25
     hsv[:, :, 2] = 35
-    hsv[::3, :, 2] = 95          # specular streaks
-    hsv[:, ::7, 1] = 60
+    for _ in range(12):
+        y = int(rng.integers(2, size_h - 2))
+        x = int(rng.integers(2, size_w - 2))
+        hsv[y - 1 : y + 2, x - 1 : x + 2, 2] = 95
     crop = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
     checker = StatsColorChecker.from_json(str(dummy_stats_json))
     result = checker.check(crop)
 
     assert result.best_color == "black"
-    assert result.metrics["debug"]["black_baseline"]["raw_ratio"] > 0.45
-    assert result.metrics["score"] > 0.45
+    assert result.metrics["debug"]["black_baseline"]["blob_pixels"] > 0.9 * (
+        size_h * size_w
+    )
+    assert result.metrics["score"] > 0.9
     assert result.is_ok is True
 
 
-def test_black_baseline_debug_exposes_score_normalization(dummy_stats_json):
+def test_black_baseline_debug_exposes_the_matched_blob(dummy_stats_json):
     gray = np.full((20, 20, 3), 30, dtype=np.uint8)
 
     result = StatsColorChecker.from_json(str(dummy_stats_json)).check(gray)
 
     debug = result.metrics["debug"]["black_baseline"]
-    assert debug["raw_ratio"] == pytest.approx(1.0)
-    assert debug["reference_coverage"] == pytest.approx(1.0)
+    assert debug["blob_pixels"] == 400
     assert debug["score"] == pytest.approx(1.0)
 
 
-def test_black_coverage_is_normalized_by_the_learned_reference(tmp_path):
+def test_black_score_is_the_matched_blobs_share_of_the_whole_box(tmp_path):
+    """No coverage figure to divide by any more -- the blob's own share stands.
+
+    ``coverage_mean`` recorded how much of a *fixed, differently framed* crop
+    matched during calibration, a property of that crop's geometry rather than
+    of black. A region already isolated by connectivity does not need a
+    second, geometry-coupled number to normalize away contamination it no
+    longer contains.
+    """
     stats = {
         "summary": {
             "black": {
@@ -413,41 +438,18 @@ def test_black_coverage_is_normalized_by_the_learned_reference(tmp_path):
                 "hsv_max": [179, 80, 80],
                 "lab_min": [0, 120, 120],
                 "lab_max": [80, 136, 136],
-                "coverage_mean": 0.4,
             }
         }
     }
     path = tmp_path / "black.json"
     path.write_text(json.dumps(stats), encoding="utf-8")
+    # A solid 8-column-wide dark block against a bright background: one
+    # connected region of 8 * 20 = 160 pixels out of the whole 20x20 = 400.
     image = np.full((20, 20, 3), 180, dtype=np.uint8)
     image[:, :8] = 20
 
     result = StatsColorChecker.from_json(path).check(image)
 
     debug = result.metrics["debug"]["black_baseline"]
-    assert debug["raw_ratio"] == pytest.approx(5 / 14)
-    assert debug["reference_coverage"] == pytest.approx(0.4)
-    assert debug["score"] == pytest.approx((5 / 14) / 0.4)
-    assert result.is_ok is True
-
-
-def test_black_baseline_without_reference_coverage_fails_closed(tmp_path):
-    stats = {
-        "summary": {
-            "black": {
-                "hsv_min": [0, 0, 0],
-                "hsv_max": [179, 255, 255],
-                "lab_min": [0, 0, 0],
-                "lab_max": [255, 255, 255],
-            }
-        }
-    }
-    path = tmp_path / "black-without-coverage.json"
-    path.write_text(json.dumps(stats), encoding="utf-8")
-
-    result = StatsColorChecker.from_json(path).check(
-        np.full((20, 20, 3), 255, dtype=np.uint8)
-    )
-
-    assert result.is_ok is False
-    assert result.metrics["debug"]["black_baseline"]["score"] == 0.0
+    assert debug["blob_pixels"] == 160
+    assert debug["score"] == pytest.approx(160 / 400)

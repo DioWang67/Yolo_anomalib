@@ -6,12 +6,15 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
 
 from core.color_baseline_contract import BASELINE_ALGORITHM_VERSION
 from core.services.color_preflight_runner import (
     ColorPreflightSource,
     ColorPreflightUnavailable,
+    gamut_samples_for,
     latest_inspection_snapshot,
     run_color_preflight,
 )
@@ -287,3 +290,52 @@ def test_an_unparsable_timestamp_shows_no_age_rather_than_a_wrong_one(
     )
 
     assert source.age == ""
+
+
+def _write_crop(path: Path, *, width: int = 100, height: int = 50) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = np.full((height, width, 3), (40, 60, 80), dtype=np.uint8)
+    cv2.imwrite(str(path), image)
+
+
+def _write_snapshot_with_crop(
+    results_root: Path, crop_path: Path
+) -> Path:
+    path = results_root / "snapshot.json"
+    path.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-09-02T07:41:00+08:00",
+                "model_info": {"model_version": "1.0.6"},
+                "artifacts": {"cropped_paths": [str(crop_path)]},
+                "color_result": {
+                    "status": "evaluated",
+                    "items": [
+                        {
+                            "index": 0,
+                            "class_name": "Red",
+                            "class": "Red",
+                            "best_color": "Red",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_gamut_samples_for_measures_the_whole_detection_box(
+    tmp_path: Path,
+) -> None:
+    """v6 measures the whole box, restricted to its largest connected match --
+    not a fixed geometric sub-crop -- so there is no smaller region to mark."""
+    config = _station(tmp_path)
+    crop = tmp_path / "crops" / "det_Red_0.png"
+    _write_crop(crop)
+    snapshot = _write_snapshot_with_crop(tmp_path, crop)
+
+    samples = gamut_samples_for(config, snapshot)
+
+    assert samples["Red"].measured_box == (0, 0, 100, 50)

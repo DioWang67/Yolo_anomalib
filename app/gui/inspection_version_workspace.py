@@ -574,7 +574,7 @@ class InspectionVersionWorkspace(QWidget):
         self.candidate_color_combo.setCurrentIndex(color_index)
         self._render_color_override_selectors(
             current_overrides,
-            prefer_deployed=not self._candidate_initialized,
+            prefer_default_revision=not self._candidate_initialized,
         )
         self._candidate_initialized = True
         if not self.candidate_version_edit.text().strip():
@@ -584,7 +584,7 @@ class InspectionVersionWorkspace(QWidget):
         self,
         selections: dict[str, str],
         *,
-        prefer_deployed: bool,
+        prefer_default_revision: bool,
     ) -> None:
         grouped: dict[str, list[InspectionComponentRecord]] = {}
         display_names: dict[str, str] = {}
@@ -636,12 +636,21 @@ class InspectionVersionWorkspace(QWidget):
                     record.component_id,
                 )
             selected = selections.get(normalized_key, "")
-            if not selected and prefer_deployed:
-                deployed = next(
-                    (record.component_id for record in records if record.status == "DEPLOYED"),
+            if not selected and prefer_default_revision:
+                # A new draft should start from the currently activated
+                # station revision.  A revision used by the production
+                # release is still a deterministic fallback, but preferring
+                # it first silently carried an older threshold into every new
+                # candidate after a newer revision had been activated.
+                selected = next(
+                    (
+                        record.component_id
+                        for preferred_status in ("DEFAULT", "DEPLOYED")
+                        for record in records
+                        if record.status == preferred_status
+                    ),
                     "",
                 )
-                selected = deployed
             index = combo.findData(selected)
             combo.setCurrentIndex(index if index >= 0 else 0)
             self.candidate_color_overrides_table.setCellWidget(
@@ -968,10 +977,7 @@ class InspectionVersionWorkspace(QWidget):
         root = self.color_store.root
         if not root.is_dir():
             return
-        for scope_root in root.iterdir():
-            if not scope_root.is_dir() or scope_root.name == "active" or scope_root.name.startswith("."):
-                continue
-            scope = self.color_store.scope_for_hash(scope_root.name)
+        for scope in self.color_store.iter_scopes():
             if (
                 scope.product,
                 scope.area,

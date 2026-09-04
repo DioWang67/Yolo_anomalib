@@ -45,8 +45,96 @@ from core.services.inspection_release_models import (
 )
 from core.services.inspection_release_store import InspectionReleaseStore
 from core.services.model_version_registry import ModelVersionRecord
+from tools.color_configuration_revisions import ColorConfigurationRevisionStore
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+def test_version_workspace_ignores_color_revision_store_infrastructure(
+    tmp_path, qapp
+) -> None:
+    revisions_root = tmp_path / ".color_revisions"
+    (revisions_root / "active").mkdir(parents=True)
+    (revisions_root / "locks").mkdir()
+
+    workspace = InspectionVersionWorkspace(project_root=tmp_path)
+    workspace.color_store = ColorConfigurationRevisionStore(root=revisions_root)
+    workspace.product = "Cable1"
+    workspace.area = "A"
+    workspace.inference_type = "yolo"
+    try:
+        workspace._index_color_revisions()
+
+        assert workspace._color_revisions == {}
+    finally:
+        workspace.close()
+
+
+def test_new_candidate_prefers_active_color_revision_over_deployed_revision(
+    tmp_path, qapp
+) -> None:
+    baseline = InspectionComponentRecord(
+        component_id="color-base:test",
+        category="COLOR_BASE",
+        component_type="stats_color",
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        version="color-base-test",
+        status="HISTORY",
+        created_at="2026-09-03T09:20:04+00:00",
+        integrity="VERIFIED",
+        source_path=tmp_path / "color_stats.json",
+        detail=json.dumps({"colors": ["Black"]}),
+    )
+    deployed = InspectionComponentRecord(
+        component_id="color:deployed",
+        category="COLOR_REVISION",
+        component_type="Black threshold",
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        version="color-v1.0.2",
+        status="DEPLOYED",
+        created_at="2026-08-28T03:25:27+00:00",
+        integrity="VERIFIED",
+        source_path=tmp_path / "deployed.json",
+        detail="{}",
+    )
+    active = InspectionComponentRecord(
+        component_id="color:active",
+        category="COLOR_REVISION",
+        component_type="Black threshold",
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        version="color-v1.0.3",
+        status="DEFAULT",
+        created_at="2026-09-03T09:41:17+00:00",
+        integrity="VERIFIED",
+        source_path=tmp_path / "active.json",
+        detail="{}",
+    )
+    deployed_revision = Mock()
+    deployed_revision.scope.threshold_key = "Black"
+    active_revision = Mock()
+    active_revision.scope.threshold_key = "Black"
+
+    workspace = InspectionVersionWorkspace(project_root=tmp_path)
+    workspace._components = (baseline, deployed, active)
+    workspace._color_revisions = {
+        deployed.component_id: deployed_revision,
+        active.component_id: active_revision,
+    }
+    try:
+        workspace._render_color_override_selectors(
+            {},
+            prefer_default_revision=True,
+        )
+
+        assert workspace._override_combos["black"].currentData() == active.component_id
+    finally:
+        workspace.close()
 
 
 def test_release_timestamp_is_rendered_in_station_timezone() -> None:

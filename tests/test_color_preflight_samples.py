@@ -10,43 +10,27 @@ from core.services.color_preflight_samples import (
     build_gamut_samples,
     measured_region,
 )
-from core.services.slot_roi import ColorRoiPolicy
 
 
 def _solid(width: int, height: int, bgr: tuple[int, int, int]) -> np.ndarray:
     return np.full((height, width, 3), bgr, dtype=np.uint8)
 
 
-def test_the_marked_region_is_the_region_the_runtime_measures() -> None:
-    """A picture of the wrong region is worse than no picture.
-
-    The saved crop is the whole detection box, so the marked region has to be
-    the station's inset plus the centred sub-crop -- taken through the same two
-    helpers the runtime uses, not restated here.
-    """
+def test_measured_region_is_the_whole_detection_box() -> None:
+    """v6 measures the whole box, restricted to its largest connected match,
+    not a fixed geometric sub-crop -- so there is no smaller region to mark."""
     crop = _solid(100, 50, (10, 20, 30))
-    policy = ColorRoiPolicy(inset_x_ratio=0.2, inset_y_ratio=0.0, min_size=1)
 
-    result = measured_region(crop, policy, center_margin_ratio=0.15)
+    result = measured_region(crop)
 
     assert result is not None
     measured, box = result
-    # 20% off each side of the width leaves 60 columns; 15% off each edge of
-    # that leaves 42, and the full height loses 15% from each edge.
-    assert measured.shape[:2] == (36, 42)
-    assert box == (20 + 9, 7, 20 + 9 + 42, 7 + 36)
-    # The marked box and the returned pixels must describe the same region.
-    assert box[2] - box[0] == measured.shape[1]
-    assert box[3] - box[1] == measured.shape[0]
+    assert measured is crop
+    assert box == (0, 0, 100, 50)
 
 
-def test_a_box_the_policy_rejects_yields_no_region(
-) -> None:
-    """A sliver carries too few pixels to say anything about colour."""
-    crop = _solid(6, 6, (10, 20, 30))
-    policy = ColorRoiPolicy(inset_x_ratio=0.2, inset_y_ratio=0.2, min_size=8)
-
-    assert measured_region(crop, policy, center_margin_ratio=0.15) is None
+def test_measured_region_rejects_an_empty_crop() -> None:
+    assert measured_region(np.zeros((0, 0, 3), dtype=np.uint8)) is None
 
 
 def test_an_achromatic_envelope_is_plotted_on_saturation_and_value() -> None:
@@ -191,8 +175,6 @@ def test_background_is_dropped_for_a_chromatic_colour_only() -> None:
         detections=[],
         color_items=items,
         baseline_summary=summary,
-        roi_policy=ColorRoiPolicy(),
-        center_margin_ratio=0.0,
         sat_threshold=60.0,
     )
 
@@ -240,8 +222,6 @@ def test_a_skipped_crop_does_not_shift_every_later_picture(tmp_path) -> None:
         detections=[],
         color_items=items,
         baseline_summary=summary,
-        roi_policy=ColorRoiPolicy(min_size=1),
-        center_margin_ratio=0.15,
     )
 
     assert samples["Red"].crop_bgr is not None
@@ -262,8 +242,6 @@ def test_a_crop_naming_another_class_is_not_shown(tmp_path) -> None:
         detections=[],
         color_items=items,
         baseline_summary={"Red": {"hsv_min": [0, 100, 80], "hsv_max": [10, 255, 255]}},
-        roi_policy=ColorRoiPolicy(min_size=1),
-        center_margin_ratio=0.15,
     )
 
     assert samples["Red"].crop_bgr is None
@@ -288,8 +266,6 @@ def test_the_hit_mask_says_how_much_of_the_box_is_the_colour(tmp_path) -> None:
         baseline_summary={
             "Red": {"hsv_min": [0, 100, 80], "hsv_max": [10, 255, 255]}
         },
-        roi_policy=ColorRoiPolicy(min_size=1),
-        center_margin_ratio=0.0,
         sat_threshold=20.0,
     )
 
@@ -343,8 +319,6 @@ def test_black_is_measured_over_the_whole_region_not_the_gated_subset(
         baseline_summary={
             "Black": {"hsv_min": [0, 0, 9], "hsv_max": [174, 77, 52]}
         },
-        roi_policy=ColorRoiPolicy(min_size=1),
-        center_margin_ratio=0.0,
         sat_threshold=20.0,
     )
 
