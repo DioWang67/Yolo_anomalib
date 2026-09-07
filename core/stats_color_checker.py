@@ -346,6 +346,18 @@ def _improved_match_ratio(
     color_name: str,
     tuning: ColorDecisionTuning = _DEFAULT_TUNING,
 ) -> float:
+    return _chromatic_score_and_support(
+        hsv_img, lab_img, color_range, color_name, tuning
+    )[0]
+
+
+def _chromatic_score_and_support(
+    hsv_img: np.ndarray,
+    lab_img: np.ndarray,
+    color_range: _ColorRange,
+    color_name: str,
+    tuning: ColorDecisionTuning = _DEFAULT_TUNING,
+) -> tuple[float, int]:
     """Score a chromatic color from its largest connected matching region.
 
     ``hsv_img``/``lab_img`` are the whole detection box in its own 2D shape,
@@ -355,7 +367,7 @@ def _improved_match_ratio(
     scoring every matching pixel found anywhere in the box.
     """
     if hsv_img.size == 0 or lab_img.size == 0:
-        return 0.0
+        return 0.0, 0
 
     h_vals = hsv_img[:, :, 0]
     s_vals = hsv_img[:, :, 1]
@@ -400,7 +412,7 @@ def _improved_match_ratio(
     sat_mask = s_vals >= tuning.sat_threshold
     candidate_pixels = int(np.count_nonzero(sat_mask))
     if candidate_pixels == 0:
-        return 0.0
+        return 0.0, 0
 
     blob_mask = largest_matching_blob(h_mask & sat_mask, tuning.min_blob_pixels)
     if blob_mask is not None:
@@ -482,8 +494,9 @@ def _improved_match_ratio(
 
     total_weight = sum(weight for _, weight in terms)
     if total_weight <= 0.0:
-        return 0.0
-    return sum(value * weight for value, weight in terms) / total_weight
+        return 0.0, 0
+    score = sum(value * weight for value, weight in terms) / total_weight
+    return score, int(np.count_nonzero(blob_mask)) if blob_mask is not None else 0
 
 
 def _black_baseline_match(
@@ -771,11 +784,13 @@ class StatsColorChecker:
             )
 
         scores = {}
+        support_pixels = {}
         for name, color_range in ranges.items():
             if name == "black" and black_measurement is not None:
                 scores[name] = black_measurement[0]
+                support_pixels[name] = black_measurement[1]
             else:
-                scores[name] = _improved_match_ratio(
+                scores[name], support_pixels[name] = _chromatic_score_and_support(
                     hsv_img,
                     lab_img,
                     color_range,
@@ -796,7 +811,34 @@ class StatsColorChecker:
                 scores[loser] = min(scores[loser], scores[winner] * 0.8)
                 debug["orange_red_tiebreak"] = tie_debug
 
-        return self._result_from_scores(scores, debug=debug)
+        # A few pixels from a neighbouring wire can have perfect similarity
+        # to its baseline. Bound that evidence relative to the strongest
+        # connected region, preserving the dominant colour's calibrated score
+        # even when the box contains background or reflective terminals.
+        # Apply after the Red/Orange tie-break so it cannot restore a capped
+        # score. Keep the no-region weak-signal fallback for desaturated crops.
+        strongest_support = max(support_pixels.values(), default=0)
+        uncapped_scores = dict(scores)
+        if strongest_support:
+            for name, pixels in support_pixels.items():
+                if pixels:
+                    scores[name] = min(scores[name], pixels / strongest_support)
+        debug["connected_support"] = {
+            "pixels": support_pixels,
+            "uncapped_scores": uncapped_scores,
+        }
+
+        # Black is scored over the whole box; chromatic colours are scored
+        # over the saturation-gated pool. Compare them on the same pixel domain
+        # so green PCB background cannot win just because its denominator is
+        # smaller. Keep calibrated scores for their per-colour pass thresholds.
+        chromatic_fraction = float(np.count_nonzero(sat_mask)) / sat_mask.size
+        ranking_scores = {
+            name: score if name == "black" else score * chromatic_fraction
+            for name, score in scores.items()
+        }
+        debug["chromatic_fraction"] = chromatic_fraction
+        return self._result_from_scores(scores, debug=debug, ranking_scores=ranking_scores)
 
     def _result_from_scores(
         self,
@@ -804,12 +846,15 @@ class StatsColorChecker:
         debug: dict[str, object],
         *,
         has_evidence: bool = True,
+        ranking_scores: dict[str, float] | None = None,
     ) -> ColorQCAdvancedResult:
         """Assemble a result, refusing to pass when nothing was measured.
 
         Args:
             score_map: Per-color confidence, keyed by the lower-cased name.
             debug: Opaque diagnostic payload carried into ``metrics``.
+            ranking_scores: Scores on a common pixel domain, used only to
+                select and order colours. Thresholds use ``score_map``.
             has_evidence: False when the ROI yielded no measurable pixels. The
                 verdict is then forced closed rather than left to the
                 threshold comparison, because a product may legitimately
@@ -832,15 +877,9 @@ class StatsColorChecker:
                     "debug": debug,
                 },
             )
-        best_name, best_score = ("", 0.0)
-        for name, score in score_map.items():
-            if best_name == "" or score > best_score:
-                best_name = name
-                best_score = score
-
-        if not best_name:
-            best_name = next(iter(self._ranges))
-            best_score = 0.0
+        ranking = ranking_scores if ranking_scores is not None else score_map
+        best_name = max(score_map, key=lambda name: ranking[name])
+        best_score = score_map[best_name]
 
         threshold = self._color_thresholds.get(
             best_name.lower(), self._default_threshold
@@ -851,9 +890,10 @@ class StatsColorChecker:
             "threshold": float(threshold),
             "has_evidence": bool(has_evidence),
             "ratios": score_map,
+            "ranking_scores": dict(ranking),
             "debug": debug,
         }
-        ordered_scores = sorted(score_map.items(), key=lambda kv: kv[1], reverse=True)
+        ordered_scores = sorted(score_map.items(), key=lambda kv: ranking[kv[0]], reverse=True)
         # Name the color that was actually scored. Substituting an arbitrary
         # first entry when the key is unknown reported one color's name against
         # another color's score.
