@@ -47,10 +47,24 @@ class InspectionComponentRecord:
     integrity: str
     source_path: Path
     detail: str
+    dataset_id: str = ""
+    dataset_image_count: int = 0
+    training_job_id: str = ""
+    provenance_confidence: str = ""
 
     @property
     def can_compose(self) -> bool:
         return self.status != "REVOKED" and self.integrity in {"VERIFIED", "WARNING"}
+
+    @property
+    def has_training_provenance(self) -> bool:
+        """Return whether this component can name its training images."""
+        return bool(self.dataset_id)
+
+    @property
+    def provenance_is_inferred(self) -> bool:
+        """Return whether the provenance was reconstructed rather than stamped."""
+        return self.provenance_confidence == "inferred"
 
 
 class InspectionComponentCatalog:
@@ -134,6 +148,9 @@ class InspectionComponentCatalog:
                 "config_snapshot": (str(version.config_snapshot_path) if version.config_snapshot_path else ""),
                 "evaluation": version.evaluation_metrics,
                 "warning": version.warning,
+                "dataset_id": version.dataset_id,
+                "dataset_image_count": version.dataset_image_count,
+                "provenance_confidence": version.provenance_confidence,
             }
             records.append(
                 InspectionComponentRecord(
@@ -168,6 +185,10 @@ class InspectionComponentCatalog:
                         sort_keys=True,
                         default=str,
                     ),
+                    dataset_id=version.dataset_id,
+                    dataset_image_count=version.dataset_image_count,
+                    training_job_id=version.training_job_id,
+                    provenance_confidence=version.provenance_confidence,
                 )
             )
         return records

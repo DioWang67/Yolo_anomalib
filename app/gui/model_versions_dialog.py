@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
@@ -59,11 +60,18 @@ class ModelVersionsDialog(QDialog):
         on_activated: Callable[[ModelVersionRecord], None] | None = None,
         is_combination_managed: Callable[[ModelVersionRecord], bool] | None = None,
         on_use_in_combination: Callable[[ModelVersionRecord], None] | None = None,
+        training_data_root: str | Path | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.registry = registry
         self.language = language
+        # Optional: the training project's data root, used only to look up
+        # the photo batch behind a model. Absent in tests and in any host
+        # that has no training project alongside it.
+        self.training_data_root = (
+            Path(training_data_root) if training_data_root else None
+        )
         self.initial_filters = (
             selected_product or "",
             selected_area or "",
@@ -162,6 +170,12 @@ class ModelVersionsDialog(QDialog):
         self.summary_label.setStyleSheet("font-weight: bold;")
         footer.addWidget(self.summary_label)
         footer.addStretch()
+        self.training_images_button = QPushButton(
+            self._text("查看訓練照片", "View training images")
+        )
+        self.training_images_button.setEnabled(False)
+        self.training_images_button.clicked.connect(self._open_training_images)
+        footer.addWidget(self.training_images_button)
         self.rollback_button = QPushButton(
             self._text("回復上一個使用版本", "Restore previous active version")
         )
@@ -374,8 +388,8 @@ class ModelVersionsDialog(QDialog):
             else self._text("舊版紀錄不完整；切換時將保留目前設定", "Legacy metadata; current config will be retained")
         )
         self.details_label.setText(
-            self._text("資料集", "Dataset")
-            + f": {record.dataset_hash or '—'}    "
+            self._text("訓練資料", "Training data")
+            + f": {self._provenance_summary(record)}    "
             + self._text("訓練設定", "Training config")
             + f": {record.training_config_hash or '—'}\n"
             + self._text("評估指標", "Metrics")
@@ -389,6 +403,101 @@ class ModelVersionsDialog(QDialog):
                 else ""
             )
         )
+        self.training_images_button.setEnabled(record.has_training_provenance)
+
+    def _provenance_summary(self, record: ModelVersionRecord) -> str:
+        """Describe the training set, never overstating what is known.
+
+        A model deployed before provenance recording gets "not recorded"
+        rather than a hash, because its old ``dataset_hash`` digests paths
+        and mtimes and cannot be resolved to any set of images.
+        """
+        if not record.has_training_provenance:
+            return self._text("無記錄", "Not recorded")
+        parts = [record.dataset_id[:12]]
+        if record.dataset_image_count:
+            parts.append(
+                self._text(
+                    f"{record.dataset_image_count} 張",
+                    f"{record.dataset_image_count} images",
+                )
+            )
+        if record.provenance_is_inferred:
+            parts.append(self._text("推測", "inferred"))
+        return "｜".join(parts)
+
+    def _open_training_images(self) -> None:
+        """Show the photos this model was trained on.
+
+        Resolution goes through the training job rather than the dataset ID:
+        the immutable per-batch manifest that submission history already
+        keeps is the only place the images themselves are listed, and it is
+        keyed by job. The dataset ID stays the authoritative identity; this
+        is the human-readable view of it.
+        """
+        record = self._selected_record()
+        if record is None or not record.has_training_provenance:
+            return
+        if self.training_data_root is None:
+            QMessageBox.information(
+                self,
+                self._text("訓練照片", "Training images"),
+                self._text(
+                    "此視窗未取得訓練資料位置，無法顯示照片。",
+                    "This window was not given the training data location.",
+                ),
+            )
+            return
+        from app.gui.training_batch_dialog import TrainingBatchDialog
+        from tools.submission_history import (
+            load_submission_entries,
+            load_submission_history,
+        )
+
+        try:
+            history = load_submission_history(self.training_data_root)
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                self._text("訓練照片", "Training images"),
+                self._text("無法讀取送出歷史：", "Could not read submission history: ")
+                + str(exc),
+            )
+            return
+        match = next(
+            (
+                item
+                for item in history
+                if record.training_job_id and item.job_id == record.training_job_id
+            ),
+            None,
+        )
+        if match is None:
+            QMessageBox.information(
+                self,
+                self._text("訓練照片", "Training images"),
+                self._text(
+                    "這個模型有資料集識別碼，但找不到對應的送出批次；"
+                    "照片可能已從訓練專案移除。\n資料集：",
+                    "This model has a dataset ID but no matching submission "
+                    "batch; the photos may have been removed from the "
+                    "training project.\nDataset: ",
+                )
+                + record.dataset_id[:12],
+            )
+            return
+        entries = load_submission_entries(match)
+        dialog = TrainingBatchDialog(
+            entries,
+            language=self.language,
+            history_mode=True,
+            parent=self,
+        )
+        prefix = match.batch_version or record.dataset_id[:12]
+        if record.provenance_is_inferred:
+            prefix += self._text("（推測）", " (inferred)")
+        dialog.setWindowTitle(f"{prefix}｜{dialog.windowTitle()}")
+        dialog.exec_()
 
     def _activate_selected(self) -> None:
         record = self._selected_record()

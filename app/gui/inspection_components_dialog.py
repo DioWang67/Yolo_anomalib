@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
@@ -13,6 +14,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -61,10 +63,16 @@ class InspectionComponentsDialog(QDialog):
         on_create_combination: (
             Callable[[InspectionComponentRecord], None] | None
         ) = None,
+        training_data_root: str | Path | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.catalog = catalog
+        # Optional: the training project's data root, used only to look up
+        # the photo batch behind a model.
+        self.training_data_root = (
+            Path(training_data_root) if training_data_root else None
+        )
         self.initial_filters = (
             selected_product,
             selected_area,
@@ -151,6 +159,10 @@ class InspectionComponentsDialog(QDialog):
         self.summary_label = QLabel()
         footer.addWidget(self.summary_label)
         footer.addStretch(1)
+        self.training_images_button = QPushButton("查看訓練照片")
+        self.training_images_button.setEnabled(False)
+        self.training_images_button.clicked.connect(self._open_training_images)
+        footer.addWidget(self.training_images_button)
         self.compose_button = QPushButton("建立檢測組合")
         self.compose_button.setMinimumHeight(40)
         self.compose_button.clicked.connect(self._create_combination)
@@ -303,12 +315,90 @@ class InspectionComponentsDialog(QDialog):
         record = self._selected_record()
         if record is None:
             self.compose_button.setEnabled(False)
+            self.training_images_button.setEnabled(False)
             return
         self.compose_button.setEnabled(record.can_compose)
+        self.training_images_button.setEnabled(record.has_training_provenance)
         self.details_label.setText(
             f"{_CATEGORY_LABELS.get(record.category, record.category)}／"
-            f"{record.component_type}／{record.version}\n{record.detail}"
+            f"{record.component_type}／{record.version}\n"
+            f"訓練資料：{self._provenance_summary(record)}\n{record.detail}"
         )
+
+    @staticmethod
+    def _provenance_summary(record: InspectionComponentRecord) -> str:
+        """Describe the training set without overstating what is known.
+
+        Components deployed before provenance recording report "not
+        recorded" rather than a hash: their old dataset_hash digests paths
+        and mtimes and cannot be resolved back to any set of images.
+        """
+        if record.category != "AI_MODEL":
+            return "不適用"
+        if not record.has_training_provenance:
+            return "無記錄"
+        parts = [record.dataset_id[:12]]
+        if record.dataset_image_count:
+            parts.append(f"{record.dataset_image_count} 張")
+        if record.provenance_is_inferred:
+            parts.append("推測")
+        return "｜".join(parts)
+
+    def _open_training_images(self) -> None:
+        """Show the photo batch behind the selected model.
+
+        The dataset ID is the authoritative identity, but the images
+        themselves are only listed in the immutable per-batch manifest that
+        submission history keeps, which is keyed by job.
+        """
+        record = self._selected_record()
+        if record is None or not record.has_training_provenance:
+            return
+        if self.training_data_root is None:
+            QMessageBox.information(
+                self,
+                "訓練照片",
+                "此視窗未取得訓練資料位置，無法顯示照片。",
+            )
+            return
+        from app.gui.training_batch_dialog import TrainingBatchDialog
+        from tools.submission_history import (
+            load_submission_entries,
+            load_submission_history,
+        )
+
+        try:
+            history = load_submission_history(self.training_data_root)
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.warning(self, "訓練照片", f"無法讀取送出歷史：{exc}")
+            return
+        match = next(
+            (
+                item
+                for item in history
+                if record.training_job_id and item.job_id == record.training_job_id
+            ),
+            None,
+        )
+        if match is None:
+            QMessageBox.information(
+                self,
+                "訓練照片",
+                "這個模型有資料集識別碼，但找不到對應的送出批次；"
+                "照片可能已從訓練專案移除。\n"
+                f"資料集：{record.dataset_id[:12]}",
+            )
+            return
+        dialog = TrainingBatchDialog(
+            load_submission_entries(match),
+            history_mode=True,
+            parent=self,
+        )
+        prefix = match.batch_version or record.dataset_id[:12]
+        if record.provenance_is_inferred:
+            prefix += "（推測）"
+        dialog.setWindowTitle(f"{prefix}｜{dialog.windowTitle()}")
+        dialog.exec_()
 
     def _create_combination(self) -> None:
         record = self._selected_record()

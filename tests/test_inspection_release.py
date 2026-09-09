@@ -1349,3 +1349,78 @@ def test_engineering_composer_builds_unvalidated_draft_for_any_model_version(
     assert release.component_for_role("primary_detector").version == "1.0.5"
     assert pointer["mode"] == "RISK_ACCEPTED"
     assert InspectionReleaseResolver(store).resolve("Cable1", "A", "yolo") == release
+
+
+def _draft_for_provenance(tmp_path, **record_extras):
+    weight_path = tmp_path / "models" / "Cable1_A_v1.0.5.onnx"
+    config_path = tmp_path / "models" / "Cable1_A_v1.0.5.onnx.config.yaml"
+    _, weight_sha = _write(weight_path, b"older-model")
+    _write(
+        config_path,
+        f"weights: {weight_path.as_posix()}\nenable_yolo: true\n".encode(),
+    )
+    record = ModelVersionRecord(
+        product="Cable1",
+        area="A",
+        model_type="yolo",
+        version="1.0.5",
+        weight_path=weight_path,
+        is_current=False,
+        trained_at=None,
+        deployed_at=None,
+        activated_at=None,
+        training_time_inferred=False,
+        weight_sha256=weight_sha,
+        config_snapshot_path=config_path,
+        file_size=weight_path.stat().st_size,
+        **record_extras,
+    )
+    return build_draft_release(
+        record,
+        display_version="inspection-v1.0.3",
+        operator="engineer",
+        reason="Provenance binding check.",
+    )
+
+
+def test_model_without_training_provenance_binds_no_provenance_keys(tmp_path):
+    """A release for an unstamped model must stay byte-identical.
+
+    Release records are checksummed by their canonical JSON, so binding an
+    empty provenance key would change the hash of every release built from a
+    model that predates provenance recording.
+    """
+    release = _draft_for_provenance(tmp_path)
+    metadata = dict(release.component_for_role("primary_detector").metadata)
+
+    assert metadata == {
+        "source": "engineering_composer",
+        "is_current_model_pointer": False,
+    }
+
+
+def test_model_with_training_provenance_binds_dataset_identity(tmp_path):
+    release = _draft_for_provenance(
+        tmp_path,
+        dataset_id="a" * 64,
+        dataset_image_count=250,
+        training_job_id="job-7",
+    )
+    metadata = dict(release.component_for_role("primary_detector").metadata)
+
+    assert metadata["dataset_id"] == "a" * 64
+    assert metadata["dataset_image_count"] == 250
+    assert metadata["training_job_id"] == "job-7"
+    assert metadata["provenance_confidence"] == "recorded"
+
+
+def test_inferred_provenance_is_not_presented_as_recorded(tmp_path):
+    release = _draft_for_provenance(
+        tmp_path,
+        dataset_id="b" * 64,
+        provenance_confidence="inferred",
+    )
+    metadata = dict(release.component_for_role("primary_detector").metadata)
+
+    assert metadata["provenance_confidence"] == "inferred"
+    assert "dataset_image_count" not in metadata

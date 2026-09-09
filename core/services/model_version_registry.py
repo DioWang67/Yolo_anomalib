@@ -113,6 +113,26 @@ class ModelVersionRecord:
     config_snapshot_path: Path | None = None
     file_size: int = 0
     warning: str = ""
+    dataset_id: str = ""
+    dataset_image_count: int = 0
+    training_job_id: str = ""
+    training_provenance_path: Path | None = None
+    provenance_confidence: str = ""
+
+    @property
+    def has_training_provenance(self) -> bool:
+        """Return whether this weight can name the images it was trained on."""
+        return bool(self.dataset_id)
+
+    @property
+    def provenance_is_inferred(self) -> bool:
+        """Return whether the provenance was guessed rather than recorded.
+
+        Backfilled records are reconstructed by matching a run's dataset path
+        against submission history. That is a guess, and the UI must not
+        present it with the same authority as an ID stamped at deploy time.
+        """
+        return self.provenance_confidence == "inferred"
 
     @property
     def exists(self) -> bool:
@@ -494,6 +514,17 @@ class ModelVersionRegistry:
                     config_snapshot_path=snapshot_path,
                     file_size=file_size,
                     warning="；".join(warning_parts),
+                    dataset_id=str(metadata.get("dataset_id") or ""),
+                    dataset_image_count=_coerce_count(
+                        metadata.get("dataset_image_count")
+                    ),
+                    training_job_id=str(metadata.get("training_job_id") or ""),
+                    training_provenance_path=self._relative_artifact_path(
+                        target_dir, metadata.get("training_provenance")
+                    ),
+                    provenance_confidence=str(
+                        metadata.get("provenance_confidence") or ""
+                    ),
                 )
             )
         return records
@@ -523,6 +554,24 @@ class ModelVersionRegistry:
             candidate = candidate if candidate.is_absolute() else target_dir / candidate
         else:
             candidate = target_dir / "versions" / f"{weight_path.name}.config.yaml"
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(target_dir.resolve()):
+            return None
+        return resolved if resolved.is_file() else None
+
+    def _relative_artifact_path(
+        self, target_dir: Path, configured: Any
+    ) -> Path | None:
+        """Resolve a manifest-declared path, refusing to escape the model dir.
+
+        Same containment rule as ``_config_snapshot_path``: the manifest is
+        written by the training project, so a path in it is untrusted input.
+        """
+        value = str(configured or "").strip()
+        if not value:
+            return None
+        candidate = Path(value)
+        candidate = candidate if candidate.is_absolute() else target_dir / candidate
         resolved = candidate.resolve()
         if not resolved.is_relative_to(target_dir.resolve()):
             return None
@@ -696,6 +745,15 @@ def _is_weight_candidate(path: Path, current_path: Path | None) -> bool:
     if path.stem.lower() in {"best", "last"} and not is_current:
         return False
     return True
+
+
+def _coerce_count(value: Any) -> int:
+    """Read a count from an untrusted manifest, treating junk as unknown."""
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return count if count > 0 else 0
 
 
 def _parse_datetime(value: Any) -> datetime | None:

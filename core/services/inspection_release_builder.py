@@ -47,6 +47,29 @@ from tools.color_configuration_revisions import (
 )
 
 
+def _training_provenance_metadata(model: ModelVersionRecord) -> dict[str, Any]:
+    """Return provenance keys to bind, or nothing when there is no provenance.
+
+    Empty values are omitted rather than bound as "". A release's canonical
+    JSON is hashed into ``checksums.json`` (see
+    ``inspection_release_store.save``), so a model without provenance must
+    still produce a byte-identical release to one built before this field
+    existed -- otherwise re-deriving an existing release would conflict with
+    its stored checksum.
+    """
+    if not model.dataset_id:
+        return {}
+    provenance: dict[str, Any] = {
+        "dataset_id": model.dataset_id,
+        "provenance_confidence": model.provenance_confidence or "recorded",
+    }
+    if model.dataset_image_count:
+        provenance["dataset_image_count"] = model.dataset_image_count
+    if model.training_job_id:
+        provenance["training_job_id"] = model.training_job_id
+    return provenance
+
+
 def build_release_from_matrix(
     report_path: str | Path,
     *,
@@ -316,6 +339,7 @@ def build_draft_release(
                     {
                         "source": "engineering_composer",
                         "is_current_model_pointer": model.is_current,
+                        **_training_provenance_metadata(model),
                     }.items()
                 )
             ),

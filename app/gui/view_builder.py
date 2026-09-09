@@ -163,6 +163,7 @@ def _open_model_versions(gui: DetectionSystemGUI) -> None:
             selected_area=gui.area_combo.currentText().strip(),
             selected_inference_type=gui.inference_combo.currentText().strip(),
             on_create_combination=on_create_combination,
+            training_data_root=load_workspace_paths(project_root).training_data,
             parent=gui,
         )
     except (OSError, RuntimeError, ValueError) as exc:
