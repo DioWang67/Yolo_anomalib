@@ -14,6 +14,49 @@ from app.gui.model_update_status_dialog import (
 from tools.retraining_workspaces import create_retraining_workspace
 
 
+class _StubProcess:
+    """Stand-in for the worker handle the launcher returns."""
+
+    pid = 9876
+    stdout = None
+
+    def wait(self) -> int:
+        return 0
+
+
+class _StubOutputReader:
+    """Swallow the pipe-draining thread; these tests assert the launch only."""
+
+    def __init__(self, process) -> None:
+        self.process = process
+
+    class _Signal:
+        def connect(self, _slot) -> None:
+            return None
+
+    line_ready = _Signal()
+    finished_with_code = _Signal()
+
+    def start(self) -> None:
+        return None
+
+    def isRunning(self) -> bool:
+        return False
+
+    def requestInterruption(self) -> None:
+        return None
+
+
+def _record_launch(sink: list[tuple[Path, Path]]):
+    """Return a ``launch_retraining_worker`` double that records its target."""
+
+    def _launch(*, training_root, handoff_path):
+        sink.append((Path(training_root), Path(handoff_path)))
+        return _StubProcess()
+
+    return _launch
+
+
 def _write_job(
     data_root: Path,
     job_id: str,
@@ -286,15 +329,13 @@ def test_retry_starts_retraining_in_background(tmp_path: Path, qtbot, monkeypatc
     launcher.write_text("@echo off\n", encoding="utf-8")
     launches = []
 
-    class DetachedProcess:
-        @staticmethod
-        def startDetached(program, arguments, working_directory):
-            launches.append((program, arguments, working_directory))
-            return True, 9876
-
     monkeypatch.setattr(
-        "app.gui.model_update_status_dialog.QProcess",
-        DetachedProcess,
+        "app.gui.model_update_status_dialog.launch_retraining_worker",
+        _record_launch(launches),
+    )
+    monkeypatch.setattr(
+        "app.gui.model_update_status_dialog.WorkerOutputReader",
+        _StubOutputReader,
     )
     dialog = ModelUpdateStatusDialog(data_root=data_root, language="zh_TW")
     qtbot.addWidget(dialog)
@@ -302,13 +343,7 @@ def test_retry_starts_retraining_in_background(tmp_path: Path, qtbot, monkeypatc
     dialog._resume_selected_job()
 
     job = dialog.jobs[0]
-    assert launches == [
-        (
-            "cmd.exe",
-            ["/c", str(launcher), str(job.handoff_path), "--background"],
-            str(tmp_path),
-        )
-    ]
+    assert launches == [(tmp_path, job.handoff_path)]
     assert "背景" in dialog.details_label.text()
 
 
@@ -328,15 +363,13 @@ def test_waiting_annotation_hides_orchestrator_and_opens_annotation_tool(
     launcher.write_text("@echo off\n", encoding="utf-8")
     launches = []
 
-    class DetachedProcess:
-        @staticmethod
-        def startDetached(program, arguments, working_directory):
-            launches.append((program, arguments, working_directory))
-            return True, 9876
-
     monkeypatch.setattr(
-        "app.gui.model_update_status_dialog.QProcess",
-        DetachedProcess,
+        "app.gui.model_update_status_dialog.launch_retraining_worker",
+        _record_launch(launches),
+    )
+    monkeypatch.setattr(
+        "app.gui.model_update_status_dialog.WorkerOutputReader",
+        _StubOutputReader,
     )
     dialog = ModelUpdateStatusDialog(data_root=data_root, language="zh_TW")
     qtbot.addWidget(dialog)
@@ -344,13 +377,7 @@ def test_waiting_annotation_hides_orchestrator_and_opens_annotation_tool(
     dialog._resume_selected_job()
 
     job = dialog.jobs[0]
-    assert launches == [
-        (
-            "cmd.exe",
-            ["/c", str(launcher), str(job.handoff_path), "--background"],
-            str(tmp_path),
-        )
-    ]
+    assert launches == [(tmp_path, job.handoff_path)]
     assert "Ctrl+S" in dialog.details_label.text()
 
 

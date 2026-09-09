@@ -175,7 +175,6 @@ class RetrainingWorkspaceHost(QWidget):
             self.product, self.area = None, None
         self._generation = 0
         self._closed = False
-        self._pending_progress_page = False
         self._pending_target: tuple[str, str] | None = None
         self._pending_workspace: RetrainingWorkspace | None = None
         self.active_workspace: RetrainingWorkspace | None = None
@@ -637,9 +636,6 @@ class RetrainingWorkspaceHost(QWidget):
         )
         self.stack.addWidget(workspace)
         self._workspace = workspace
-        if self._pending_progress_page:
-            workspace.show_progress_page()
-            self._pending_progress_page = False
         self.stack.setCurrentWidget(workspace)
         self.workspace_ready.emit(len(prepared_rows))
 
@@ -661,12 +657,6 @@ class RetrainingWorkspaceHost(QWidget):
     def refresh_workspace(self) -> None:
         if self._workspace is not None:
             self._workspace.refresh_workspace()
-
-    def show_progress_page(self) -> None:
-        if self._workspace is None:
-            self._pending_progress_page = True
-            return
-        self._workspace.show_progress_page()
 
     def shutdown_workspace(self) -> None:
         self._closed = True

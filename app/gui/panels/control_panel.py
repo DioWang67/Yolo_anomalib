@@ -568,8 +568,9 @@ class ControlPanel(QGroupBox):
     model_versions_requested = pyqtSignal()
     acceptance_requested = pyqtSignal()
     retraining_workspace_requested = pyqtSignal()
-    model_update_status_requested = pyqtSignal()
     inspection_history_requested = pyqtSignal()
+    training_workspace_requested = pyqtSignal()
+    training_workbench_requested = pyqtSignal()
     engineering_settings_requested = pyqtSignal()
     engineering_settings_closed = pyqtSignal()
     auto_mode_toggled = pyqtSignal(bool)
@@ -1256,15 +1257,19 @@ class ControlPanel(QGroupBox):
         )
         retraining_layout.addWidget(self.retraining_workspace_btn)
 
-        self.model_update_status_btn = QPushButton("Retraining Progress")
-        self.model_update_status_btn.setObjectName("secondaryAction")
-        self.model_update_status_btn.setToolTip(
-            "View retraining progress, resume jobs, or request a safe stop"
+        self.training_workspace_btn = QPushButton("Retraining Progress")
+        self.training_workspace_btn.setObjectName("secondaryAction")
+        self.training_workspace_btn.clicked.connect(
+            self.training_workspace_requested.emit
         )
-        self.model_update_status_btn.clicked.connect(
-            self.model_update_status_requested.emit
+        retraining_layout.addWidget(self.training_workspace_btn)
+
+        self.training_workbench_btn = QPushButton("Training Workbench")
+        self.training_workbench_btn.setObjectName("secondaryAction")
+        self.training_workbench_btn.clicked.connect(
+            self.training_workbench_requested.emit
         )
-        retraining_layout.addWidget(self.model_update_status_btn)
+        retraining_layout.addWidget(self.training_workbench_btn)
 
         self.retraining_group.setLayout(retraining_layout)
         improvement_layout.addWidget(self.retraining_group)
@@ -1490,7 +1495,8 @@ class ControlPanel(QGroupBox):
             self.acceptance_btn,
             self.edit_model_config_btn,
             self.retraining_workspace_btn,
-            self.model_update_status_btn,
+            self.training_workspace_btn,
+            self.training_workbench_btn,
             self.use_camera_chk,
             self.reconnect_camera_btn,
             self.disconnect_camera_btn,
@@ -1731,14 +1737,6 @@ class ControlPanel(QGroupBox):
         self.edit_model_config_btn.setText(
             "編輯目前檢測參數" if zh else "Edit Active Inspection Parameters"
         )
-        self.model_update_status_btn.setText(
-            "模型補訓進度"
-            if zh
-            else "Retraining Progress"
-        )
-        self.model_update_status_btn.setToolTip(
-            tr(self._language, "retraining_progress_hint")
-        )
 
         # Engineer section labels (update even when hidden so they're correct on reveal)
         self.camera_group.setTitle(tr(self._language, "camera_group"))
@@ -1835,6 +1833,18 @@ class ControlPanel(QGroupBox):
         )
         self.inspection_history_btn.setToolTip(
             tr(self._language, "inspection_history_open_hint")
+        )
+        self.training_workspace_btn.setText(
+            tr(self._language, "training_workspace_open")
+        )
+        self.training_workspace_btn.setToolTip(
+            tr(self._language, "training_workspace_open_hint")
+        )
+        self.training_workbench_btn.setText(
+            tr(self._language, "training_workbench_open")
+        )
+        self.training_workbench_btn.setToolTip(
+            tr(self._language, "training_workbench_open_hint")
         )
 
         # Sync language combo

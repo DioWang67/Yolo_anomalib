@@ -248,48 +248,6 @@ def _run_inspection_components_dialog(*, dialog_class, **kwargs) -> int:
     return dialog_class(**kwargs).exec_()
 
 
-def _open_model_update_status(gui: DetectionSystemGUI) -> None:
-    """Open the read-only cross-project model update status screen."""
-    project_root = getattr(gui, "_project_root", Path.cwd())
-    try:
-        workspace = load_workspace_paths(project_root)
-        station_paths = load_station_data_paths(project_root)
-        data_root = workspace.training_data
-        if hasattr(gui, "show_retraining_workspace"):
-            workspace = gui.show_retraining_workspace(
-                result_root=station_paths.results,
-                manifest_path=station_paths.default_review_manifest,
-                training_data_dir=data_root,
-                inference_models_dir=station_paths.models,
-                inference_station_data_dir=station_paths.root,
-                inference_project_root=station_paths.source_root,
-                language=_lang(gui),
-                product=gui.product_combo.currentText().strip() or None,
-                area=gui.area_combo.currentText().strip() or None,
-                available_targets=_retraining_targets(gui),
-            )
-            workspace.show_progress_page()
-            return
-        _run_model_update_status_dialog(
-            data_root=data_root,
-            language=_lang(gui),
-            selected_product=gui.product_combo.currentText().strip() or None,
-            selected_area=gui.area_combo.currentText().strip() or None,
-            parent=gui,
-        )
-    except (OSError, RuntimeError, ValueError) as exc:
-        gui.log_message(f"模型更新狀態載入失敗：{exc}")
-        QMessageBox.critical(gui, "模型更新狀態", str(exc))
-
-
-def _run_model_update_status_dialog(**kwargs) -> int:
-    """Import the status dialog lazily to keep normal inference startup fast."""
-    from app.gui.model_update_status_dialog import ModelUpdateStatusDialog
-
-    kwargs.setdefault("background_refresh", True)
-    return ModelUpdateStatusDialog(**kwargs).exec_()
-
-
 def build_menu_bar(gui: DetectionSystemGUI) -> QMenuBar:
     """Build a localized menu bar for the current GUI language."""
     language = _lang(gui)

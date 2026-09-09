@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -17,6 +18,8 @@ import yaml
 
 if TYPE_CHECKING:
     from app.gui.retraining_workspace_host import RetrainingWorkspaceHost
+    from app.gui.training_launcher import WorkerOutputReader
+    from app.gui.training_workspace_page import TrainingWorkspacePage
     from core.types import DetectionResult
 
 
@@ -98,7 +101,6 @@ from app.gui.preferences import PreferencesManager  # noqa: E402
 from app.gui.utils import load_image_with_retry  # noqa: E402
 from app.gui.view_builder import (  # noqa: E402
     _open_inspection_releases,
-    _open_model_update_status,
     _open_model_versions,
     _open_training_review,
     build_menu_bar,
@@ -187,6 +189,9 @@ class DetectionSystemGUI(
         self._pending_auto_restart: tuple[int, str, str, str] | None = None
         self._retraining_workspace: RetrainingWorkspaceHost | None = None
         self._retraining_workspace_key: tuple[str, ...] | None = None
+        self._training_workspace_page: TrainingWorkspacePage | None = None
+        self._workbench_processes: list[subprocess.Popen[str]] = []
+        self._workbench_readers: list[WorkerOutputReader] = []
         # Models base path and settings
         from core.path_utils import project_root, resolve_path
         from core.station_data import load_station_data_paths
@@ -472,13 +477,14 @@ class DetectionSystemGUI(
                 lambda: _open_training_review(self)
             )
         )
-        self.control_panel.model_update_status_requested.connect(
-            lambda: self._run_engineering_action(
-                lambda: _open_model_update_status(self)
-            )
-        )
         self.control_panel.engineering_settings_requested.connect(
             self.show_engineering_settings
+        )
+        self.control_panel.training_workspace_requested.connect(
+            lambda: self._run_engineering_action(self.show_training_workspace)
+        )
+        self.control_panel.training_workbench_requested.connect(
+            lambda: self._run_engineering_action(self._open_training_workbench)
         )
         self.control_panel.inspection_history_requested.connect(
             self.show_inspection_history
@@ -772,6 +778,82 @@ class DetectionSystemGUI(
             self.inspection_history_page.back_button.setFocus,
         )
 
+    def show_training_workspace(self) -> None:
+        """Show retraining progress for the selected target, in this window.
+
+        Built on first use rather than at startup: the page reads the training
+        project's job directory, which a station that never retrains does not
+        need touched, and resolving the workspace paths would otherwise run on
+        every launch to serve a button that may never be pressed.
+        """
+        page = self._training_workspace_page
+        if page is None:
+            from app.gui.training_workspace_page import TrainingWorkspacePage
+            from core.workspace import load_workspace_paths
+
+            paths = load_workspace_paths()
+            page = TrainingWorkspacePage(
+                data_root=paths.training_data,
+                language=self.current_language,
+                parent=self.workspace_stack,
+            )
+            page.back_to_inspection_requested.connect(
+                self.show_inspection_workspace
+            )
+            self.workspace_stack.addWidget(page)
+            self._training_workspace_page = page
+
+        self.control_panel.lock_engineering_access()
+        self.engineering_settings_page.clear_preview()
+        self.workspace_stack.setCurrentWidget(page)
+        page.show_for_target(
+            self.product_combo.currentText(),
+            self.area_combo.currentText(),
+        )
+        QTimer.singleShot(0, page.back_button.setFocus)
+
+    def _open_training_workbench(self) -> None:
+        """Open the training project's full GUI as its own window.
+
+        This is the engineering tool (annotation, config, color baseline),
+        deliberately kept out of process: importing its GUI package here
+        would drag the training pipeline into the inspection process, the
+        exact coupling the retraining-worker's own process split exists to
+        avoid.
+
+        The process's output is drained into this app's log rather than
+        discarded: the first version of this button launched with
+        ``--resume-latest`` and no way to see why nothing appeared once the
+        latest job was already deployed, because a windowless child's own
+        failure message had nowhere to go. An undrained pipe would also
+        eventually block the child once its buffer filled, so the reader
+        is not optional once the launcher writes to one.
+        """
+        from app.gui.training_launcher import (
+            TrainingLaunchError,
+            WorkerOutputReader,
+            launch_training_workbench,
+        )
+        from core.workspace import load_workspace_paths
+
+        try:
+            paths = load_workspace_paths()
+            process = launch_training_workbench(training_root=paths.training_project)
+        except TrainingLaunchError as exc:
+            QMessageBox.critical(
+                self,
+                self._t("training_workbench_launch_failed"),
+                str(exc),
+            )
+            return
+        self._workbench_processes.append(process)
+        reader = WorkerOutputReader(process)
+        reader.line_ready.connect(
+            lambda line: self._logger.info("[training-workbench] %s", line)
+        )
+        self._workbench_readers.append(reader)
+        reader.start()
+
     def show_retraining_workspace(
         self,
         *,
@@ -894,6 +976,8 @@ class DetectionSystemGUI(
         self.control_panel.set_language(self.current_language)
         self.engineering_settings_page.set_language(self.current_language)
         self.inspection_history_page.set_language(self.current_language)
+        if self._training_workspace_page is not None:
+            self._training_workspace_page.set_language(self.current_language)
         self.image_panel.set_language(self.current_language)
         self.info_panel.set_language(self.current_language)
         if self.camera_status_indicator is not None:

@@ -2,6 +2,7 @@ import csv
 import inspect
 import json
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -211,25 +212,44 @@ def test_submitted_training_starts_orchestrator_in_background(
     qtbot.addWidget(dialog)
     launches = []
 
-    class DetachedProcess:
-        @staticmethod
-        def startDetached(program, arguments, working_directory):
-            launches.append((program, arguments, working_directory))
-            return True, 1234
+    class _StubProcess:
+        pid = 1234
+        stdout = None
+
+        def wait(self) -> int:
+            return 0
+
+    def _launch(*, training_root, handoff_path):
+        launches.append((Path(training_root), Path(handoff_path)))
+        return _StubProcess()
 
     monkeypatch.setattr(
-        "app.gui.review_cases_dialog.QProcess",
-        DetachedProcess,
+        "app.gui.review_cases_dialog.launch_retraining_worker",
+        _launch,
+    )
+    class _StubOutputReader:
+        """Swallow the pipe-draining thread; this test asserts the launch."""
+
+        class _Signal:
+            def connect(self, _slot) -> None:
+                return None
+
+        line_ready = _Signal()
+        finished_with_code = _Signal()
+
+        def __init__(self, process) -> None:
+            self.process = process
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.gui.review_cases_dialog.WorkerOutputReader",
+        _StubOutputReader,
     )
 
     assert dialog._start_training_center(handoff) is True
-    assert launches == [
-        (
-            "cmd.exe",
-            ["/c", str(launcher), str(handoff), "--background"],
-            str(tmp_path),
-        )
-    ]
+    assert launches == [(tmp_path, handoff)]
 
 
 def test_saved_case_lookup_requires_exact_persisted_path(tmp_path):

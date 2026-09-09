@@ -38,6 +38,25 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
             "View persisted results, yield, failure reasons, and result images"
         ),
         "history_back": "← Back to Inspection",
+        "training_workspace_open": "Retraining Progress",
+        "training_workspace_open_hint": (
+            "Track retraining progress for this station without leaving the "
+            "inspection window"
+        ),
+        "training_back": "← Back to Inspection",
+        "training_no_target": "No product/station selected",
+        "training_page_hint": (
+            "Retraining runs in a separate low-priority process, so inspection "
+            "keeps its speed. You can leave this page and come back; progress "
+            "is not lost."
+        ),
+        "training_launch_failed": "Failed to start retraining",
+        "training_workbench_open": "Training Workbench",
+        "training_workbench_open_hint": (
+            "Open the full training tool (annotation, config, color baseline) "
+            "in its own window"
+        ),
+        "training_workbench_launch_failed": "Failed to open the training tool",
         "history_page_title": "Inspection Records",
         "history_page_hint": (
             "Review persisted inspection status, reasons, latency, and evidence"
@@ -552,6 +571,18 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "inspection_history_open": "檢測紀錄 >",
         "inspection_history_open_hint": "查看已落盤結果、良率、異常原因與結果影像",
         "history_back": "← 返回檢測",
+        "training_workspace_open": "模型補訓進度",
+        "training_workspace_open_hint": "在檢測畫面內查看本站補訓進度，不需切換視窗",
+        "training_back": "← 返回檢測",
+        "training_no_target": "尚未選擇產品／站別",
+        "training_page_hint": (
+            "補訓在另一個低優先權的行程執行，不會拖慢檢測。可以離開此頁再回來，"
+            "進度不會中斷。"
+        ),
+        "training_launch_failed": "補訓啟動失敗",
+        "training_workbench_open": "訓練工具",
+        "training_workbench_open_hint": "開啟完整訓練工具（標註／設定／色彩基準），獨立視窗",
+        "training_workbench_launch_failed": "訓練工具開啟失敗",
         "history_page_title": "檢測紀錄",
         "history_page_hint": "查看已落盤的檢測狀態、異常原因、耗時與結果證據",
         "history_all": "全部",

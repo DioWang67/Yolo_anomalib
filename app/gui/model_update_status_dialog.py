@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import QProcess, Qt, QThread, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -27,12 +29,19 @@ from PyQt5.QtWidgets import (
 )
 
 from app.gui.dialog_geometry import configure_responsive_dialog
+from app.gui.training_launcher import (
+    TrainingLaunchError,
+    WorkerOutputReader,
+    launch_retraining_worker,
+)
 from tools.operator_job_control import (
     OperatorJobControlError,
     request_operator_job_cancel,
 )
 from tools.process_liveness import heartbeat_is_stale, is_process_active
 from tools.record_visibility import hide_record, load_hidden_record_ids
+
+logger = logging.getLogger(__name__)
 
 STATE_LABELS = {
     "queued": ("等待處理", "Queued"),
@@ -357,6 +366,7 @@ class ModelUpdateStatusDialog(QDialog):
         self._embedded = bool(embedded)
         self._load_generation = 0
         self._load_worker: ModelUpdateJobLoadWorker | None = None
+        self._worker_readers: list[WorkerOutputReader] = []
         self._refresh_pending = False
         self._restore_initial_pending = True
         self._closed = False
@@ -504,9 +514,13 @@ class ModelUpdateStatusDialog(QDialog):
         self.cancel_button.clicked.connect(self._cancel_selected_job)
         footer.addWidget(self.clear_record_button)
         footer.addWidget(self.cancel_button)
-        close_button = QPushButton(self._text("關閉", "Close"))
-        close_button.clicked.connect(self.accept)
-        footer.addWidget(close_button)
+        # Embedded, there is nothing to close: the host page owns navigation
+        # and offers "back". Accepting the dialog in place would hide this
+        # widget inside the page and leave the operator on a blank screen.
+        if not self._embedded:
+            close_button = QPushButton(self._text("關閉", "Close"))
+            close_button.clicked.connect(self.accept)
+            footer.addWidget(close_button)
         layout.addLayout(footer)
 
         for combo in (self.product_filter, self.area_filter, self.state_filter):
@@ -516,7 +530,8 @@ class ModelUpdateStatusDialog(QDialog):
         panel = QFrame()
         panel.setObjectName("OperatorWorkflowPanel")
         panel.setStyleSheet(
-            "QFrame#OperatorWorkflowPanel { background: #111820; border: 1px solid #2f3b49; border-radius: 8px; }"
+            "QFrame#OperatorWorkflowPanel { background: #ffffff; "
+            "border: 1px solid #d9e2ec; border-radius: 8px; }"
         )
         panel_layout = QVBoxLayout(panel)
         panel_layout.setContentsMargins(18, 14, 18, 14)
@@ -524,9 +539,13 @@ class ModelUpdateStatusDialog(QDialog):
 
         header = QHBoxLayout()
         self.workflow_state_label = QLabel()
-        self.workflow_state_label.setStyleSheet("color: #f0f6fc; font-size: 14px; font-weight: bold;")
+        self.workflow_state_label.setStyleSheet(
+            "color: #1f2933; font-size: 14px; font-weight: bold;"
+        )
         self.workflow_target_label = QLabel()
-        self.workflow_target_label.setStyleSheet("color: #58a6ff; font-size: 12px; font-weight: bold;")
+        self.workflow_target_label.setStyleSheet(
+            "color: #245b8f; font-size: 12px; font-weight: bold;"
+        )
         header.addWidget(self.workflow_state_label)
         header.addStretch()
         header.addWidget(self.workflow_target_label)
@@ -546,10 +565,16 @@ class ModelUpdateStatusDialog(QDialog):
         self.workflow_progress = QProgressBar()
         self.workflow_progress.setRange(0, 100)
         self.workflow_progress.setFormat(self._text("模型更新 %p%", "Model update %p%"))
+        # The fill moves across the percentage text, so one text colour has to
+        # stay readable over both the track and the fill. Dark text measures
+        # 13.1:1 on this track and 7.1:1 on this fill; the darker green this
+        # palette uses for filled buttons would leave 2.7:1 -- below WCAG AA --
+        # for whichever part of the label the fill happens to cover.
         self.workflow_progress.setStyleSheet(
-            "QProgressBar { background: #202b36; border: 0; border-radius: 5px; "
-            "color: white; text-align: center; min-height: 18px; }"
-            "QProgressBar::chunk { background: #2f81f7; border-radius: 5px; }"
+            "QProgressBar { background: #eef2f6; border: 1px solid #d9e2ec; "
+            "border-radius: 5px; color: #1f2933; text-align: center; "
+            "min-height: 18px; }"
+            "QProgressBar::chunk { background: #7bc47f; border-radius: 5px; }"
         )
         panel_layout.addWidget(self.workflow_progress)
         self._clear_workflow_panel()
@@ -983,33 +1008,24 @@ class ModelUpdateStatusDialog(QDialog):
             self.resume_button.setEnabled(False)
             return
         training_root = self.data_root.parent
-        launcher = training_root / "open_operator_training.bat"
-        if not launcher.is_file() or not job.handoff_path.is_file():
-            QMessageBox.critical(
-                self,
-                self.windowTitle(),
-                self._text(
-                    "找不到補訓啟動器或工作資料，請通知工程人員。",
-                    "The retraining launcher or job data is missing.",
-                ),
-            )
-            return
         needs_annotation = job.pending_count > 0
-        arguments = [
-            "/c",
-            str(launcher),
-            str(job.handoff_path),
-            "--background",
-        ]
-        result = QProcess.startDetached("cmd.exe", arguments, str(training_root))
-        started = result[0] if isinstance(result, tuple) else bool(result)
-        if not started:
+        # Started windowless and attached rather than detached through
+        # cmd.exe: the old path raised a console over the inspection screen,
+        # and reported a failure to start as nothing happening at all.
+        try:
+            process = launch_retraining_worker(
+                training_root=training_root,
+                handoff_path=job.handoff_path,
+            )
+        except TrainingLaunchError as exc:
+            logger.warning("Retraining launch failed: %s", exc)
             QMessageBox.critical(
                 self,
                 self.windowTitle(),
-                self._text("補訓視窗啟動失敗。", "Failed to start retraining."),
+                self._text("補訓啟動失敗。", "Failed to start retraining."),
             )
             return
+        self._retain_worker(process)
         self._resume_requested_job_ids.add(job.job_id)
         self.resume_button.setEnabled(False)
         self.details_label.setText(
@@ -1032,7 +1048,10 @@ class ModelUpdateStatusDialog(QDialog):
         self.workflow_target_label.setText("—")
         self.workflow_progress.setValue(0)
         for label in self.workflow_step_labels:
-            label.setStyleSheet("background: #202b36; color: #8b98a5; border: 1px solid #303b46; border-radius: 6px;")
+            label.setStyleSheet(
+                "background: #eef2f6; color: #6b7280; "
+                "border: 1px solid #d9e2ec; border-radius: 6px;"
+            )
 
     def _render_workflow(self, job: ModelUpdateJob) -> None:
         active_step = workflow_step_index(job.state, job.current_task)
@@ -1042,29 +1061,36 @@ class ModelUpdateStatusDialog(QDialog):
         is_success = job.state == "deployed"
         is_failure = job.state in {"failed", "invalid"}
         is_cancelled = job.state == "cancelled"
+        # Washes, not fills: this panel sits on a light page, and dark chips
+        # made it read as a window from another application. Weight carries
+        # the active step as much as hue does, so the states stay apart for
+        # anyone who cannot separate green from blue.
         for index, label in enumerate(self.workflow_step_labels):
             if index < active_step or (is_success and index <= active_step):
                 style = (
-                    "background: #1f6f3e; color: #d9fbe5; border: 1px solid #2ea44f; "
+                    "background: #edf7ed; color: #237a3b; border: 1px solid #7bc47f; "
                     "border-radius: 6px; font-weight: 600;"
                 )
             elif index == active_step and is_failure:
                 style = (
-                    "background: #7a2525; color: white; border: 1px solid #e5534b; "
+                    "background: #fbeae8; color: #b42318; border: 1px solid #d9534f; "
                     "border-radius: 6px; font-weight: 700;"
                 )
             elif index == active_step and is_cancelled:
                 style = (
-                    "background: #4b5563; color: white; border: 1px solid #9ca3af; "
+                    "background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; "
                     "border-radius: 6px; font-weight: 700;"
                 )
             elif index == active_step and not is_success:
                 style = (
-                    "background: #174b7a; color: #e6f2ff; border: 1px solid #58a6ff; "
+                    "background: #eef6ff; color: #245b8f; border: 1px solid #c7ddf2; "
                     "border-radius: 6px; font-weight: 700;"
                 )
             else:
-                style = "background: #202b36; color: #8b98a5; border: 1px solid #303b46; border-radius: 6px;"
+                style = (
+                    "background: #eef2f6; color: #6b7280; "
+                    "border: 1px solid #d9e2ec; border-radius: 6px;"
+                )
             label.setStyleSheet(style)
 
     def _shutdown_refresh(self) -> None:
@@ -1072,6 +1098,43 @@ class ModelUpdateStatusDialog(QDialog):
         self.refresh_timer.stop()
         if self._load_worker is not None and self._load_worker.isRunning():
             self._load_worker.requestInterruption()
+        # The worker processes keep running on purpose -- they are the
+        # retraining, and closing this view must not abandon a half-finished
+        # model update. Only the readers are released.
+        for reader in self._worker_readers:
+            if reader.isRunning():
+                reader.requestInterruption()
+        self._worker_readers.clear()
+
+    def _retain_worker(self, process: subprocess.Popen[str]) -> None:
+        """Drain a started worker's output and keep its reader alive.
+
+        Both halves matter. The launcher gives the child a pipe, and a pipe
+        nobody reads stops the child once its buffer fills -- a retrain that
+        dies silently part-way through. And a ``QThread`` that goes out of
+        scope while running takes the interpreter down with it, so the reader
+        is held until this view is gone.
+        """
+        reader = WorkerOutputReader(process)
+        reader.line_ready.connect(
+            lambda line: logger.info("[retraining] %s", line)
+        )
+        reader.finished_with_code.connect(
+            lambda code: logger.info("Retraining worker exited with %s", code)
+        )
+        self._worker_readers.append(reader)
+        reader.start()
+
+    def shutdown(self) -> None:
+        """Stop refreshing and release the load worker.
+
+        Public because an embedded host has no close event to hook: when the
+        page that owns this view replaces it -- on a language change, which
+        rebuilds every label -- the outgoing instance still holds a running
+        timer and possibly a live ``QThread``. Dropping the reference without
+        this leaves both alive against a deleted widget.
+        """
+        self._shutdown_refresh()
 
     def accept(self) -> None:
         self._shutdown_refresh()

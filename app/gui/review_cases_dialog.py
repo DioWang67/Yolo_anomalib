@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import QDateTime, QEvent, QProcess, Qt, pyqtSignal
+from PyQt5.QtCore import QDateTime, QEvent, Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -44,6 +44,11 @@ from app.gui.dialog_geometry import configure_responsive_dialog
 from app.gui.historical_cleanup_dialog import HistoricalCleanupDialog
 from app.gui.historical_cleanup_view_model import HistoricalCleanupViewModel
 from app.gui.hover_help import HoverHelpBadge
+from app.gui.training_launcher import (
+    TrainingLaunchError,
+    WorkerOutputReader,
+    launch_retraining_worker,
+)
 from app.gui.processing_batch_dialog import (
     ProcessingBatchDialog,
     processing_annotation_step_enabled,
@@ -936,6 +941,7 @@ class ReviewCasesDialog(QDialog):
         self.result_root = Path(result_root)
         self.manifest_path = _target_manifest_path(Path(manifest_path), product=product, area=area)
         self.training_data_dir = Path(training_data_dir)
+        self._training_worker_readers: list[WorkerOutputReader] = []
         self.inference_models_dir = inference_paths.models_dir
         self.inference_station_data_dir = inference_paths.station_data_dir
         self.inference_project_root = inference_paths.project_root
@@ -4496,10 +4502,6 @@ class ReviewCasesDialog(QDialog):
         else:
             dialog.exec_()
 
-    def show_progress_page(self) -> None:
-        """Public navigation entry used by the main-window progress action."""
-        self._open_update_progress()
-
     def _open_submission_history(self) -> None:
         """Open immutable submitted batches without changing the pending queue."""
         from app.gui.submission_history_dialog import SubmissionHistoryDialog
@@ -4651,6 +4653,24 @@ class ReviewCasesDialog(QDialog):
                 pass
         return path
 
+    def _retain_training_worker(self, process) -> None:
+        """Drain the worker's output so it cannot block, and hold the reader.
+
+        An unread pipe stops the child once its buffer fills, and a running
+        ``QThread`` that goes out of scope takes the interpreter with it.
+        The process itself is left running: it is the retraining, and it
+        outlives this dialog by design.
+        """
+        reader = WorkerOutputReader(process)
+        reader.line_ready.connect(
+            lambda line: logger.info("[retraining] %s", line)
+        )
+        reader.finished_with_code.connect(
+            lambda code: logger.info("Retraining worker exited with %s", code)
+        )
+        self._training_worker_readers.append(reader)
+        reader.start()
+
     def _start_training_center(
         self,
         handoff_path: Path,
@@ -4658,52 +4678,42 @@ class ReviewCasesDialog(QDialog):
         *,
         initial_state: str = "queued",
     ) -> bool:
-        """Start the operator training window and report whether it launched."""
+        """Start the retraining worker and report whether it launched.
+
+        Windowless and attached, rather than detached through ``cmd.exe``:
+        the console the old path raised sat over the inspection screen, and
+        progress is followed on the retraining page in this same window.
+        """
         training_root = self.training_data_dir.parent
-        launcher = training_root / "open_operator_training.bat"
-        if not launcher.exists():
+        try:
+            process = launch_retraining_worker(
+                training_root=training_root,
+                handoff_path=handoff_path,
+            )
+        except TrainingLaunchError as exc:
             QMessageBox.critical(
                 self,
                 self.windowTitle(),
                 self._text(
-                    f"找不到訓練啟動器：\n{launcher}",
-                    f"Training launcher not found:\n{launcher}",
+                    f"訓練啟動失敗：\n{exc}",
+                    f"Failed to start training:\n{exc}",
                 ),
             )
             if status_path:
                 update_operator_job_status(
                     status_path,
                     state="failed",
-                    message="找不到模型更新啟動器",
-                    error=str(launcher),
-                )
-            return False
-        result = QProcess.startDetached(
-            "cmd.exe",
-            ["/c", str(launcher), str(handoff_path), "--background"],
-            str(training_root),
-        )
-        started = result[0] if isinstance(result, tuple) else bool(result)
-        if not started:
-            QMessageBox.critical(
-                self,
-                self.windowTitle(),
-                self._text("訓練中心啟動失敗", "Failed to start training center"),
-            )
-            if status_path:
-                update_operator_job_status(
-                    status_path,
-                    state="failed",
                     message="模型更新中心啟動失敗",
+                    error=str(exc),
                 )
             return False
+        self._retain_training_worker(process)
         if status_path:
-            process_id = result[1] if isinstance(result, tuple) and len(result) > 1 else None
             update_operator_job_status(
                 status_path,
                 state=initial_state,
                 message="模型更新中心已啟動",
-                training_process_id=process_id,
+                training_process_id=process.pid,
                 training_process_host=socket.gethostname(),
             )
         return True

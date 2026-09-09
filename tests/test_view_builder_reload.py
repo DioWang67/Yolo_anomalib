@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from app.gui.view_builder import (
-    _open_model_update_status,
     _open_model_versions,
     _open_training_review,
     _reload_models,
@@ -262,28 +261,3 @@ def test_component_selection_opens_prefilled_combination_builder(
     )
 
 
-def test_model_update_status_uses_training_data_directory(
-    tmp_path, monkeypatch
-) -> None:
-    run_dialog = Mock()
-    monkeypatch.setattr(
-        "app.gui.view_builder._run_model_update_status_dialog", run_dialog
-    )
-    project_root = tmp_path / "yolo11_inference"
-    gui = SimpleNamespace(
-        _project_root=project_root,
-        current_language="zh_TW",
-        product_combo=_combo("Cable1"),
-        area_combo=_combo("A"),
-        log_message=Mock(),
-    )
-
-    _open_model_update_status(gui)
-
-    run_dialog.assert_called_once_with(
-        data_root=tmp_path / "Yolo11_auto_train" / "data",
-        language="zh_TW",
-        selected_product="Cable1",
-        selected_area="A",
-        parent=gui,
-    )
