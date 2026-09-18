@@ -926,6 +926,19 @@ class ControlPanel(QGroupBox):
         self.engineering_panel.setEnabled(True)
         return True
 
+    def authorize_engineering_action(self) -> bool:
+        """Verify the PIN for one action, without opening an engineering session.
+
+        ``unlock_engineering_access`` also flips ``_engineering_access_granted``
+        and enables the engineering panel, which is correct when the user is
+        entering that page. Callers outside it -- the golden sample dialog sits
+        over the inspection workspace -- must not leave those controls live
+        behind them, so this verifies and returns, changing no widget state.
+        """
+        if self._engineering_access_granted:
+            return True
+        return self._verify_pin() and self._force_initial_pin_change()
+
     def lock_engineering_access(self) -> None:
         """Revoke the page session and discard target-sensitive draft data."""
         self._engineering_access_granted = False

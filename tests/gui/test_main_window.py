@@ -811,6 +811,19 @@ def test_close_waits_for_auto_work_to_finish(
     qtbot.waitUntil(lambda: close_requests == ["close"], timeout=1000)
 
 
+def test_close_defers_destruction_until_golden_worker_stops(gui, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(gui, "is_detection_running", lambda: False)
+    session = SimpleNamespace(prepare_shutdown=lambda: False)
+    monkeypatch.setattr(gui, "_color_preflight_dialog", session, raising=False)
+    event = QCloseEvent()
+    gui.closeEvent(event)
+    assert not event.isAccepted()
+    assert "顏色開線" in gui.statusBar().currentMessage()
+    session.prepare_shutdown = lambda: True
+
+
 def test_engineer_retraining_button_routes_to_existing_workspace_entry(
     gui, monkeypatch
 ):

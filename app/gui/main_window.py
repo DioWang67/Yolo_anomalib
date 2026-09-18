@@ -1873,14 +1873,18 @@ class DetectionSystemGUI(
             self._t("model_load_error", error=error_msg),
         )
 
-    def start_detection(self):
+    def start_detection(self, golden_sample=False):
         """Launch detection workflow."""
+        preflight = getattr(self, "_color_preflight_dialog", None)
+        if not golden_sample and preflight is not None and preflight._worker is not None:
+            self.statusBar().showMessage("Golden sample 正在自動取樣，請等待完成或在開線視窗取消。")
+            return
         product = self.product_combo.currentText()
         area = self.area_combo.currentText()
         inference_type = self.inference_combo.currentText()
         # Auto Mode armed: Start launches the auto-inspection loop instead of a
         # single manual inspection.
-        if self.auto_mode_chk.isChecked():
+        if self.auto_mode_chk.isChecked() and not golden_sample:
             self._start_auto_mode()
             return
         if not all([product, area, inference_type]):
@@ -2062,6 +2066,9 @@ class DetectionSystemGUI(
 
     def on_detection_error(self, error_msg):
         """Handle detection error callback."""
+        preflight = getattr(self, "_color_preflight_dialog", None)
+        if preflight is not None:
+            preflight.capture_failed(str(error_msg))
         self.controller.bridge.end_run()
         self._single_shot_cancel_event.set()
         self._single_shot_running = False
@@ -2667,6 +2674,14 @@ class DetectionSystemGUI(
                 event.ignore()
                 return
             QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        preflight_dialog = getattr(self, "_color_preflight_dialog", None)
+        if preflight_dialog is not None and not preflight_dialog.prepare_shutdown():
+            self.statusBar().showMessage("正在停止顏色開線收集，請稍後再關閉程式。")
+            if is_pipeline_running:
+                QApplication.restoreOverrideCursor()
+            event.ignore()
+            return
 
         self._closing = True
         self._pending_auto_restart = None
