@@ -130,7 +130,7 @@ calibration:
   target_luma: 45.0
   tolerance: 2.0
 gain: '23.0'
-exposure_time: '11819.0000'
+exposure_time: '20134.0000'
 save_annotated: true
 save_processed: true
 save_crops: true
@@ -139,11 +139,11 @@ model_version: 1.0.6
 color_preflight:
   minimum_margin_retention: 0.6
   reference_margins:
-    Black: 0.23896103896103904
-    Green: 0.33099251320344925
-    Orange: 0.25963414484702907
-    Red: 0.3479370507117583
-    Yellow: 0.12300993948553018
+    Black: 0.30603318250377076
+    Green: 0.10673969093019142
+    Orange: 0.2551202668177792
+    Red: 0.29456519819430693
+    Yellow: 0.29552207339384706
   baseline_sha256: 4842d0a14cc117f00cd33017525067dcd3b3a9c154ff3a17432589f69c09d12d
-  recorded_at: '2026-09-04T16:36:24+08:00'
-  recorded_by: '0'
+  recorded_at: '2026-09-09T14:05:09+08:00'
+  recorded_by: '1'
