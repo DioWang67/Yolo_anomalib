@@ -77,6 +77,34 @@ class DetectionController:
         if self._system:
             self._system.disconnect_camera()
 
+    # --- Session-local camera calibration -------------------------------
+    # Held on the system rather than written to the station config: under
+    # uncontrolled light the right exposure is a measurement of today, and the
+    # config file keeps its meaning as the last one a person chose.
+
+    def set_runtime_exposure_override(
+        self, scope: tuple[str, str, str], exposure_time: float
+    ) -> None:
+        if self._system:
+            self._system.set_runtime_exposure_override(scope, exposure_time)
+
+    def clear_runtime_exposure_override(self) -> None:
+        if self._system:
+            self._system.clear_runtime_exposure_override()
+
+    def invalidate_applied_camera_settings(self) -> None:
+        if self._system:
+            self._system.invalidate_applied_camera_settings()
+
+    def effective_camera_settings(self) -> dict:
+        if not self._system:
+            return {}
+        try:
+            return self._system.effective_camera_settings()
+        except Exception as exc:  # noqa: BLE001 - reporting must not break a check
+            self._logger.exception("Effective camera settings unavailable: %s", exc)
+            return {}
+
     def shutdown(self) -> None:
         """Full system shutdown."""
         if self._system:

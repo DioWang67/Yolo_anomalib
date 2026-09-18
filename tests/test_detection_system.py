@@ -246,6 +246,106 @@ class TestDetectionSystemIntegration(unittest.TestCase):
         self.system._apply_camera_settings_from_config()
         self.assertEqual(self.system.camera.set_exposure.call_count, 2)
 
+    # --- session-local exposure, under uncontrolled light ------------------
+    # Cable1/A is lit by daylight plus room fluorescents: the exposure that is
+    # right at 15:30 is 9.2% wrong by 16:02. A session auto-calibration
+    # re-derives it and holds it here rather than in config.yaml, which keeps
+    # its meaning as the last exposure a person deliberately chose.
+
+    def _camera_at(self, exposure, gain="23.0"):
+        self.system.camera = MagicMock()
+        self.system.camera.is_initialized = True
+        self.system.config.exposure_time = exposure
+        self.system.config.gain = gain
+
+    def test_runtime_exposure_outlives_the_model_load_before_every_inspection(self):
+        """The whole point: load_model_configs must not undo the calibration.
+
+        It re-reads the station config from disk and re-pushes exposure, and
+        it runs before every inspection -- so an exposure held anywhere it
+        does not consult is wiped by the operator's first press of Start.
+        """
+        self._camera_at("20134.0000")
+        self.system._switch_model_component = MagicMock(
+            return_value=(None, self.system.config)
+        )
+        self.system._refresh_result_sink = MagicMock()
+
+        self.system.set_runtime_exposure_override(("Cable1", "A", "yolo"), 21980.0)
+        self.system.load_model_configs("Cable1", "A", "yolo")
+
+        self.assertEqual(self.system.camera.set_exposure.call_args[0][0], 21980.0)
+
+    def test_a_session_exposure_does_not_follow_the_operator_to_another_station(self):
+        self._camera_at("20134.0000")
+        self.system._switch_model_component = MagicMock(
+            return_value=(None, self.system.config)
+        )
+        self.system._refresh_result_sink = MagicMock()
+
+        self.system.set_runtime_exposure_override(("Cable1", "A", "yolo"), 21980.0)
+        self.system.load_model_configs("PCBA1", "A", "yolo")
+
+        self.assertIsNone(self.system.runtime_exposure_override())
+        self.assertEqual(self.system.camera.set_exposure.call_args[0][0], 20134.0)
+
+    def test_fusion_and_yolo_name_the_same_station(self):
+        self.system.set_runtime_exposure_override(("Cable1", "A", "fusion"), 21980.0)
+        self.system._active_scope = ("Cable1", "A", "yolo")
+
+        self.assertEqual(self.system.runtime_exposure_override(), 21980.0)
+
+    def test_recording_a_session_exposure_makes_the_next_apply_push_it(self):
+        """The cache is fed the effective value, never relied on to hide one."""
+        self._camera_at("20134.0000")
+        self.system._apply_camera_settings_from_config()
+        self.assertEqual(self.system.camera.set_exposure.call_count, 1)
+
+        self.system.set_runtime_exposure_override(("Cable1", "A", "yolo"), 21980.0)
+        self.system._active_scope = ("Cable1", "A", "yolo")
+        self.system._apply_camera_settings_from_config()
+
+        self.assertEqual(self.system.camera.set_exposure.call_count, 2)
+        self.assertEqual(self.system.camera.set_exposure.call_args[0][0], 21980.0)
+
+    def test_clearing_a_session_exposure_goes_back_to_the_config(self):
+        self._camera_at("20134.0000")
+        self.system.set_runtime_exposure_override(("Cable1", "A", "yolo"), 21980.0)
+        self.system._active_scope = ("Cable1", "A", "yolo")
+
+        self.system.clear_runtime_exposure_override()
+        self.system._apply_camera_settings_from_config()
+
+        self.assertIsNone(self.system.runtime_exposure_override())
+        self.assertEqual(self.system.camera.set_exposure.call_args[0][0], 20134.0)
+
+    def test_disconnecting_the_camera_drops_the_session_exposure(self):
+        self.system.set_runtime_exposure_override(("Cable1", "A", "yolo"), 21980.0)
+        self.system.camera = MagicMock()
+
+        self.system.disconnect_camera()
+
+        self.assertIsNone(self.system._runtime_exposure_override)
+        self.assertIsNone(self.system._applied_camera_settings)
+
+    def test_a_human_calibration_outranks_the_sessions_guess(self):
+        """reload_model_settings is what the calibration dialog calls on save."""
+        self.system.set_runtime_exposure_override(("Cable1", "A", "yolo"), 21980.0)
+
+        self.system.reload_model_settings("Cable1", "A", "yolo")
+
+        self.assertIsNone(self.system._runtime_exposure_override)
+
+    def test_the_effective_settings_report_only_what_the_config_lacks(self):
+        self.assertEqual(self.system.effective_camera_settings(), {})
+
+        self.system.set_runtime_exposure_override(("Cable1", "A", "yolo"), 21980.0)
+        self.system._active_scope = ("Cable1", "A", "yolo")
+
+        self.assertEqual(
+            self.system.effective_camera_settings(), {"exposure_time": 21980.0}
+        )
+
     def test_prepare_auto_inspection_settles_camera_before_preview_frames(self):
         """Auto preview must start only after per-model camera settings are ready."""
         self.system.load_model_configs = MagicMock()

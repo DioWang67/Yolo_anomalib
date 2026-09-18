@@ -91,11 +91,14 @@ def baseline_age_days(value) -> float | None:
     return (datetime.now(timezone.utc) - moment).total_seconds() / 86400
 
 
-def station_identity(config_path):
+def station_identity(config_path, observed_override=None):
     """``(identity, retention, identity_payload, conditions)`` for a station.
 
     One reader for both the worker and the dialog: they must never disagree
     about whether the stored baseline still applies.
+
+    ``observed_override`` supplies camera values in force that the config file
+    does not record; identity and retention are unaffected by it.
     """
     config = read_station_config(config_path)
     model = resolve_color_model(config_path, str(config.get("color_model_path") or ""))
@@ -103,7 +106,7 @@ def station_identity(config_path):
         configuration_identity(config_path, model, config=config),
         margin_retention(config),
         color_identity_payload(config),
-        observed_conditions(config),
+        observed_conditions(config, observed_override),
     )
 
 
@@ -128,9 +131,11 @@ class GoldenCaptureWorker(QThread):
         delta_e,
         repeatability,
         automatic=False,
+        observed_override_fn=None,
         parent=None,
     ):
         super().__init__(parent)
+        self.observed_override_fn = observed_override_fn
         self.config_path = config_path
         self.results_root = results_root
         self.scope = scope
@@ -179,8 +184,19 @@ class GoldenCaptureWorker(QThread):
         """
         self.progress.emit(collected, required, message)
 
+    def _observed_override(self):
+        """Live camera values the config file does not carry, or {}."""
+        if self.observed_override_fn is None:
+            return {}
+        try:
+            return self.observed_override_fn() or {}
+        except Exception:  # noqa: BLE001 - reporting must not fail a check
+            return {}
+
     def _collect(self):
-        identity, retention, identity_payload, conditions = station_identity(self.config_path)
+        identity, retention, identity_payload, conditions = station_identity(
+            self.config_path, self._observed_override()
+        )
         expected = station_expected_color_positions(self.config_path, *self.scope[:2])
         if not expected:
             raise GoldenSampleError("站點未設定預期顏色，無法檢查 golden sample")
@@ -350,9 +366,11 @@ class GoldenSampleDialog(QDialog):
         request_capture_fn=None,
         readiness_fn=None,
         authorize_fn=None,
+        observed_override_fn=None,
         parent=None,
     ):
         super().__init__(parent)
+        self._observed_override_fn = observed_override_fn
         self._config_path = Path(config_path)
         self._results_root = Path(results_root)
         self._scope = (product, area, model_type)
@@ -646,6 +664,7 @@ class GoldenSampleDialog(QDialog):
             delta_e=self._delta.value(),
             repeatability=self._repeatability.value(),
             automatic=self._request_capture_fn is not None,
+            observed_override_fn=self._observed_override_fn,
             parent=self,
         )
         self._worker.progress.connect(self._on_progress)

@@ -77,6 +77,7 @@ from app.gui.auto_inspection_controller import (  # noqa: E402
     DEFAULT_AUTO_TRIGGER_CONFIG,
     AutoInspectionController,
 )
+from app.gui.auto_calibration_handler import AutoCalibrationHandlerMixin  # noqa: E402
 from app.gui.calibration_handler import CalibrationHandlerMixin  # noqa: E402
 from app.gui.color_preflight_handler import (  # noqa: E402
     ColorPreflightHandlerMixin,
@@ -124,6 +125,9 @@ class DetectionSystemGUI(
     CameraHandlerMixin,
     LightHandlerMixin,
     CalibrationHandlerMixin,
+    # After CalibrationHandlerMixin: reuses its _active_camera and
+    # _existing_calibration, and LightHandlerMixin's keepalive controls.
+    AutoCalibrationHandlerMixin,
     ColorPreflightHandlerMixin,
 ):
     def __init__(
@@ -214,6 +218,12 @@ class DetectionSystemGUI(
             detection_cls=_get_detection_class(),
         )
         self._skip_system_init = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+        # Session-local exposure matching; see AutoCalibrationHandlerMixin.
+        self._autocalib_worker = None
+        self._autocalib_scope = None
+        self._autocalib_timer = None
+        self._autocalib_reason = ""
+        self._last_autocalibrated_scope = None
         self.init_ui()
         self.update_camera_controls()
         if not self._skip_system_init:
@@ -429,7 +439,9 @@ class DetectionSystemGUI(
 
         self.control_panel.area_changed.connect(self.on_area_changed)
 
-        self.control_panel.inference_type_changed.connect(lambda _: self.update_start_enabled())
+        self.control_panel.inference_type_changed.connect(
+            self._on_inference_type_changed
+        )
 
         self.control_panel.start_requested.connect(self.start_detection)
         self.control_panel.stop_requested.connect(self.stop_detection)
@@ -1115,6 +1127,8 @@ class DetectionSystemGUI(
         self.inference_combo.blockSignals(False)
 
         self.update_start_enabled()
+        # Presets block all three combo signals, so the cascade never fires.
+        self._maybe_autocalibrate("preset")
         self.log_message(f"套用預設：{product} / {area} / {inf_type}")
 
 
@@ -1133,6 +1147,11 @@ class DetectionSystemGUI(
         except Exception as e:
             self.log_message(f"載入推論類型時發生錯誤：{e}")
 
+    def _on_inference_type_changed(self, _text=None):
+        """The one scope change that does not travel through the cascade."""
+        self.update_start_enabled()
+        self._maybe_autocalibrate("scope_change")
+
     def reload_inference_types(self):
         product = self.product_combo.currentText().strip()
         area = self.area_combo.currentText().strip()
@@ -1140,6 +1159,9 @@ class DetectionSystemGUI(
         self._rebuild_inference_combo(product, area)
         self.inference_combo.blockSignals(False)
         self.update_start_enabled()
+        # The common end of both the product -> area cascade and a direct area
+        # change, and the path _update_model_combos takes at startup.
+        self._maybe_autocalibrate("scope_change")
 
     def is_detection_running(self) -> bool:
         """Return True if a detection worker is running."""
@@ -1178,7 +1200,10 @@ class DetectionSystemGUI(
             and self.inference_combo.currentText().strip()
         )
         self.start_btn.setEnabled(
-            ok and not self.stop_btn.isEnabled() and not self.is_detection_running()
+            ok
+            and not self.stop_btn.isEnabled()
+            and not self.is_detection_running()
+            and not self._autocalibration_in_progress()
         )
 
 
@@ -1843,6 +1868,10 @@ class DetectionSystemGUI(
             self.log_message(self._t("system_callback_error", error=exc))
         finally:
             self.update_camera_controls()
+            # The camera is open and nothing owns it yet. The station may not
+            # be selected at this point -- the model list loads on its own
+            # thread -- in which case this is a no-op and the combos ask again.
+            self._maybe_autocalibrate("camera_ready")
 
     def load_available_models(self):
         """Async load available model information from the filesystem."""
@@ -1878,6 +1907,11 @@ class DetectionSystemGUI(
         preflight = getattr(self, "_color_preflight_dialog", None)
         if not golden_sample and preflight is not None and preflight._worker is not None:
             self.statusBar().showMessage("Golden sample 正在自動取樣，請等待完成或在開線視窗取消。")
+            return
+        # Same reason as above: the camera has one owner, and the exposure
+        # loop is holding it for a second or two.
+        if self._autocalibration_in_progress():
+            self.statusBar().showMessage(self._t("autocalib_blocks_start"))
             return
         product = self.product_combo.currentText()
         area = self.area_combo.currentText()
@@ -2703,6 +2737,10 @@ class DetectionSystemGUI(
             if self._retraining_workspace is not None:
                 self._retraining_workspace.shutdown_workspace()
             self.inspection_history_page.shutdown()
+            # Before the light goes and the system is torn down: the loop is
+            # mid-way through driving both, and its thread must not be
+            # destroyed under it.
+            self._stop_autocalibration_for_shutdown()
             self.shutdown_light()
             if self.controller.has_system():
                 self.controller.shutdown()

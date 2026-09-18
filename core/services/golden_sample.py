@@ -169,17 +169,29 @@ def color_identity_payload(config: Mapping) -> dict:
     return payload
 
 
-def observed_conditions(config: Mapping) -> dict:
+def observed_conditions(config: Mapping, overrides: Mapping | None = None) -> dict:
     """Hardware values the calibration loop landed on, for the record.
 
     Reported alongside a result so a drifting exposure is visible, without
     being allowed to invalidate the baseline that would detect its effect.
+
+    ``overrides`` carries values in force that the config file does not
+    record --- today, an exposure a session auto-calibration landed on.
+    Without it this reads the file, sees a number nobody has changed, and
+    reports no drift through a day in which the exposure moved by nearly ten
+    percent: the report would be at its quietest exactly when it had the most
+    to say. The fields are still only the observed ones, so feeding a live
+    value here can never expire a baseline.
     """
-    return {
-        field: config.get(field)
-        for field in OBSERVED_CONDITION_FIELDS
-        if config.get(field) is not None
-    }
+    overrides = overrides or {}
+    conditions = {}
+    for field in OBSERVED_CONDITION_FIELDS:
+        value = overrides.get(field)
+        if value is None:
+            value = config.get(field)
+        if value is not None:
+            conditions[field] = value
+    return conditions
 
 
 def condition_drift(baseline: Mapping | None, current: Mapping | None) -> list[str]:

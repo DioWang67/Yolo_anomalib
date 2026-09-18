@@ -66,7 +66,9 @@ class ColorPreflightHandlerMixin:
     """Open the pre-shift color check for the selected model.
 
     Relies on ``DetectionSystemGUI`` host attributes: ``_catalog``, the
-    product/area/inference combos, ``current_language`` and ``log_message``.
+    product/area/inference combos, ``current_language``, ``log_message`` and
+    ``controller`` (for the camera values in force that the station config
+    does not record).
 
     Opening requires only a selected scope. Once armed, the dialog collects
     new inspections triggered through the station's normal detection path.
@@ -144,6 +146,9 @@ class ColorPreflightHandlerMixin:
             request_capture_fn=lambda: self._capture_golden_sample(product, area, inference_type),
             readiness_fn=lambda: self._golden_sample_readiness(product, area, inference_type),
             authorize_fn=self._authorize_golden_sample_maintenance,
+            # The exposure actually in force, which the station config does not
+            # record once a session auto-calibration has moved it.
+            observed_override_fn=self.controller.effective_camera_settings,
             parent=self,
         )
         # Shown non-modally, and kept on the host so it is not collected: the

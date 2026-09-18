@@ -10,7 +10,13 @@ from app.gui.i18n import tr
 
 
 class CameraHandlerMixin:
-    """Camera control methods extracted from DetectionSystemGUI."""
+    """Camera control methods extracted from DetectionSystemGUI.
+
+    Connecting or dropping the camera also ends the session exposure measured
+    against the old one, so the host must supply
+    ``AutoCalibrationHandlerMixin``'s
+    ``_reset_autocalibration_for_camera_change`` and ``_maybe_autocalibrate``.
+    """
 
     def _t(self, key: str, **kwargs: object) -> str:
         text = tr(getattr(self, "current_language", "en"), key)
@@ -108,6 +114,9 @@ class CameraHandlerMixin:
                 return
         self._set_camera_status("reconnecting")
         self.log_message(self._t("camera_reconnecting"))
+        # A different camera session has measured nothing yet, so the exposure
+        # the last one converged on stops applying here rather than lingering.
+        self._reset_autocalibration_for_camera_change()
         try:
             success = self.controller.reconnect_camera()
         except Exception as exc:
@@ -142,6 +151,7 @@ class CameraHandlerMixin:
                 )
         self._camera_check_ts = 0
         self.update_camera_controls()
+        self._maybe_autocalibrate("camera_reconnect")
 
     def handle_disconnect_camera(self) -> None:
         """Allow the operator to disconnect the camera manually."""
@@ -160,6 +170,7 @@ class CameraHandlerMixin:
             )
             return
         self.log_message(self._t("camera_disconnecting"))
+        self._reset_autocalibration_for_camera_change()
         disconnect_succeeded = False
         try:
             self.controller.disconnect_camera()

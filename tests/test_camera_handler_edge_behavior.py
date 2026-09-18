@@ -59,7 +59,17 @@ class _Signal:
 
 
 class _Host(camera_handler.CameraHandlerMixin):
+    # Connecting or dropping the camera ends the session exposure measured
+    # against the old one; the real window gets these from
+    # AutoCalibrationHandlerMixin.
+    def _reset_autocalibration_for_camera_change(self) -> None:
+        self.autocalib_events.append("reset")
+
+    def _maybe_autocalibrate(self, reason: str = "") -> None:
+        self.autocalib_events.append(reason)
+
     def __init__(self) -> None:
+        self.autocalib_events: list[str] = []
         self.current_language = "en"
         self.running = False
         self.system_available = True

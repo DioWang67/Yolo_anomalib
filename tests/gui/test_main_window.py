@@ -811,6 +811,44 @@ def test_close_waits_for_auto_work_to_finish(
     qtbot.waitUntil(lambda: close_requests == ["close"], timeout=1000)
 
 
+def test_every_way_the_station_can_change_asks_for_a_recalibration(gui, monkeypatch):
+    """Camera-ready and station switch are the two triggers, and they race.
+
+    The camera can open before the model list has loaded and vice versa, so
+    both ask and the guards decide; nothing sequences them.
+    """
+    asked = []
+    monkeypatch.setattr(gui, "_maybe_autocalibrate", lambda reason="": asked.append(reason))
+
+    gui._on_system_init_finished(True)
+    assert asked == ["camera_ready"]
+
+    gui.reload_inference_types()
+    gui._on_inference_type_changed("yolo")
+    assert asked[1:] == ["scope_change", "scope_change"]
+
+
+def test_start_is_refused_while_the_exposure_is_being_matched(gui, monkeypatch):
+    """The camera has one owner and the loop is holding it."""
+    started = []
+    monkeypatch.setattr(gui, "is_detection_running", lambda: False)
+    monkeypatch.setattr(gui.controller, "has_system", lambda: True)
+    monkeypatch.setattr(gui, "_run_single_shot", lambda *a, **k: started.append(a))
+    gui._autocalib_worker = object()
+
+    gui.start_detection()
+
+    assert started == []
+    assert gui.statusBar().currentMessage() == tr(
+        gui.current_language, "autocalib_blocks_start"
+    )
+
+    gui.update_start_enabled()
+    assert not gui.start_btn.isEnabled()
+
+    gui._autocalib_worker = None
+
+
 def test_close_defers_destruction_until_golden_worker_stops(gui, monkeypatch):
     from types import SimpleNamespace
 

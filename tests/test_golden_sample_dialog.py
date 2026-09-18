@@ -400,6 +400,9 @@ def test_menu_reopens_same_session_and_retires_old_scope_safely(tmp_path, qtbot,
         combo.addItem(text)
         setattr(host, name, combo)
     host._catalog = SimpleNamespace(config_path=lambda *args: capture.config_path)
+    # The dialog asks the controller for camera values in force that the
+    # station config does not record; no session calibration here, so none.
+    host.controller = SimpleNamespace(effective_camera_settings=lambda: {})
     monkeypatch.setattr("app.gui.color_preflight_handler.load_station_data_paths", lambda:
         SimpleNamespace(results=capture.results_root, color_preflight=tmp_path / "ledger"))
     host.open_color_preflight_dialog()

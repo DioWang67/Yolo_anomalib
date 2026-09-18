@@ -307,6 +307,38 @@ def test_a_stored_roi_outside_the_crop_is_still_refused(tmp_path):
         fixed_grid_measurements([[position]], legacy)
 
 
+def test_the_conditions_report_shows_the_exposure_actually_in_use():
+    """A session calibration moves exposure without touching config.yaml.
+
+    Reading only the file, this report would stay silent through a day in
+    which the exposure moved nearly ten percent -- quietest exactly when it
+    had the most to say.
+    """
+    from core.services.golden_sample import condition_drift, observed_conditions
+
+    config = {"exposure_time": "20134.0000", "gain": "23.0", "light_brightness": 0}
+
+    assert observed_conditions(config)["exposure_time"] == "20134.0000"
+
+    live = observed_conditions(config, {"exposure_time": 21980.0})
+    assert live["exposure_time"] == 21980.0
+    # Only the overridden field moves; the rest still come from the file.
+    assert live["gain"] == "23.0"
+    assert condition_drift(observed_conditions(config), live) == [
+        "曝光 20134.0000 → 21980.0"
+    ]
+
+
+def test_a_session_exposure_cannot_expire_a_baseline(tmp_path):
+    """Exposure is an observed condition, not part of colour identity."""
+    from core.services.golden_sample import color_identity_payload
+
+    config = {"enable_color_check": True, "exposure_time": "20134.0000"}
+    moved = {"enable_color_check": True, "exposure_time": "21980.0"}
+
+    assert color_identity_payload(config) == color_identity_payload(moved)
+
+
 def test_colour_identity_field_list_is_locked():
     """The field list is a correctness boundary, not an implementation detail.
 

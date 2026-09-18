@@ -58,6 +58,22 @@ if TYPE_CHECKING:  # pragma: no cover
 PROJECT_ROOT = project_root()
 
 
+def calibration_scope(product: str, area: str, inference_type: str) -> tuple[str, str, str]:
+    """Which station's camera settings a selection refers to.
+
+    Fusion reads the YOLO station config, so it names the same scope. Given a
+    name of its own it would key a runtime exposure under a station that has
+    no config file, and the override would then never match the settings it
+    was measured for.
+    """
+    resolved = inference_type.strip().lower()
+    return (
+        product.strip(),
+        area.strip(),
+        "yolo" if resolved == "fusion" else resolved,
+    )
+
+
 class DetectionSystem:
     _CAMERA_SETTINGS_RETRY_ATTEMPTS = 3
     _CAMERA_SETTINGS_RETRY_DELAY_SECONDS = 0.05
@@ -125,6 +141,13 @@ class DetectionSystem:
         # only re-applied on change (never on the per-frame hot path).
         self._applied_camera_settings: tuple[str, str] | None = None
         self._camera_settings_need_settle = False
+        # Which station's settings are currently loaded, and the exposure a
+        # session-local auto-calibration landed on for it. Held as one tuple so
+        # there is no way to carry an exposure whose station has been
+        # forgotten -- carrying one into another station would silently light
+        # that station with a number measured somewhere else.
+        self._active_scope: tuple[str, str, str] | None = None
+        self._runtime_exposure_override: tuple[tuple[str, str, str], float] | None = None
         self.result_sink: ExcelImageResultSink | None = None
         self._sink_base_dir: Path | None = None
         self._refresh_result_sink()
@@ -237,6 +260,11 @@ class DetectionSystem:
         self.current_inference_type = None
         self._active_inspection_release = None
         self.model_manager.clear_cache(product, area, inference_type)
+        # Reached after a person saved a calibration of their own. A recorded
+        # decision outranks a session's guess, so the guess is dropped rather
+        # than left to quietly outlive the thing it was standing in for.
+        self._runtime_exposure_override = None
+        self._applied_camera_settings = None
         self._base_config = self.load_config(self.config_path)
         self.config = copy.deepcopy(self._base_config)
         self._refresh_result_sink()
@@ -429,6 +457,9 @@ class DetectionSystem:
             self.camera.initialize()
             self._applied_camera_settings = None
             self._camera_settings_need_settle = False
+            # A new camera session has not been calibrated; the exposure the
+            # last one converged on described a moment that has passed.
+            self._runtime_exposure_override = None
             self.logger.logger.info("Camera is ready")
         except Exception as e:
             self.logger.logger.error(f"Camera init failed: {str(e)}")
@@ -446,6 +477,9 @@ class DetectionSystem:
             except Exception as e:
                 self.logger.logger.warning(f"Camera shutdown raised: {e}")
         self.camera = None
+        # Both were left describing a camera that no longer exists.
+        self._runtime_exposure_override = None
+        self._applied_camera_settings = None
 
     def reconnect_camera(self) -> bool:
         """Attempt to reinitialize the camera after a manual disconnect."""
@@ -469,6 +503,17 @@ class DetectionSystem:
 
     def load_model_configs(self, product: str, area: str, inference_type: str) -> None:
         """Resolve one release snapshot and switch all model components."""
+        scope = calibration_scope(product, area, inference_type)
+        # A session exposure belongs to the station it was measured at. The
+        # GUI drops it when the operator switches, but this is the path every
+        # inspection goes through, so it is checked here too rather than
+        # trusted to have happened.
+        if (
+            self._runtime_exposure_override is not None
+            and self._runtime_exposure_override[0] != scope
+        ):
+            self.clear_runtime_exposure_override()
+        self._active_scope = scope
         release = (
             self._inspection_release_resolver.resolve(product, area, inference_type)
             if self._inspection_release_resolver is not None
@@ -564,19 +609,80 @@ class DetectionSystem:
         )
         self._ensure_camera_settings_ready_for_capture()
 
+    def set_runtime_exposure_override(
+        self, scope: tuple[str, str, str], exposure_time: float
+    ) -> None:
+        """Record the exposure a session-local auto-calibration landed on.
+
+        Session-local on purpose: under uncontrolled light the correct
+        exposure is a measurement of today, not a setting, so it is never
+        written to the station's ``config.yaml`` --- that file keeps its
+        meaning as the last exposure a person deliberately chose.
+
+        The applied-settings cache is dropped rather than left to agree by
+        accident. The override only takes effect because the next apply
+        re-reads it, and the cache must describe what the hardware was
+        actually told.
+        """
+        self._active_scope = calibration_scope(*scope)
+        self._runtime_exposure_override = (self._active_scope, float(exposure_time))
+        self._applied_camera_settings = None
+        self._camera_settings_need_settle = True
+
+    def clear_runtime_exposure_override(self) -> None:
+        """Drop the session exposure and go back to what the config says."""
+        self._runtime_exposure_override = None
+        self._applied_camera_settings = None
+
+    def runtime_exposure_override(self) -> float | None:
+        """The session exposure for the station now loaded, if there is one."""
+        override = self._runtime_exposure_override
+        if override is None or override[0] != self._active_scope:
+            return None
+        return override[1]
+
+    def invalidate_applied_camera_settings(self) -> None:
+        """Forget what the camera was last told.
+
+        Called before anything drives the hardware behind this object's back,
+        so that whatever state that leaves --- converged, half-converged, or
+        abandoned mid-step --- the next apply pushes the effective values
+        again instead of skipping on a stale match.
+        """
+        self._applied_camera_settings = None
+
+    def effective_camera_settings(self) -> dict[str, Any]:
+        """Camera values in force that the station config does not record.
+
+        Read by the pre-shift colour check so its "camera conditions changed"
+        line reports the exposure actually in use. Without this it would read
+        the file, see the unchanged number, and report no change through a
+        day in which the exposure moved by nearly ten percent.
+        """
+        override = self.runtime_exposure_override()
+        return {} if override is None else {"exposure_time": override}
+
+    def _effective_exposure_time(self) -> Any:
+        override = self.runtime_exposure_override()
+        if override is not None:
+            return override
+        return getattr(self.config, "exposure_time", None)
+
     def _apply_camera_settings_from_config(self) -> bool:
-        """Push the active config's exposure/gain to the camera when changed.
+        """Push the effective exposure/gain to the camera when changed.
 
         Models calibrated via the calibration dialog carry their own
         ``exposure_time``/``gain``; models without those keys keep the
-        currently-set (global) values. Change-detection guarantees this never
-        touches hardware unless a value actually differs, so it is safe on the
-        model-switch path that runs before every inspection.
+        currently-set (global) values. A session auto-calibration outranks
+        both --- see :meth:`set_runtime_exposure_override`. Change-detection
+        guarantees this never touches hardware unless a value actually
+        differs, so it is safe on the model-switch path that runs before every
+        inspection.
         """
         camera = self.camera
         if camera is None or not getattr(camera, "is_initialized", False):
             return False
-        exposure = getattr(self.config, "exposure_time", None)
+        exposure = self._effective_exposure_time()
         gain = getattr(self.config, "gain", None)
         desired = (str(exposure), str(gain))
         if desired == self._applied_camera_settings:

@@ -68,7 +68,7 @@ def _frame_to_pixmap(frame: np.ndarray, target_size) -> QPixmap | None:
         return None
 
 
-class _AutoCalibrateWorker(QThread):
+class AutoCalibrateWorker(QThread):
     """Runs the (blocking) calibration loop off the UI thread."""
 
     finished_ok = pyqtSignal(object)   # CalibrationOutcome
@@ -129,7 +129,7 @@ class CalibrationDialog(QDialog):
         self._session = session
         self._save_fn = save_fn
         self._language = normalize_language(language)
-        self._worker: _AutoCalibrateWorker | None = None
+        self._worker: AutoCalibrateWorker | None = None
 
         self.setWindowTitle(self._t("calib_title"))
         self.setMinimumWidth(380)
@@ -278,7 +278,7 @@ class CalibrationDialog(QDialog):
         self._status_label.setText(self._t("calib_running"))
         self._progress_log.clear()
         self._progress_log.setVisible(True)
-        worker = _AutoCalibrateWorker(self._session, self._current_target(), self)
+        worker = AutoCalibrateWorker(self._session, self._current_target(), self)
         worker.finished_ok.connect(self._on_auto_finished)
         worker.failed.connect(self._on_auto_failed)
         worker.progress.connect(self._on_auto_progress)

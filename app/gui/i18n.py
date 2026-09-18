@@ -403,6 +403,24 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "calib_failed": "Calibration did not converge ({reason}); nothing saved. Best luma={luma}.",
         "calib_saved": "Saved to model config (backup: {backup}).",
         "calib_error": "Calibration failed: {error}",
+        "autocalib_running": "Matching exposure to the light in the room...",
+        "autocalib_success": (
+            "Exposure set to {exposure} us (luma {luma}, {iterations} steps). "
+            "This session only; the model config was not changed."
+        ),
+        "autocalib_not_converged": (
+            "Could not match the light ({reason}); the saved exposure is still "
+            "in use. Best luma {luma}. Run Illumination Calibration if images "
+            "look wrong."
+        ),
+        "autocalib_error": "Automatic exposure matching failed: {error}",
+        "autocalib_skipped_no_target": (
+            "This station has no recorded target brightness, so exposure was "
+            "left as configured."
+        ),
+        "autocalib_blocks_start": (
+            "Matching exposure to the light; detection can start in a moment."
+        ),
         "preflight_menu": "Pre-shift Color Check...",
         "preflight_title": "Pre-shift Color Check",
         "preflight_hint": (
@@ -902,6 +920,18 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "calib_failed": "校正未收斂（{reason}），未寫入。最佳亮度={luma}。",
         "calib_saved": "已寫入機種設定（備份：{backup}）。",
         "calib_error": "校正失敗：{error}",
+        "autocalib_running": "正在依現場光線調整曝光…",
+        "autocalib_success": (
+            "曝光已調為 {exposure} µs（亮度 {luma}，共 {iterations} 步）。"
+            "本次開機有效，未寫入機種設定。"
+        ),
+        "autocalib_not_converged": (
+            "無法配合現場光線（{reason}），仍沿用已存的曝光值。最佳亮度 {luma}。"
+            "若畫面明顯不對，請手動執行光源校正。"
+        ),
+        "autocalib_error": "自動曝光調整失敗：{error}",
+        "autocalib_skipped_no_target": "此站點沒有記錄目標亮度，曝光維持設定值。",
+        "autocalib_blocks_start": "正在依現場光線調整曝光，稍候即可開始檢測。",
         "preflight_menu": "顏色開線檢查…",
         "preflight_title": "顏色開線檢查",
         "preflight_hint": (
