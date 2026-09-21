@@ -5,7 +5,7 @@ from __future__ import annotations
 import getpass
 import hashlib
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -62,6 +62,36 @@ STATION_OWNED_COLOR_FIELDS = frozenset(
         "color_roi_policy",
     }
 )
+
+
+def restore_station_local_fields(
+    snapshot: dict[str, Any], live: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Give a config snapshot's station back the fields that describe it.
+
+    A snapshot -- a model version's, or the one an inspection release pins --
+    records the settings a model was validated with. That is right for
+    everything describing the model and wrong for everything describing the
+    room: exposure, gain, the brightness target, the colour sampling geometry
+    and the pre-shift reference are properties of this fixture under this
+    light, and a snapshot taken on another day carries another day's values.
+
+    Colour fields are restored *or removed*, never left standing: a foreign
+    sampling geometry invalidates the station's approved baseline exactly as
+    surely as dropping the station's own would, so where the live station
+    holds no value, neither may the snapshot.
+
+    ``snapshot`` is mutated and returned.
+    """
+    for field_name in STATION_LOCAL_FIELDS:
+        if field_name in live:
+            snapshot[field_name] = live[field_name]
+    for field_name in STATION_OWNED_COLOR_FIELDS:
+        if field_name in live:
+            snapshot[field_name] = live[field_name]
+        else:
+            snapshot.pop(field_name, None)
+    return snapshot
 
 
 class ModelVersionRegistryError(RuntimeError):
@@ -272,14 +302,7 @@ class ModelVersionRegistry:
                 if refreshed.has_config_snapshot
                 else dict(current_config)
             )
-            for field_name in STATION_LOCAL_FIELDS:
-                if field_name in current_config:
-                    next_config[field_name] = current_config[field_name]
-            for field_name in STATION_OWNED_COLOR_FIELDS:
-                if field_name in current_config:
-                    next_config[field_name] = current_config[field_name]
-                else:
-                    next_config.pop(field_name, None)
+            restore_station_local_fields(next_config, current_config)
             self._set_config_weight(
                 next_config,
                 refreshed,

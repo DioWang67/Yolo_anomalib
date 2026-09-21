@@ -17,6 +17,7 @@ from core.exceptions import ModelConfigError
 from core.logging_config import DetectionLogger
 from core.path_utils import project_root, resolve_path
 from core.security import resolve_result_output_dir, safe_segment
+from core.services.model_version_registry import restore_station_local_fields
 from core.version_utils import (
     ModelVersionError,
     check_compatibility,
@@ -379,6 +380,48 @@ class ModelManager:
             f"(searched: {[str(c) for c in candidates]})"
         )
 
+    def _restore_station_local_fields(
+        self,
+        cfg: dict,
+        product: str,
+        area: str,
+        inference_type: str,
+    ) -> dict:
+        """Let the station keep its own settings when a release pins a config.
+
+        A release pins the config its model was validated with, which is the
+        right thing for everything describing the model and the wrong thing
+        for everything describing the room. ``model_version_registry`` applies
+        this rule when an older model version is activated and documents why;
+        applying it in only one of the two paths is what let release
+        inspection-v1.0.10 run Cable1/A at the 95085us it was pinned with in
+        July while the station's own config said 20134 -- measured luma 155
+        against a target of 56, with every manual calibration undone by the
+        next inspection, and the station's colour sampling geometry dropped
+        from under an approved baseline.
+
+        A station with no live config of its own has nothing to give back, so
+        the snapshot stands as it is.
+        """
+        try:
+            live_path = self._locate_model_config(product, area, inference_type)
+        except (FileNotFoundError, ModelConfigError):
+            return cfg
+        try:
+            with open(live_path, encoding="utf-8") as handle:
+                live = yaml.safe_load(handle) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            # Unreadable rather than absent: say so instead of silently
+            # running the station on another day's exposure.
+            self.logger.logger.warning(
+                "Station config at %s could not be read (%s); the release "
+                "snapshot's station-local values are being used",
+                live_path,
+                exc,
+            )
+            return cfg
+        return restore_station_local_fields(cfg, live)
+
     def switch(
         self,
         base_config: DetectionConfig,
@@ -415,6 +458,11 @@ class ModelManager:
 
         with open(model_config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
+
+        if config_path_override is not None:
+            cfg = self._restore_station_local_fields(
+                cfg, safe_product, safe_area, safe_inference_type
+            )
 
         # Optional pydantic normalization for model-level config
         try:

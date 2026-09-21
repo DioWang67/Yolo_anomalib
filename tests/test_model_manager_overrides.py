@@ -178,6 +178,71 @@ def test_exact_config_override_reads_history_without_changing_active_config(
     assert active_path.read_bytes() == active_before
 
 
+def test_a_release_snapshot_does_not_relight_the_room(tmp_path, monkeypatch):
+    """A pinned config describes the model, not the station it runs at.
+
+    Release inspection-v1.0.10 pinned Cable1/A's July config and so ran the
+    station at 95085us while its own config said 20134 -- measured luma 155
+    against a target of 56, with every manual calibration undone by the next
+    inspection. model_version_registry protects these fields by name on the
+    version-rollback path; this pins the same rule on the release path.
+    """
+    weights_path = tmp_path / "pinned.onnx"
+    weights_path.write_bytes(b"")
+    global_cfg_path = _write_global_config(tmp_path, weights_path)
+    active_dir = tmp_path / "models" / "Cable1" / "A" / "yolo"
+    _write_model_config(active_dir, weights_path)
+    # The station's own colour geometry, which the snapshot does not carry.
+    live = yaml.safe_load(
+        (active_dir / "config.yaml").read_text(encoding="utf-8")
+    )
+    live["color_roi_policy"] = {"inset_x_ratio": 0.2, "inset_y_ratio": 0.1}
+    (active_dir / "config.yaml").write_text(
+        yaml.safe_dump(live), encoding="utf-8"
+    )
+
+    pinned = tmp_path / "versions" / "v1.0.6.config.yaml"
+    pinned.parent.mkdir()
+    pinned.write_text(
+        yaml.safe_dump(
+            {
+                "weights": str(weights_path),
+                "enable_yolo": True,
+                "color_model_path": "color.json",
+                # Another day's room.
+                "exposure_time": "95085.0000",
+                "gain": "23.0",
+                "calibration": {"target_luma": 56.0, "tolerance": 2.0},
+                # A foreign sampling geometry the live station does not hold.
+                "color_decision_tuning": {"yellow_h_min": 99},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (pinned.parent / "color.json").write_text("{}", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    _, cfg = ModelManager(
+        DetectionLogger(), engine_factory=_FakeInferenceEngine
+    ).switch(
+        DetectionConfig.from_yaml(str(global_cfg_path)),
+        product="Cable1",
+        area="A",
+        inference_type="yolo",
+        config_path_override=pinned,
+    )
+
+    # The room is the station's: its exposure and brightness target survive.
+    assert cfg.exposure_time == "22380.0000"
+    assert cfg.calibration == {"target_luma": 60.3, "tolerance": 2.0}
+    # The station's own colour geometry survives...
+    assert cfg.color_roi_policy == {"inset_x_ratio": 0.2, "inset_y_ratio": 0.1}
+    # ...and a foreign one is removed rather than left standing, because a
+    # snapshot's tuning invalidates the approved baseline just as surely as
+    # dropping the station's own would.
+    assert cfg.color_decision_tuning is None
+
+
 def test_model_overrides_apply_expected_items_from_model_config(tmp_path, monkeypatch):
     weights_path = tmp_path / "best.onnx"
     weights_path.write_bytes(b"")
