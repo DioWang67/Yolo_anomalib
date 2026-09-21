@@ -296,6 +296,48 @@ class AutoTriggerStateMachine:
     # Public API
     # ------------------------------------------------------------------
 
+    def _evaluate_stability(self, sharpness: float, motion: float) -> bool:
+        """Score one frame against the stability gate. Returns whether to fire.
+
+        Extracted so ``PRODUCT_APPEAR`` can judge the frame on which it enters
+        ``WAIT_STABLE`` instead of discarding it. The caller must already have
+        confirmed ``product_present`` for this frame.
+        """
+        stable = (
+            motion < self.config.motion_threshold
+            and sharpness > self.config.sharpness_threshold
+        )
+        if stable:
+            self._stable_count += 1
+            logger.debug(
+                "WAIT_STABLE stable_count=%d sharpness=%.1f motion=%.2f",
+                self._stable_count, sharpness, motion,
+            )
+        else:
+            if self._stable_count > 0:
+                logger.debug(
+                    "WAIT_STABLE reset sharpness=%.1f (need >%.1f) "
+                    "motion=%.2f (need <%.2f)",
+                    sharpness, self.config.sharpness_threshold,
+                    motion, self.config.motion_threshold,
+                )
+            self._stable_count = 0
+
+        if self._stable_count < self.config.stable_frames:
+            return False
+
+        cooldown_elapsed_ms = (time.monotonic() - self._last_trigger_ts) * 1000
+        if cooldown_elapsed_ms < self.config.inspection_cooldown_ms:
+            return False
+
+        self._last_trigger_ts = time.monotonic()
+        self._transition(TriggerState.CAPTURE_LOCK)
+        logger.info(
+            "Trigger fired: sharpness=%.1f motion=%.2f stable=%d",
+            sharpness, motion, self._stable_count,
+        )
+        return True
+
     def update(
         self,
         frame: np.ndarray,
@@ -356,9 +398,18 @@ class AutoTriggerStateMachine:
                 self._appear_count = 0
                 self._transition(TriggerState.WAIT_EMPTY)
             else:
-                # Already at appear_frames; stay here one cycle, then advance
+                # Enter WAIT_STABLE and judge this very frame, rather than
+                # spending it purely on the state change. Trigger latency is
+                # counted in camera frames (~55 ms each on this station), and
+                # this frame previously carried no evidence at all: presence
+                # was already confirmed by appear_frames, and stability was
+                # not evaluated until the next frame. Judging it here costs
+                # one whole frame less without relaxing anything — the same
+                # number of stable frames is still required, and presence is
+                # still re-checked every frame inside WAIT_STABLE.
                 self._stable_count = 0
                 self._transition(TriggerState.WAIT_STABLE)
+                should_trigger = self._evaluate_stability(sharpness, motion)
 
         elif self._state == TriggerState.WAIT_STABLE:
             if not product_present:
@@ -366,39 +417,7 @@ class AutoTriggerStateMachine:
                 self._stable_count = 0
                 self._transition(TriggerState.WAIT_EMPTY)
             else:
-                stable = (
-                    motion < self.config.motion_threshold
-                    and sharpness > self.config.sharpness_threshold
-                )
-                if stable:
-                    self._stable_count += 1
-                    logger.debug(
-                        "WAIT_STABLE stable_count=%d sharpness=%.1f motion=%.2f",
-                        self._stable_count, sharpness, motion,
-                    )
-                else:
-                    if self._stable_count > 0:
-                        logger.debug(
-                            "WAIT_STABLE reset sharpness=%.1f (need >%.1f) "
-                            "motion=%.2f (need <%.2f)",
-                            sharpness, self.config.sharpness_threshold,
-                            motion, self.config.motion_threshold,
-                        )
-                    self._stable_count = 0
-
-                if self._stable_count >= self.config.stable_frames:
-                    cooldown_ok = (
-                        (time.monotonic() - self._last_trigger_ts) * 1000
-                        >= self.config.inspection_cooldown_ms
-                    )
-                    if cooldown_ok:
-                        self._last_trigger_ts = time.monotonic()
-                        self._transition(TriggerState.CAPTURE_LOCK)
-                        should_trigger = True
-                        logger.info(
-                            "Trigger fired: sharpness=%.1f motion=%.2f stable=%d",
-                            sharpness, motion, self._stable_count,
-                        )
+                should_trigger = self._evaluate_stability(sharpness, motion)
 
         elif self._state == TriggerState.CAPTURE_LOCK:
             # External caller must call mark_inspecting() after frame selection.
