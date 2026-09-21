@@ -127,7 +127,7 @@ save_original: true
 light_brightness: 0
 save_fail_only: false
 calibration:
-  target_luma: 45.0
+  target_luma: 56.0
   tolerance: 2.0
 gain: '23.0'
 exposure_time: '20134.0000'
