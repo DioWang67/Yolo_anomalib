@@ -28,6 +28,8 @@ module deciding how bright a station it has never seen ought to be.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from PyQt5.QtCore import QTimer
 
 from app.gui.calibration_dialog import AutoCalibrateWorker
@@ -35,6 +37,30 @@ from app.gui.i18n import tr
 from core.detection_system import calibration_scope
 from core.services.auto_calibrator import CalibrationTarget
 from core.services.calibration_session import CalibrationSession
+
+
+class CalibrationStatus(NamedTuple):
+    """The last illumination result, in a form a precondition can read.
+
+    The loop already logs and flashes the status bar when it cannot converge,
+    then marks the scope so it will not retry. Nothing outranks that: the
+    golden-sample check could find every one of its preconditions green while
+    the station sat outside its own luma band, run three inspections at the
+    wrong brightness, and report the result as a colour deviation at some
+    position. The operator then looks at the board and the colour model, which
+    are both fine.
+
+    Recorded for success and for every failure path, so a reader can tell
+    "converged", "did not converge" and "never ran" apart. Plain GUI-thread
+    state by design: the readiness poll must stay free of I/O.
+    """
+
+    scope: tuple[str, str, str]
+    converged: bool
+    reason: str
+    final_luma: float | None = None
+    target_luma: float | None = None
+    tolerance: float | None = None
 
 #: Long enough to swallow the product -> area -> inference cascade, which
 #: fires three scope changes for one operator action, short enough that the
@@ -141,6 +167,11 @@ class AutoCalibrationHandlerMixin:
             # never been calibrated, and this is not the thing to decide how
             # bright it should be.
             self._last_autocalibrated_scope = scope
+            # Recorded as converged: a station with no target has no band to
+            # be outside of, so this must not block its golden-sample check.
+            self._last_autocalibration_status = CalibrationStatus(
+                scope, True, "no_target"
+            )
             self.log_message(self._t("autocalib_skipped_no_target"))
             return
 
@@ -176,6 +207,12 @@ class AutoCalibrationHandlerMixin:
         worker.finished.connect(self._finish_autocalibration)
         self._autocalib_worker = worker
         self._autocalib_scope = scope
+        # Stashed so the outcome handlers can report the band the run was
+        # driving toward, not just the luma it ended on.
+        self._autocalib_band = (
+            float(calibration_target.target_luma),
+            float(calibration_target.tolerance),
+        )
         self.update_start_enabled()
         self.statusBar().showMessage(self._t("autocalib_running"))
         worker.start()
@@ -193,6 +230,16 @@ class AutoCalibrationHandlerMixin:
         # Marked whatever the outcome: a station that cannot converge must not
         # re-run the loop every time the combos repaint.
         self._last_autocalibrated_scope = scope
+        band = getattr(self, "_autocalib_band", (None, None))
+        if scope is not None:
+            self._last_autocalibration_status = CalibrationStatus(
+                scope,
+                bool(getattr(outcome, "success", False)),
+                str(getattr(outcome.reason, "value", outcome.reason)),
+                float(outcome.final_luma),
+                band[0],
+                band[1],
+            )
 
         if not getattr(outcome, "success", False):
             self.log_message(
@@ -235,6 +282,13 @@ class AutoCalibrationHandlerMixin:
 
     def _on_autocalibration_failed(self, message: str) -> None:
         self._last_autocalibrated_scope = getattr(self, "_autocalib_scope", None)
+        band = getattr(self, "_autocalib_band", (None, None))
+        if self._last_autocalibrated_scope is not None:
+            # A crashed run leaves the illumination wherever it stopped, which
+            # is no safer than one that ran out of iterations.
+            self._last_autocalibration_status = CalibrationStatus(
+                self._last_autocalibrated_scope, False, "error", None, band[0], band[1]
+            )
         text = self._t("autocalib_error", error=message)
         self.log_message(text)
         self.statusBar().showMessage(text)

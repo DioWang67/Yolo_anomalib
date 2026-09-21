@@ -59,7 +59,51 @@ def golden_sample_readiness(host, product, area, model_type) -> list[ReadinessCh
             host.controller.has_system(),
             "請先完成相機／檢測系統初始化",
         ),
+        _illumination_check(host, (product, area, model_type.lower())),
     ]
+
+
+def _illumination_check(host, scope) -> ReadinessCheck:
+    """Whether illumination has settled into this station's luma band.
+
+    Without this the other four can all be green while auto-calibration is
+    still stepping — or has already given up — and the check then measures a
+    golden sample at the wrong brightness. It fails, and it fails as "position
+    N colour deviation", which sends the operator to inspect the board and the
+    colour model instead of the light.
+
+    Reads the recorded outcome rather than measuring: this runs on a 500 ms
+    GUI-thread poll, where grabbing a frame would both stall the interface and
+    contend with the camera.
+
+    Never blocks on an unknown. A station that has not calibrated may simply
+    have no target recorded, and refusing the daily check on a missing reading
+    would stop a line to protect it from a measurement nobody asked for.
+    """
+    if getattr(host, "_autocalib_worker", None) is not None:
+        return ReadinessCheck(
+            "照明已收斂", False, "照明自動校正進行中，請等待完成"
+        )
+
+    status = getattr(host, "_last_autocalibration_status", None)
+    if status is None or status.scope != scope:
+        return ReadinessCheck("照明已收斂", True, "")
+    if status.converged:
+        return ReadinessCheck("照明已收斂", True, "")
+
+    if status.final_luma is None or status.target_luma is None:
+        detail = f"自動校正未完成（{status.reason}）"
+    else:
+        detail = (
+            f"目前亮度 {status.final_luma:.1f}，目標 {status.target_luma:.1f}"
+            f" ± {status.tolerance:.1f}"
+            f"（偏離 {status.final_luma - status.target_luma:+.1f}，{status.reason}）"
+        )
+    return ReadinessCheck(
+        "照明已收斂",
+        False,
+        f"{detail}。請先讓照明穩定或重跑照明校正，否則量到的是亮度問題而非顏色問題",
+    )
 
 
 class ColorPreflightHandlerMixin:
