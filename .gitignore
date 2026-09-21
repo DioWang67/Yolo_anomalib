@@ -123,6 +123,10 @@ models_backup/
 # truth (resolves paths via SPECPATH), tracked on purpose. build_exe.bat builds
 # from it rather than regenerating it.
 !yolo11_inference.spec
+# Same category: hand-maintained, resolves paths via SPECPATH, and carries the
+# exclusion list that keeps the preflight checker small enough to copy onto a
+# bare station. build_system_check.bat builds from it.
+!tools/system_check/system_check.spec
 build_log.txt
 *.bak.*
 models/*_backup/
