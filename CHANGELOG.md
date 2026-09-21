@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `tools/system_check` -- a deployment preflight that answers whether a given
+  Windows machine can run this application, and how fast it does, before
+  anything else is installed on it. It ships as its own standalone executable
+  so it can be copied to a bare station and double-clicked: no arguments, no
+  Python, it finds the installation beside itself, runs every check,
+  benchmarks the real ONNX model and holds the window open.
+
+  Every threshold it applies is traceable to a file in this repository, and
+  `--list-requirements` prints that table. Where the repository states nothing
+  -- minimum RAM, minimum core count, any FPS or cycle-time figure -- it
+  measures and reports without a verdict rather than inventing one, and the
+  report names those gaps out loud. Two performance concepts are kept apart on
+  purpose: the per-inference timeout `core/fusion_inference.py` enforces is a
+  real constraint and is judged PASS/FAIL, while line cycle time is nowhere in
+  the repository and so carries no verdict at all.
+
+  Its two hard-won details are worth keeping: package versions of a *packaged*
+  build are read from `_internal` metadata rather than by importing, because a
+  frozen checker's own bundle is not the application's environment and
+  trusting it reported eight false failures; and absence of a pure-Python
+  package in a bundle is never evidence of absence, because PyInstaller keeps
+  those inside the PYZ where nothing on disk reveals them.
+
 - A pre-shift color check -- 燈光控制 > 顏色開線檢查 in the GUI, beside the
   illumination calibration it completes, and `tools/color_preflight.py` for
   engineers and for the cross-shift trend -- and the second half of an operator
@@ -140,6 +163,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   typo as `warn` would grant the opposite of what the config asked for.
 
 ### Fixed
+- Auto-trigger latency is counted in camera frames, and one frame was being
+  spent on nothing. `PRODUCT_APPEAR` existed only to advance the state
+  machine: presence had already been confirmed by `appear_frames`, and
+  stability was not scored until the frame after. It now judges the frame on
+  which it enters `WAIT_STABLE`. The same number of stable frames is still
+  required and every per-frame quality bar is unchanged -- a blurred frame
+  still cannot trigger, a removed product still resets -- so this buys a whole
+  frame (~67 ms on the Cable1/A station) without relaxing anything.
+
+- The golden-sample check could run while the light was still moving, and then
+  blamed the board. Illumination auto-calibration runs at camera-ready; when
+  it cannot converge it logs, flashes the status bar and marks the scope so it
+  will not retry, and *nothing outranked that*. All four preconditions could
+  read green while the station sat outside its own luma band, three
+  inspections would run at the wrong brightness, and the result came back as a
+  colour deviation at some position -- sending the operator to inspect the
+  board and the colour model, both of which were fine. Measured on the station
+  at the time of writing: luma 90.6 against a target of 56.0 ± 2.0.
+
+  The loop's outcome is now recorded (converged, not converged, crashed, or no
+  target configured) and a fifth precondition, 照明已收斂, reads it. It reads
+  state rather than measuring, because the readiness panel polls twice a
+  second on the GUI thread where grabbing a frame would both stall the
+  interface and contend with the camera. It never blocks on something it does
+  not know: a station that has never calibrated, or has no recorded target,
+  passes -- refusing a daily check over a missing reading would stop a line to
+  protect it from a measurement nobody asked for.
+
+  Not yet exercised against a real line start; the failure it prevents was
+  reproduced from recorded state, not from a live run.
+
 - Stats Color's baseline contract is now `stats-robust-v6`. Every color,
   black included, is measured over the whole detection box restricted to its
   largest connected match, instead of a fixed geometric sub-crop
@@ -687,6 +741,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Support for multiple allowed root directories
   - Symlink resolution and validation
   - Comprehensive test suite (12/13 tests passing, 1 skipped on Windows)
+
+- Cable1/A's auto-trigger gate is tuned in `models/Cable1/A/auto_trigger.yaml`:
+  `appear_frames` 3 → 2, `stable_frames` 6 → 3, `inspection_cooldown_ms`
+  500 → 250. Trigger latency is `(appear_frames + 1 + stable_frames) x frame
+  interval`, and this station's camera measures 67 ms per frame (21 ms
+  exposure plus ~46 ms readout of a 6.29 MB Bayer frame at Gigabit line rate),
+  so the gate was ten frames of it. Measured end to end from the application
+  log: **480 ms median on 2026-09-10 against 345 ms on 2026-09-21**, n=23 and
+  n=16.
+
+  The per-frame quality bars (`motion_threshold`, `sharpness_threshold`) are
+  deliberately untouched. They decide *whether* a frame is acceptable, not how
+  fast the trigger fires, and tightening them without measuring a real board
+  risks a gate that never fires -- a stopped line rather than a slow one. The
+  calibrated `product_area_threshold` (46712) is preserved: the built-in
+  default of 5000 is below this station's empty-stage contour area of ~7900,
+  so losing it would make an empty fixture read as a product.
+
+  `stable_frames` is the one to revert first if blurred captures appear.
+
+- Recorded here because the next person will have the same idea: routing the
+  production letterbox's `INTER_AREA` downscale through OpenCL was tried and
+  **reverted**. It measured a 24 ms saving in a microbenchmark that
+  interleaved model inference between letterbox calls -- which evicts the
+  frame from CPU cache. Production does not do that: capture, Bayer convert
+  and letterbox run back to back, so the frame is already hot. Against 82
+  inspection records after the change and 14 before, `inference_time` did not
+  improve and ran ~3 ms slower. The lesson is about the measurement, not the
+  API: a microbenchmark's "realistic conditions" have to mirror the real call
+  order, or it will prove a saving that does not exist.
 
 - **Security Tests** (`tests/test_security.py`)
   - Directory traversal attack prevention tests

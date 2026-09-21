@@ -23,6 +23,7 @@
 | 模型／顏色組合驗收 | [模型組合驗收與發布](model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md) | [發布與回滾](operations/RELEASE_ROLLBACK_SOP.md) |
 | 模型命名、版本切換與回復 | [模型版本指南](model_lifecycle/MODEL_VERSION_GUIDE.md) | [發布與回滾](operations/RELEASE_ROLLBACK_SOP.md) |
 | Windows 現場部署 | [Windows 部署 SOP](operations/WINDOWS_DEPLOYMENT_SOP.md) | [上線檢查表](operations/PRODUCTION_GO_LIVE_CHECKLIST.md) |
+| 新機器能不能跑、跑多快 | [部署前置檢查工具](../tools/system_check/README.md) | `tools/system_check/system_check.exe` |
 | 相機 Runtime／取像問題 | [相機診斷](operations/CAMERA_RUNTIME_DIAGNOSTICS.md) | `tools/diagnostics/diagnose_camera.bat` |
 | SQLite 備份、保存與還原 | [資料庫文件](data/INSPECTION_DATABASE.md) | `tools/maintain_inspection_data.py` |
 | 公司伺服器同步 | [公司同步](data/COMPANY_SERVER_SYNC.md) | `tools/inspection_sync_admin.py` |
