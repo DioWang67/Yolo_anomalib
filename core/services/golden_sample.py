@@ -532,16 +532,46 @@ def build_reference(
     return finalize_baseline(measured, delta_e=delta_e, repeatability=repeatability, **kwargs)
 
 
-def normal_delta_e_samples(checks: list[dict]) -> list[float]:
+def comparable_conditions(recorded: Mapping | None, current: Mapping | None) -> bool:
+    """Whether a past check was taken under the camera conditions in force.
+
+    An unrecorded condition is a mismatch, not a pass. The records that
+    predate the field are precisely the ones this exists to exclude, and the
+    same rule governs a calibration's scale and model elsewhere.
+    """
+    if not recorded:
+        return False
+    current = current or {}
+    for field in OBSERVED_CONDITION_FIELDS:
+        if field in current and field not in recorded:
+            return False
+    return not condition_drift(recorded, current)
+
+
+def normal_delta_e_samples(
+    checks: list[dict], conditions: Mapping | None = None
+) -> list[float]:
     """Worst delta-E per past check, with gross excursions removed.
 
     A check that failed because the station really had drifted still says
     nothing about the *normal* spread, so those must not widen the limit.
     Outliers are found by distance from the median rather than by the stored
     OK/NG verdict -- that verdict came from the limit being replaced.
+
+    ``conditions`` restricts the history to checks taken under the camera
+    settings now in force. A check taken at another exposure is not a sample
+    of this station's normal spread at all, and admitting one lets a limit be
+    widened by a measurement of something else: Cable1/A's colour limit was
+    proposed as 12.92 from a check taken while a release override held the
+    camera at three times the station's own exposure, four times wider than
+    anything the station actually did that day.
     """
     peaks = []
     for check in checks:
+        if conditions is not None and not comparable_conditions(
+            check.get("observed_conditions"), conditions
+        ):
+            continue
         rows = check.get("rows")
         if not isinstance(rows, list) or not rows:
             continue

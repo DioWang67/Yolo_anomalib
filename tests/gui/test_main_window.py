@@ -819,6 +819,10 @@ def test_every_way_the_station_can_change_asks_for_a_recalibration(gui, monkeypa
     """
     asked = []
     monkeypatch.setattr(gui, "_maybe_autocalibrate", lambda reason="": asked.append(reason))
+    # camera_success=True ticks 使用相機, whose handler reaches the MVS SDK.
+    # On a machine with a camera actually attached that faults; the trigger
+    # under test is in the finally block and needs none of it.
+    monkeypatch.setattr(gui, "on_use_camera_toggled", lambda _checked: None)
 
     gui._on_system_init_finished(True)
     assert asked == ["camera_ready"]

@@ -165,15 +165,19 @@ class GoldenCaptureWorker(QThread):
     def _identity(self):
         return station_identity(self.config_path)[0]
 
-    def _history(self):
-        """Worst delta-E from this station's past checks, for the proposal."""
+    def _history(self, conditions=None):
+        """Worst delta-E from this station's past checks, for the proposal.
+
+        Restricted to checks taken under the conditions now in force: a
+        measurement made at another exposure describes another station.
+        """
         payloads = []
         for path in sorted(self.reference_path.parent.glob("check-*.json")):
             try:
                 payloads.append(read_json(path))
             except GoldenSampleError:
                 continue
-        return normal_delta_e_samples(payloads)
+        return normal_delta_e_samples(payloads, conditions)
 
     def _report(self, collected, required, message):
         """Single source of progress: the dialog renders this and nothing else.
@@ -310,7 +314,8 @@ class GoldenCaptureWorker(QThread):
                         {
                             "measured": measured,
                             "proposal": propose_limits(
-                                measured["measured_jitter"], self._history()
+                                measured["measured_jitter"],
+                                self._history(conditions),
                             ),
                             "retention": retention,
                             "identity_payload": identity_payload,

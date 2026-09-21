@@ -329,6 +329,37 @@ def test_the_conditions_report_shows_the_exposure_actually_in_use():
     ]
 
 
+def test_a_limit_is_not_widened_by_a_check_from_another_exposure():
+    """A measurement at another exposure describes another station.
+
+    Cable1/A's colour limit was proposed as 12.92 from a check taken while a
+    release override held the camera at three times the station's own
+    exposure -- four times wider than anything the station did that day.
+    """
+    from core.services.golden_sample import normal_delta_e_samples, propose_limits
+
+    here = {"exposure_time": "20134.0000", "gain": "23.0", "light_brightness": 0}
+    checks = [
+        {"observed_conditions": here, "rows": [{"delta_e": 2.99}]},
+        # The contaminated one: taken while the camera was elsewhere.
+        {
+            "observed_conditions": {**here, "exposure_time": "22006.0000"},
+            "rows": [{"delta_e": 8.61}],
+        },
+        # Predates the field. Unrecorded is a mismatch, not a pass: these are
+        # precisely the records the check exists to exclude.
+        {"rows": [{"delta_e": 4.33}]},
+    ]
+
+    assert normal_delta_e_samples(checks, here) == [2.99]
+    # Without conditions the caller gets the old, unfiltered behaviour.
+    assert len(normal_delta_e_samples(checks)) == 3
+
+    narrow = propose_limits(2.0, normal_delta_e_samples(checks, here))
+    wide = propose_limits(2.0, normal_delta_e_samples(checks))
+    assert narrow["delta_e"] < wide["delta_e"]
+
+
 def test_a_session_exposure_cannot_expire_a_baseline(tmp_path):
     """Exposure is an observed condition, not part of colour identity."""
     from core.services.golden_sample import color_identity_payload
