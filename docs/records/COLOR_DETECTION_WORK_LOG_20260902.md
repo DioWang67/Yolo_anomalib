@@ -3,7 +3,7 @@
 接手用。涵蓋 `yolo11_inference`、`Yolo11_auto_train` 與 workspace 三個 repo。
 **全部已修改、尚未 commit，也未 push。**
 
-上一份是 [`COLOR_DETECTION_WORK_LOG_20260827.md`](COLOR_DETECTION_WORK_LOG_20260827.md)，
+上一份是 [`COLOR_DETECTION_WORK_LOG_20260827.md`](../archive/COLOR_DETECTION_WORK_LOG_20260827.md)，
 屬 `stats-robust-v4` 時代，只當歷史紀錄讀。
 
 ---
@@ -57,7 +57,7 @@ v5 只改了推論端的取樣幾何，相依程式沒跟上。九個缺口都�
 
 `燈光控制 → 顏色開線檢查`（`app/gui/color_preflight_dialog.py`）與
 `tools/color_preflight.py`，共用 `core/services/color_preflight_runner.py`。
-流程與判準見 [`operations/MISJUDGE_TRIAGE_SOP.md`](operations/MISJUDGE_TRIAGE_SOP.md) 第 9 節。
+流程與判準見 [`operations/MISJUDGE_TRIAGE_SOP.md`](../operations/MISJUDGE_TRIAGE_SOP.md) 第 9 節。
 
 兩個不可打破的規則：
 
@@ -111,7 +111,7 @@ Black +0.541、Yellow +0.075），單一絕對容差會讓 Yellow 掉到零都�
 ## 四、待辦（按槓桿排序）
 
 1. **每個工位跑一次 v5 重建 + 驗收 + 發布 + 設 `strict`**
-   （見 [`model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md`](model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md) 第 5.3 節）。
+   （見 [`model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md`](../model_lifecycle/MODEL_COMBINATION_ACCEPTANCE.md) 第 5.3 節）。
    在第 4 步之前該工位並未受保護。注意排程相依：portable detector bundle 會強制
    帶入 `strict`，所以**站台必須先完成 v5 重建才能吃新 bundle**。
 2. **決定要不要在同一次重建裡調整 `color_roi_policy`**（第三節）。若要，先在真實
