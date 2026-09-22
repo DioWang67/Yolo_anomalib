@@ -499,7 +499,7 @@ def test_shipped_crt_in_runtime_is_not_reported_missing(
         raise OSError(f"{name} not found on the system path")
 
     monkeypatch.setattr(runtime_check, "_windll", always_missing)
-    monkeypatch.setattr(runtime_check.os, "name", "nt")
+    monkeypatch.setattr(runtime_check, "_on_windows", lambda: True)
 
     results = runtime_check._vcredist_results(resolve_context(app_root))
     by_id = {item.check_id: item for item in results}
@@ -518,7 +518,7 @@ def test_crt_missing_from_both_system_and_runtime_fails(
         raise OSError(f"{name} not found")
 
     monkeypatch.setattr(runtime_check, "_windll", always_missing)
-    monkeypatch.setattr(runtime_check.os, "name", "nt")
+    monkeypatch.setattr(runtime_check, "_on_windows", lambda: True)
 
     by_id = {
         item.check_id: item

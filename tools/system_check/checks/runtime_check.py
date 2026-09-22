@@ -34,11 +34,25 @@ from tools.system_check.spec import (
 from tools.system_check.sysinfo import BYTES_PER_MB
 
 
+def _on_windows() -> bool:
+    """Whether this process is running on Windows.
+
+    The platform is read through this function rather than ``os.name`` at each
+    call site so that a test can simulate Windows by patching one name here.
+    Patching ``os.name`` itself would do far more than intended: ``Path()``
+    consults it to choose between ``WindowsPath`` and ``PosixPath``, so on
+    Linux every subsequent path construction -- including the ones pytest
+    makes while formatting a failure report -- raises ``NotImplementedError``
+    and takes down the whole session instead of one test.
+    """
+    return os.name == "nt"
+
+
 def _windll(name: str) -> object:
     """Load a DLL by name or path, Windows only.
 
     ``ctypes.WinDLL`` is absent from the POSIX stubs, so it is resolved
-    dynamically; every caller here is already behind an ``os.name == "nt"``
+    dynamically; every caller here is already behind an ``_on_windows()``
     guard.
 
     Raises:
@@ -138,7 +152,7 @@ def _vcredist_results(context: AppContext) -> list[CheckResult]:
       perfectly healthy. Checking only the system search path reports a
       missing runtime on every such machine.
     """
-    if os.name != "nt":
+    if not _on_windows():
         return [
             CheckResult(
                 check_id="runtime.vcredist",
@@ -341,7 +355,7 @@ def _hikrobot_results(context: AppContext) -> list[CheckResult]:
 def _hikrobot_load_result(runtime_dir: Path) -> CheckResult:
     """Attempt a process-local load of ``MvCameraControl.dll``."""
     dll_path = runtime_dir / "MvCameraControl.dll"
-    if os.name != "nt":
+    if not _on_windows():
         return CheckResult(
             check_id="runtime.hikrobot_load",
             title="Hikrobot SDK load",
