@@ -49,8 +49,12 @@
 - `archive/`：歷史資料，只供追溯，不作為現行操作依據。
 
 版本演進、工程問題、驗證證據與已知限制記錄於
-[`yolo_inference_RevisionNote.xlsx`](yolo_inference_RevisionNote.xlsx)。
+[`yolo_inference_RevisionNote.xlsx`](yolo_inference_RevisionNote.xlsx)，
+繁體中文版為 [`yolo_inference_RevisionNote_ZH_TW.xlsx`](yolo_inference_RevisionNote_ZH_TW.xlsx)。
 檔名不帶版本，內容持續累積至最新版本，不隨發版改名。
+英文版是原始版本；中文版為翻譯，兩份逐列對應，日期、版本號、commit hash、檔案路徑、
+執行 ID、測試數量與狀態碼（PASS／BLOCKED／NOT RECORDED）在兩份中完全相同，以便對照。
+兩份都要更新；若內容不一致，以英文版為準。
 系統畫面顯示版本的唯一來源是 `core/_version.py`，目前正式版為 `1.2.0`。
 
 ## 上線界線
