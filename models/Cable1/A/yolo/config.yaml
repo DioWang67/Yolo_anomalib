@@ -127,10 +127,10 @@ save_original: true
 light_brightness: 0
 save_fail_only: false
 calibration:
-  target_luma: 56.0
+  target_luma: 45.96
   tolerance: 2.0
 gain: '23.0'
-exposure_time: '20134.0000'
+exposure_time: '21152.0000'
 save_annotated: true
 save_processed: true
 save_crops: true
