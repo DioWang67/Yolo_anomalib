@@ -51,7 +51,7 @@
 版本演進、工程問題、驗證證據與已知限制記錄於
 [`yolo_inference_RevisionNote.xlsx`](yolo_inference_RevisionNote.xlsx)。
 檔名不帶版本，內容持續累積至最新版本，不隨發版改名。
-系統畫面顯示版本的唯一來源是 `core/_version.py`，目前正式版為 `1.1.0`。
+系統畫面顯示版本的唯一來源是 `core/_version.py`，目前正式版為 `1.2.0`。
 
 ## 上線界線
 

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-22
+
+Cuts everything accumulated since 1.1.0 (2026-08-13) into one MINOR release.
+New features and behaviour tightening, no break to any published contract: the
+`incompatible` notes below concern colour-baseline artifact formats, which
+`core/_version.py` states are versioned independently of the application.
+
+Two items in this release have not been validated on a running line, and are
+marked as such where they appear: the golden-sample illumination precondition
+and Cable1/A's `stable_frames` reduction.
+
 ### Added
 - `tools/system_check` -- a deployment preflight that answers whether a given
   Windows machine can run this application, and how fast it does, before
