@@ -588,9 +588,17 @@ def test_malformed_config_yaml_yields_empty_config(app_root: Path) -> None:
 
 
 def test_local_config_overrides_top_level_keys(app_root: Path) -> None:
-    (app_root / "config.local.yaml").write_text("output_dir: D:/Other\n", encoding="utf-8")
+    # The point is that an absolute output_dir is taken as given rather than
+    # resolved against the application root, so the path has to be absolute on
+    # whichever platform is running. "D:/Other" is only absolute on Windows;
+    # on Linux it is relative, and the assertion compared the app root joined
+    # with it against itself.
+    elsewhere = Path(app_root.anchor) / "Other"
+    (app_root / "config.local.yaml").write_text(
+        f"output_dir: {elsewhere.as_posix()}\n", encoding="utf-8"
+    )
     context = resolve_context(app_root)
-    assert context.result_dir == Path("D:/Other")
+    assert context.result_dir == elsewhere
 
 
 def test_bundle_without_weights_is_not_offered(app_root: Path) -> None:
