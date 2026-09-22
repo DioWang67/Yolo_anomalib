@@ -1,4 +1,21 @@
 # tests/conftest.py
+
+# onnxruntime has to be imported before Qt, and this is the earliest point in
+# the suite that can guarantee it.
+#
+# Loading Qt's DLLs first exhausts the Windows static-TLS slots that
+# onnxruntime_pybind11_state.pyd needs, so its import then fails with "DLL
+# initialization routine failed" -- permanently, for the rest of the process.
+# Reversing the order costs nothing and both imports succeed. Anything that
+# pulls in PyQt5 triggers it, including `core.detection_system` by way of its
+# own imports, so which tests are affected depends on collection order rather
+# than on anything the tests do: the benchmark and system-check verdict tests
+# fail with what reads like a broken onnxruntime installation.
+try:  # pragma: no cover - depends on whether the extra is installed
+    import onnxruntime  # noqa: F401
+except ImportError:  # pragma: no cover - suites that do not need it still run
+    pass
+
 import atexit
 import hashlib
 import os
