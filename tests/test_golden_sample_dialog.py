@@ -366,10 +366,10 @@ def test_dialog_full_flow(tmp_path, qtbot):
     qtbot.waitUntil(lambda: view._worker is None, timeout=10000)
     assert "通過" in view._verdict.text()
     assert view._table.rowCount() == 1
-    assert view._table.item(0, 5).text() == "OK"
+    assert view._table.item(0, 6).text() == "OK"
     view.reject()
     view.show()
-    assert view._table.item(0, 5).text() == "OK"
+    assert view._table.item(0, 6).text() == "OK"
 
 
 def test_hidden_session_shutdown_stops_worker(tmp_path, qtbot):
@@ -453,7 +453,7 @@ def test_automatic_baseline_captures_exactly_five_then_daily_three(tmp_path, qtb
     view._start(False)
     qtbot.waitUntil(lambda: view._worker is None, timeout=15000)
     assert len(calls) == 8
-    assert view._table.item(0, 5).text() == "OK"
+    assert view._table.item(0, 6).text() == "OK"
 
 
 def test_automatic_capture_error_is_visible_and_stops(tmp_path, qtbot):
@@ -675,3 +675,33 @@ def test_uniform_drift_collapses_the_sixteen_cell_grid(qtbot):
     view.show_previews([preview])
     texts = [label.text() for label in view.widget().findChildren(QLabel)]
     assert sum(text == "25.4" for text in texts) == 15
+
+
+def test_cells_left_out_of_the_verdict_are_shown_as_such(qtbot):
+    """An edge the operator can see changing must visibly not count."""
+    from app.gui.golden_sample_view import GoldenEvidenceView
+
+    view = GoldenEvidenceView()
+    qtbot.addWidget(view)
+    row = {"position": 1, "color": "orange", "delta_e": 1.2, "delta_l": 0.3, "jitter": 0.4,
+           "margin": 0.3, "reasons": [], "alignment_shift": [-1, 1]}
+    heatmap = [[None, 1.2, 3.4, None] for _ in range(4)]
+    preview = {
+        "position": 1, "color": "orange", "reference_image": None, "reference_bbox": None,
+        "current_image": None, "current_bbox": None, "roi": None, "current_roi": None,
+        "heatmap": heatmap, "frame": 1, "row": row, "delta_e_limit": 9.0, "repeatability_limit": 3.0,
+    }
+    view.show_previews([preview])
+    texts = [label.text() for label in view.widget().findChildren(QLabel)]
+    assert sum(text == "—" for text in texts) == 8
+    assert any("對位 -1, +1 px" in text for text in texts)
+
+
+def test_the_exposure_change_reads_as_context_not_as_the_cause(tmp_path, qtbot):
+    view = dialog(tmp_path, qtbot)
+    row = {"position": 2, "color": "green", "delta_e": 9.0, "delta_l": 1.0, "jitter": 0.1,
+           "margin": 0.3, "reasons": ["顏色偏移超限"], "alignment_shift": [-1, 1]}
+    view._completed({"status": "NG", "rows": [row], "condition_drift": ["曝光 20913 → 22397"]})
+    assert "相機條件已變動" not in view._verdict.text()
+    assert "參考，不列入判定：曝光 20913 → 22397" in view._verdict.text()
+    assert view._table.item(0, 5).text() == "-1, +1"

@@ -9,40 +9,84 @@ import numpy as np
 import pytest
 
 from core.services.golden_sample import (
+    MAX_ACCEPTABLE_JITTER,
+    SCHEMA,
     GoldenSampleError,
     build_reference,
     configuration_identity,
+    encode_template,
     evaluate_readings,
-    fixed_grid_measurements,
+    judged_cells,
     lab_grid,
+    locate,
+    measure_baseline,
     measure_snapshot,
+    normal_sessions,
+    propose_limits,
     read_json,
+    replay_sessions,
+    stable_pixels,
     validate_reference,
     write_json_atomic,
 )
 
+BOARD = (60, 130, 70)
+RED_WIRE = (30, 40, 180)
+SCENE = 72
 
-def readings(count=5, offset=0):
+
+def scene(wire=RED_WIRE):
+    """A wire on a board, as the camera sees one position.
+
+    Piecewise uniform on purpose: a crimp terminal, a print mark and the wire
+    edges give alignment something to lock on to, and the flat interiors are
+    what the measurement is meant to read. The wire's left edge falls just
+    past the middle of a grid cell, as Cable1/A's did: that cell is 54% wire.
+    """
+    image = np.empty((SCENE, SCENE, 3), np.uint8)
+    image[:] = BOARD
+    image[:, 30:43] = wire
+    image[:12, 20:52] = (225, 225, 225)
+    image[30:34, 33:40] = (20, 20, 20)
+    return image
+
+
+def detection(tmp_path, name, *, image=None, dx=0, dy=0, box_dx=0, box_dy=0,
+              gain=1.0, origin=(20, 20), color="red"):
+    """One detection: the crop a detector box cut out of a camera frame.
+
+    ``dx``/``dy`` move the board (an operator re-seating it); ``box_dx``/
+    ``box_dy`` move only the detector's box.
+    """
+    content = scene() if image is None else image
+    canvas = np.empty((200, 200, 3), np.uint8)
+    canvas[:] = BOARD
+    left, top = origin[0] + dx, origin[1] + dy
+    canvas[top : top + SCENE, left : left + SCENE] = content
+    canvas = np.clip(canvas.astype(float) * gain, 0, 255).astype(np.uint8)
+    x1, y1 = origin[0] + box_dx, origin[1] + box_dy
+    path = tmp_path / f"{name}.png"
+    cv2.imwrite(str(path), canvas[y1 : y1 + SCENE, x1 : x1 + SCENE])
+    return {
+        "color": color,
+        "bbox": [x1, y1, x1 + SCENE, y1 + SCENE],
+        "crop_path": str(path),
+        "margin": 0.3,
+        "accepted": True,
+    }
+
+
+def readings(tmp_path, count=5, tag="r", **kwargs):
     return [
-        {
-            "source": str(i),
-            "positions": [
-                {
-                    "color": "red",
-                    "bbox": [0, 0, 32, 32],
-                    "lab": [[50 + offset, 30, 20] for _ in range(16)],
-                    "margin": 0.3,
-                    "accepted": True,
-                }
-            ],
-        }
-        for i in range(count)
+        {"source": f"{tag}-{index}", "positions": [detection(tmp_path, f"{tag}_{index}", **kwargs)]}
+        for index in range(count)
     ]
 
 
-def reference():
+def reference(tmp_path, **kwargs):
     return build_reference(
-        readings(), identity="config", operator="engineer", sample_id="G1", delta_e=3, repeatability=1
+        readings(tmp_path, tag="base"), identity="config", operator="engineer", sample_id="G1",
+        delta_e=3, repeatability=1, **kwargs,
     )
 
 
@@ -74,49 +118,137 @@ def snapshot(tmp_path, index=0, timestamp=None):
     return path
 
 
-def test_stable_and_shifted_same_production_score():
-    baseline = reference()
+def test_a_re_seated_board_is_not_a_colour_shift(tmp_path):
+    """Regression: Cable1/A failed almost every daily check on placement alone.
+
+    The sampling window used to sit at fixed image coordinates. Re-seating the
+    golden board moved the wire a pixel or two under it, cells on the wire
+    edge and the crimp terminal flipped between materials, and 10-05's check
+    read ΔE 35.6 on a board whose wire colour had not changed.
+    """
+    baseline = reference(tmp_path)
+    moved = readings(tmp_path, 3, tag="moved", dx=2, dy=-1)
+
+    # What the fixed window now sees: the same board, measured as a new colour.
+    roi = baseline["positions"][0]["measurement_bbox"]
+    fixed = cv2.imread(moved[0]["positions"][0]["crop_path"])
+    box = moved[0]["positions"][0]["bbox"]
+    stale = np.asarray(lab_grid(fixed[roi[1] - box[1] : roi[3] - box[1], roi[0] - box[0] : roi[2] - box[0]]))
+    first = cv2.imread(baseline["readings"][0]["positions"][0]["crop_path"])
+    original = np.asarray(lab_grid(first[roi[1] - 20 : roi[3] - 20, roi[0] - 20 : roi[2] - 20]))
+    assert np.max(np.linalg.norm(stale - original, axis=1)) > 3
+
+    result = evaluate_readings(moved, baseline, "config")
+    assert result["status"] == "OK"
+    row = result["rows"][0]
+    assert row["delta_e"] < 0.5
+    assert row["alignment_shift"] == [2, -1]
+    assert row["alignment_score"] > 0.99
+
+
+def test_the_box_following_the_wire_reports_the_same_shift(tmp_path):
+    baseline = reference(tmp_path)
+    result = evaluate_readings(readings(tmp_path, 3, tag="follow", dx=3, box_dx=3), baseline, "config")
+    assert result["status"] == "OK"
+    assert result["rows"][0]["alignment_shift"] == [3, 0]
+
+
+def test_a_brightness_drift_is_still_caught_after_alignment(tmp_path):
+    """Alignment is gain-invariant, so it must not absorb the drift it serves."""
+    baseline = reference(tmp_path)
     original = copy.deepcopy(baseline)
-    assert evaluate_readings(readings(3), baseline, "config")["status"] == "OK"
-    result = evaluate_readings(readings(3, 4), baseline, "config")
+    result = evaluate_readings(readings(tmp_path, 3, tag="bright", dx=1, gain=1.15), baseline, "config")
     assert result["status"] == "NG"
-    assert result["rows"][0]["delta_l"] == 4
-    assert result["rows"][0]["reasons"] == ["顏色偏移超限"]
+    row = result["rows"][0]
+    assert row["reasons"] == ["顏色偏移超限"]
+    assert row["delta_l"] > 3
+    assert row["alignment_score"] > 0.99
     assert baseline == original  # Daily checks never adapt the normal reference.
 
 
-def test_one_bad_frame_and_cell_cannot_hide_in_average():
-    measured = readings(3)
-    measured[2]["positions"][0]["lab"][15][1] += 6
-    result = evaluate_readings(measured, reference(), "config")
-    assert result["rows"][0]["delta_e"] == 6
-    assert "連拍不穩定" in result["rows"][0]["reasons"]
+def test_a_frame_showing_another_scene_fails_alignment(tmp_path):
+    baseline = reference(tmp_path)
+    noise = np.random.default_rng(3).integers(0, 256, (SCENE, SCENE, 3), dtype=np.uint8)
+    result = evaluate_readings(readings(tmp_path, 3, tag="other", image=noise), baseline, "config")
+    assert result["status"] == "NG"
+    assert result["rows"][0]["reasons"][0] == "取樣對位失敗"
 
 
-def test_repeated_colors_match_geometry_when_detector_order_changes():
-    measured = readings()
-    for reading in measured:
-        second = copy.deepcopy(reading["positions"][0])
-        second["bbox"] = [0, 50, 32, 82]
-        second["lab"] = [[30, 10, 20] for _ in range(16)]
-        reading["positions"].append(second)
-    baseline = build_reference(measured, identity="config", operator="e", sample_id="G1", delta_e=3, repeatability=1)
-    daily = copy.deepcopy(measured[:3])
+def test_one_bad_frame_cannot_hide_in_the_average(tmp_path):
+    baseline = reference(tmp_path)
+    measured = readings(tmp_path, 3, tag="steady")
+    measured[2]["positions"][0] = detection(tmp_path, "odd", image=scene(wire=(40, 60, 205)))
+    row = evaluate_readings(measured, baseline, "config")["rows"][0]
+    assert row["worst_frame"] == 2
+    assert row["delta_e"] > 3
+    assert {"顏色偏移超限", "連拍不穩定"} <= set(row["reasons"])
+
+
+def test_only_cells_with_stable_pixels_are_judged(tmp_path):
+    flat = np.full((40, 40, 3), BOARD, np.uint8)
+    assert all(judged_cells(stable_pixels(flat)))
+    edge = scene()[11:61, 11:61]
+    mask = stable_pixels(edge)
+    # The wire edge (scene x=30, window x=19) is a material boundary, the
+    # wire's interior is not.
+    assert not mask[30, 19] and mask[30, 25]
+    textured = np.random.default_rng(5).integers(0, 256, (40, 40, 3), dtype=np.uint8)
+    assert not any(judged_cells(stable_pixels(textured)))
+    row = evaluate_readings(readings(tmp_path, 3, tag="cells"), reference(tmp_path), "config")["rows"][0]
+    assert len(row["cells"]) == 16
+
+
+def test_a_window_with_nothing_stable_cannot_be_a_baseline(tmp_path):
+    noise = np.random.default_rng(9).integers(0, 256, (SCENE, SCENE, 3), dtype=np.uint8)
+    with pytest.raises(GoldenSampleError, match="可穩定量測"):
+        build_reference(readings(tmp_path, image=noise), identity="c", operator="e",
+                        sample_id="g", delta_e=3, repeatability=1)
+
+
+def test_a_flat_window_is_read_in_place_and_must_be_covered(tmp_path):
+    """Nothing to align on, and nothing a small misplacement could change."""
+    flat = np.full((SCENE, SCENE, 3), RED_WIRE, np.uint8)
+    baseline = build_reference(readings(tmp_path, image=flat), identity="config", operator="e",
+                               sample_id="G1", delta_e=3, repeatability=1)
+    result = evaluate_readings(readings(tmp_path, 3, tag="flat", image=flat), baseline, "config")
+    assert result["status"] == "OK"
+    assert result["rows"][0]["alignment_shift"] == [0, 0]
+    # Read in place, the window must still lie inside the crop. Boxes that
+    # align_positions accepts always contain it (the inset equals that
+    # tolerance), so the guard is exercised directly.
+    with pytest.raises(GoldenSampleError, match="未涵蓋"):
+        locate(flat[:40, :40], [0, 0, 40, 40], flat[:20, :20], [30, 0, 50, 20], 0)
+    with pytest.raises(GoldenSampleError, match="小於"):
+        locate(flat[:10, :10], [0, 0, 10, 10], flat[:20, :20], [0, 0, 20, 20], 0)
+
+
+def test_repeated_colors_match_geometry_when_detector_order_changes(tmp_path):
+    def two_wires(tag, count, box_dx=0):
+        frames = []
+        for index in range(count):
+            red = detection(tmp_path, f"{tag}_red_{index}", box_dx=box_dx)
+            black = detection(tmp_path, f"{tag}_black_{index}", image=scene(wire=(25, 25, 25)),
+                              origin=(110, 20), color="black")
+            frames.append({"source": f"{tag}-{index}", "positions": [red, black]})
+        return frames
+
+    baseline = build_reference(two_wires("base", 5), identity="config", operator="e",
+                               sample_id="G1", delta_e=3, repeatability=1)
+    daily = two_wires("daily", 3, box_dx=1)
     daily[1]["positions"].reverse()
-    daily[1]["positions"][0]["bbox"] = [1, 50, 33, 82]
     assert evaluate_readings(daily, baseline, "config")["status"] == "OK"
 
 
 @pytest.mark.parametrize("field,value", [("margin", 0), ("margin", 0.1), ("accepted", False)])
-def test_production_gates(field, value):
-    measured = readings(3)
+def test_production_gates(tmp_path, field, value):
+    measured = readings(tmp_path, 3, tag="gate")
     measured[0]["positions"][0][field] = value
-    assert evaluate_readings(measured, reference(), "config")["status"] == "NG"
+    assert evaluate_readings(measured, reference(tmp_path), "config")["status"] == "NG"
 
 
-@pytest.mark.parametrize("mutation", ["duplicate", "few", "empty", "shift", "color", "count"])
-def test_invalid_session(mutation):
-    measured = readings(3)
+@pytest.mark.parametrize("mutation", ["duplicate", "few", "empty", "shift", "color", "count", "crop"])
+def test_invalid_session(tmp_path, mutation):
+    measured = readings(tmp_path, 3, tag="bad")
     if mutation == "duplicate":
         measured[1]["source"] = measured[0]["source"]
     elif mutation == "few":
@@ -125,47 +257,55 @@ def test_invalid_session(mutation):
         for item in measured:
             item["positions"] = []
     elif mutation == "shift":
-        measured[1]["positions"][0]["bbox"][0] += 10
+        measured[1]["positions"][0]["bbox"][0] += 20
     elif mutation == "color":
         measured[1]["positions"][0]["color"] = "green"
+    elif mutation == "crop":
+        del measured[1]["positions"][0]["crop_path"]
     else:
         measured[1]["positions"].append(copy.deepcopy(measured[1]["positions"][0]))
     with pytest.raises(GoldenSampleError):
-        evaluate_readings(measured, reference(), "config")
+        evaluate_readings(measured, reference(tmp_path), "config")
 
 
 @pytest.mark.parametrize("delta,jitter", [(float("nan"), 1), (3, float("inf")), (0, 1), (1, 2)])
-def test_bad_limits(delta, jitter):
+def test_bad_limits(tmp_path, delta, jitter):
     with pytest.raises(GoldenSampleError):
-        build_reference(readings(), identity="c", operator="e", sample_id="g", delta_e=delta, repeatability=jitter)
+        build_reference(readings(tmp_path), identity="c", operator="e", sample_id="g",
+                        delta_e=delta, repeatability=jitter)
 
 
-def test_reject_unstable_or_bad_baseline():
-    for measured in (readings(), readings(), readings()):
-        measured[0]["positions"][0]["accepted"] = False
-        with pytest.raises(GoldenSampleError):
-            build_reference(measured, identity="c", operator="e", sample_id="g", delta_e=3, repeatability=1)
-    measured = readings()
-    measured[0]["positions"][0]["lab"][0][0] += 5
+def test_reject_unstable_or_bad_baseline(tmp_path):
+    measured = readings(tmp_path)
+    measured[0]["positions"][0]["accepted"] = False
+    with pytest.raises(GoldenSampleError):
+        build_reference(measured, identity="c", operator="e", sample_id="g", delta_e=3, repeatability=1)
+    measured = readings(tmp_path, tag="wobble")
+    measured[0]["positions"][0] = detection(tmp_path, "wobble_odd", image=scene(wire=(34, 46, 192)))
     with pytest.raises(GoldenSampleError, match="不穩定"):
         build_reference(measured, identity="c", operator="e", sample_id="g", delta_e=3, repeatability=1)
     with pytest.raises(GoldenSampleError, match="填寫"):
-        build_reference(readings(), identity="c", operator="", sample_id="g", delta_e=3, repeatability=1)
+        build_reference(readings(tmp_path), identity="c", operator="", sample_id="g", delta_e=3, repeatability=1)
 
 
-@pytest.mark.parametrize("mutation", ["schema", "nan", "shape", "bbox", "margin", "missing", "empty"])
-def test_corrupt_reference(mutation):
-    baseline = reference()
+@pytest.mark.parametrize(
+    "mutation", ["schema", "nan", "template", "template_size", "bbox", "margin", "missing", "empty"]
+)
+def test_corrupt_reference(tmp_path, mutation):
+    baseline = reference(tmp_path)
+    position = baseline["positions"][0]
     if mutation == "schema":
         baseline["schema"] = "old"
     elif mutation == "nan":
-        baseline["positions"][0]["lab"][0][0] = float("nan")
-    elif mutation == "shape":
-        baseline["positions"][0]["lab"] = []
+        position["measurement_bbox"][0] = float("nan")
+    elif mutation == "template":
+        position["template"] = "not-an-image"
+    elif mutation == "template_size":
+        position["template"] = encode_template(np.zeros((9, 9, 3), np.uint8))
     elif mutation == "bbox":
-        baseline["positions"][0]["bbox"] = [0, 0, 0, 0]
+        position["bbox"] = [0, 0, 0, 0]
     elif mutation == "margin":
-        baseline["positions"][0]["margin"] = float("nan")
+        position["margin"] = float("nan")
     elif mutation == "missing":
         del baseline["created_at"]
     else:
@@ -220,8 +360,9 @@ def test_invalid_snapshot(tmp_path, mutation):
 
 def test_files_and_identity(tmp_path):
     path = tmp_path / "profile.json"
-    write_json_atomic(path, reference())
-    assert read_json(path) == reference() or read_json(path)["schema"] == reference()["schema"]
+    baseline = reference(tmp_path)
+    write_json_atomic(path, baseline)
+    assert read_json(path)["schema"] == baseline["schema"] == SCHEMA
     first = configuration_identity(path, None)
     assert configuration_identity(path, path) != first
     path.write_text("[]", encoding="utf-8")
@@ -233,78 +374,72 @@ def test_files_and_identity(tmp_path):
     assert not list(tmp_path.glob("*.tmp"))
 
 
-def test_tiny_image_and_missing_reference():
+def test_tiny_image_and_missing_reference(tmp_path):
     with pytest.raises(GoldenSampleError):
         lab_grid(np.zeros((2, 2, 3), dtype=np.uint8))
     with pytest.raises(GoldenSampleError):
-        validate_reference(reference(), "changed")
+        validate_reference(reference(tmp_path), "changed")
 
 
-def test_fixed_grid_ignores_one_pixel_detection_box_jitter(tmp_path):
-    scene = np.random.default_rng(17).integers(0, 256, (40, 40, 3), dtype=np.uint8)
-    frames = readings()
-    for index, frame in enumerate(frames):
-        left = index % 2
-        crop = scene[:, left:]
-        path = tmp_path / f"crop_{index}.png"
-        cv2.imwrite(str(path), crop)
-        frame["positions"][0].update(bbox=[left, 0, 40, 40], lab=lab_grid(crop), crop_path=str(path))
-    raw = np.asarray([f["positions"][0]["lab"] for f in frames])
-    assert np.max(np.linalg.norm(raw - raw.mean(0), axis=2)) > 1
-    baseline = build_reference(frames, identity="config", operator="e", sample_id="G1",
-                               delta_e=3, repeatability=1)
-    assert baseline["positions"][0]["jitter"] == 0
-    # Inset by the drift align_positions tolerates (15% of 40px), not by a
-    # token two pixels: an ROI tighter than the matcher's own tolerance fails
-    # containment on a shift the matcher has just called the same position.
-    assert baseline["positions"][0]["measurement_bbox"] == [7, 6, 34, 34]
-    result = evaluate_readings(frames[:3], baseline, "config")
-    assert result["status"] == "OK"
-    assert result["rows"][0]["delta_e"] == 0
+def past_session(tmp_path, tag, **kwargs):
+    return {
+        "identity": "config",
+        "sample_id": "G1",
+        "checked_at": f"2026-10-0{len(tag)}T00:00:00+00:00",
+        "readings": readings(tmp_path, 3, tag=tag, **kwargs),
+    }
 
 
-def test_fixed_grid_survives_the_drift_alignment_accepts(tmp_path):
-    """Five pixels on a 40px box: inside tolerance, so it must measure.
-
-    The two rules used to disagree -- align_positions accepted the box and
-    fixed_grid_measurements then aborted the whole pre-shift check over it,
-    naming the fixture for what was really a too-tight ROI.
-    """
-    scene = np.random.default_rng(17).integers(0, 256, (40, 40, 3), dtype=np.uint8)
-
-    def framed(count, left):
-        frames = readings(count)
-        for index, frame in enumerate(frames):
-            crop = scene[:, left:]
-            path = tmp_path / f"crop_{left}_{index}.png"
-            cv2.imwrite(str(path), crop)
-            frame["positions"][0].update(
-                bbox=[left, 0, 40, 40], lab=lab_grid(crop), crop_path=str(path)
-            )
-        return frames
-
-    baseline = build_reference(framed(5, 0), identity="config", operator="e",
-                               sample_id="G1", delta_e=3, repeatability=1)
-
-    result = evaluate_readings(framed(3, 5), baseline, "config")
-
-    # Same physical pixels despite the shift, so no colour difference at all.
-    assert result["status"] == "OK"
-    assert result["rows"][0]["delta_e"] == 0
+def test_a_proposal_re_measures_past_sessions_against_the_new_baseline(tmp_path):
+    """Stored delta-E values were taken against other baselines, and before v5
+    by a measurement that mostly recorded where the board had been placed."""
+    measured = measure_baseline(readings(tmp_path, tag="base"), identity="config",
+                                operator="e", sample_id="G1")
+    sessions = [
+        past_session(tmp_path, "a", dx=2, gain=1.02),
+        past_session(tmp_path, "bb", dx=-1, gain=1.05),
+    ]
+    samples = replay_sessions(sessions, measured, "config")
+    assert len(samples) == 2
+    # Newest first; the brighter session sits further from the baseline.
+    assert 0 < samples[1]["delta_e"] < samples[0]["delta_e"]
+    proposal = propose_limits(measured["measured_jitter"], samples)
+    assert proposal["history_count"] == 2
+    assert proposal["delta_e"] == pytest.approx(round(samples[0]["delta_e"] * 1.5, 2))
+    assert "重算過往 2 次" in proposal["basis"]
 
 
-def test_a_stored_roi_outside_the_crop_is_still_refused(tmp_path):
-    """The guard stays for baselines written before the inset was widened."""
-    scene = np.random.default_rng(17).integers(0, 256, (40, 40, 3), dtype=np.uint8)
-    crop = scene[:, 1:]
-    path = tmp_path / "crop.png"
-    cv2.imwrite(str(path), crop)
-    position = dict(readings(1)[0]["positions"][0])
-    position.update(bbox=[1, 0, 40, 40], lab=lab_grid(crop), crop_path=str(path))
-    legacy = [{**position, "measurement_bbox": [0, 0, 39, 40]}]
+def test_sessions_that_cannot_stand_for_this_board_are_skipped(tmp_path):
+    measured = measure_baseline(readings(tmp_path, tag="base"), identity="config",
+                                operator="e", sample_id="G1")
+    noise = np.random.default_rng(4).integers(0, 256, (SCENE, SCENE, 3), dtype=np.uint8)
+    missing = past_session(tmp_path, "gone")
+    missing["readings"][0]["positions"][0]["crop_path"] = str(tmp_path / "deleted.png")
+    sessions = [
+        {**past_session(tmp_path, "other"), "identity": "another-setup"},
+        {**past_session(tmp_path, "sample"), "sample_id": "G2"},
+        past_session(tmp_path, "scene", image=noise),
+        missing,
+        {"identity": "config", "sample_id": "G1", "readings": []},
+    ]
+    assert replay_sessions(sessions, measured, "config") == []
+    # With nothing to replay the proposal says so instead of inventing history.
+    assert "尚無可重算" in propose_limits(measured["measured_jitter"], [])["basis"]
 
-    with pytest.raises(GoldenSampleError, match="未涵蓋"):
-        fixed_grid_measurements([[position]], legacy)
+
+def test_an_excursion_or_an_unstable_session_does_not_widen_the_limit():
+    ordinary = [{"delta_e": value, "jitter": 1.0} for value in (1.0, 1.4, 1.2)]
+    drifted = {"delta_e": 30.0, "jitter": 1.0}
+    shaky = {"delta_e": 1.3, "jitter": MAX_ACCEPTABLE_JITTER + 1}
+    assert normal_sessions(ordinary + [drifted, shaky]) == ordinary
+    assert propose_limits(1.0, ordinary + [drifted])["delta_e"] == propose_limits(1.0, ordinary)["delta_e"]
+
+
+def test_run_to_run_noise_seen_on_other_days_sets_the_repeatability_floor():
+    proposal = propose_limits(1.0, [{"delta_e": 2.0, "jitter": 2.0}])
+    assert proposal["repeatability"] == 3.0
+    assert "過往取樣最大 2.00" in proposal["basis"]
+    assert proposal["delta_e"] >= proposal["repeatability"]
 
 
 def test_the_conditions_report_shows_the_exposure_actually_in_use():
@@ -327,37 +462,6 @@ def test_the_conditions_report_shows_the_exposure_actually_in_use():
     assert condition_drift(observed_conditions(config), live) == [
         "曝光 20134.0000 → 21980.0"
     ]
-
-
-def test_a_limit_is_not_widened_by_a_check_from_another_exposure():
-    """A measurement at another exposure describes another station.
-
-    Cable1/A's colour limit was proposed as 12.92 from a check taken while a
-    release override held the camera at three times the station's own
-    exposure -- four times wider than anything the station did that day.
-    """
-    from core.services.golden_sample import normal_delta_e_samples, propose_limits
-
-    here = {"exposure_time": "20134.0000", "gain": "23.0", "light_brightness": 0}
-    checks = [
-        {"observed_conditions": here, "rows": [{"delta_e": 2.99}]},
-        # The contaminated one: taken while the camera was elsewhere.
-        {
-            "observed_conditions": {**here, "exposure_time": "22006.0000"},
-            "rows": [{"delta_e": 8.61}],
-        },
-        # Predates the field. Unrecorded is a mismatch, not a pass: these are
-        # precisely the records the check exists to exclude.
-        {"rows": [{"delta_e": 4.33}]},
-    ]
-
-    assert normal_delta_e_samples(checks, here) == [2.99]
-    # Without conditions the caller gets the old, unfiltered behaviour.
-    assert len(normal_delta_e_samples(checks)) == 3
-
-    narrow = propose_limits(2.0, normal_delta_e_samples(checks, here))
-    wide = propose_limits(2.0, normal_delta_e_samples(checks))
-    assert narrow["delta_e"] < wide["delta_e"]
 
 
 def test_a_session_exposure_cannot_expire_a_baseline(tmp_path):
@@ -437,15 +541,15 @@ def test_margin_retention_reads_config_and_rejects_nonsense():
             margin_retention({"color_preflight": {"minimum_margin_retention": bad}})
 
 
-def test_retention_floor_comes_from_the_baseline_not_a_constant():
+def test_retention_floor_comes_from_the_baseline_not_a_constant(tmp_path):
     """Hard-coding 0.6 kept a tuned station judged against the untuned value."""
     baseline = build_reference(
-        readings(), identity="config", operator="e", sample_id="G1",
+        readings(tmp_path), identity="config", operator="e", sample_id="G1",
         delta_e=3, repeatability=1, retention=0.9,
     )
     assert baseline["margin_retention"] == 0.9
     # Baseline margin is 0.3, so a 0.9 floor trips at anything under 0.27.
-    weak = readings(3)
+    weak = readings(tmp_path, 3, tag="weak")
     for reading in weak:
         reading["positions"][0]["margin"] = 0.26
     result = evaluate_readings(weak, baseline, "config")
@@ -454,7 +558,7 @@ def test_retention_floor_comes_from_the_baseline_not_a_constant():
     assert result["margin_retention"] == 0.9
     # The same measurement passes under the default floor.
     lenient = build_reference(
-        readings(), identity="config", operator="e", sample_id="G1",
+        readings(tmp_path, tag="lenient"), identity="config", operator="e", sample_id="G1",
         delta_e=3, repeatability=1, retention=0.6,
     )
     assert evaluate_readings(weak, lenient, "config")["status"] == "OK"
@@ -497,7 +601,7 @@ def test_recalibrated_exposure_does_not_expire_the_baseline():
 
 def test_baseline_survives_recalibration_end_to_end(tmp_path):
     baseline = build_reference(
-        readings(), identity="config", operator="e", sample_id="G1",
+        readings(tmp_path), identity="config", operator="e", sample_id="G1",
         delta_e=3, repeatability=1,
         conditions={"exposure_time": "35559.0000", "gain": "23.0"},
     )
@@ -505,7 +609,7 @@ def test_baseline_survives_recalibration_end_to_end(tmp_path):
     # Identity is unchanged by a recalibration, so the stored baseline still
     # validates and the daily check actually runs.
     validate_reference(baseline, "config")
-    assert evaluate_readings(readings(3), baseline, "config")["status"] == "OK"
+    assert evaluate_readings(readings(tmp_path, 3, tag="daily"), baseline, "config")["status"] == "OK"
 
 
 def test_condition_drift_is_quiet_when_nothing_moved():
@@ -519,10 +623,10 @@ def test_condition_drift_is_quiet_when_nothing_moved():
     assert condition_drift({"gain": "23.0"}, {"gain": "23.0000"}) == []
 
 
-def test_schema_bump_and_identity_mismatch_say_different_things():
+def test_schema_bump_and_identity_mismatch_say_different_things(tmp_path):
     """An operator's next action differs, so the message must too."""
-    baseline = reference()
-    stale = dict(baseline, schema="golden-lab-fixed-grid-v3")
+    baseline = reference(tmp_path)
+    stale = dict(baseline, schema="golden-lab-fixed-grid-v4")
     with pytest.raises(GoldenSampleError) as raised:
         validate_reference(stale, baseline["identity"])
     assert "舊版格式" in str(raised.value)

@@ -41,11 +41,11 @@ from core.services.golden_sample import (
     finalize_baseline,
     margin_retention,
     measure_baseline,
-    normal_delta_e_samples,
+    measure_snapshot,
     observed_conditions,
     propose_limits,
-    measure_snapshot,
     read_json,
+    replay_sessions,
     validate_reference,
     write_json_atomic,
 )
@@ -165,19 +165,24 @@ class GoldenCaptureWorker(QThread):
     def _identity(self):
         return station_identity(self.config_path)[0]
 
-    def _history(self, conditions=None):
-        """Worst delta-E from this station's past checks, for the proposal.
+    def _history(self, measured, identity):
+        """Earlier sessions of this board, re-measured against the new baseline.
 
-        Restricted to checks taken under the conditions now in force: a
-        measurement made at another exposure describes another station.
+        Daily checks and archived baselines alike: each is a day's images of
+        the same golden sample, which is what the colour limit must cover.
         """
+        folder = self.reference_path.parent
         payloads = []
-        for path in sorted(self.reference_path.parent.glob("check-*.json")):
+        for path in sorted(folder.glob("check-*.json")) + sorted(folder.glob("reference-*.json")) + [
+            self.reference_path
+        ]:
+            if self.isInterruptionRequested():
+                return []
             try:
                 payloads.append(read_json(path))
             except GoldenSampleError:
                 continue
-        return normal_delta_e_samples(payloads, conditions)
+        return replay_sessions(payloads, measured, identity)
 
     def _report(self, collected, required, message):
         """Single source of progress: the dialog renders this and nothing else.
@@ -315,7 +320,7 @@ class GoldenCaptureWorker(QThread):
                             "measured": measured,
                             "proposal": propose_limits(
                                 measured["measured_jitter"],
-                                self._history(conditions),
+                                self._history(measured, identity),
                             ),
                             "retention": retention,
                             "identity_payload": identity_payload,
@@ -437,10 +442,10 @@ class GoldenSampleDialog(QDialog):
         self._views = QTabWidget()
         self._evidence = GoldenEvidenceView()
         self._views.addTab(self._evidence, "影像對照")
-        self._table = QTableWidget(0, 7)
+        self._table = QTableWidget(0, 8)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setHorizontalHeaderLabels(
-            ["位置／顏色", "最大 ΔE76", "平均 ΔL*", "連拍波動", "辨識餘裕", "結果", "原因"]
+            ["位置／顏色", "最大 ΔE76", "平均 ΔL*", "連拍波動", "辨識餘裕", "對位偏移 px", "結果", "原因"]
         )
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self._table.horizontalHeader().setStretchLastSection(True)
@@ -449,7 +454,8 @@ class GoldenSampleDialog(QDialog):
         self._views.addTab(self._table, "數值明細")
         layout.addWidget(self._views, 1)
         legend = QLabel(
-            "青框＝固定取樣區域　｜　4×4 數字＝各區域跨次最大色差；紅底表示超限。基準圖片為實拍範例，判定使用多張統計。"
+            "青框＝取樣區域（已依樣品實際位置自動對位）　｜　4×4 數字＝各區域跨次最大色差；紅底表示超限，"
+            "「—」為線緣、印字或端子等對擺放敏感、不列入判定的區域。基準圖片為實拍範例，判定使用多張統計。"
         )
         legend.setWordWrap(True)
         layout.addWidget(legend)
@@ -759,7 +765,7 @@ class GoldenSampleDialog(QDialog):
         self._style_verdict("attention")
         if "不穩定" in message:
             title = "取樣不穩定"
-        elif any(word in message for word in ("位置", "裁切", "固定取樣")):
+        elif any(word in message for word in ("位置", "裁切", "固定取樣", "對位")):
             title = "取樣位置／影像需確認"
         else:
             title = "檢查未完成"
@@ -839,9 +845,11 @@ class GoldenSampleDialog(QDialog):
         self._style_verdict("ok" if passed else "attention")
         failed = [row for row in result["rows"] if row["reasons"]]
         # Conditions the calibration loop landed on are context for either
-        # verdict, not a verdict of their own.
+        # verdict, not a verdict of their own. Worded as context: appended to
+        # an NG headline as "相機條件已變動" it read as the cause, on a day the
+        # loop had held the image steady and the board had merely been moved.
         drift = result.get("condition_drift") or []
-        note = f"（相機條件已變動：{'、'.join(drift)}）" if drift else ""
+        note = f"（參考，不列入判定：{'、'.join(drift)}）" if drift else ""
         if passed:
             summary = "通過 — 本次顏色與波動符合已設定的正常範圍，可進行檢測" + note
         else:
@@ -853,12 +861,14 @@ class GoldenSampleDialog(QDialog):
         self._verdict.setText(summary)
         self._table.setRowCount(len(result["rows"]))
         for index, row in enumerate(result["rows"]):
+            shift = row.get("alignment_shift")
             cells = [
                 f"{row['position']} / {color_label(row['color'])}",
                 f"{row['delta_e']:.2f}",
                 f"{row['delta_l']:+.2f}",
                 f"{row['jitter']:.2f}",
                 f"{row['margin']:.3f}",
+                f"{shift[0]:+d}, {shift[1]:+d}" if shift else "—",
                 "NG" if row["reasons"] else "OK",
                 "；".join(row["reasons"]) or "穩定",
             ]

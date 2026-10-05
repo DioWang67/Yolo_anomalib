@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The golden sample pre-shift check measures colour, not where the board was
+  put down** (`golden-lab-registered-v5`; existing baselines must be rebuilt
+  once). The v4 check sampled a fixed ~19x29 px window at image coordinates
+  and took the worst of 16 cell medians. That window's top row was the crimp
+  terminal and its side columns straddled the wire edge, so re-seating the
+  board by a pixel flipped those cells between wire and board. Cable1/A failed
+  almost every check this way: 10-05 read ΔE 35.6 on a board whose wire colour
+  had not changed. The baseline was rebuilt 11 times and the limit was moved
+  nine times (3.0 -> 100 -> 19.85) chasing that noise.
+
+  Each frame is now aligned to an image stored with the baseline, using
+  normalised cross-correlation, which a gain or offset cannot move, so the
+  alignment cannot absorb a brightness drift. Each stable pixel is then
+  compared with the same baseline pixel. A pixel is stable when no neighbour
+  differs from it by more than ΔE 6. That rule is decided by the image's
+  structure, never its colour, and drops edges, print and the terminal. Each
+  cell judges the median of those paired differences. Replayed over all 30
+  stored Cable1/A checks, every placement-only check falls to 1.3-8.2 (10-05:
+  6.0). The three 2026-09-21 checks whose whole scene had changed still read
+  25-74 and also fail the new alignment gate (score 0.36-0.45 against a floor
+  of 0.7; placement scores 0.89-1.00).
+
+  Limit proposals re-measure the stored images of earlier sessions against the
+  new baseline instead of reusing their saved v4 numbers. The exact-exposure
+  filter is gone: the calibration loop lands on a different exposure every
+  day, so that filter left the history empty. Sessions that cannot be aligned
+  and gross excursions are excluded instead. Cards show the aligned window,
+  "對位 ±x, ±y px", and "—" for cells left out of the verdict. The table gains
+  an alignment column. The exposure note reads "參考，不列入判定" rather than
+  "相機條件已變動", which on an NG headline read as the cause. See
+  `docs/operations/GOLDEN_SAMPLE_PREFLIGHT.md`.
+
 ## [1.2.0] - 2026-09-22
 
 Cuts everything accumulated since 1.1.0 (2026-08-13) into one MINOR release.

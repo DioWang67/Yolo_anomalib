@@ -1,4 +1,4 @@
-"""Qt-native evidence cards: exact crops, fixed ROI and measured cell differences."""
+"""Qt-native evidence cards: exact crops, aligned ROI and measured cell differences."""
 
 from __future__ import annotations
 
@@ -102,13 +102,18 @@ class GoldenEvidenceView(QScrollArea):
             label = QLabel(caption)
             label.setAlignment(Qt.AlignCenter)
             column.addWidget(label)
-            column.addWidget(CropView(preview[f"{kind}_image"], preview[f"{kind}_bbox"], preview["roi"]))
+            # The current frame is outlined where alignment found the board,
+            # which is where it was measured.
+            roi = preview.get("current_roi") if kind == "current" else None
+            column.addWidget(CropView(preview[f"{kind}_image"], preview[f"{kind}_bbox"], roi or preview["roi"]))
             images.addLayout(column)
         layout.addLayout(images)
         if row:
+            shift = row.get("alignment_shift")
+            moved = f"　對位 {shift[0]:+d}, {shift[1]:+d} px" if shift and any(shift) else ""
             summary = QLabel(
                 f"色差 {row['delta_e']:.2f} / {preview['delta_e_limit']:.2f}　"
-                f"波動 {row['jitter']:.2f} / {preview['repeatability_limit']:.2f}"
+                f"波動 {row['jitter']:.2f} / {preview['repeatability_limit']:.2f}{moved}"
             )
             layout.addWidget(summary)
             layout.addLayout(self._heatmap(preview))
@@ -118,20 +123,22 @@ class GoldenEvidenceView(QScrollArea):
         return card
 
     def _heatmap(self, preview):
-        """Sixteen cells only when they disagree.
+        """Judged cells only when they disagree.
 
         The grid exists to localise a partial shift. Lighting drift moves every
         cell together, and then it printed the same number sixteen times and
-        pushed the remaining positions off screen.
+        pushed the remaining positions off screen. Cells left out of the
+        verdict (wire edge, print, terminal) read "—", so an operator can see
+        why a visibly different edge did not count.
         """
         grid = QGridLayout()
         grid.setSpacing(2)
-        cells = [value for values in (preview["heatmap"] or []) for value in values]
+        cells = [value for values in (preview["heatmap"] or []) for value in values if value is not None]
         if not cells:
             return grid
         limit = preview["delta_e_limit"]
         if max(cells) - min(cells) <= UNIFORM_CELL_TOLERANCE:
-            label = QLabel(f"16 個取樣區域一致偏移 {max(cells):.1f}")
+            label = QLabel(f"{len(cells)} 個取樣區域一致偏移 {max(cells):.1f}")
             label.setStyleSheet(
                 "background: %s; color: #243b53; padding: 4px;"
                 % ("#fee4e2" if max(cells) > limit else "#e3f3eb")
@@ -140,9 +147,12 @@ class GoldenEvidenceView(QScrollArea):
             return grid
         for y, values in enumerate(preview["heatmap"]):
             for x, value in enumerate(values):
-                label = QLabel(f"{value:.1f}")
+                label = QLabel("—" if value is None else f"{value:.1f}")
                 label.setAlignment(Qt.AlignCenter)
-                color = "#fee4e2" if value > limit else "#e3f3eb"
-                label.setStyleSheet(f"background: {color}; color: #243b53; padding: 2px;")
+                if value is None:
+                    color, text = "#eef2f6", "#8a99a8"
+                else:
+                    color, text = ("#fee4e2" if value > limit else "#e3f3eb"), "#243b53"
+                label.setStyleSheet(f"background: {color}; color: {text}; padding: 2px;")
                 grid.addWidget(label, y, x)
         return grid

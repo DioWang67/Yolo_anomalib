@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from core.services.golden_sample import GoldenSampleError, align_positions, fixed_grid_measurements
+from core.services.golden_sample import GoldenSampleError, align_positions
 
 
 def _crop(position: dict | None):
@@ -20,6 +20,12 @@ def _crop(position: dict | None):
 
 
 def build_preview(reference: dict, result: dict | None = None) -> list[dict]:
+    """Pair each position's baseline crop with the frame the verdict was drawn from.
+
+    Cells, worst frame and the aligned sampling window are read off the
+    evaluated row rather than measured a second time, so the picture on screen
+    is the one that was judged.
+    """
     anchors = reference.get("positions", [])
     baseline_readings = reference.get("readings", [])
     if not anchors or not baseline_readings:
@@ -27,20 +33,18 @@ def build_preview(reference: dict, result: dict | None = None) -> list[dict]:
     baseline = align_positions(baseline_readings[0]["positions"], anchors)
     current = []
     if result and result.get("readings"):
-        ordered = [align_positions(r["positions"], anchors) for r in result["readings"]]
-        current = fixed_grid_measurements(ordered, anchors)
+        current = [align_positions(r["positions"], anchors) for r in result["readings"]]
     rows = result.get("rows", []) if result else []
     previews = []
     for index, anchor in enumerate(anchors):
+        row = rows[index] if index < len(rows) else None
         selected = None
         heatmap = None
         frame_index = None
-        if current:
-            values = np.asarray([r[index]["lab"] for r in current])
-            distances = np.linalg.norm(values - np.asarray(anchor["lab"]), axis=2)
-            frame_index = int(np.argmax(distances.max(axis=1)))
+        if current and row is not None and row.get("cells") is not None:
+            frame_index = int(row.get("worst_frame", 0))
             selected = current[frame_index][index]
-            heatmap = distances.max(axis=0).reshape(4, 4).tolist()
+            heatmap = [row["cells"][start : start + 4] for start in range(0, 16, 4)]
         previews.append(
             {
                 "position": index + 1,
@@ -50,9 +54,10 @@ def build_preview(reference: dict, result: dict | None = None) -> list[dict]:
                 "current_image": _crop(selected),
                 "current_bbox": selected["bbox"] if selected else None,
                 "roi": anchor.get("measurement_bbox"),
+                "current_roi": row.get("measured_roi") if row else None,
                 "heatmap": heatmap,
                 "frame": frame_index + 1 if frame_index is not None else None,
-                "row": rows[index] if index < len(rows) else None,
+                "row": row,
                 "delta_e_limit": reference["delta_e_limit"],
                 "repeatability_limit": reference["repeatability_limit"],
             }
@@ -64,5 +69,5 @@ def preview_or_empty(reference: dict, result: dict | None = None) -> list[dict]:
     """Unavailable pictures never alter an otherwise valid measurement result."""
     try:
         return build_preview(reference, result)
-    except (GoldenSampleError, OSError, ValueError, TypeError, KeyError, cv2.error):
+    except (GoldenSampleError, OSError, ValueError, TypeError, KeyError, IndexError, cv2.error):
         return []
