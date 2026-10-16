@@ -107,7 +107,7 @@ kornia-rs==0.1.10
     # via kornia
 lazy-loader==0.4
     # via scikit-image
-lightning==2.4.0
+lightning==2.6.6
     # via yolo11-inference (pyproject.toml)
 lightning-utilities==0.15.2
     # via
