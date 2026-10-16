@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
+from datetime import datetime, timedelta
 from uuid import uuid4
 from types import SimpleNamespace
 
@@ -11,6 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt5.QtWidgets import QLabel
 from test_golden_sample import snapshot
 
+from app.gui import golden_sample_dialog
 from app.gui.golden_sample_dialog import (
     CAPTURE_RETRY_BUDGET,
     CAPTURE_TIMEOUT_SECONDS,
@@ -107,6 +110,43 @@ def test_worker_reference_and_daily_check(tmp_path, qapp):
     publish_samples(renewed, 5)
     build_baseline(renewed)
     assert len(list(tmp_path.glob("reference-*.json"))) == 1
+
+
+def test_a_shot_stamped_in_the_tick_the_session_started_still_counts(tmp_path, qapp, monkeypatch):
+    # Windows advances the wall clock in 15.6 ms ticks. Inside one tick
+    # time.time() still carries 100 ns digits while datetime.now() keeps only
+    # microseconds, so a start read from time.time() lands just after a shot
+    # stamped in the same tick. The fast windows-latest runner hit that and
+    # hung; pinning both clocks to one tick makes it deterministic everywhere.
+    capture = worker(tmp_path)
+    directory = publish_samples(capture, 5)[0].parent
+    assert build_baseline(capture)
+    for path in directory.glob("*_config_snapshot.json"):
+        path.unlink()
+    tick = datetime.now() - timedelta(seconds=1)
+
+    class SameTick(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return tick if tz is None else tick.astimezone(tz)
+
+    monkeypatch.setattr(golden_sample_dialog, "datetime", SameTick)
+    monkeypatch.setattr(
+        golden_sample_dialog,
+        "time",
+        SimpleNamespace(time=lambda: tick.timestamp() + 4e-7, monotonic=time.monotonic),
+    )
+    daily = worker(tmp_path, baseline=False)
+    for index in range(CHECK_COUNT):
+        snapshot(directory, index=index, timestamp=tick.isoformat())
+    outputs, errors = [], []
+    daily.completed.connect(outputs.append)
+    daily.failed.connect(errors.append)
+    # A dropped shot would otherwise wait forever; run out the budget instead.
+    monkeypatch.setattr(daily, "msleep", lambda _: setattr(daily, "started_at", 0))
+    daily.run()
+    assert not errors
+    assert outputs[-1]["status"] == "OK"
 
 
 def test_old_copied_snapshot_does_not_count(tmp_path, qapp, monkeypatch):

@@ -91,6 +91,19 @@ def baseline_age_days(value) -> float | None:
     return (datetime.now(timezone.utc) - moment).total_seconds() / 86400
 
 
+def _snapshot_clock() -> float:
+    """Now, read the way a published snapshot's ``timestamp`` is.
+
+    The result handler stamps snapshots with ``datetime.now()``, which keeps
+    microseconds; ``time.time()`` keeps 100 ns digits. On Windows both advance
+    in 15.6 ms ticks, so a snapshot written in the tick a session started in
+    read as *earlier* than a ``time.time()`` start about 85% of the time, and
+    was discarded as stale for good -- the session then waited for a shot that
+    had already arrived. Read the same way, "the same instant" compares equal.
+    """
+    return datetime.now().timestamp()
+
+
 def station_identity(config_path, observed_override=None):
     """``(identity, retention, identity_payload, conditions)`` for a station.
 
@@ -147,7 +160,7 @@ class GoldenCaptureWorker(QThread):
         self.repeatability = repeatability
         self.automatic = automatic
         self.capture_starts = SimpleQueue()
-        self.started_at = time.time()
+        self.started_at = _snapshot_clock()
 
     def run(self):
         try:
@@ -786,7 +799,7 @@ class GoldenSampleDialog(QDialog):
         self._capture_timer.stop()
         try:
             # This callback runs on the GUI thread; the worker never touches UI.
-            started_at = time.time()
+            started_at = _snapshot_clock()
             requested = self._request_capture_fn()
         except GoldenSampleError as exc:
             self.capture_failed(str(exc))
