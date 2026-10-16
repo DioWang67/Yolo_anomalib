@@ -122,7 +122,7 @@ jobs:
         run: python -m pytest -m gui --timeout=60 --junitxml=reports/gui.xml
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results-${{ runner.os }}-py${{ matrix.python }}
           path: reports/*.xml
@@ -203,7 +203,7 @@ jobs:
             --cov-fail-under=80
       - name: Upload coverage reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-report
           path: reports/*.xml
@@ -234,7 +234,7 @@ jobs:
           python -m pip install --no-deps --force-reinstall dist/*.whl
           yolo11-inference --help
       - name: Upload Python package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: python-package
           path: dist/
@@ -271,7 +271,7 @@ jobs:
           set "YOLO11_PYTHON=%pythonLocation%\python.exe"
           call build_exe.bat
       - name: Upload Windows executable
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: yolo11-inference-windows
           path: dist/yolo11_inference/
