@@ -819,12 +819,18 @@ def test_every_way_the_station_can_change_asks_for_a_recalibration(gui, monkeypa
     """
     asked = []
     monkeypatch.setattr(gui, "_maybe_autocalibrate", lambda reason="": asked.append(reason))
-    # camera_success=True ticks 使用相機, whose handler reaches the MVS SDK.
-    # On a machine with a camera actually attached that faults; the trigger
-    # under test is in the finally block and needs none of it.
-    monkeypatch.setattr(gui, "on_use_camera_toggled", lambda _checked: None)
-
-    gui._on_system_init_finished(True)
+    # camera_success=True ticks 使用相機, and its handler either reaches the
+    # MVS SDK (camera attached) or opens a modal warning (none attached, which
+    # access-violates on the offscreen windows-latest runner). The trigger
+    # under test is in the finally block and needs none of it. Patching the
+    # handler on the instance never stopped it: the checkbox signal was wired
+    # to the bound method when the window was built. Quiet the checkbox for
+    # this one call instead.
+    gui.use_camera_chk.blockSignals(True)
+    try:
+        gui._on_system_init_finished(True)
+    finally:
+        gui.use_camera_chk.blockSignals(False)
     assert asked == ["camera_ready"]
 
     gui.reload_inference_types()
