@@ -183,7 +183,7 @@ pandas==2.3.1
     # via
     #   ultralytics
     #   yolo11-inference (pyproject.toml)
-pillow==10.4.0
+pillow==12.3.0
     # via
     #   imageio
     #   imgaug
