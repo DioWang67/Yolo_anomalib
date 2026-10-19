@@ -1,7 +1,34 @@
 {
   "area": "B",
+  "artifact_schema": 2,
   "baseline_only": true,
   "class_path": "anomalib.models.EfficientAd",
+  "compatibility": {
+    "artifact_schema": 2,
+    "checkpoint_sha256": "4c678aa10c04b3d374aa18005f3191b45407c2fe3da7a4b68910c010c15782cc",
+    "class_path": "anomalib.models.EfficientAd",
+    "image_size": 256,
+    "probe": {
+      "abs_tolerance": 0.0001,
+      "amplitude": 0.05,
+      "base": 0.45,
+      "channel_phase": 0.7,
+      "column_frequency": 0.07,
+      "detail_amplitude": 0.04,
+      "detail_frequency": 1.3,
+      "kind": "sincos_v2",
+      "raw_pred_score": -0.046896856278181076,
+      "rel_tolerance": 0.001,
+      "row_frequency": 0.11,
+      "size": 391
+    },
+    "runtime": {
+      "anomalib": "2.7.0",
+      "lightning": "2.6.6",
+      "python": "3.11.17",
+      "torch": "2.13.0"
+    }
+  },
   "extract_under": "yolo11_inference/models",
   "files": [
     "PCBA1/B/anomalib/config.yaml",

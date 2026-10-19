@@ -2,7 +2,7 @@
   "abnormal_image_count": 0,
   "area": "B",
   "baseline_only": true,
-  "checkpoint_path": "runs\\anomalib\\PCBA1\\B\\EfficientAd\\PCBA1_B\\latest\\weights\\lightning\\model.ckpt",
+  "checkpoint_path": "runs\\anomalib_2x\\PCBA1\\B\\EfficientAd\\PCBA1_B\\latest\\weights\\lightning\\model.ckpt",
   "config": {
     "abnormal_dir": null,
     "accelerator": "cpu",
@@ -23,7 +23,7 @@
     "num_workers": 0,
     "patch_anomalib_symlink": true,
     "pre_trained": false,
-    "project": "runs\\anomalib\\PCBA1\\B",
+    "project": "runs\\anomalib_2x\\PCBA1\\B",
     "require_anomalous_validation": false,
     "root": "data\\PCBA1\\B\\split",
     "task": "segmentation",
@@ -45,7 +45,7 @@
   },
   "normal_image_count": 280,
   "product": "PCBA1",
-  "run_dir": "runs\\anomalib\\PCBA1\\B\\EfficientAd\\PCBA1_B\\latest",
+  "run_dir": "runs\\anomalib_2x\\PCBA1\\B\\EfficientAd\\PCBA1_B\\latest",
   "usable_for_deployment": false,
   "warnings": [
     "No abnormal validation/test images were configured.",
