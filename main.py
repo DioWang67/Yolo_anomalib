@@ -15,6 +15,10 @@ try:
 except Exception:
     cv2 = None  # type: ignore
 
+# Before _create_detection_system() loads torch: its spin-waiting OpenMP
+# threads otherwise fight ONNX Runtime and spike YOLO post-processing (see GUI.py).
+os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+
 
 def setup_logging() -> None:
     configure_logging(

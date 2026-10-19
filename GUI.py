@@ -13,6 +13,12 @@ from pathlib import Path
 # Windows that re-executes this script, causing a duplicate GUI window.
 multiprocessing.freeze_support()
 
+# Must be set before torch loads OpenMP. torch 2.13's spin-waiting OpenMP
+# threads fight ONNX Runtime's pool and put 10-25 ms spikes on YOLO
+# post-processing; PASSIVE brought p95 back to the torch 2.4 baseline
+# (measured 2026-10-19). setdefault keeps an operator override possible.
+os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+
 # When running as a PyInstaller bundle, point TORCH_HOME at the bundled
 # timm weight cache so Patchcore backbone loads offline (no internet needed).
 if getattr(sys, "frozen", False):
@@ -214,6 +220,62 @@ def _check_camera_grab() -> int:
             print(f"DestroyHandle: ret={_ret_text(ret)}")
 
 
+def _is_lfs_pointer(path: Path) -> bool:
+    """A checkout without Git LFS leaves a small text pointer instead of the file."""
+    if path.stat().st_size > 1024:
+        return False
+    return path.read_bytes().startswith(b"version https://git-lfs")
+
+
+def _check_anomalib() -> int:
+    """Import the bundled Anomalib stack and verify every packaged model.
+
+    verify_build.py runs this inside the built exe: a broken or partial
+    Anomalib bundle otherwise passes the build and fails on the line the first
+    time an operator selects the anomalib backend. Each packaged model goes
+    through the same stamp check, weights-only load and probe re-score that
+    initialize() applies at runtime.
+    """
+    from core.runtime_preflight import preload_onnxruntime_before_gui
+
+    preload_onnxruntime_before_gui()
+    try:
+        import yaml
+
+        from core import anomalib_lightning_inference as anomalib_runtime
+    except Exception as exc:  # report any import failure, this is the whole check
+        print(f"Anomalib preflight failed: import: {exc}", file=sys.stderr)
+        return 1
+
+    if getattr(sys, "frozen", False):
+        app_root = Path(sys.executable).resolve().parent
+    else:
+        app_root = Path(__file__).resolve().parent
+    verified, skipped = [], []
+    for config_path in sorted((app_root / "models").glob("*/*/anomalib/config.yaml")):
+        product, area = config_path.parts[-4], config_path.parts[-3]
+        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        config = dict(loaded.get("anomalib_config") or {})
+        model_cfg = dict(((config.get("models") or {}).get(product) or {}).get(area) or {})
+        ckpt = app_root / str(model_cfg.get("ckpt_path", ""))
+        if not ckpt.is_file() or _is_lfs_pointer(ckpt):
+            skipped.append(f"{product}/{area}")
+            continue
+        model_cfg["ckpt_path"] = str(ckpt)
+        config["models"] = {product: {area: model_cfg}}
+        try:
+            anomalib_runtime.initialize(config=config, product=product, area=area)
+        except Exception as exc:
+            print(f"Anomalib preflight failed: {product}/{area}: {exc}", file=sys.stderr)
+            return 1
+        verified.append(f"{product}/{area}")
+    print(
+        f"Anomalib preflight OK (verified: {', '.join(verified) or 'none'}; "
+        f"no checkpoint file, import only: {', '.join(skipped) or 'none'})"
+    )
+    return 0
+
+
 if "--check-onnxruntime" in sys.argv:
     from core.runtime_preflight import validate_runtime_for_model
 
@@ -231,10 +293,14 @@ if "--check-hikrobot-runtime" in sys.argv:
 if "--check-camera-grab" in sys.argv:
     sys.exit(_check_camera_grab())
 
+if "--check-anomalib" in sys.argv:
+    sys.exit(_check_anomalib())
+
 if "--help" in sys.argv:
     print(
         "Usage: yolo11_inference.exe "
-        "[--check-onnxruntime] [--check-hikrobot-runtime] [--check-camera-grab]"
+        "[--check-onnxruntime] [--check-hikrobot-runtime] [--check-camera-grab] "
+        "[--check-anomalib]"
     )
     sys.exit(0)
 

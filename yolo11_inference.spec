@@ -29,9 +29,10 @@ binaries = []
 # [export], anomalib[openvino], lightning[dev], ...). Naming it here made the
 # build succeed only on machines that happened to have one of those extras
 # installed, and copy_metadata('onnx') then failed outright on a clean runner.
-hiddenimports = ['torch', 'torch.nn.functional', 'torchvision', 'cv2', 'numpy', 'scipy', 'scipy.special._ufuncs', 'PIL', 'kornia', 'anomalib', 'lightning', 'ultralytics', 'onnxruntime', 'onnxruntime.capi.onnxruntime_pybind11_state', 'pandas', 'openpyxl', 'openpyxl.cell._writer', 'yaml', 'pydantic', 'tqdm', 'timm', 'einops', 'FrEIA', 'imgaug', 'serial', 'serial.tools', 'serial.tools.list_ports', 'PyQt5', 'PyQt5.sip', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'pkg_resources', 'importlib.metadata', 'jsonargparse']
+hiddenimports = ['torch', 'torch.nn.functional', 'torchvision', 'cv2', 'numpy', 'scipy', 'scipy.special._ufuncs', 'PIL', 'kornia', 'anomalib', 'lightning', 'ultralytics', 'onnxruntime', 'onnxruntime.capi.onnxruntime_pybind11_state', 'pandas', 'openpyxl', 'openpyxl.cell._writer', 'yaml', 'pydantic', 'tqdm', 'timm', 'einops', 'FrEIA', 'serial', 'serial.tools', 'serial.tools.list_ports', 'PyQt5', 'PyQt5.sip', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'pkg_resources', 'importlib.metadata', 'jsonargparse']
+# imgaug and open_clip went with the anomalib 2.x upgrade: 2.x has no imgaug
+# dependency and only needs open_clip for WinCLIP, which this station never loads.
 datas += collect_data_files('anomalib')
-datas += collect_data_files('open_clip')
 datas += collect_data_files('ultralytics')
 datas += copy_metadata('torch')
 datas += copy_metadata('ultralytics')

@@ -21,12 +21,12 @@ from tools.system_check.results import Confidence
 # Python runtime
 # --------------------------------------------------------------------------
 
-#: ``requires-python = ">=3.10,<3.12"`` (pyproject.toml).
-PYTHON_MIN: tuple[int, int] = (3, 10)
+#: ``requires-python = ">=3.11,<3.12"`` (pyproject.toml).
+PYTHON_MIN: tuple[int, int] = (3, 11)
 PYTHON_MAX_EXCLUSIVE: tuple[int, int] = (3, 12)
 
 #: The pair tools/check_runtime_environment.py already gates the launcher on.
-SUPPORTED_PYTHON_MINORS: tuple[tuple[int, int], ...] = ((3, 10), (3, 11))
+SUPPORTED_PYTHON_MINORS: tuple[tuple[int, int], ...] = ((3, 11),)
 
 # --------------------------------------------------------------------------
 # Packages
@@ -36,11 +36,10 @@ SUPPORTED_PYTHON_MINORS: tuple[tuple[int, int], ...] = ((3, 10), (3, 11))
 #: hard gate. A mismatch here blocks start.bat today, so the checker reports it
 #: as FAIL rather than drift.
 PINNED_BLOCKING: dict[str, str] = {
-    "torch": "2.4.1",
-    "torchvision": "0.19.1",
+    "torch": "2.13.0",
+    "torchvision": "0.28.0",
     "onnxruntime": "1.23.2",
     "PyQt5": "5.15.11",
-    "jsonargparse": "4.34.0",
 }
 
 #: Remaining runtime pins from requirements.txt. Drift is reported as WARNING:
@@ -48,9 +47,10 @@ PINNED_BLOCKING: dict[str, str] = {
 #: (numpy/opencv differences can move a borderline colour verdict).
 PINNED_ADVISORY: dict[str, str] = {
     "numpy": "1.26.4",
-    "opencv-python": "4.9.0.80",
-    "ultralytics": "8.3.156",
-    "pillow": "10.4.0",
+    "opencv-python": "4.11.0.86",
+    "opencv-python-headless": "4.11.0.86",
+    "ultralytics": "8.3.253",
+    "pillow": "12.3.0",
     "PyYAML": "6.0.2",
     "pandas": "2.3.1",
     "openpyxl": "3.1.5",
@@ -61,13 +61,12 @@ PINNED_ADVISORY: dict[str, str] = {
 
 #: Distributions only needed when ``enable_anomalib`` is true.
 PINNED_ANOMALIB: dict[str, str] = {
-    "anomalib": "1.2.0",
-    "lightning": "2.4.0",
-    "timm": "1.0.19",
-    "kornia": "0.8.1",
-    "einops": "0.8.1",
+    "anomalib": "2.7.0",
+    "lightning": "2.6.6",
+    "timm": "1.0.30",
+    "kornia": "0.8.3",
+    "einops": "0.8.2",
     "FrEIA": "0.2",
-    "open-clip-torch": "3.1.0",
 }
 
 #: Imports tools/check_runtime_environment.py requires before the GUI starts.
@@ -77,7 +76,6 @@ REQUIRED_IMPORTS: tuple[str, ...] = (
     "onnxruntime",
     "cv2",
     "PyQt5.QtCore",
-    "jsonargparse",
     "yaml",
 )
 
@@ -215,16 +213,16 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement(
         "python.version",
         "Runtime",
-        "CPython >=3.10,<3.12 (production station runs 3.10; CI compiles pins "
-        "on 3.11).",
+        "CPython >=3.11,<3.12 (the station env and CI both run 3.11 since the "
+        "2026-10 stack upgrade).",
         Confidence.CONFIRMED,
         "pyproject.toml:18, tools/check_runtime_environment.py:13",
     ),
     Requirement(
         "deps.blocking",
         "Runtime",
-        "torch 2.4.1, torchvision 0.19.1, onnxruntime 1.23.2, PyQt5 5.15.11, "
-        "jsonargparse 4.34.0 at exactly these versions.",
+        "torch 2.13.0, torchvision 0.28.0, onnxruntime 1.23.2, PyQt5 5.15.11 "
+        "at exactly these versions.",
         Confidence.CONFIRMED,
         "tools/check_runtime_environment.py:14-20",
     ),

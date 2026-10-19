@@ -169,7 +169,7 @@ def test_cuda_unavailable_reported_from_torch_not_the_driver(
         "_torch_cuda",
         lambda: {
             "importable": True,
-            "version": "2.4.1+cpu",
+            "version": "2.13.0+cpu",
             "built_with_cuda": None,
             "is_available": False,
         },
@@ -297,22 +297,23 @@ def test_station_override_of_min_free_disk_is_respected(
 def test_missing_blocking_package_fails(
     monkeypatch: pytest.MonkeyPatch, context: AppContext
 ) -> None:
-    """The five distributions start.bat gates on must FAIL when absent."""
+    """The four distributions start.bat gates on must FAIL when absent."""
     monkeypatch.setattr(dependency_check, "_interpreter_has_app", lambda: True)
     monkeypatch.setattr(dependency_check, "_bundle_versions", lambda ctx: ({}, {}))
     monkeypatch.setattr(dependency_check, "_import_results", list)
     monkeypatch.setattr(
         dependency_check,
         "_interpreter_versions",
-        lambda: {"torch": "2.4.1", "torchvision": "0.19.1", "pyqt5": "5.15.11"},
+        lambda: {"torch": "2.13.0", "torchvision": "0.28.0", "pyqt5": "5.15.11"},
     )
 
     results = dependency_check.check(context)
     by_id = {item.check_id: item for item in results}
 
     assert by_id["deps.version.onnxruntime"].status is Status.FAIL
-    assert by_id["deps.version.jsonargparse"].status is Status.FAIL
     assert by_id["deps.version.torch"].status is Status.PASS
+    # Nothing imports jsonargparse since the anomalib 2.x port.
+    assert "deps.version.jsonargparse" not in by_id
 
 
 def test_advisory_drift_warns_but_does_not_fail(
@@ -326,11 +327,10 @@ def test_advisory_drift_warns_but_does_not_fail(
         dependency_check,
         "_interpreter_versions",
         lambda: {
-            "torch": "2.4.1",
-            "torchvision": "0.19.1",
+            "torch": "2.13.0",
+            "torchvision": "0.28.0",
             "onnxruntime": "1.23.2",
             "pyqt5": "5.15.11",
-            "jsonargparse": "4.34.0",
             "numpy": "2.1.0",
         },
     )
@@ -357,7 +357,7 @@ def test_blocking_version_mismatch_fails(
 def test_bundle_mode_reports_unversioned_packages_as_unknown(app_root: Path) -> None:
     """A packaged build without metadata is "unknown version", not "missing"."""
     internal = app_root / "_internal"
-    (internal / "torch-2.4.1.dist-info").mkdir(parents=True)
+    (internal / "torch-2.13.0.dist-info").mkdir(parents=True)
     (internal / "cv2").mkdir()
 
     by_id = {item.check_id: item for item in dependency_check.check(resolve_context(app_root))}
@@ -428,7 +428,7 @@ def test_anomalib_packages_skipped_only_when_absent(
     monkeypatch.setattr(dependency_check, "_interpreter_has_app", lambda: True)
     monkeypatch.setattr(dependency_check, "_bundle_versions", lambda ctx: ({}, {}))
     monkeypatch.setattr(dependency_check, "_import_results", list)
-    monkeypatch.setattr(dependency_check, "_interpreter_versions", lambda: {"torch": "2.4.1"})
+    monkeypatch.setattr(dependency_check, "_interpreter_versions", lambda: {"torch": "2.13.0"})
 
     by_id = {item.check_id: item for item in dependency_check.check(context)}
     assert by_id["deps.anomalib"].status is Status.SKIP
@@ -452,7 +452,7 @@ def test_anomalib_drift_is_reported_even_when_the_backend_is_disabled(
     monkeypatch.setattr(
         dependency_check,
         "_interpreter_versions",
-        lambda: {"kornia": "0.6.9", "timm": "0.6.12", "anomalib": "1.2.0"},
+        lambda: {"kornia": "0.6.9", "timm": "0.6.12", "anomalib": "2.7.0"},
     )
 
     by_id = {item.check_id: item for item in dependency_check.check(context)}

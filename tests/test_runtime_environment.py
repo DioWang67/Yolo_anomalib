@@ -52,7 +52,8 @@ def test_runtime_checker_rejects_unsupported_python(monkeypatch):
     assert checks[0].passed is False
 
 
-def test_runtime_checker_accepts_deployed_python_310(monkeypatch):
+def test_runtime_checker_rejects_the_retired_python_310(monkeypatch):
+    """The station moved to 3.11 with the torch 2.13 / anomalib 2.7 stack."""
     monkeypatch.setattr(runtime.sys, "version_info", (3, 10, 18))
     monkeypatch.setattr(
         runtime.importlib,
@@ -67,4 +68,5 @@ def test_runtime_checker_accepts_deployed_python_310(monkeypatch):
 
     checks = runtime.run_checks()
 
-    assert checks[0].passed is True
+    assert checks[0].name == "python_version"
+    assert checks[0].passed is False

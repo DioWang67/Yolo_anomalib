@@ -10,13 +10,12 @@ import platform
 import sys
 from dataclasses import asdict, dataclass
 
-SUPPORTED_PYTHON = ((3, 10), (3, 11))
+SUPPORTED_PYTHON = ((3, 11),)
 EXPECTED_DISTRIBUTIONS = {
-    "torch": "2.4.1",
-    "torchvision": "0.19.1",
+    "torch": "2.13.0",
+    "torchvision": "0.28.0",
     "onnxruntime": "1.23.2",
     "PyQt5": "5.15.11",
-    "jsonargparse": "4.34.0",
 }
 REQUIRED_IMPORTS = (
     "torch",
@@ -24,7 +23,6 @@ REQUIRED_IMPORTS = (
     "onnxruntime",
     "cv2",
     "PyQt5.QtCore",
-    "jsonargparse",
     "yaml",
 )
 

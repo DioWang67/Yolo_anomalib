@@ -230,6 +230,32 @@ def check_dir(dist: Path) -> bool:
     else:
         print("  SKIP exe not found")
 
+    # Required, not optional: the exe never imports anomalib on start-up, so a
+    # broken bundle would otherwise pass here and fail on the line.
+    print("\n[Anomalib preflight]")
+    if exe.exists():
+        try:
+            result = subprocess.run(
+                [str(exe), "--check-anomalib"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if result.returncode == 0:
+                print(f"  OK  {result.stdout.strip()[:300]}")
+            else:
+                print(f"  FAIL packaged anomalib check exitcode={result.returncode}")
+                if result.stdout:
+                    print(f"     stdout: {result.stdout[:300]}")
+                if result.stderr:
+                    print(f"     stderr: {result.stderr[-800:]}")
+                passed = False
+        except Exception as exc:
+            print(f"  FAIL packaged anomalib check failed: {exc}")
+            passed = False
+    else:
+        print("  SKIP exe not found")
+
     return passed
 
 
