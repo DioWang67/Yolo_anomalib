@@ -30,6 +30,7 @@
 | PCBA 受控試產 | [PCBA 試產指南](pilot/PCBA_PILOT_GUIDE.md) | [試產驗收紀錄](pilot/PCBA_PILOT_ACCEPTANCE_TEMPLATE.md) |
 | 跨類別重複框 Pilot | [Cable1/A 1.0.6 改善企畫](pilot/CROSS_CLASS_DUPLICATE_DETECTION_PROPOSAL.md) | 現場 Gate 尚須完成 |
 | 程式模組與執行緒責任 | [模組架構（繁中）](architecture/MODULE_ARCHITECTURE_ZH_TW.md) | [英文原文](architecture/MODULE_ARCHITECTURE.md)／[技術指南](architecture/TECH_GUIDE.md) |
+| 訓練端架構、推論↔訓練的檔案合約 | [Yolo11_auto_train 架構](../../Yolo11_auto_train/docs/ARCHITECTURE.md) | §1 合約表、§7 部署 Gate、§14 已知落差 |
 | 路徑、YAML 與憑證安全 | [安全設計](architecture/SECURITY.md) | `tests/test_security.py` |
 | 驗收證據綁定與跨行程互斥 | [安全設計 §1.1／§1.2](architecture/SECURITY.md) | [模組架構：驗收證據層](architecture/MODULE_ARCHITECTURE_ZH_TW.md) |
 | 受限裝置 runtime 評估 | [Firmware Runtime Plan](architecture/FIRMWARE_RUNTIME_PLAN.md) | 需以 benchmark gate 決定 |
