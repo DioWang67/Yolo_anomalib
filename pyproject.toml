@@ -36,7 +36,7 @@ dependencies = [
     # Data processing
     "numpy==1.26.4",
     "opencv-python==4.9.0.80",
-    "pillow==10.4.0",
+    "pillow==12.3.0",
     "pandas==2.3.1",
     "openpyxl==3.1.5",
     "matplotlib==3.9.2",
@@ -48,14 +48,14 @@ dependencies = [
     "timm==1.0.19",
     "einops==0.8.1",
     "FrEIA==0.2",
-    "python-dotenv==1.1.1",
+    "python-dotenv==1.2.4",
     "open-clip-torch==3.1.0",
     
     # Utilities
     "jsonargparse==4.34.0",
     "pydantic>=1.10,<3.0",
     "PyYAML==6.0.2",
-    "requests==2.32.3",
+    "requests==2.34.2",
     "tqdm==4.67.1",
     "typing_extensions==4.12.2",
     "imgaug>=0.4.0",
@@ -70,7 +70,7 @@ gui = [
 ]
 
 dev = [
-    "pytest==8.3.3",
+    "pytest==9.0.3",
     "pytest-cov>=4.0.0",
     "pytest-qt>=4.2.0",
     "pytest-timeout>=2.4.0",

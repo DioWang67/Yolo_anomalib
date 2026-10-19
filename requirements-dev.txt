@@ -2,7 +2,7 @@
 # Install with: pip install -r requirements-dev.txt
 
 # Testing
-pytest==8.3.3
+pytest==9.0.3
 pytest-cov==7.0.0
 pytest-qt==4.5.0
 pytest-timeout==2.4.0
