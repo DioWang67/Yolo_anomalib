@@ -11,7 +11,6 @@ from typing import Any
 
 import numpy as np
 import torch
-from torch.cuda.amp import autocast
 from ultralytics import YOLO
 
 from core.base_model import BaseInferenceModel
@@ -36,6 +35,15 @@ from core.services.missing_slot_checker import MissingSlotChecker
 from core.utils import ImageUtils
 from core.version_utils import parse_model_version, version_to_string
 from core.yolo_runtime import YoloRuntimeInfo, detect_yolo_runtime
+
+
+def autocast():
+    """CUDA mixed-precision context for ``.pt`` weights.
+
+    ``torch.cuda.amp.autocast`` is deprecated; importing it at module load also
+    tied this module to that path for every runtime, CPU included.
+    """
+    return torch.autocast(device_type="cuda")
 
 
 class YOLOInferenceModel(BaseInferenceModel):

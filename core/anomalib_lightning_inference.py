@@ -71,8 +71,7 @@ from core.services.results.path_manager import ResultPathManager
 from core.station_data import load_station_data_paths
 from importlib import import_module
 
-# ---- Anomalib / jsonargparse 依賴檢查與強制載入 ----
-import jsonargparse
+# ---- Anomalib 依賴 ----
 from anomalib.data import PredictDataset
 from anomalib.engine import Engine
 from jsonargparse import Namespace
@@ -80,24 +79,6 @@ from torch.utils.data import DataLoader
 
 logger = logging.getLogger("anomalib")
 
-try:
-    # 強制載入 signatures extra，讓 PyInstaller 確定收這個子模組
-    import jsonargparse.signatures  # type: ignore  # noqa: F401
-
-    logger.info(
-        "jsonargparse loaded OK (version=%s, file=%s)",
-        getattr(jsonargparse, "__version__", "N/A"),
-        getattr(jsonargparse, "__file__", "N/A"),
-    )
-except Exception as e:  # pragma: no cover - 只用來在 exe 裡除錯
-    logger.error(
-        "Failed to import jsonargparse.signatures: %s (version=%s, file=%s)",
-        e,
-        getattr(jsonargparse, "__version__", "N/A"),
-        getattr(jsonargparse, "__file__", "N/A"),
-        exc_info=True,
-    )
-# ---- end jsonargparse check ----
 
 
 logging.getLogger("anomalib").setLevel(logging.INFO)
