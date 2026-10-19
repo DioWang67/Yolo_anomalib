@@ -616,6 +616,41 @@ def test_calibration_apply_writes_only_the_bound_target(
     assert panel._calib_apply_btn.isEnabled() is False
 
 
+def test_calibration_apply_keeps_the_documented_tuning(
+    gui,
+    monkeypatch,
+    tmp_path,
+):
+    """Recalibrating must not erase why the other values were chosen."""
+    _configure_calibration_targets(gui)
+    panel = gui.control_panel
+    gui._models_base = tmp_path / "models"
+    saved_path = tmp_path / "models" / "Cable1" / "A" / "auto_trigger.yaml"
+    saved_path.parent.mkdir(parents=True)
+    documented = (
+        "# DO NOT DROP: the empty background already measures ~7900.\n"
+        "product_area_threshold: 46712\n"
+        "# 6 -> 3: the real latency driver; revert first if blur appears.\n"
+        "stable_frames: 3\n"
+    )
+    saved_path.write_text(documented, encoding="utf-8")
+    monkeypatch.setattr(panel, "_verify_pin", lambda: True)
+    monkeypatch.setattr(
+        qt_widgets.QMessageBox,
+        "information",
+        lambda *_args, **_kwargs: qt_widgets.QMessageBox.Ok,
+    )
+    panel.engineering_toggle_btn.click()
+    panel.set_calib_empty(100.0, target=("Cable1", "A"))
+    panel.set_calib_product(300.0, target=("Cable1", "A"))
+
+    panel._calib_apply_btn.click()
+
+    assert saved_path.read_text(encoding="utf-8") == documented.replace(
+        "46712", "200"
+    )
+
+
 def test_engineering_equipment_tab_exposes_visible_live_preview(gui, monkeypatch):
     """Equipment calibration must provide visual context on its owning tab."""
     monkeypatch.setattr(gui.control_panel, "_verify_pin", lambda: True)

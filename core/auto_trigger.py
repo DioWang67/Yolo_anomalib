@@ -18,6 +18,7 @@ WAIT_REMOVE    → result displayed, waiting for product to leave
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections import deque
 from dataclasses import dataclass, field, fields
@@ -73,6 +74,30 @@ class AutoTriggerConfig:
     def from_dict(cls, d: dict) -> AutoTriggerConfig:
         valid_keys = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in valid_keys})
+
+
+_PRODUCT_AREA_THRESHOLD_LINE = re.compile(
+    r"^(product_area_threshold:)[ \t]*[^\s#]*", re.MULTILINE
+)
+
+
+def with_product_area_threshold(text: str, threshold: int) -> str:
+    """Return auto_trigger.yaml text with ``product_area_threshold`` replaced.
+
+    Only the value changes; comments and every other line are kept. These
+    files record why each tuning value was chosen, and a load/dump round trip
+    discarded that on every calibration. A file without the key gets it
+    appended.
+    """
+    value = int(threshold)
+    updated, replaced = _PRODUCT_AREA_THRESHOLD_LINE.subn(
+        rf"\g<1> {value}", text, count=1
+    )
+    if replaced:
+        return updated
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return f"{text}product_area_threshold: {value}\n"
 
 
 # ---------------------------------------------------------------------------

@@ -108,7 +108,10 @@ from app.gui.view_builder import (  # noqa: E402
 )
 from app.gui.widgets import CameraStatusIndicator  # noqa: E402
 from core._version import __version__ as SYSTEM_VERSION  # noqa: E402
-from core.auto_trigger import AutoTriggerConfig  # noqa: E402
+from core.auto_trigger import (  # noqa: E402
+    AutoTriggerConfig,
+    with_product_area_threshold,
+)
 from core.services.model_catalog import ModelCatalog  # noqa: E402
 from core.services.model_config_editor import (  # noqa: E402
     ModelConfigEditError,
@@ -2433,10 +2436,11 @@ class DetectionSystemGUI(
         )
         # Load existing file or start fresh, then update only product_area_threshold
         existing: dict = {}
+        existing_text = ""
         if save_path.exists():
             try:
-                with open(save_path, encoding="utf-8") as f:
-                    loaded = yaml.safe_load(f) or {}
+                existing_text = save_path.read_text(encoding="utf-8")
+                loaded = yaml.safe_load(existing_text) or {}
                 if not isinstance(loaded, dict):
                     raise ValueError("auto_trigger.yaml must contain a mapping.")
                 existing = loaded
@@ -2454,12 +2458,18 @@ class DetectionSystemGUI(
                 return
         existing["product_area_threshold"] = threshold
         try:
-            serialized = yaml.safe_dump(
-                existing,
-                allow_unicode=True,
-                default_flow_style=False,
-                sort_keys=False,
-            ).encode("utf-8")
+            text = with_product_area_threshold(existing_text, threshold)
+            # Keep the file's comments only when the targeted edit means
+            # exactly the updated mapping; anything unusual (flow style, a
+            # duplicated key) falls back to a plain dump.
+            if yaml.safe_load(text) != existing:
+                text = yaml.safe_dump(
+                    existing,
+                    allow_unicode=True,
+                    default_flow_style=False,
+                    sort_keys=False,
+                )
+            serialized = text.encode("utf-8")
             save_path.parent.mkdir(parents=True, exist_ok=True)
             save_file = QSaveFile(str(save_path))
             if not save_file.open(QIODevice.WriteOnly):
