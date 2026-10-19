@@ -95,6 +95,7 @@ except Exception as e:  # pragma: no cover - 只用來在 exe 裡除錯
         e,
         getattr(jsonargparse, "__version__", "N/A"),
         getattr(jsonargparse, "__file__", "N/A"),
+        exc_info=True,
     )
 # ---- end jsonargparse check ----
 
@@ -244,7 +245,8 @@ def initialize(
 
         except Exception as exc:
             logging.getLogger("anomalib").error(
-                f"Model initialization failed (product: {product}, area: {area}): {str(exc)}"
+                f"Model initialization failed (product: {product}, area: {area}): {str(exc)}",
+                exc_info=True,
             )
             raise
 
@@ -522,7 +524,8 @@ def _process_prediction(
 
     except Exception as exc:
         logging.getLogger("anomalib").error(
-            f"Processing prediction failed: {str(exc)}"
+            f"Processing prediction failed: {str(exc)}",
+            exc_info=True,
         )
         return {
             "image_path": image_path,

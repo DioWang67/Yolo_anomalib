@@ -129,7 +129,7 @@ class MVSCamera:
             self.set_gain(self.config.gain)
 
         except Exception as e:
-            _camera_logger.error("初始化相機參數時發生錯誤: %s", e)
+            _camera_logger.error("初始化相機參數時發生錯誤: %s", e, exc_info=True)
             return False
 
         _camera_logger.info("相機連接成功且參數初始化完成!")
@@ -143,7 +143,7 @@ class MVSCamera:
                     self.close()  # 釋放資源
                     return False
         except Exception as e:
-            _camera_logger.error("設定觸發模式時發生錯誤: %s", e)
+            _camera_logger.error("設定觸發模式時發生錯誤: %s", e, exc_info=True)
             self.close()  # 錯誤時釋放資源
             return False
 
@@ -208,7 +208,7 @@ class MVSCamera:
                         else:
                             _camera_logger.error("保存影像失敗: %s", filename)
                     except Exception as e:
-                        _camera_logger.error("保存影像時發生錯誤: %s", e)
+                        _camera_logger.error("保存影像時發生錯誤: %s", e, exc_info=True)
                     finally:
                         self.save_image = False
 

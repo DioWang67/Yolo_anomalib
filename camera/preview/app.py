@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
                 logger=logger,
             ), None
         except Exception as exc:  # pragma: no cover
-            logger.error("Camera init failed: %s", exc)
+            logger.error("Camera init failed: %s", exc, exc_info=True)
             return None, str(exc)
 
     source, error_msg = _create_source(args.opencv_backup)
