@@ -40,6 +40,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "相機條件已變動", which on an NG headline read as the cause. See
   `docs/operations/GOLDEN_SAMPLE_PREFLIGHT.md`.
 
+- The annotated result image now marks failing targets as a distinct emphasis
+  layer (`core/services/results/failure_marks.py`) instead of recolouring the
+  same 2px outline a passing detection gets. A failing target carries a tinted
+  interior, a light/dark/colour border sandwich, outward targeting corners, and
+  a caption naming the reason -- colour swap, position shift, wrong component,
+  missing item, or an unexpected extra -- with the reason codes matching the NG
+  evidence crop filenames. The info panel gains an `NG xN:` line summarising
+  the same targets for anyone reading the panel alone.
+
+  The emphasis is drawn above the detection boxes and the info panel, so a
+  defect is never buried by a neighbouring box, and captions of adjacent
+  defects step out of each other's way rather than overlapping. Position
+  expectation cues (expected box, expected centre, offset line) moved on top of
+  the emphasis so the "where it should have been" hint stays readable.
+
+- A failed sequence check now marks the box holding each out-of-order slot,
+  captioned with the class that slot should have held (`#1 NG SEQUENCE
+  exp=Red`). `SequenceCheckStep` records the expected and observed orders but
+  not which box broke them, so `detection_sequence.sequence_mismatches` pairs
+  the slots back to detections by re-deriving the same left-to-right ordering
+  the decision used. It blames nobody unless the recorded `observed` can be
+  reproduced from the detections exactly: a stale record would otherwise point
+  an operator at an innocent part. A length mismatch stays unpaired for the
+  same reason -- the extra or absent item is reported by its own check.
+
+  The panel prints `Exp:` directly above `LR:` when the order fails, so what
+  the board should hold and what it does hold read as two adjacent lines. `LR:`
+  is no longer conditional on a colour check having run.
+
+### Added
+- `annotate_info_panel` (global config, default `true`) and a matching
+  "Show info panel" switch in the engineering panel's 顯示與輸出 group. Turning
+  it off leaves the text summary off the saved annotated image while every
+  box-level cue stays: each failing target still carries its own reason
+  caption, so what failed and why remains on the picture; what goes is the
+  run-wide summary that was covering a large part of a small frame.
+
+  It is a display setting only -- the panel lines are still computed, no
+  verdict or pipeline step changes, and NG evidence crops, the metadata
+  snapshot and the Excel row are untouched. Because the panel is drawn at save
+  time rather than composited at view time, results already on disk keep the
+  panel they were saved with. The key is deliberately absent from the model
+  config key allowlists: it is a station-wide display choice and must not ride
+  along with a model release.
+
+  The switch is held as a session override on `DetectionSystem` and re-applied
+  wherever the config reaches the result sink, because `load_model_configs`
+  rebuilds the active config from the pristine base config on every model
+  switch and `reload_model_settings` re-reads that base config from YAML. A
+  value written straight onto the active config would have survived only until
+  the next switch, which is to say until the next inspection.
+
+- A failure caption is now centered on the target it names and carries a
+  pointer tail into that target's near edge. A caption is several times wider
+  than the small box it describes, so left-aligning it left the caption
+  stretching across its neighbours, and the eye assigns a label to whatever
+  sits under its middle -- on a row of connectors it was genuinely unclear
+  which box a caption belonged to. The tail settles the cases centering cannot:
+  a caption pushed aside by a neighbour, or clamped by the frame edge, no
+  longer sits over its own target at all.
+
+- Box captions drop the reason code when a lone reason's detail already reads
+  as the whole story: an out-of-order wire is captioned `#1 NG exp=Orange`
+  rather than `#1 NG SEQUENCE exp=Orange`. The code returns as soon as a target
+  fails more than one check, so a detail is never printed under a heading it
+  does not belong to, and the panel summary and NG crop filenames name it
+  either way.
+
 ## [1.2.0] - 2026-09-22
 
 Cuts everything accumulated since 1.1.0 (2026-08-13) into one MINOR release.

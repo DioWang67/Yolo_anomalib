@@ -313,6 +313,7 @@ class ResultHandler:
                 )
 
             detector_lower = (detector or "").lower()
+            show_info_panel = bool(self._cfg_get("annotate_info_panel", True))
             if detector_lower == "yolo" and save_flags["annotated"]:
                 annotated_frame = processed_image.copy()
                 crop_source = processed_image
@@ -328,6 +329,8 @@ class ResultHandler:
                     missing_locations=missing_locations,
                     duplicate_filter=duplicate_filter,
                     raw_detections=raw_detections,
+                    sequence_check=sequence_check,
+                    show_info_panel=show_info_panel,
                 )
                 self._img_queue.write_sync(
                     annotated_path,
@@ -380,6 +383,8 @@ class ResultHandler:
                         missing_locations=missing_locations,
                         duplicate_filter=duplicate_filter,
                         raw_detections=raw_detections,
+                        sequence_check=sequence_check,
+                        show_info_panel=show_info_panel,
                     )
                     self._img_queue.write_sync(
                         annotated_path,

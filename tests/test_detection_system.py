@@ -452,6 +452,40 @@ class TestDetectionSystemIntegration(unittest.TestCase):
 
         sink.update_config.assert_called_once_with(active_config)
 
+    def test_info_panel_choice_survives_a_model_config_switch(self):
+        """A switch rebuilds the config; an engineer's display choice must not
+        be silently reset by it."""
+        sink = MagicMock()
+        self.system.result_sink = sink
+        self.system._sink_base_dir = self.system._resolve_output_dir()
+
+        self.system.set_info_panel_visible(False)
+        self.assertFalse(self.system.config.annotate_info_panel)
+
+        # ``load_model_configs`` replaces the active config wholesale with one
+        # merged from the pristine base config, which carries the default.
+        self.system.config = MagicMock(
+            output_dir=str(self.system._sink_base_dir),
+            annotate_info_panel=True,
+        )
+        self.system._refresh_result_sink()
+
+        self.assertFalse(self.system.config.annotate_info_panel)
+        self.assertIs(sink.update_config.call_args[0][0], self.system.config)
+
+    def test_untouched_info_panel_setting_leaves_the_config_alone(self):
+        """Without an engineer's choice the config files stay authoritative."""
+        self.system.result_sink = MagicMock()
+        self.system._sink_base_dir = self.system._resolve_output_dir()
+        self.system.config = MagicMock(
+            output_dir=str(self.system._sink_base_dir),
+            annotate_info_panel=False,
+        )
+
+        self.system._refresh_result_sink()
+
+        self.assertFalse(self.system.config.annotate_info_panel)
+
 
 if __name__ == "__main__":
     unittest.main()

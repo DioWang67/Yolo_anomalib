@@ -44,6 +44,15 @@ class PreferencesManager:
         """Persist the result-image detection box visibility preference."""
         self._settings.setValue("show_detection_boxes", bool(enabled))
 
+    def restore_show_info_panel(self) -> bool:
+        """Return whether annotated images should carry the text info panel."""
+        value = self._settings.value("show_info_panel", True)
+        return self._as_bool(value, default=True)
+
+    def save_show_info_panel(self, enabled: bool) -> None:
+        """Persist the annotated-image info panel preference."""
+        self._settings.setValue("show_info_panel", bool(enabled))
+
     def restore_show_original_tab(self) -> bool:
         """Return whether the original-image tab should be visible."""
         value = self._settings.value("show_original_tab", True)

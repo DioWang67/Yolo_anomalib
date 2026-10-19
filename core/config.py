@@ -223,6 +223,12 @@ class DetectionConfig:
     save_annotated: bool = True
     save_crops: bool = True
     save_fail_only: bool = False
+    # Overlay controls. The info panel is drawn into the saved annotated image
+    # rather than composited at view time, so hiding it is a save-time decision
+    # and past results keep whatever they were saved with. Failure reasons stay
+    # legible either way: they are captioned on the boxes themselves, and the
+    # full record remains in the metadata snapshot and the Excel row.
+    annotate_info_panel: bool = True
     jpeg_quality: int = 95
     png_compression: int = 3
     max_crops_per_frame: int | None = None
@@ -430,6 +436,9 @@ class DetectionConfig:
             "save_annotated": bool(normalized.get("save_annotated", True)),
             "save_crops": bool(normalized.get("save_crops", True)),
             "save_fail_only": bool(normalized.get("save_fail_only", False)),
+            "annotate_info_panel": bool(
+                normalized.get("annotate_info_panel", True)
+            ),
             "jpeg_quality": int(normalized.get("jpeg_quality", 95)),
             "png_compression": int(normalized.get("png_compression", 3)),
             "max_crops_per_frame": normalized.get("max_crops_per_frame"),

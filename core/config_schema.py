@@ -121,6 +121,7 @@ if BaseModel is not None:  # pragma: no cover - runtime optional
         save_annotated: bool | None = True
         save_crops: bool | None = True
         save_fail_only: bool | None = False
+        annotate_info_panel: bool | None = True
         inspection_backup_interval_hours: int | None = Field(
             default=24, ge=1, le=168
         )

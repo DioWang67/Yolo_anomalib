@@ -582,6 +582,7 @@ class ControlPanel(QGroupBox):
     pick_image_requested = pyqtSignal()
     clear_image_requested = pyqtSignal()
     show_detection_boxes_toggled = pyqtSignal(bool)
+    show_info_panel_toggled = pyqtSignal(bool)
     show_original_tab_toggled = pyqtSignal(bool)
     show_processed_tab_toggled = pyqtSignal(bool)
     calib_sample_empty_requested = pyqtSignal()
@@ -1229,6 +1230,14 @@ class ControlPanel(QGroupBox):
         self.show_detection_boxes_chk.toggled.connect(self.show_detection_boxes_toggled.emit)
         display_layout.addWidget(self.show_detection_boxes_chk)
 
+        self.show_info_panel_chk = QCheckBox("Show info panel")
+        self.show_info_panel_chk.setChecked(True)
+        self.show_info_panel_chk.setToolTip(
+            "Draw the text summary panel onto saved annotated images"
+        )
+        self.show_info_panel_chk.toggled.connect(self.show_info_panel_toggled.emit)
+        display_layout.addWidget(self.show_info_panel_chk)
+
         self.show_original_tab_chk = QCheckBox("Show original tab")
         self.show_original_tab_chk.setChecked(True)
         self.show_original_tab_chk.setToolTip("Show or hide the original image tab")
@@ -1515,6 +1524,7 @@ class ControlPanel(QGroupBox):
             self.disconnect_camera_btn,
             self.pick_image_btn,
             self.show_detection_boxes_chk,
+            self.show_info_panel_chk,
             self.show_original_tab_chk,
             self.show_processed_tab_chk,
             self._calib_empty_btn,
@@ -1781,6 +1791,7 @@ class ControlPanel(QGroupBox):
             tr(self._language, "open_retraining_workspace_hint")
         )
         self.show_detection_boxes_chk.setText(tr(self._language, "show_detection_boxes"))
+        self.show_info_panel_chk.setText(tr(self._language, "show_info_panel"))
         self.show_original_tab_chk.setText(tr(self._language, "show_original_tab"))
         self.show_processed_tab_chk.setText(tr(self._language, "show_processed_tab"))
         self.output_path_label.setText(
@@ -1793,6 +1804,9 @@ class ControlPanel(QGroupBox):
         )
         self.show_detection_boxes_chk.setToolTip(
             tr(self._language, "show_detection_boxes_hint")
+        )
+        self.show_info_panel_chk.setToolTip(
+            tr(self._language, "show_info_panel_hint")
         )
         self.show_original_tab_chk.setToolTip(
             tr(self._language, "show_original_tab_hint")

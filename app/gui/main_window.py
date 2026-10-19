@@ -167,6 +167,7 @@ class DetectionSystemGUI(
         self.system_version_label: QLabel | None = None
         self.model_version_label = None  # Status bar version display
         self.show_detection_boxes_chk = None
+        self.show_info_panel_chk = None
         self.show_original_tab_chk = None
         self.show_processed_tab_chk = None
         self._run_generation = 0
@@ -417,6 +418,7 @@ class DetectionSystemGUI(
         self.image_path_label = self.control_panel.image_path_label
         self.clear_image_btn = self.control_panel.clear_image_btn
         self.show_detection_boxes_chk = self.control_panel.show_detection_boxes_chk
+        self.show_info_panel_chk = self.control_panel.show_info_panel_chk
         self.show_original_tab_chk = self.control_panel.show_original_tab_chk
         self.show_processed_tab_chk = self.control_panel.show_processed_tab_chk
         self.auto_mode_chk = self.control_panel.auto_mode_chk
@@ -521,6 +523,9 @@ class DetectionSystemGUI(
         self.control_panel.show_detection_boxes_toggled.connect(
             self._on_show_detection_boxes_toggled
         )
+        self.control_panel.show_info_panel_toggled.connect(
+            self._on_show_info_panel_toggled
+        )
         self.control_panel.show_original_tab_toggled.connect(
             self._on_image_tab_visibility_toggled
         )
@@ -584,6 +589,10 @@ class DetectionSystemGUI(
         self.show_detection_boxes_chk.setChecked(
             self.preferences.restore_show_detection_boxes()
         )
+        self.show_info_panel_chk.setChecked(
+            self.preferences.restore_show_info_panel()
+        )
+        self._apply_info_panel_visibility()
         self.show_original_tab_chk.setChecked(
             self.preferences.restore_show_original_tab()
         )
@@ -1669,6 +1678,36 @@ class DetectionSystemGUI(
             self._refresh_result_image()
 
     @pyqtSlot(bool)
+    def _on_show_info_panel_toggled(self, checked: bool) -> None:
+        """Persist and apply the annotated-image info panel setting."""
+        self.preferences.save_show_info_panel(checked)
+        self._apply_info_panel_visibility()
+
+    def _apply_info_panel_visibility(self) -> None:
+        """Push the info panel setting into the running detection system.
+
+        The panel is drawn at save time, so this only changes images produced
+        from here on; results already on disk keep the panel they were saved
+        with. Nothing about the verdict changes either way.
+
+        Reading ``controller.detection_system`` would construct the system, so
+        an unstarted session is left alone; the setting is applied again from
+        ``_on_system_init_finished`` once one exists.
+        """
+        if self.show_info_panel_chk is None or not self.controller.has_system():
+            return
+        visible = self.show_info_panel_chk.isChecked()
+        setter = getattr(
+            self.controller.detection_system, "set_info_panel_visible", None
+        )
+        if not callable(setter):
+            return
+        try:
+            setter(visible)
+        except Exception as exc:
+            self._logger.warning("Failed to apply info panel setting: %s", exc)
+
+    @pyqtSlot(bool)
     def _on_image_tab_visibility_toggled(self, _checked: bool) -> None:
         """Persist and apply original/processed image tab visibility."""
         self._apply_image_tab_visibility()
@@ -1854,6 +1893,9 @@ class DetectionSystemGUI(
     def _on_system_init_finished(self, camera_success):
         try:
             self.detection_system = self.controller.detection_system
+            # The system is built lazily, so the engineer's overlay setting is
+            # only pushable once it exists.
+            self._apply_info_panel_visibility()
             self.log_message(self._t("system_initialized"))
             if camera_success:
                 self._set_camera_status("connected")
@@ -1951,6 +1993,10 @@ class DetectionSystemGUI(
         else:
             self.detection_system = self.controller.detection_system
 
+        # Re-asserted per run: a system reached through a path other than
+        # ``_on_system_init_finished`` would otherwise start its first
+        # inspection with the config-file default.
+        self._apply_info_panel_visibility()
         self._apply_model_light_brightness(product, area, inference_type)
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -2752,6 +2798,9 @@ class DetectionSystemGUI(
             )
             self.preferences.save_show_detection_boxes(
                 self.show_detection_boxes_chk.isChecked()
+            )
+            self.preferences.save_show_info_panel(
+                self.show_info_panel_chk.isChecked()
             )
             self.preferences.save_show_original_tab(
                 self.show_original_tab_chk.isChecked()

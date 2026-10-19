@@ -135,6 +135,10 @@ class DetectionSystem:
         # concurrent readers always see a fully-built config object.
         self._base_config = self.load_config(resolved_config)
         self.config = copy.deepcopy(self._base_config)
+        # ``None`` means "whatever the config files say"; a bool is an engineer's
+        # session choice that outlives every model switch. See
+        # ``set_info_panel_visible``.
+        self._info_panel_override: bool | None = None
 
         self.camera: CameraController | None = None
         # Last (exposure, gain) pushed to the camera, so per-model settings are
@@ -211,7 +215,20 @@ class DetectionSystem:
         self.config.output_dir = str(output_dir)
         return output_dir
 
+    def _apply_overlay_overrides(self) -> None:
+        """Re-assert session overlay choices onto the freshly merged config.
+
+        ``self.config`` is rebuilt from ``_base_config`` on every model switch,
+        and ``reload_model_settings`` re-reads ``_base_config`` from YAML, so a
+        value written straight onto the active config survives only until the
+        next switch. The engineer's choice is therefore held here and re-applied
+        wherever the config is handed to the result sink.
+        """
+        if self._info_panel_override is not None:
+            self.config.annotate_info_panel = self._info_panel_override
+
     def _refresh_result_sink(self) -> None:
+        self._apply_overlay_overrides()
         output_dir = self._resolve_output_dir()
         if getattr(self, "_sink_base_dir", None) == output_dir:
             if self.result_sink:
@@ -232,6 +249,24 @@ class DetectionSystem:
     def load_config(self, config_path: str | Path) -> DetectionConfig:
         """Load global config from YAML into DetectionConfig dataclass."""
         return DetectionConfig.from_yaml(str(Path(config_path)))
+
+    def set_info_panel_visible(self, visible: bool) -> None:
+        """Show or hide the text panel drawn onto saved annotated images.
+
+        Held as a session override rather than written onto the active config,
+        because that config is replaced wholesale on every model switch. It is
+        a station-wide display choice, so unlike the exposure override it is
+        kept when the operator switches product or area.
+
+        Unlike ``reload_model_settings`` this is safe to call while detection
+        runs: it touches no engine and no verdict, only what the next annotated
+        image is drawn with. ``ResultHandler`` keeps a snapshot of the config
+        rather than a live reference, so the sink has to be re-pushed for the
+        change to take hold; a frame already being annotated keeps the previous
+        setting, which is why no lock is warranted here.
+        """
+        self._info_panel_override = bool(visible)
+        self._refresh_result_sink()
 
     def reload_model_settings(
         self,

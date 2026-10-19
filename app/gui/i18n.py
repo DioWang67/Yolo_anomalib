@@ -199,6 +199,11 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "output_path_hint": "Current result output directory",
         "show_detection_boxes": "Show detection boxes",
         "show_detection_boxes_hint": "Toggle inspection overlays on the result view",
+        "show_info_panel": "Show info panel",
+        "show_info_panel_hint": (
+            "Draw the text summary panel onto saved annotated images. "
+            "Failing targets stay marked either way; only the summary goes."
+        ),
         "show_original_tab": "Show original tab",
         "show_original_tab_hint": "Show or hide the original image tab",
         "show_processed_tab": "Show processed tab",
@@ -719,6 +724,11 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "output_path_hint": "目前的檢測結果輸出目錄",
         "show_detection_boxes": "顯示檢測框",
         "show_detection_boxes_hint": "切換結果畫面上的檢測標示",
+        "show_info_panel": "顯示資訊面板",
+        "show_info_panel_hint": (
+            "是否在存檔的標註圖上畫出文字摘要面板。"
+            "不論開關，NG 目標都仍會被標示，關掉只少了整體摘要。"
+        ),
         "show_original_tab": "顯示原始分頁",
         "show_original_tab_hint": "顯示或隱藏原始影像分頁",
         "show_processed_tab": "顯示處理後分頁",

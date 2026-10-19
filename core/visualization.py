@@ -74,17 +74,21 @@ def draw_box_tag(
 
     cv2.rectangle(frame, (left, top), (right, bottom), color, -1)
     cv2.rectangle(frame, (left, top), (right, bottom), (230, 230, 230), 1)
-    text_color = (0, 0, 0) if _perceived_brightness(color) >= 135 else (255, 255, 255)
     cv2.putText(
         frame,
         text,
         (left + padding_x, bottom - padding_y - baseline),
         font,
         font_scale,
-        text_color,
+        contrast_text_color(color),
         thickness,
         cv2.LINE_AA,
     )
+
+
+def contrast_text_color(background: Color) -> Color:
+    """Return black or white, whichever stays readable on ``background``."""
+    return (0, 0, 0) if _perceived_brightness(background) >= 135 else (255, 255, 255)
 
 
 def draw_legend_panel(

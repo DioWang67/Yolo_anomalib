@@ -11,11 +11,18 @@ from core.services.alignment import (
     extract_layout_alignment,
     resolve_missing_expected_keys,
 )
-from core.services.detection_sequence import left_right_sequence
+from core.services.detection_sequence import left_right_sequence, sequence_mismatches
 from core.services.results.customer_message import (
     COLOR_FAILURE_LOW_CONFIDENCE,
     COLOR_FAILURE_MISMATCH,
     classify_color_check_failure,
+)
+from core.services.results.failure_marks import (
+    FailureMark,
+    collect_detection_marks,
+    draw_failure_marks,
+    missing_marks,
+    summarize_failure_marks,
 )
 from core.services.results.position_summary import (
     POSITION_OK_STATES,
@@ -66,8 +73,27 @@ def annotate_yolo_frame(
     missing_locations: list[dict[str, Any]] | None = None,
     duplicate_filter: dict[str, Any] | None = None,
     raw_detections: list[dict[str, Any]] | None = None,
+    sequence_check: dict[str, Any] | None = None,
+    show_info_panel: bool = True,
 ) -> None:
-    """Render detection, color, and position cues onto the frame."""
+    """Render detection, color, and position cues onto the frame.
+
+    Drawn in layers, weakest cue first, so the strongest cue is never buried:
+    duplicate suppressions, detection boxes, the info panel, the failure
+    emphasis layer, and finally the thin position-expectation cues that say
+    where a shifted item should have been.
+
+    Args:
+        image_utils: Retained for call compatibility. Failure captions are now
+            rendered by :mod:`core.services.results.failure_marks` so every NG
+            cue on the image shares one style.
+        show_info_panel: When false, the text panel is left off the image and
+            only the box-level cues are drawn. Every failing target still
+            carries its own reason caption, so nothing about which target failed
+            and why is lost with the panel; what goes is the run-wide summary.
+            Panel lines are still computed, because suppressing a panel is a
+            display choice and must not change any verdict.
+    """
     panel_lines: list[tuple[str, tuple[int, int, int]]] = []
     status_text = str(status or "").upper()
     if status_text:
@@ -79,7 +105,14 @@ def annotate_yolo_frame(
         color_items = (color_result or {}).get("items", []) or []
     color_items_by_index = _items_by_index(color_items)
 
-    fail_indices: list[int] = []
+    mismatched_slots = sequence_mismatches(detections, sequence_check)
+    marks: list[FailureMark] = collect_detection_marks(
+        detections,
+        color_items_by_index,
+        _sequence_expectations(detections, mismatched_slots),
+    )
+    failing_indices = {mark.index for mark in marks if mark.index is not None}
+
     if duplicate_filter:
         panel_lines.extend(_build_duplicate_summary_lines(duplicate_filter))
         _draw_duplicate_suppressions(
@@ -87,34 +120,37 @@ def annotate_yolo_frame(
             duplicate_filter,
             raw_detections or detections,
         )
-    if detections:
-        for idx, det in enumerate(detections):
-            source_index = _source_index(det, idx)
-            color_item = color_items_by_index.get(source_index)
-            _draw_detection_box(frame, source_index, det, color_item)
-            if color_item is not None:
-                try:
-                    if not color_item.get("is_ok", True):
-                        fail_indices.append(source_index)
-                except Exception:
-                    continue
+    for position, detection in enumerate(detections or []):
+        source_index = _source_index(detection, position)
+        _draw_detection_box(
+            frame,
+            source_index,
+            detection,
+            is_failing=source_index in failing_indices,
+        )
     # ``None`` preserves the direct-call fallback for callers that have not
     # resolved spatial evidence. An empty list is an explicit decision not to
     # draw locations (for example, when position checking is disabled).
     if missing_locations is None:
-        _draw_missing_expected_boxes(frame, detections, missing_items, expected_boxes)
-    if fail_indices:
-        panel_lines.append(
-            (f"NG idx: {', '.join(str(i) for i in fail_indices)}", (0, 0, 255))
+        marks.extend(
+            missing_marks(
+                _missing_expected_entries(detections, missing_items, expected_boxes)
+            )
         )
+    else:
+        marks.extend(missing_marks(_missing_location_entries(missing_locations)))
 
+    panel_lines.extend(summarize_failure_marks(marks))
     panel_lines.extend(_build_position_summary_lines(detections))
 
     if color_result:
         panel_lines.extend(_build_color_summary_lines(color_result, detections))
-        _highlight_color_failures(frame, detections, color_result)
     elif detections:
         panel_lines.extend(_build_detection_summary_lines(detections))
+
+    panel_lines.extend(
+        _build_sequence_summary_lines(detections, sequence_check, mismatched_slots)
+    )
 
     missing_names = [str(item).strip() for item in (missing_items or [])]
     if not missing_names:
@@ -130,34 +166,68 @@ def annotate_yolo_frame(
             )
         )
 
-    if panel_lines:
+    if panel_lines and show_info_panel:
         _draw_info_panel(frame, panel_lines, origin=(15, 35))
 
-    if missing_locations:
-        _draw_missing_locations(image_utils, frame, missing_locations)
+    draw_failure_marks(frame, marks)
+    _draw_position_cues(frame, detections)
 
 
 def _draw_detection_box(
     frame: np.ndarray,
     index: int,
     detection: dict[str, Any],
-    color_item: dict[str, Any] | None = None,
+    *,
+    is_failing: bool = False,
 ) -> None:
+    """Draw one detection box, leaving failures to the emphasis layer.
+
+    A failing box gets no ``#index`` tag here: the emphasis layer puts its full
+    reason caption in that same slot, so drawing both would stack two labels on
+    one box.
+    """
     x1, y1, x2, y2 = _coerce_bbox(detection.get("bbox"))
     color = _position_color(detection)
-    position_status = str(detection.get("position_status") or "").upper()
-    position_is_ok = position_status in POSITION_OK_STATES
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+    if not is_failing:
+        draw_box_tag(frame, (x1, y1, x2, y2), f"#{index}", color)
 
-    if position_status and not position_is_ok:
+
+def _sequence_expectations(
+    detections: list[dict[str, Any]] | None,
+    mismatched_slots: list[tuple[int, Any, str, str]],
+) -> dict[int, str]:
+    """Map source index to the class that detection's sequence slot expected.
+
+    ``sequence_mismatches`` hands back the detection records themselves, so the
+    source index is recovered through each record's own position in
+    ``detections`` rather than through its position among the mismatches.
+    """
+    positions = {
+        id(detection): position
+        for position, detection in enumerate(detections or [])
+    }
+    return {
+        _source_index(detection, positions.get(id(detection), 0)): expected
+        for _, detection, _observed, expected in mismatched_slots
+    }
+
+
+def _draw_position_cues(
+    frame: np.ndarray,
+    detections: list[dict[str, Any]] | None,
+) -> None:
+    """Draw where mispositioned items were expected, above the emphasis layer.
+
+    These are thin diagnostic marks, so they neither hide the emphasis nor get
+    hidden by it.
+    """
+    for detection in detections or []:
+        position_status = str(detection.get("position_status") or "").upper()
+        if not position_status or position_status in POSITION_OK_STATES:
+            continue
         _draw_expected_position(frame, detection)
         _draw_position_offset(frame, detection)
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-    tag_text = f"#{index}"
-    tag_color = color
-    if color_item and not color_item.get("is_ok", True):
-        tag_text += " NG"
-        tag_color = (0, 0, 255)
-    draw_box_tag(frame, (x1, y1, x2, y2), tag_text, tag_color)
 
 
 def _draw_expected_position(frame: np.ndarray, detection: dict[str, Any]) -> None:
@@ -219,15 +289,16 @@ def _draw_position_offset(frame: np.ndarray, detection: dict[str, Any]) -> None:
         )
 
 
-def _draw_missing_expected_boxes(
-    frame: np.ndarray,
+def _missing_expected_entries(
     detections: list[dict[str, Any]] | None,
     missing_items: list[str] | None,
     expected_boxes: dict[str, dict[str, Any]] | None,
-) -> None:
+) -> list[tuple[tuple[int, int, int, int], str]]:
+    """Return expected boxes for missing items, shifted onto the live layout."""
     if not missing_items or not expected_boxes:
-        return
+        return []
 
+    entries: list[tuple[tuple[int, int, int, int], str]] = []
     alignment = extract_layout_alignment(detections or [])
     used_expected_keys = {
         str(det.get("position_expected_key"))
@@ -244,74 +315,25 @@ def _draw_missing_expected_boxes(
             x1, y1, x2, y2 = alignment.shift_box(expected_box)
         except (KeyError, TypeError, ValueError):
             continue
-
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-        cv2.putText(
-            frame,
-            f"MISSING {base_class_name(expected_key)}",
-            (x1, max(y1 - 8, 18)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (0, 0, 255),
-            1,
-            cv2.LINE_AA,
-        )
+        entries.append(((x1, y1, x2, y2), base_class_name(expected_key)))
+    return entries
 
 
-def _draw_missing_locations(
-    image_utils: ImageUtils,
-    frame: np.ndarray,
+def _missing_location_entries(
     missing_locations: list[dict[str, Any]],
-) -> None:
-    for item in missing_locations:
+) -> list[tuple[tuple[int, int, int, int], str]]:
+    """Return resolved spatial evidence for items that were not detected."""
+    entries: list[tuple[tuple[int, int, int, int], str]] = []
+    for item in missing_locations or []:
         bbox = item.get("bbox")
         if not bbox or len(bbox) < 4:
             continue
         try:
-            x1, y1, x2, y2 = [int(v) for v in bbox[:4]]
+            x1, y1, x2, y2 = (int(v) for v in bbox[:4])
         except (TypeError, ValueError):
             continue
-
-        h, w = frame.shape[:2]
-        x1 = max(0, min(w - 1, x1))
-        x2 = max(0, min(w - 1, x2))
-        y1 = max(0, min(h - 1, y1))
-        y2 = max(0, min(h - 1, y2))
-        if x1 >= x2 or y1 >= y2:
-            continue
-
-        color = (0, 0, 255)
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
-        label = f"MISSING {item.get('class', '')}".strip()
-        label_y = max(y1 - 10, 20)
-        image_utils.draw_label(
-            frame,
-            label,
-            (x1, label_y),
-            color,
-            font_scale=0.65,
-            thickness=2,
-        )
-
-
-def _highlight_color_failures(
-    frame: np.ndarray,
-    detections: list[dict[str, Any]],
-    color_result: dict[str, Any],
-) -> None:
-    try:
-        items = (color_result or {}).get("items", []) or []
-        items_by_index = _items_by_index(items)
-        for idx, det in enumerate(detections or []):
-            item = items_by_index.get(_source_index(det, idx))
-            if item is None:
-                continue
-            if not item.get("is_ok", True):
-                color = (0, 0, 255)
-                x1, y1, x2, y2 = _coerce_bbox(det.get("bbox"))
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-    except Exception:
-        pass
+        entries.append(((x1, y1, x2, y2), str(item.get("class", "")).strip()))
+    return entries
 
 
 def _build_position_summary_lines(
@@ -366,15 +388,43 @@ def _build_color_summary_lines(
         for line, is_ok in details:
             line_color = (0, 255, 0) if is_ok else (0, 0, 255)
             lines.append((line, line_color))
-        if detections:
-            # Must stay the shared helper: the panel reports the labels the
-            # decision was made from, not the color checker's raw best match.
-            seq = left_right_sequence(detections)
-            if seq:
-                seq_line = seq[0] if len(seq) == 1 else " -> ".join(seq)
-                lines.append((f"LR: {seq_line}", (200, 200, 200)))
     except Exception:
         pass
+    return lines
+
+
+def _build_sequence_summary_lines(
+    detections: list[dict[str, Any]] | None,
+    sequence_check: dict[str, Any] | None,
+    mismatched_slots: list[tuple[int, Any, str, str]],
+) -> list[tuple[str, tuple[int, int, int]]]:
+    """Report the order verdict and print expected against observed.
+
+    A wrong order reads as two adjacent lines: what the board should have held
+    and what it does hold. Marking only the boxes would leave an operator
+    comparing a caption per wire; marking only the panel would leave them
+    counting positions by eye.
+    """
+    lines: list[tuple[str, tuple[int, int, int]]] = []
+    if isinstance(sequence_check, dict) and not sequence_check.get("is_ok", True):
+        reason = str(sequence_check.get("reason") or "mismatch")
+        slots = " ".join(f"@{slot}" for slot, _, _, _ in mismatched_slots[:4])
+        headline = f"Seq: FAIL {reason}"
+        if slots:
+            headline = f"{headline} {slots}"
+        lines.append((headline, (0, 0, 255)))
+        expected = [
+            str(item).strip() for item in (sequence_check.get("expected") or [])
+        ]
+        if expected:
+            lines.append((f"Exp: {' -> '.join(expected)}", (200, 200, 200)))
+
+    if detections:
+        # Must stay the shared helper: the panel reports the labels the
+        # decision was made from, not the color checker's raw best match.
+        seq = left_right_sequence(detections)
+        if seq:
+            lines.append((f"LR: {' -> '.join(seq)}", (200, 200, 200)))
     return lines
 
 

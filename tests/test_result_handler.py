@@ -420,6 +420,59 @@ def test_save_results_draws_missing_expected_box(tmp_result_dir):
     assert green <= 80
 
 
+def test_annotate_info_panel_false_drops_the_panel_but_keeps_the_ng_box(
+    tmp_result_dir,
+):
+    """The engineering switch is display-only: the NG evidence stays drawn."""
+    positions = {
+        "P": {
+            "A": {
+                "enabled": True,
+                "expected_boxes": {
+                    "bolt": {"x1": 86, "y1": 96, "x2": 116, "y2": 126},
+                },
+            }
+        }
+    }
+
+    def _annotate(show_panel: bool):
+        cfg = DummyConfig(buffer_limit=1)
+        cfg.position_config = positions
+        cfg.annotate_info_panel = show_panel
+        handler = ResultHandler(
+            cfg, base_dir=tmp_result_dir, logger=DummyLogger()
+        )
+        frame = _mk_img(w=160, h=160)
+        out = handler.save_results(
+            frame=frame,
+            detections=[],
+            status="FAIL",
+            detector="yolo",
+            missing_items=["bolt"],
+            processed_image=frame.copy(),
+            product="P",
+            area="A",
+            anomaly_score=None,
+            heatmap_path=None,
+            ckpt_path=None,
+        )
+        return cv2.imread(out["annotated_path"])
+
+    with_panel = _annotate(True)
+    without_panel = _annotate(False)
+    assert with_panel is not None and without_panel is not None
+
+    # The panel background replaces the plain grey test image where it is drawn.
+    assert tuple(int(v) for v in with_panel[10, 10]) == (25, 25, 25)
+    assert tuple(int(v) for v in without_panel[10, 10]) == (128, 128, 128)
+    # The missing-item box is emphasized in both.
+    for annotated in (with_panel, without_panel):
+        blue, green, red = (int(v) for v in annotated[96, 86])
+        assert red >= 180
+        assert blue <= 80
+        assert green <= 80
+
+
 def test_save_results_shifts_missing_expected_box_using_detected_offsets(tmp_result_dir):
     cfg = DummyConfig(buffer_limit=1)
     cfg.position_config = {

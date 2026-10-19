@@ -110,6 +110,52 @@ def test_annotate_yolo_frame_omits_position_summary_when_check_is_disabled(
     assert not any(text.startswith("Pos:") for text, _ in captured_lines)
 
 
+def test_info_panel_can_be_hidden_without_losing_the_failure_marks():
+    """Engineering can silence the summary; the NG targets stay marked."""
+    detections = [
+        {
+            "bbox": [100, 100, 130, 130],
+            "class": "Black",
+            "class_id": 0,
+            "source_index": 0,
+        }
+    ]
+    color_result = {
+        "is_ok": False,
+        "items": [
+            {
+                "index": 0,
+                "class_name": "Black",
+                "best_color": "Orange",
+                "diff": 0.6,
+                "threshold": 0.75,
+                "is_ok": False,
+            }
+        ],
+    }
+
+    with_panel = np.zeros((220, 220, 3), dtype=np.uint8)
+    annotate_yolo_frame(
+        FakeImageUtils(), with_panel, detections, color_result, "DETECTION_FAIL"
+    )
+    without_panel = np.zeros((220, 220, 3), dtype=np.uint8)
+    annotate_yolo_frame(
+        FakeImageUtils(),
+        without_panel,
+        detections,
+        color_result,
+        "DETECTION_FAIL",
+        show_info_panel=False,
+    )
+
+    # The panel's top-left corner is painted only in the first frame.
+    assert tuple(with_panel[10, 10]) == (25, 25, 25)
+    assert tuple(without_panel[10, 10]) == (0, 0, 0)
+    # The failing box keeps its emphasis border in both.
+    assert tuple(with_panel[130, 100]) == (0, 0, 255)
+    assert tuple(without_panel[130, 100]) == (0, 0, 255)
+
+
 def test_annotate_yolo_frame_draws_missing_expected_box_without_detection():
     frame = np.zeros((180, 180, 3), dtype=np.uint8)
 
