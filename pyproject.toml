@@ -7,7 +7,7 @@ name = "yolo11-inference"
 dynamic = ["version"]
 description = "Industrial vision inspection system integrating YOLO object detection and Anomalib anomaly detection"
 readme = "README.md"
-requires-python = ">=3.10,<3.12"
+requires-python = ">=3.11,<3.12"
 license = "LicenseRef-Proprietary"
 authors = [
     {name = "DioWang", email = "a0983743448@gmail.com"}
@@ -25,17 +25,22 @@ classifiers = [
 ]
 
 dependencies = [
-    # Core inference
-    "torch==2.4.1",
-    "torchvision==0.19.1",
-    "lightning==2.4.0",
-    "anomalib==1.2.0",
-    "ultralytics==8.3.156",
+    # Core inference. One coupled stack, moved together with the training
+    # project in 2026-10 (see Yolo11_auto_train requirements.in).
+    "torch==2.13.0",
+    "torchvision==0.28.0",
+    "lightning==2.6.6",
+    "pytorch-lightning==2.6.6",
+    "anomalib==2.7.0",
+    "ultralytics==8.3.253",
     "onnxruntime==1.23.2",
     
     # Data processing
     "numpy==1.26.4",
-    "opencv-python==4.9.0.80",
+    # anomalib >= 2.5.1 depends on the headless build; both provide cv2, so
+    # they must be the same version or one silently overwrites the other.
+    "opencv-python==4.11.0.86",
+    "opencv-python-headless==4.11.0.86",
     "pillow==12.3.0",
     "pandas==2.3.1",
     "openpyxl==3.1.5",
@@ -44,21 +49,18 @@ dependencies = [
     "scipy==1.13.1",
     
     # Anomalib support
-    "kornia==0.8.1",
-    "timm==1.0.19",
-    "einops==0.8.1",
+    "kornia==0.8.3",
+    "timm==1.0.30",
+    "einops==0.8.2",
     "FrEIA==0.2",
     "python-dotenv==1.2.4",
-    "open-clip-torch==3.1.0",
     
     # Utilities
-    "jsonargparse==4.34.0",
     "pydantic>=1.10,<3.0",
     "PyYAML==6.0.2",
     "requests==2.34.2",
     "tqdm==4.67.1",
     "typing_extensions==4.12.2",
-    "imgaug>=0.4.0",
 
     # Hardware I/O
     "pyserial==3.5",

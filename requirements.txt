@@ -12,7 +12,7 @@ aiosignal==1.4.0
     # via aiohttp
 annotated-types==0.7.0
     # via pydantic
-anomalib==1.2.0
+anomalib==2.7.0
     # via yolo11-inference (pyproject.toml)
 antlr4-python3-runtime==4.9.3
     # via omegaconf
@@ -43,8 +43,10 @@ docstring-parser==0.17.0
     # via
     #   anomalib
     #   jsonargparse
-einops==0.8.1
-    # via yolo11-inference (pyproject.toml)
+einops==0.8.2
+    # via
+    #   anomalib
+    #   yolo11-inference (pyproject.toml)
 et-xmlfile==2.0.0
     # via openpyxl
 filelock==3.32.7
@@ -56,7 +58,9 @@ flatbuffers==25.12.19
 fonttools==4.61.1
     # via matplotlib
 freia==0.2
-    # via yolo11-inference (pyproject.toml)
+    # via
+    #   anomalib
+    #   yolo11-inference (pyproject.toml)
 frozenlist==1.8.0
     # via
     #   aiohttp
@@ -67,8 +71,6 @@ fsspec[http]==2025.12.0
     #   lightning
     #   pytorch-lightning
     #   torch
-ftfy==6.3.1
-    # via open-clip-torch
 h11==0.16.0
     # via httpcore
 hf-xet==1.2.0
@@ -78,9 +80,7 @@ httpcore==1.0.9
 httpx==0.28.1
     # via huggingface-hub
 huggingface-hub==1.2.3
-    # via
-    #   open-clip-torch
-    #   timm
+    # via timm
 humanfriendly==10.0
     # via coloredlogs
 idna==3.20
@@ -89,12 +89,10 @@ idna==3.20
     #   httpx
     #   requests
     #   yarl
+imagecodecs==2026.1.14
+    # via anomalib
 imageio==2.37.2
-    # via
-    #   imgaug
-    #   scikit-image
-imgaug==0.4.0
-    # via yolo11-inference (pyproject.toml)
+    # via scikit-image
 importlib-resources==6.5.2
     # via typeshed-client
 jinja2==3.1.6
@@ -102,19 +100,21 @@ jinja2==3.1.6
 joblib==1.5.3
     # via scikit-learn
 jsonargparse[signatures,typing-extensions]==4.34.0
+    # via anomalib
+kiwisolver==1.4.9
+    # via matplotlib
+kornia==0.8.3
     # via
     #   anomalib
     #   yolo11-inference (pyproject.toml)
-kiwisolver==1.4.9
-    # via matplotlib
-kornia==0.8.1
-    # via yolo11-inference (pyproject.toml)
 kornia-rs==0.1.10
     # via kornia
 lazy-loader==0.4
     # via scikit-image
-lightning==2.4.0
-    # via yolo11-inference (pyproject.toml)
+lightning==2.6.6
+    # via
+    #   anomalib
+    #   yolo11-inference (pyproject.toml)
 lightning-utilities==0.15.2
     # via
     #   anomalib
@@ -127,7 +127,7 @@ markupsafe==3.0.3
     # via jinja2
 matplotlib==3.9.2
     # via
-    #   imgaug
+    #   anomalib
     #   ultralytics
     #   yolo11-inference (pyproject.toml)
 mdurl==0.1.2
@@ -146,16 +146,16 @@ numpy==1.26.4
     # via
     #   contourpy
     #   freia
+    #   imagecodecs
     #   imageio
-    #   imgaug
     #   matplotlib
     #   onnxruntime
     #   opencv-python
+    #   opencv-python-headless
     #   pandas
     #   scikit-image
     #   scikit-learn
     #   scipy
-    #   shapely
     #   tifffile
     #   torchmetrics
     #   torchvision
@@ -166,12 +166,13 @@ omegaconf==2.3.0
     # via anomalib
 onnxruntime==1.23.2
     # via yolo11-inference (pyproject.toml)
-open-clip-torch==3.1.0
-    # via yolo11-inference (pyproject.toml)
-opencv-python==4.9.0.80
+opencv-python==4.11.0.86
     # via
-    #   imgaug
     #   ultralytics
+    #   yolo11-inference (pyproject.toml)
+opencv-python-headless==4.11.0.86
+    # via
+    #   anomalib
     #   yolo11-inference (pyproject.toml)
 openpyxl==3.1.5
     # via yolo11-inference (pyproject.toml)
@@ -189,17 +190,23 @@ packaging==24.2
     #   torchmetrics
 pandas==2.3.1
     # via
-    #   ultralytics
+    #   anomalib
     #   yolo11-inference (pyproject.toml)
 pillow==12.3.0
     # via
+    #   anomalib
     #   imageio
-    #   imgaug
     #   matplotlib
     #   scikit-image
     #   torchvision
     #   ultralytics
     #   yolo11-inference (pyproject.toml)
+platformdirs==4.13.5
+    # via anomalib
+polars==2.0.0
+    # via ultralytics
+polars-runtime-32==2.0.0
+    # via polars
 propcache==0.4.1
     # via
     #   aiohttp
@@ -207,8 +214,6 @@ propcache==0.4.1
 protobuf==7.36.2
     # via onnxruntime
 psutil==7.2.1
-    # via ultralytics
-py-cpuinfo==9.0.0
     # via ultralytics
 pydantic==2.11.10
     # via yolo11-inference (pyproject.toml)
@@ -228,8 +233,10 @@ python-dateutil==2.9.0.post0
     #   pandas
 python-dotenv==1.2.4
     # via yolo11-inference (pyproject.toml)
-pytorch-lightning==2.6.0
-    # via lightning
+pytorch-lightning==2.6.6
+    # via
+    #   lightning
+    #   yolo11-inference (pyproject.toml)
 pytz==2025.2
     # via pandas
 pyyaml==6.0.2
@@ -242,8 +249,6 @@ pyyaml==6.0.2
     #   timm
     #   ultralytics
     #   yolo11-inference (pyproject.toml)
-regex==2025.11.3
-    # via open-clip-torch
 requests==2.34.2
     # via
     #   ultralytics
@@ -255,29 +260,24 @@ rich==14.2.0
 rich-argparse==1.7.2
     # via anomalib
 safetensors==0.7.0
-    # via
-    #   open-clip-torch
-    #   timm
+    # via timm
 scikit-image==0.26.0
-    # via imgaug
+    # via anomalib
 scikit-learn==1.5.2
-    # via yolo11-inference (pyproject.toml)
+    # via
+    #   anomalib
+    #   yolo11-inference (pyproject.toml)
 scipy==1.13.1
     # via
     #   freia
-    #   imgaug
     #   scikit-image
     #   scikit-learn
     #   ultralytics
     #   yolo11-inference (pyproject.toml)
-shapely==2.1.2
-    # via imgaug
 shellingham==1.5.4
     # via huggingface-hub
 six==1.17.0
-    # via
-    #   imgaug
-    #   python-dateutil
+    # via python-dateutil
 sympy==1.14.0
     # via
     #   onnxruntime
@@ -285,17 +285,18 @@ sympy==1.14.0
 threadpoolctl==3.6.0
     # via scikit-learn
 tifffile==2025.12.20
-    # via scikit-image
-timm==1.0.19
     # via
-    #   open-clip-torch
+    #   anomalib
+    #   scikit-image
+timm==1.0.30
+    # via
+    #   anomalib
     #   yolo11-inference (pyproject.toml)
-torch==2.4.1
+torch==2.13.0
     # via
     #   freia
     #   kornia
     #   lightning
-    #   open-clip-torch
     #   pytorch-lightning
     #   timm
     #   torchmetrics
@@ -305,11 +306,11 @@ torch==2.4.1
     #   yolo11-inference (pyproject.toml)
 torchmetrics==1.8.2
     # via
+    #   anomalib
     #   lightning
     #   pytorch-lightning
-torchvision==0.19.1
+torchvision==0.28.0
     # via
-    #   open-clip-torch
     #   timm
     #   ultralytics
     #   yolo11-inference (pyproject.toml)
@@ -317,9 +318,7 @@ tqdm==4.67.1
     # via
     #   huggingface-hub
     #   lightning
-    #   open-clip-torch
     #   pytorch-lightning
-    #   ultralytics
     #   yolo11-inference (pyproject.toml)
 typer-slim==0.21.0
     # via huggingface-hub
@@ -345,14 +344,12 @@ typing-inspection==0.4.2
     # via pydantic
 tzdata==2025.3
     # via pandas
-ultralytics==8.3.156
+ultralytics==8.3.253
     # via yolo11-inference (pyproject.toml)
 ultralytics-thop==2.0.18
     # via ultralytics
 urllib3==2.8.0
     # via requests
-wcwidth==0.2.14
-    # via ftfy
 yarl==1.22.0
     # via aiohttp
 
