@@ -23,3 +23,19 @@ updates:
       python-dependencies:
         patterns: ["*"]
     open-pull-requests-limit: 5
+    # Coupled to anomalib 1.2.0 on torch 2.4.1. Moving any of these is a
+    # station-validated upgrade, not a bot PR; their alerts stay visible.
+    ignore:
+      - dependency-name: "torch"
+      - dependency-name: "torchvision"
+      - dependency-name: "lightning"
+      - dependency-name: "pytorch-lightning"
+      - dependency-name: "anomalib"
+      - dependency-name: "kornia"
+      - dependency-name: "timm"
+      - dependency-name: "open-clip-torch"
+      - dependency-name: "ultralytics"
+      - dependency-name: "numpy"
+      - dependency-name: "opencv-python*"
+      - dependency-name: "onnxruntime"
+      - dependency-name: "jsonargparse"
