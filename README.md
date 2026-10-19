@@ -596,7 +596,7 @@ except SecurityError as e:
 詳細安全指南請參考：
 - **[docs/architecture/SECURITY.md](docs/architecture/SECURITY.md)** - 安全設計與操作界線
 - **[CHANGELOG.md](CHANGELOG.md)** - 安全相關變更記錄
-- **測試**: `D:\miniconda\envs\yolo_anomalib\python.exe -m pytest tests\test_security.py -q`
+- **測試**: `D:\miniconda\envs\yolo_infer_py311\python.exe -m pytest tests\test_security.py -q`
 
 
 
@@ -614,16 +614,16 @@ Proprietary License - 專有授權，未經許可不得分發或使用。
 
 ## Local Environment and Fusion Notes
 
-The Windows startup scripts in this repository activate the `yolo_anomalib`
+The Windows startup scripts in this repository activate the `yolo_infer_py311`
 conda environment. Use that environment for YOLO/Anomalib development and
 verification on this machine:
 
 ```powershell
-conda activate yolo_anomalib
+conda activate yolo_infer_py311
 python -c "import torch, jsonargparse; print(torch.__version__)"
 
 # Or call the environment Python directly.
-D:\miniconda\envs\yolo_anomalib\python.exe -m pytest tests\test_fusion_inference.py
+D:\miniconda\envs\yolo_infer_py311\python.exe -m pytest tests\test_fusion_inference.py
 ```
 
 If tests fail with `torch` DLL or missing `jsonargparse` errors, confirm that

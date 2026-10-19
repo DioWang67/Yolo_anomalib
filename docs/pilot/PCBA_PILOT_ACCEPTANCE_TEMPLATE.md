@@ -22,7 +22,7 @@ Use this record for each product/area before enabling unattended production deci
 Command:
 
 ```powershell
-D:\miniconda\envs\yolo_anomalib\python.exe tools\production_readiness_check.py --config <config.yaml> --product <PRODUCT> --area <AREA> --output-json readiness_report.json
+D:\miniconda\envs\yolo_infer_py311\python.exe tools\production_readiness_check.py --config <config.yaml> --product <PRODUCT> --area <AREA> --output-json readiness_report.json
 ```
 
 Result:

@@ -23,8 +23,9 @@ updates:
       python-dependencies:
         patterns: ["*"]
     open-pull-requests-limit: 5
-    # Coupled to anomalib 1.2.0 on torch 2.4.1. Moving any of these is a
-    # station-validated upgrade, not a bot PR; their alerts stay visible.
+    # Coupled to anomalib 2.7.0 on torch 2.13.0 (upgraded together 2026-10).
+    # Moving any of these is a station-validated upgrade, not a bot PR; their
+    # alerts stay visible.
     ignore:
       - dependency-name: "torch"
       - dependency-name: "torchvision"

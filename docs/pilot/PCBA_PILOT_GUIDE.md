@@ -73,7 +73,7 @@ position_config:
 ## 3. 常用命令
 
 從 `yolo11_inference` 根目錄執行 `pcba.bat`。批次檔優先使用
-`D:\miniconda\envs\yolo_anomalib\python.exe`，找不到時才使用目前的 `python`。
+`D:\miniconda\envs\yolo_infer_py311\python.exe`，找不到時才使用目前的 `python`。
 
 ```powershell
 # A／B 區 readiness

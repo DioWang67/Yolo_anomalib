@@ -14,7 +14,7 @@ REM ==========================================================================
 pushd "%~dp0..\.."
 set "SOURCE_PATH=%CD%"
 
-set "DEFAULT_PYTHON=D:\miniconda\envs\yolo_anomalib\python.exe"
+set "DEFAULT_PYTHON=D:\miniconda\envs\yolo_infer_py311\python.exe"
 if not "%YOLO11_PYTHON%"=="" (
     set "ENV_PYTHON=%YOLO11_PYTHON%"
 ) else (

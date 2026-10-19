@@ -13,8 +13,7 @@ if not exist "%YOLO_CONFIG_DIR%" mkdir "%YOLO_CONFIG_DIR%"
 set "PYTHON_EXE="
 if defined YOLO11_PYTHON if exist "%YOLO11_PYTHON%" set "PYTHON_EXE=%YOLO11_PYTHON%"
 if not defined PYTHON_EXE if exist ".venv\Scripts\python.exe" set "PYTHON_EXE=.venv\Scripts\python.exe"
-if not defined PYTHON_EXE if exist "D:\miniconda\envs\anomalib_env\python.exe" set "PYTHON_EXE=D:\miniconda\envs\anomalib_env\python.exe"
-if not defined PYTHON_EXE if exist "D:\miniconda\envs\yolo_anomalib\python.exe" set "PYTHON_EXE=D:\miniconda\envs\yolo_anomalib\python.exe"
+if not defined PYTHON_EXE if exist "D:\miniconda\envs\yolo_infer_py311\python.exe" set "PYTHON_EXE=D:\miniconda\envs\yolo_infer_py311\python.exe"
 if not defined PYTHON_EXE (
     where python >nul 2>nul
     if not errorlevel 1 set "PYTHON_EXE=python"

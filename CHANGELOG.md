@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- The ML stack moved together with the training project (2026-10): Python
+  3.11, torch 2.13.0 / torchvision 0.28.0, lightning 2.6.6, anomalib 1.2.0 ->
+  2.7.0, ultralytics 8.3.253, opencv-python and opencv-python-headless
+  4.11.0.86. numpy stays 1.26.4 and onnxruntime 1.23.2. imgaug (an unfixable
+  CVE, needed only by anomalib 1.x), open-clip-torch and jsonargparse leave the
+  direct dependencies.
+
+  YOLO verdicts do not move. On the new station env, the Cable1/A acceptance
+  snapshot (250 images, full app pipeline) gives 0 verdict flips, 0 reason
+  differences and 0 colour-detail differences against the old env, with p95
+  latency 157 -> 133 ms. Recent production images of every active
+  product/area give identical boxes and confidences.
+
+- Anomalib inference was rewritten for 2.x and refuses models it cannot vouch
+  for. A package must carry the training project's compatibility stamp, and
+  the station rejects it if the stamp is missing (every anomalib 1.x model),
+  the schema or class differs, the installed anomalib major.minor differs,
+  the checkpoint is not the stamped file, or the stamped probe image no longer
+  scores the same. YOLO keeps running either way.
+  - Checkpoints load with `weights_only=True`.
+  - Scoring applies the pre-processor's training-time transform. `model(x)`
+    would use the export transform, which differs by up to 0.05 near the
+    threshold. Scores equal `Engine.predict` exactly.
+  - The NumPy-2 `np.sctypes` shim, the process-wide PosixPath patch and the
+    Engine/PredictDataset path are gone.
+  - PCBA1/B's EfficientAD was retrained under anomalib 2.7 (same recipe:
+    1 epoch, 256 px, 280 normal images) and re-packaged with its stamp. It is
+    still `baseline_only` and not deployment-grade.
+- `OMP_WAIT_POLICY=PASSIVE` is set before torch loads (GUI.py, main.py). torch
+  2.13's spin-waiting OpenMP threads put 10-25 ms spikes on YOLO
+  post-processing next to ONNX Runtime.
+- `yolo11_inference.exe --check-anomalib` imports the bundled anomalib and
+  verifies every packaged model. verify_build.py runs it as a required step.
+- Launchers and docs use the `yolo_infer_py311` conda env. The runtime gate
+  and the system check accept only Python 3.11 with the new pins, and CI's
+  ubuntu leg moved to 3.11 on the lockfile.
 - **The golden sample pre-shift check measures colour, not where the board was
   put down** (`golden-lab-registered-v5`; existing baselines must be rebuilt
   once). The v4 check sampled a fixed ~19x29 px window at image coordinates

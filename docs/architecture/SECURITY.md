@@ -119,7 +119,7 @@ service validation 或 readiness check 驗證。新增 YAML 入口時必須同�
 路徑安全回歸測試：
 
 ```powershell
-D:\miniconda\envs\yolo_anomalib\python.exe -m pytest tests\test_security.py -q
+D:\miniconda\envs\yolo_infer_py311\python.exe -m pytest tests\test_security.py -q
 ```
 
 測試涵蓋合法子路徑、多 root、`..` traversal、root 外絕對路徑、symlink escape、
@@ -129,7 +129,7 @@ Result alias、drive-relative 路徑與單一路徑片段。Windows 無建立 sy
 第 1.1／1.2 節的證據邊界回歸測試：
 
 ```powershell
-D:\miniconda\envs\yolo_anomalib\python.exe -m pytest tests\test_acceptance_artifacts.py tests\test_acceptance_runs.py tests\test_model_acceptance.py -q
+D:\miniconda\envs\yolo_infer_py311\python.exe -m pytest tests\test_acceptance_artifacts.py tests\test_acceptance_runs.py tests\test_model_acceptance.py -q
 ```
 
 另有一項測試環境保護：`tests/conftest.py` 會在 `--basetemp` 落在含

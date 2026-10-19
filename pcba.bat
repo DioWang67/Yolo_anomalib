@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set "PYTHON_EXE=D:\miniconda\envs\yolo_anomalib\python.exe"
+set "PYTHON_EXE=D:\miniconda\envs\yolo_infer_py311\python.exe"
 
 if exist "%PYTHON_EXE%" (
     "%PYTHON_EXE%" tools\pcba_pilot.py %*

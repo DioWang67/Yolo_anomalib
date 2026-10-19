@@ -13,7 +13,7 @@ documented in `docs/manuals/ENGINEERING_MANUAL.md`.
 
 - Target: Windows production or pilot machine.
 - Runtime: packaged `dist\yolo11_inference\yolo11_inference.exe` or a checked
-  out repo with the `yolo_anomalib` Python environment.
+  out repo with the `yolo_infer_py311` Python environment.
 - Hardware: Hikrobot/MVS industrial camera when physical capture is required.
 
 ## Preconditions
@@ -53,7 +53,7 @@ If deploying from source instead of the packaged bundle, use the project Python
 environment:
 
 ```powershell
-conda activate yolo_anomalib
+conda activate yolo_infer_py311
 python main.py --product <PRODUCT> --area <AREA> --type yolo --image path\to\image.jpg
 ```
 
@@ -121,7 +121,7 @@ Then compare logs with `docs/operations/CAMERA_RUNTIME_DIAGNOSTICS.md`.
 For PCBA pilot, run the readiness gate:
 
 ```powershell
-D:\miniconda\envs\yolo_anomalib\python.exe tools\production_readiness_check.py `
+D:\miniconda\envs\yolo_infer_py311\python.exe tools\production_readiness_check.py `
   --config models\<PRODUCT>\<AREA>\yolo\config.yaml `
   --product <PRODUCT> `
   --area <AREA> `

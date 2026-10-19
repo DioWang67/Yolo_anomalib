@@ -13,7 +13,7 @@ if defined YOLO11_CONDA (
 if defined YOLO11_PYTHON (
     set "PYTHON_EXE=%YOLO11_PYTHON%"
 ) else (
-    set "PYTHON_EXE=%CONDA_PATH%\envs\yolo_anomalib\python.exe"
+    set "PYTHON_EXE=%CONDA_PATH%\envs\yolo_infer_py311\python.exe"
 )
 
 cd /d "%~dp0"
@@ -33,9 +33,9 @@ if not defined YOLO11_PYTHON (
         echo ERROR: Conda activation script was not found: %CONDA_PATH%
         exit /b 1
     )
-    call "%CONDA_PATH%\Scripts\activate.bat" yolo_anomalib
+    call "%CONDA_PATH%\Scripts\activate.bat" yolo_infer_py311
     if errorlevel 1 (
-        echo ERROR: Conda environment activation failed: yolo_anomalib
+        echo ERROR: Conda environment activation failed: yolo_infer_py311
         exit /b 1
     )
 )

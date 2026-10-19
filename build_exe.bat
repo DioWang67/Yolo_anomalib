@@ -22,7 +22,7 @@ set "YOLO_AUTOINSTALL=false"
 if not exist "%YOLO_CONFIG_DIR%" mkdir "%YOLO_CONFIG_DIR%"
 
 REM --- Python 環境設定（可透過 YOLO11_PYTHON 環境變數覆蓋）---
-set "DEFAULT_PYTHON=D:\miniconda\envs\yolo_anomalib\python.exe"
+set "DEFAULT_PYTHON=D:\miniconda\envs\yolo_infer_py311\python.exe"
 if not "%YOLO11_PYTHON%"=="" (
     set "ENV_PYTHON=%YOLO11_PYTHON%"
 ) else (

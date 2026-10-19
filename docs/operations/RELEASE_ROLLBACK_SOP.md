@@ -67,7 +67,7 @@ The packaged executable is built from `GUI.py`. Packaged diagnostics:
 ## Validate Config
 
 ```powershell
-D:\miniconda\envs\yolo_anomalib\python.exe tools\production_readiness_check.py `
+D:\miniconda\envs\yolo_infer_py311\python.exe tools\production_readiness_check.py `
   --config models\<PRODUCT>\<AREA>\yolo\config.yaml `
   --product <PRODUCT> `
   --area <AREA> `

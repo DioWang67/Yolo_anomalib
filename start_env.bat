@@ -7,7 +7,7 @@ set PATH=%CONDA_PATH%;%CONDA_PATH%\Scripts;%CONDA_PATH%\Library\bin;%PATH%
 
 REM 啟動 Conda 並激活環境
 call %CONDA_PATH%\Scripts\activate.bat
-call conda activate yolo_anomalib
+call conda activate yolo_infer_py311
 
 REM 切換到指定目錄
 cd /d "%~dp0"

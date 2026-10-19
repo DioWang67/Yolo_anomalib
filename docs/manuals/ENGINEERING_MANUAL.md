@@ -95,7 +95,7 @@ SQLite outbox
 
 ```powershell
 $env:CI = "1"
-$env:YOLO11_PYTHON = "D:\miniconda\envs\yolo_anomalib\python.exe"
+$env:YOLO11_PYTHON = "D:\miniconda\envs\yolo_infer_py311\python.exe"
 .\build_exe.bat
 ```
 
