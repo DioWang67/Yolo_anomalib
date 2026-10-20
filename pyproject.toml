@@ -41,12 +41,12 @@ dependencies = [
     # they must be the same version or one silently overwrites the other.
     "opencv-python==4.11.0.86",
     "opencv-python-headless==4.11.0.86",
-    "pillow==12.3.0",
-    "pandas==2.3.1",
+    "pillow==13.0.0",
+    "pandas==3.0.6",
     "openpyxl==3.1.5",
-    "matplotlib==3.9.2",
-    "scikit-learn==1.5.2",
-    "scipy==1.13.1",
+    "matplotlib==3.11.2",
+    "scikit-learn==1.9.1",
+    "scipy==1.17.1",
     
     # Anomalib support
     "kornia==0.8.3",
@@ -57,10 +57,10 @@ dependencies = [
     
     # Utilities
     "pydantic>=1.10,<3.0",
-    "PyYAML==6.0.2",
+    "PyYAML==6.0.3",
     "requests==2.34.2",
-    "tqdm==4.67.1",
-    "typing_extensions==4.12.2",
+    "tqdm==4.70.1",
+    "typing_extensions==4.16.0",
 
     # Hardware I/O
     "pyserial==3.5",
@@ -72,14 +72,14 @@ gui = [
 ]
 
 dev = [
-    "pytest==9.0.3",
+    "pytest==9.1.1",
     "pytest-cov>=4.0.0",
     "pytest-qt>=4.2.0",
     "pytest-timeout>=2.4.0",
     "PyQt5==5.15.11",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
-    "types-requests==2.32.4.20260107",
+    "types-requests==2.33.0.20261006",
     "build>=0.10.0",
     "twine>=4.0.0",
 ]

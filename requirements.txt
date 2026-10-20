@@ -4,30 +4,30 @@
 #
 #    pip-compile --no-strip-extras --output-file=requirements.txt pyproject.toml
 #
-aiohappyeyeballs==2.6.1
+aiohappyeyeballs==2.7.1
     # via aiohttp
-aiohttp==3.14.3
+aiohttp==3.14.5
     # via fsspec
 aiosignal==1.4.0
     # via aiohttp
-annotated-types==0.7.0
+annotated-types==0.8.0
     # via pydantic
 anomalib==2.7.0
     # via yolo11-inference (pyproject.toml)
-antlr4-python3-runtime==4.9.3
+antlr4-python3-runtime==4.13.2
     # via omegaconf
-anyio==4.14.2
+anyio==4.15.1
     # via httpx
-attrs==25.4.0
+attrs==26.1.0
     # via aiohttp
-certifi==2026.1.4
+certifi==2026.7.22
     # via
     #   httpcore
     #   httpx
     #   requests
-charset-normalizer==3.4.4
+charset-normalizer==3.5.2
     # via requests
-click==8.3.1
+click==8.5.0
     # via typer-slim
 colorama==0.4.6
     # via
@@ -39,7 +39,7 @@ contourpy==1.3.3
     # via matplotlib
 cycler==0.12.1
     # via matplotlib
-docstring-parser==0.17.0
+docstring-parser==0.18.0
     # via
     #   anomalib
     #   jsonargparse
@@ -49,13 +49,13 @@ einops==0.8.2
     #   yolo11-inference (pyproject.toml)
 et-xmlfile==2.0.0
     # via openpyxl
-filelock==3.32.7
+filelock==4.2.0
     # via
     #   huggingface-hub
     #   torch
 flatbuffers==25.12.19
     # via onnxruntime
-fonttools==4.61.1
+fonttools==4.67.0
     # via matplotlib
 freia==0.2
     # via
@@ -65,7 +65,7 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-fsspec[http]==2025.12.0
+fsspec[http]==2026.9.0
     # via
     #   huggingface-hub
     #   lightning
@@ -73,13 +73,13 @@ fsspec[http]==2025.12.0
     #   torch
 h11==0.16.0
     # via httpcore
-hf-xet==1.2.0
+hf-xet==1.7.0
     # via huggingface-hub
 httpcore==1.0.9
     # via httpx
 httpx==0.28.1
     # via huggingface-hub
-huggingface-hub==1.2.3
+huggingface-hub==2.2.0
     # via timm
 humanfriendly==10.0
     # via coloredlogs
@@ -89,52 +89,52 @@ idna==3.20
     #   httpx
     #   requests
     #   yarl
-imagecodecs==2026.1.14
+imagecodecs==2026.3.6
     # via anomalib
-imageio==2.37.2
+imageio==2.38.1
     # via scikit-image
-importlib-resources==6.5.2
+importlib-resources==7.1.0
     # via typeshed-client
 jinja2==3.1.6
     # via torch
-joblib==1.5.3
+joblib==1.6.0
     # via scikit-learn
 jsonargparse[signatures,typing-extensions]==4.34.0
     # via anomalib
-kiwisolver==1.4.9
+kiwisolver==1.5.1
     # via matplotlib
 kornia==0.8.3
     # via
     #   anomalib
     #   yolo11-inference (pyproject.toml)
-kornia-rs==0.1.10
+kornia-rs==0.2.0
     # via kornia
-lazy-loader==0.4
+lazy-loader==0.6
     # via scikit-image
 lightning==2.6.6
     # via
     #   anomalib
     #   yolo11-inference (pyproject.toml)
-lightning-utilities==0.15.2
+lightning-utilities==0.15.3
     # via
     #   anomalib
     #   lightning
     #   pytorch-lightning
     #   torchmetrics
-markdown-it-py==4.0.0
+markdown-it-py==4.2.0
     # via rich
-markupsafe==3.0.3
+markupsafe==3.0.4
     # via jinja2
-matplotlib==3.9.2
+matplotlib==3.11.2
     # via
     #   anomalib
     #   ultralytics
     #   yolo11-inference (pyproject.toml)
 mdurl==0.1.2
     # via markdown-it-py
-mpmath==1.3.0
+mpmath==1.4.1
     # via sympy
-multidict==6.9.1
+multidict==7.1.0
     # via
     #   aiohttp
     #   yarl
@@ -162,7 +162,7 @@ numpy==1.26.4
     #   ultralytics
     #   ultralytics-thop
     #   yolo11-inference (pyproject.toml)
-omegaconf==2.3.0
+omegaconf==2.4.0
     # via anomalib
 onnxruntime==1.23.2
     # via yolo11-inference (pyproject.toml)
@@ -176,7 +176,7 @@ opencv-python-headless==4.11.0.86
     #   yolo11-inference (pyproject.toml)
 openpyxl==3.1.5
     # via yolo11-inference (pyproject.toml)
-packaging==24.2
+packaging==26.3
     # via
     #   huggingface-hub
     #   kornia
@@ -188,11 +188,11 @@ packaging==24.2
     #   pytorch-lightning
     #   scikit-image
     #   torchmetrics
-pandas==2.3.1
+pandas==3.0.6
     # via
     #   anomalib
     #   yolo11-inference (pyproject.toml)
-pillow==12.3.0
+pillow==13.0.0
     # via
     #   anomalib
     #   imageio
@@ -207,21 +207,21 @@ polars==2.0.0
     # via ultralytics
 polars-runtime-32==2.0.0
     # via polars
-propcache==0.4.1
+propcache==0.5.4
     # via
     #   aiohttp
     #   yarl
 protobuf==7.36.2
     # via onnxruntime
-psutil==7.2.1
+psutil==7.2.2
     # via ultralytics
-pydantic==2.11.10
+pydantic==2.14.1
     # via yolo11-inference (pyproject.toml)
-pydantic-core==2.33.2
+pydantic-core==2.50.1
     # via pydantic
 pygments==2.21.0
     # via rich
-pyparsing==3.3.1
+pyparsing==3.3.3
     # via matplotlib
 pyreadline3==3.5.6
     # via humanfriendly
@@ -237,9 +237,9 @@ pytorch-lightning==2.6.6
     # via
     #   lightning
     #   yolo11-inference (pyproject.toml)
-pytz==2025.2
+pytz==2026.5
     # via pandas
-pyyaml==6.0.2
+pyyaml==6.0.3
     # via
     #   huggingface-hub
     #   jsonargparse
@@ -253,21 +253,21 @@ requests==2.34.2
     # via
     #   ultralytics
     #   yolo11-inference (pyproject.toml)
-rich==14.2.0
+rich==15.0.0
     # via
     #   anomalib
     #   rich-argparse
-rich-argparse==1.7.2
+rich-argparse==1.8.0
     # via anomalib
-safetensors==0.7.0
+safetensors==0.8.0
     # via timm
 scikit-image==0.26.0
     # via anomalib
-scikit-learn==1.5.2
+scikit-learn==1.9.1
     # via
     #   anomalib
     #   yolo11-inference (pyproject.toml)
-scipy==1.13.1
+scipy==1.17.1
     # via
     #   freia
     #   scikit-image
@@ -282,9 +282,9 @@ sympy==1.14.0
     # via
     #   onnxruntime
     #   torch
-threadpoolctl==3.6.0
+threadpoolctl==3.7.0
     # via scikit-learn
-tifffile==2025.12.20
+tifffile==2026.3.3
     # via
     #   anomalib
     #   scikit-image
@@ -304,7 +304,7 @@ torch==2.13.0
     #   ultralytics
     #   ultralytics-thop
     #   yolo11-inference (pyproject.toml)
-torchmetrics==1.8.2
+torchmetrics==1.9.0
     # via
     #   anomalib
     #   lightning
@@ -314,17 +314,17 @@ torchvision==0.28.0
     #   timm
     #   ultralytics
     #   yolo11-inference (pyproject.toml)
-tqdm==4.67.1
+tqdm==4.70.1
     # via
     #   huggingface-hub
     #   lightning
     #   pytorch-lightning
     #   yolo11-inference (pyproject.toml)
-typer-slim==0.21.0
+typer-slim==0.24.0
     # via huggingface-hub
-typeshed-client==2.8.2
+typeshed-client==2.14.0
     # via jsonargparse
-typing-extensions==4.12.2
+typing-extensions==4.16.0
     # via
     #   aiohttp
     #   aiosignal
@@ -340,17 +340,17 @@ typing-extensions==4.12.2
     #   typeshed-client
     #   typing-inspection
     #   yolo11-inference (pyproject.toml)
-typing-inspection==0.4.2
+typing-inspection==0.4.4
     # via pydantic
-tzdata==2025.3
+tzdata==2026.5
     # via pandas
 ultralytics==8.3.253
     # via yolo11-inference (pyproject.toml)
-ultralytics-thop==2.0.18
+ultralytics-thop==2.2.2
     # via ultralytics
 urllib3==2.8.0
     # via requests
-yarl==1.22.0
+yarl==1.25.1
     # via aiohttp
 
 # The following packages are considered to be unsafe in a requirements file:
