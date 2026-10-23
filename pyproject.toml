@@ -41,7 +41,7 @@ dependencies = [
     # they must be the same version or one silently overwrites the other.
     "opencv-python==4.11.0.86",
     "opencv-python-headless==4.11.0.86",
-    "pillow==12.3.0",
+    "pillow==13.0.0",
     "pandas==2.3.1",
     "openpyxl==3.1.5",
     "matplotlib==3.9.2",
